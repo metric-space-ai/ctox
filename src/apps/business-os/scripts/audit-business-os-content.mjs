@@ -90,7 +90,6 @@ export const SHELL_SURFACE_FILES = Object.freeze([
   'src/apps/business-os/index.html',
   'src/apps/business-os/app.js',
   'src/apps/business-os/shared/react-settings.js',
-  'src/apps/business-os/shared/bugReporter.js',
 ]);
 
 const EXCLUDED_MODULE_UI_DIRS = new Set([
@@ -373,7 +372,7 @@ function isUserFacingLiteral(literal, relativePath, metadata) {
   if (ERROR_COPY_PATTERN.test(lineBefore) && isNaturalCopy(literal.value)) return true;
   // Labels/messages in the module's UI dictionaries are object values. Keep
   // this restricted to rendered app boundaries; runtime helpers are excluded.
-  if (isNaturalCopy(literal.value) && /(?:index|desktop-apps|react-settings|bugReporter)\.(?:js|mjs|html)$/u.test(relativePath)) {
+  if (isNaturalCopy(literal.value) && /(?:index|desktop-apps|react-settings)\.(?:js|mjs|html)$/u.test(relativePath)) {
     return true;
   }
   return false;
@@ -442,9 +441,23 @@ export function auditSourceText(source, relativePath, { metadata = false } = {})
   return findings;
 }
 
+/**
+ * Shell v4 isolation rule R1 moved single-app libraries from the excluded
+ * top-level vendor/ into the consuming app (`<app>/vendor/`, see
+ * v4/tools/isolation/REPORT.md and guard-v4.mjs APP_VENDOR_DIR). Same files,
+ * same reason as the vendor/ rule above; bounded to exactly one level below
+ * modules/, desktop-apps/ or customer-modules/ so nested vendor folders stay audited.
+ */
+export const APP_VENDOR_EXCLUSION = Object.freeze({
+  pattern: /^src\/apps\/business-os\/(?:modules|desktop-apps|customer-modules)\/[^/]+\/vendor\//u,
+  reason: 'third-party/vendor source of a single app (<app>/vendor/, Shell v4 rule R1) is not owned product copy',
+});
+
 function exclusionFor(relativePath) {
   const path = normalizePath(relativePath);
-  return EXCLUSION_RULES.find((entry) => path === entry.prefix.slice(0, -1) || path.startsWith(entry.prefix));
+  const rule = EXCLUSION_RULES.find((entry) => path === entry.prefix.slice(0, -1) || path.startsWith(entry.prefix));
+  if (rule) return rule;
+  return APP_VENDOR_EXCLUSION.pattern.test(path) ? APP_VENDOR_EXCLUSION : undefined;
 }
 
 export function exclusionReason(relativePath) {

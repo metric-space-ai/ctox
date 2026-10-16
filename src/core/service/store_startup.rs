@@ -34,11 +34,11 @@ static FACTORIES: OnceLock<Mutex<Factories>> = OnceLock::new();
 #[cfg(all(test, unix))]
 static TEST_ROOTS: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 #[cfg(all(test, unix))]
-pub(super) struct ForegroundTestScope {
+pub(crate) struct ForegroundTestScope {
     _lock: tokio::sync::MutexGuard<'static, ()>,
 }
 #[cfg(all(test, unix))]
-pub(super) async fn isolate_test_roots() -> ForegroundTestScope {
+pub(crate) async fn isolate_test_roots() -> ForegroundTestScope {
     ForegroundTestScope {
         _lock: TEST_ROOTS.lock().await,
     }
@@ -250,6 +250,17 @@ impl Foreground {
         };
         match NativeOwners::attach(&owner.inputs).await {
             Ok(native) => owner.native_owners = Some(native),
+            Err(error) => {
+                owner.shutdown().await?;
+                return Err(error);
+            }
+        }
+        let app_engine =
+            crate::business_os::app_platform::runtime_host::attach_native(owner.inputs.clone())
+                .await; // APP-PLATFORM-4 attach
+        match app_engine {
+            Ok(Some(engine)) => owner.engines.push(engine),
+            Ok(None) => (),
             Err(error) => {
                 owner.shutdown().await?;
                 return Err(error);

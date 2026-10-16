@@ -2,9 +2,28 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { build } from 'esbuild';
+// esbuild aus dem Klon oder (wie Playwright in den v4-Tests) aus dem Haupt-Checkout.
+const require = createRequire(import.meta.url);
+function loadEsbuild() {
+  try { return require('esbuild'); } catch {}
+  return require(process.env.ESBUILD_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/esbuild'));
+}
+const { build } = loadEsbuild();
+
+// Wie der Service Worker (§16.15, PORTING §4 Falle 2): ctox:shared/x.js → ../../shared/x.js.
+const ctoxShared = {
+  name: 'ctox-shared',
+  setup(b) {
+    b.onResolve({ filter: /^ctox:shared\// }, (args) => ({
+      path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)),
+    }));
+  },
+};
 
 const bundledModule = await build({
   entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
@@ -12,6 +31,7 @@ const bundledModule = await build({
   format: 'esm',
   platform: 'browser',
   write: false,
+  plugins: [ctoxShared],
 });
 
 const [{ text: bundledSource }] = bundledModule.outputFiles;
@@ -21,161 +41,28 @@ const { __conversationsTestHooks: hooks } = await import(
 
 const t = (key, fallback) => fallback || key;
 
-test('conversation empty state distinguishes filter misses from sync failures', () => {
-  const noResults = hooks.conversationEmptyState({
-    totalBuckets: 2,
-    filteredBuckets: 0,
-    hasActiveFilters: true,
-    diagnostics: { hasFailure: false, isStarting: false },
-    t,
+test('v4: no sync state machine, no readiness/diagnostics hooks, route params parse 1:1', async () => {
+  const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+  assert.equal(hooks.conversationEmptyState, undefined);
+  assert.equal(hooks.buildConversationDataDiagnostics, undefined);
+  assert.doesNotMatch(js, /collectionReadiness|syncDiagnostics|ctox-syncing|commandBus|location\.hash|ctx\./);
+  const link = hooks.parseConversationDeepLink({
+    campaign_id: 'c1',
+    engagement_id: 'e1',
+    message_id: 'om1',
+    thread_key: 't1',
+    message_key: 'm1',
+    account_key: 'a1',
+    channel: 'physical_letter',
   });
-
-  assert.equal(noResults.kind, 'no-results');
-
-  const syncFailure = hooks.conversationEmptyState({
-    totalBuckets: 0,
-    filteredBuckets: 0,
-    hasActiveFilters: false,
-    diagnostics: {
-      hasFailure: true,
-      isStarting: false,
-      problemCollections: ['communication_messages'],
-      detail: 'communication_messages: WebRTC replication failed',
-    },
-    t,
-  });
-
-  assert.equal(syncFailure.kind, 'sync-failure');
-  assert.doesNotMatch(syncFailure.body, /communication_messages|WebRTC|replication/i);
-  assert.match(syncFailure.body, /Konversationen/);
-});
-
-test('conversation empty state gates initial-empty on collection readiness', () => {
-  const base = {
-    totalBuckets: 0,
-    filteredBuckets: 0,
-    hasActiveFilters: false,
-    diagnostics: { hasFailure: false, isStarting: false },
-    t,
-  };
-
-  const unready = hooks.conversationEmptyState({
-    ...base,
-    readiness: { collection: 'communication_threads', state: 'catching-up', ready: false, syncing: true },
-  });
-  assert.equal(unready.kind, 'syncing');
-
-  const offlinePending = hooks.conversationEmptyState({
-    ...base,
-    readiness: { collection: 'communication_threads', state: 'offline-pending', ready: false, syncing: false },
-  });
-  assert.equal(offlinePending.kind, 'syncing');
-
-  const live = hooks.conversationEmptyState({
-    ...base,
-    readiness: { collection: 'communication_threads', state: 'live', ready: true, syncing: false },
-  });
-  assert.equal(live.kind, 'initial-empty');
-
-  // No readiness handle (older shells) keeps the legacy initial-empty copy.
-  const legacy = hooks.conversationEmptyState(base);
-  assert.equal(legacy.kind, 'initial-empty');
-
-  // Readiness never overrides filter misses, local projections, or failures.
-  const filterMiss = hooks.conversationEmptyState({
-    ...base,
-    totalBuckets: 2,
-    hasActiveFilters: true,
-    readiness: { ready: false },
-  });
-  assert.equal(filterMiss.kind, 'no-results');
-
-  const failure = hooks.conversationEmptyState({
-    ...base,
-    diagnostics: { hasFailure: true, isStarting: false },
-    readiness: { ready: false },
-  });
-  assert.equal(failure.kind, 'sync-failure');
-});
-
-test('communication diagnostics include accounts and messages sync errors', () => {
-  const diagnostics = hooks.buildConversationDataDiagnostics({
-    missingCollections: new Set(['communication_accounts']),
-    collectionErrors: new Map([
-      ['communication_messages', new Error('load failed')],
-    ]),
-    syncDiagnostics: {
-      collections: {
-        communication_messages: {
-          status: 'failed',
-          lastError: { message: 'WebRTC replication failed' },
-        },
-      },
-    },
-  });
-
-  assert.equal(diagnostics.hasFailure, true);
-  assert.deepEqual(diagnostics.problemCollections.sort(), [
-    'communication_accounts',
-    'communication_messages',
-  ]);
-  assert.match(diagnostics.detail, /communication_accounts/);
-  assert.match(diagnostics.detail, /communication_messages/);
-});
-
-test('communication diagnostics treats failed sync status as failure without lastError', () => {
-  const diagnostics = hooks.buildConversationDataDiagnostics({
-    syncDiagnostics: {
-      collections: {
-        communication_accounts: { status: 'connected' },
-        communication_messages: { status: 'failed' },
-      },
-    },
-  });
-
-  assert.equal(diagnostics.hasFailure, true);
-  assert.deepEqual(diagnostics.problemCollections, ['communication_messages']);
-});
-
-test('communication diagnostics treats running but connecting peers as sync starting', () => {
-  const diagnostics = hooks.buildConversationDataDiagnostics({
-    syncDiagnostics: {
-      collections: {
-        communication_accounts: { status: 'running', connectionStatus: 'connected' },
-        communication_threads: { status: 'running', connectionStatus: 'connecting' },
-        communication_messages: { status: 'running', connectionStatus: 'connected' },
-      },
-    },
-  });
-
-  assert.equal(diagnostics.hasFailure, false);
-  assert.equal(diagnostics.isStarting, true);
-  assert.deepEqual(diagnostics.startingCollections, ['communication_threads']);
-});
-
-test('communication diagnostics includes thread projection peer timeouts', () => {
-  const diagnostics = hooks.buildConversationDataDiagnostics({
-    syncDiagnostics: {
-      collections: {
-        communication_accounts: { status: 'running', connectionStatus: 'connected' },
-        communication_threads: {
-          status: 'running',
-          connectionStatus: 'connecting',
-          lastLifecycleEvent: {
-            code: 'peer_connect_timeout',
-            message: 'WebRTC native peer did not open for communication_threads within 30000ms',
-            severity: 'recoverable',
-          },
-        },
-        communication_messages: { status: 'running', connectionStatus: 'connected' },
-      },
-    },
-  });
-
-  assert.equal(diagnostics.hasFailure, true);
-  assert.deepEqual(diagnostics.problemCollections, ['communication_threads']);
-  assert.match(diagnostics.detail, /communication_threads/);
-  assert.match(diagnostics.detail, /native peer did not open/);
+  assert.equal(link.campaign_id, 'c1');
+  assert.equal(link.engagement_id, 'e1');
+  assert.equal(link.outbound_message_id, 'om1');
+  assert.equal(link.thread_key, 't1');
+  assert.equal(link.message_key, 'm1');
+  assert.equal(link.account_key, 'a1');
+  assert.equal(link.channel, 'email');
+  assert.equal(hooks.parseConversationDeepLink(new URLSearchParams('channel=bogus')).channel, '');
 });
 
 test('bucket filters report active account, channel, direction, date, and search state', () => {
@@ -208,6 +95,8 @@ test('conversations presentation follows compact Business OS contract', async ()
   assert.doesNotMatch(css, /\.conv-card\s*\{[^}]*(border|background|border-radius)/s);
   // The chat timeline stays a custom view and keeps its compact radius.
   assert.match(css, /\.conv-message\s*\{[^}]*border-radius:\s*var\(--control-radius\)/s);
+  // R16: every selector is scoped under the app root (no shell ancestors).
+  assert.doesNotMatch(css.replace(/\/\*[\s\S]*?\*\//g, ''), /\.shell-window/);
 });
 
 test('left column follows the canonical shell-wired column grammar', async () => {
@@ -350,13 +239,14 @@ test('selecting a conversation is an in-place class flip, never a list rebuild',
   assert.doesNotMatch(selectFn[0], /renderList\(/);
 });
 
-test('v2 CTOX chat context form is bounded to the conversation window', async () => {
+test('nothing outside the app window: no fixed overlays, no document-level mounts', async () => {
+  // v2 bounded its CTOX chat form to the window (position:absolute in the module root). That form and its context
+  // menu had no caller and were removed with the v4 port; the rule behind the old guard stays.
   const [js, css] = await Promise.all([
     readFile(new URL('./index.js', import.meta.url), 'utf8'),
     readFile(new URL('./index.css', import.meta.url), 'utf8'),
   ]);
-  assert.match(js, /menu\.style\.position = 'absolute'/);
-  assert.match(js, /root\.append\(menu\)/);
-  assert.doesNotMatch(js, /menu\.style\.position = 'fixed'/);
-  assert.match(css, /\.shell-window\[data-shell-contract="v2"\] \.conv-module \{ position: relative;/);
+  assert.doesNotMatch(js, /document\.body\.append|position = 'fixed'/);
+  assert.doesNotMatch(css, /position:\s*fixed/);
+  assert.match(css, /\[data-app="conversations"\] \.conv-module \{ position: relative;/);
 });

@@ -1,0 +1,5 @@
+{
+  "collections": {
+    "zettel": { "type": "object", "primaryKey": "id", "properties": { "id": { "type": "string" }, "text": { "type": "string" } }, "required": ["id"] }
+  }
+}

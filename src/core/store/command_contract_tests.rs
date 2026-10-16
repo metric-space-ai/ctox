@@ -1062,6 +1062,88 @@ async fn command_terminal_outcome_commits_once_and_command_id_deduplicates() {
     readers.shutdown().await.unwrap();
     writer.shutdown().await.unwrap();
 }
+fn command_patch(seq: u64, n: u16, base: Option<String>, body: Value) -> OrderedWrite {
+    let mut w = put(seq, n, "command-1", base, body);
+    w.write.collection = "business_commands".into();
+    w.write.op = WriteOp::Patch;
+    w
+}
+async fn stored_command(readers: &ReadPool) -> Value {
+    readers
+        .read(|tx| {
+            let s: String = tx.query_row(
+                "SELECT data FROM c_business_commands WHERE id='command-1'",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok(serde_json::from_str(&s).unwrap())
+        })
+        .await
+        .unwrap()
+}
+/// E27.1 (K-WJ-6): a terminal patch's `result` is stored as a value; null
+/// fields survive and an absent `result` key leaves the old result untouched.
+#[tokio::test]
+async fn command_terminal_patch_keeps_result_as_value() {
+    let (_dir, writer, readers, ingress) = commands().await;
+    let (created, lease) = begin(&ingress).await;
+    let running = send(
+        &ingress,
+        "executor-a",
+        command_patch(
+            1,
+            931,
+            created.rev,
+            json!({"status":"running","executor_fence":lease.fence,"result":{"partial":true,"b":{"e":2}}}),
+        ),
+        NOW,
+    )
+    .await;
+    assert_eq!(running.status, WriteStatus::Accepted, "{running:?}");
+    let progress = send(
+        &ingress,
+        "executor-a",
+        command_patch(
+            2,
+            932,
+            running.rev,
+            json!({"status":"running","executor_fence":lease.fence,"progress":0.5}),
+        ),
+        NOW,
+    )
+    .await;
+    assert_eq!(progress.status, WriteStatus::Accepted, "{progress:?}");
+    let body = stored_command(&readers).await;
+    assert_eq!(body["result"], json!({"partial":true,"b":{"e":2}}));
+    assert_eq!(body["progress"], json!(0.5));
+    let outcome = json!({"a":null,"b":{"c":null,"d":1}});
+    let terminal = json!({"status":"done","executor_fence":lease.fence,"result":outcome.clone()});
+    let done = send(
+        &ingress,
+        "executor-a",
+        command_patch(3, 933, progress.rev, terminal.clone()),
+        NOW,
+    )
+    .await;
+    assert_eq!(done.status, WriteStatus::Accepted, "{done:?}");
+    let body = stored_command(&readers).await;
+    assert_eq!(body["status"], "done");
+    assert_eq!(body["result"], outcome);
+    // Pre-validation must see the same document: an identical terminal patch
+    // is a no-op, not a `command_terminal` rejection.
+    let replay = send(
+        &ingress,
+        "executor-a",
+        command_patch(4, 934, done.rev.clone(), terminal),
+        NOW,
+    )
+    .await;
+    assert_eq!(replay.reason, None, "{replay:?}");
+    assert_eq!(replay.rev, done.rev);
+    assert_eq!(stored_command(&readers).await["result"], outcome);
+    readers.shutdown().await.unwrap();
+    writer.shutdown().await.unwrap();
+}
 #[tokio::test]
 async fn command_stale_fence_is_a_typed_conflict_after_takeover() {
     let (_dir, writer, readers, ingress) = commands().await;

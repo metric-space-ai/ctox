@@ -1,0 +1,29 @@
+{
+  "_basis": {
+    "commands_in": "modules/tickets/V4-HANDLERS.md:50 (local.create akzeptiert ticket_id, damit support die ID über ctx.command vorgeben kann); modules/support/V4-HANDLERS.md W1",
+    "foreign_collections": "modules/tickets/V4-PORT.md OFFEN 5",
+    "multi_instance": "modules/tickets/V4-PORT.md OFFEN 4; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "commands_in": [
+    {
+      "from": [
+        "support"
+      ],
+      "type": "ctox.ticket.local.create"
+    }
+  ],
+  "foreign_collections": {
+    "business_commands": [
+      "read"
+    ],
+    "ctox_crew_members": [
+      "read"
+    ],
+    "ctox_queue_tasks": [
+      "read"
+    ]
+  },
+  "multi_instance": false
+}

@@ -14,54 +14,77 @@ const COLLECTION_MAP = {
   object_photo_variant_chunks: 'matching_objects'
 };
 
+// App-API 4.0 (V4-PORT.md): je Montage ein Live-Abo je Collection. Lesen kommt aus dem lokalen
+// Live-Stand (api.query), Schreiben über api.put/api.remove. Keine Readiness, kein Nachladen.
+let matchingApi = null;
 let dbPromise = null;
-let businessOsContext = null;
-const cacheByCollection = new Map();
+const liveRowsByRemote = new Map();
+const liveUnsubscribers = [];
+const changeListeners = new Map();
 
-export function setBusinessOsDatabaseContext(ctx) {
-  businessOsContext = ctx && typeof ctx === 'object' ? ctx : null;
+export function setMatchingDataApi(api) {
+  disposeMatchingData();
+  matchingApi = api || null;
   dbPromise = null;
-  cacheByCollection.clear();
+  if (!matchingApi) return;
+  for (const remote of MATCHING_REMOTE_COLLECTIONS) {
+    let previous = null;
+    const off = matchingApi
+      .query(remote, { sort: [{ updated_at_ms: 'desc' }] })
+      .subscribe((rows) => {
+        const next = new Map(rows.map((row) => [row.id, row]));
+        liveRowsByRemote.set(remote, rows);
+        const first = previous === null;
+        const changed = first ? [] : changedIds(previous, next);
+        previous = next;
+        if (!first) emitChange(remote, changed);
+      });
+    liveUnsubscribers.push(off);
+  }
+}
+
+export function disposeMatchingData() {
+  while (liveUnsubscribers.length) {
+    try { liveUnsubscribers.pop()?.(); } catch (_) {}
+  }
+  liveRowsByRemote.clear();
+  changeListeners.clear();
+  matchingApi = null;
+  dbPromise = null;
+}
+
+function changedIds(previous, next) {
+  const ids = [];
+  for (const [id, row] of next) {
+    const before = previous.get(id);
+    if (!before || before !== row && (before.updated_at_ms !== row.updated_at_ms || before.status !== row.status || before.title !== row.title)) ids.push(id);
+  }
+  for (const id of previous.keys()) if (!next.has(id)) ids.push(id);
+  return ids;
+}
+
+function emitChange(remote, ids) {
+  for (const [name, listeners] of changeListeners) {
+    if ((COLLECTION_MAP[name] || name) !== remote) continue;
+    const events = ids.length && ids.length <= 25 ? ids.map((id) => ({ documentData: { id } })) : [{}];
+    for (const listener of [...listeners]) {
+      for (const event of events) {
+        try { listener(event); } catch (error) { console.warn('[matching] change listener failed', error); }
+      }
+    }
+  }
 }
 
 export async function getContactsCollection() {
   return { database: await getDatabase() };
 }
 
-export function getMatchingCollectionReadiness(collectionName) {
-  const name = matchingCollectionName(collectionName);
-  const collectionReadiness = businessOsContext?.sync?.collectionReadiness;
-  if (typeof collectionReadiness === 'function') {
-    return collectionReadiness.call(businessOsContext.sync, name);
-  }
-  return Object.freeze({
-    collection: name,
-    state: 'live',
-    ready: true,
-    syncing: false,
-    updatedAt: null
-  });
-}
-
-export function subscribeMatchingCollectionReadiness(collectionName, listener) {
-  const name = matchingCollectionName(collectionName);
-  if (typeof listener !== 'function') {
-    throw new TypeError('Matching collection readiness listener must be a function.');
-  }
-  const subscribe = businessOsContext?.sync?.subscribeCollectionReadiness;
-  if (typeof subscribe === 'function') {
-    return subscribe.call(businessOsContext.sync, name, listener);
-  }
-  listener(getMatchingCollectionReadiness(name));
-  return () => {};
-}
-
 export async function getDatabase() {
-  if (!dbPromise) dbPromise = createDatabase();
+  if (!dbPromise) dbPromise = Promise.resolve(createDatabase());
   return dbPromise;
 }
 
-async function createDatabase() {
+function createDatabase() {
   const db = {};
   for (const name of Object.keys(COLLECTION_MAP)) {
     db[name] = createCollection(name);
@@ -69,51 +92,34 @@ async function createDatabase() {
   return db;
 }
 
+// Fassade der UI: all(query) / one(selector|id) / save(doc) / onChange(cb). Ergebnisse sind Klone
+// mit modify/remove; Lesen ist synchron aus dem Live-Stand (als Promise, wie die UI es erwartet).
 function createCollection(name) {
   return {
-    $: {
-      subscribe(handler) {
-        const rxCollection = matchingCollection(COLLECTION_MAP[name] || name, { mode: 'read', optional: true });
-        if (!rxCollection?.$?.subscribe) return { unsubscribe() {} };
-        return rxCollection.$.subscribe((event) => {
-          invalidateCacheForRemote(COLLECTION_MAP[name] || name);
-          handler?.(event);
-        });
-      }
+    onChange(handler) {
+      if (typeof handler !== 'function') return () => {};
+      if (!changeListeners.has(name)) changeListeners.set(name, new Set());
+      changeListeners.get(name).add(handler);
+      return () => changeListeners.get(name)?.delete(handler);
     },
-    find(query = {}) {
-      return {
-        exec: async () => {
-          const docs = await loadCollection(name);
-          return queryDocuments(name, docs, query).map((doc) => wrapDoc(name, doc));
-        }
-      };
+    async all(query = {}) {
+      return queryDocuments(name, uiDocuments(name), query).map((doc) => wrapDoc(name, doc));
     },
-    findOne(arg = {}) {
-      return {
-        exec: async () => {
-          const docs = await loadCollection(name);
-          const selector = typeof arg === 'string' ? { id: arg } : (arg.selector || arg || {});
-          const found = queryDocuments(name, docs, { selector })[0] || null;
-          return found ? wrapDoc(name, found) : null;
-        }
-      };
+    async one(arg = {}) {
+      const selector = typeof arg === 'string' ? { id: arg } : (arg.selector || arg || {});
+      const found = queryDocuments(name, uiDocuments(name), { selector })[0] || null;
+      return found ? wrapDoc(name, found) : null;
     },
-    insert: async (doc) => wrapDoc(name, await saveDocument(name, doc)),
-    upsert: async (doc) => wrapDoc(name, await saveDocument(name, doc)),
-    atomicUpsert: async (doc) => wrapDoc(name, await saveDocument(name, doc))
+    save: async (doc) => wrapDoc(name, await saveDocument(name, doc))
   };
 }
 
-async function loadCollection(name, { force = false } = {}) {
-  if (!force && cacheByCollection.has(name)) return cacheByCollection.get(name);
+function uiDocuments(name) {
   const remote = COLLECTION_MAP[name] || name;
-  const rxCollection = matchingCollection(remote, { mode: 'read', optional: true });
-  const rows = rxCollection ? await rxCollection.find().exec() : [];
-  const documents = rows.map((row) => fromPersistedDocument(name, toPlain(row)));
-  const filtered = documents.filter((doc) => !doc?._deleted && belongsToUiCollection(name, doc));
-  cacheByCollection.set(name, filtered);
-  return filtered;
+  const rows = liveRowsByRemote.get(remote) || [];
+  return rows
+    .map((row) => fromPersistedDocument(name, structuredCloneSafe(row)))
+    .filter((doc) => !doc?._deleted && belongsToUiCollection(name, doc));
 }
 
 async function saveDocument(name, input) {
@@ -124,25 +130,17 @@ async function saveDocument(name, input) {
     updatedAt: input?.updatedAt || now,
     updated_at_ms: Date.now()
   };
-  const remote = COLLECTION_MAP[name] || name;
+  const remote = matchingCollectionName(COLLECTION_MAP[name] || name);
+  if (!matchingApi) throw new Error(`Matching collection missing: ${remote}`);
+  if (doc._deleted) {
+    const handle = matchingApi.remove(remote, doc.id);
+    await handle.local;
+    return doc;
+  }
   const persisted = toPersistedDocument(name, doc);
-  const rxCollection = matchingCollection(remote, { mode: 'write' });
-  if (typeof rxCollection.upsert === 'function') {
-    await rxCollection.upsert(persisted);
-  } else {
-    const existing = await rxCollection.findOne(persisted.id).exec().catch(() => null);
-    if (existing) await existing.incrementalPatch(persisted);
-    else await rxCollection.insert(persisted);
-  }
-
-  invalidateCacheForRemote(remote);
-  if (canReadCollection(remote)) {
-    const docs = await loadCollection(name);
-    const idx = docs.findIndex((item) => item.id === doc.id);
-    if (idx >= 0) docs[idx] = doc;
-    else docs.push(doc);
-    cacheByCollection.set(name, docs);
-  }
+  delete persisted._deleted;
+  const handle = matchingApi.put(remote, persisted);
+  await handle.local;
   return doc;
 }
 
@@ -154,62 +152,13 @@ function matchingCollectionName(collectionName) {
   return name;
 }
 
-function matchingCollection(collectionName, { mode = 'read', optional = false } = {}) {
-  let name;
-  try {
-    name = matchingCollectionName(collectionName);
-  } catch (error) {
-    if (optional) return null;
-    throw error;
-  }
-  if (mode === 'write' && !canWriteCollection(name)) {
-    throw createPermissionError(name, 'data.write');
-  }
-  if (mode !== 'write' && !canReadCollection(name)) {
-    if (optional) return null;
-    throw createPermissionError(name, 'data.read');
-  }
-  const db = businessOsContext?.db;
-  const collection = db?.collection?.(name) || null;
-  if (!collection) {
-    if (optional) return null;
-    throw new Error(`Matching collection unavailable: ${name}`);
-  }
-  return collection;
-}
-
-function canReadCollection(collectionName) {
-  const check = businessOsContext?.permissions?.canReadCollection;
-  return typeof check === 'function' ? check(collectionName) === true : true;
-}
-
-function canWriteCollection(collectionName) {
-  const check = businessOsContext?.permissions?.canWriteCollection;
-  return typeof check === 'function' ? check(collectionName) === true : true;
-}
-
-function createPermissionError(collectionName, permission) {
-  const error = new Error(`Matching ${permission} permission denied for ${collectionName}.`);
-  error.name = 'BusinessOsPermissionDenied';
-  error.code = 'BUSINESS_OS_PERMISSION_DENIED';
-  error.collection = collectionName;
-  error.permission = permission;
-  return error;
-}
-
-function invalidateCacheForRemote(remote) {
-  for (const [name, mapped] of Object.entries(COLLECTION_MAP)) {
-    if (mapped === remote) cacheByCollection.delete(name);
-  }
-}
-
 function wrapDoc(name, doc) {
   return {
     ...doc,
     toJSON: () => structuredCloneSafe(doc),
     atomicPatch: async (patch) => saveDocument(name, { ...doc, ...patch }),
     atomicUpdate: async (fn) => saveDocument(name, fn(structuredCloneSafe(doc))),
-    incrementalModify: async (fn) => saveDocument(name, fn(structuredCloneSafe(doc))),
+    modify: async (fn) => saveDocument(name, fn(structuredCloneSafe(doc))),
     update: async (patch) => saveDocument(name, { ...doc, ...(patch?.$set || patch || {}) }),
     remove: async () => saveDocument(name, { ...doc, _deleted: true })
   };

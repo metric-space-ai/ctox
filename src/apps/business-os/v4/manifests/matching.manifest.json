@@ -1,0 +1,457 @@
+{
+  "_capability_evidence": {
+    "doc.extract": [
+      "handlers/matching.source.parse_object.js"
+    ],
+    "doc.html": [
+      "handlers/_lib/job.js",
+      "handlers/matching.source.parse_requirement.js"
+    ],
+    "web.fetch": [
+      "handlers/matching.source.parse_requirement.js"
+    ]
+  },
+  "_commands_out_evidence": {
+    "ctox ctox.app.modify.request": [
+      "ui/businessOsControls.js:1175"
+    ],
+    "ctox ctox.chat.task": [
+      "ui/businessOsControls.js:1175"
+    ]
+  },
+  "_declaration": "modules/matching/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/matching/index.html",
+  "_rust_basis": "~950 Z. in `rs:importer.rs` (`handle_match_compute:61`, `import_matching_requirement:676`, `import_matching_objects:847`, `compute_matching_result:1020`, Scoring `3695–4010`), Routing `rs:importer.rs:40–72`; 10 Fundstellen `rs:store.rs`.",
+  "_source_dir": "src/apps/business-os/modules/matching",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "matching",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "doc.extract",
+    "doc.html",
+    "web.fetch"
+  ],
+  "collections": {
+    "matching_objects": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/matching.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "definition_id": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "parsed_object": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "prompt_key": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_ref": {
+            "type": "string"
+          },
+          "source_type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 2
+      }
+    },
+    "matching_requirements": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/matching.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "definition_id": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "parsed_requirement": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "prompt_key": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "source_ref": {
+            "type": "string"
+          },
+          "source_type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 2
+      }
+    },
+    "matching_results": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/matching.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "definition_id": {
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "object_id": {
+            "type": "string"
+          },
+          "parsed_match": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "requirement_id": {
+            "type": "string"
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "score": {
+            "type": "number"
+          },
+          "source_ref": {
+            "type": "string"
+          },
+          "source_type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 2
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [
+    {
+      "app": "ctox",
+      "type": "ctox.app.modify.request"
+    },
+    {
+      "app": "ctox",
+      "type": "ctox.chat.task"
+    }
+  ],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "matching_objects": [
+      "read"
+    ],
+    "matching_results": [
+      "read"
+    ]
+  },
+  "files": {
+    "V4-HANDLERS.md": "65ccbfa9abd83dcaf16db604e2cf1a17533d122cbd5faff1b44f67a1b19a2037",
+    "V4-PORT.md": "982af6996587a2b480eb39c26f38ba677750cdc5c6a002ae5dcc31346f430ada",
+    "assets/icon.jpg": "3bde634a41120c92468b533c23847246cd3b15f928d66be6451358c2c4931c9f",
+    "assets/icon@512.jpg": "b8062a13d45162bf9526db39d903ed0b9294afb4c1531d79df8606f05cee10a3",
+    "collections.schema.json": "154cfcc7e40114868a590793910e9eca0d22c7efd18a19e5c4b5f3075789d59b",
+    "core/pipeline.js": "b47543dfb3005857f7a3619dca0e2add6923f61350edf0c6321f96683b774aeb",
+    "core/screening.js": "e52b9dc276e753e8f2c2348e1db1c617feeca3cad926e8ca53ac51a765dd5810",
+    "handlers/_lib/candidate.js": "53fabb8e5f0beb2dc4c3a302a6e6425f0269eb70189bf5a519b597aec59ac04e",
+    "handlers/_lib/envelope.js": "5bb3d60fd16d20ac2243dce4f0bec82f6d9468596bd6244f149c0bebba406cc1",
+    "handlers/_lib/errors.js": "7438ffa06346f5e8edab02ca70339861877985442c5ca0862819ed70e3853b17",
+    "handlers/_lib/files.js": "360cc44fddcc33fefbe518c4de382150552309e5dced1883c899e1c79a3784f9",
+    "handlers/_lib/job.js": "14e0c924dfeb7e2a85de362c02db94c2d858df9c0f4060e24416bbbeb893170b",
+    "handlers/_lib/score.js": "9ce59b8ea06c8e3c14c2028691e470746ce45bfe5c82a4b96a047bc172865c6e",
+    "handlers/_lib/text.js": "736fa81e2ec6fdffe24145392218d450053005e5153e06678815b39419dc9d45",
+    "handlers/matching.match.js": "3f2c9b548bfa1aec8b591c8234ccadb0d78918be85ff3f33725a1885cb06ad24",
+    "handlers/matching.source.parse_object.js": "a2602da58967f30478583dd7f53afb41b0328402291d3a71a0b155376cec7ead",
+    "handlers/matching.source.parse_requirement.js": "c8159540efff354147fc30355fd5336eb6f8188629b0fc7d56d9d0d479489bed",
+    "icon.svg": "97d2cf72c43f4ab61a725109b8e2174720c919cf5a2166b14200a0a691d3d7c2",
+    "index.css": "66c544d668fc7f6ffca888a18e390166d6e5cb187905139e5c1d419541b6caf8",
+    "index.html": "44289bddd74357a7b9db4320926893693fbcab19f4ed311b5c26581159bb1789",
+    "index.js": "ffaec0e6b712fe8a2f186bdf42dc3cd869fe7671e9b68f44d88f2705b6d86249",
+    "locales/de.json": "a2de07ce18ef70b871948192bd79b940efe32af550fa99bb62c238dff14db489",
+    "locales/en.json": "ef6ffbc9fb6fd0d9cd37ee30f2675b5e24f20991d11a6521a7fd97c3ad422dbf",
+    "matching-ia.css": "97f863759db2b7616bbfecd42754169ba68a6d60a590c4a183805361b9b7244c",
+    "module.json": "f3fa4b8a9b431e3e530ae7bc5d2f467aff058b32627ed4fb7e3bbd6b4d9a5326",
+    "ui/businessOsControls.js": "5432c479c047a5c5134d3fd3159e22d32b2de2f9413a4e795d6ee99b803be777",
+    "ui/businessOsDataSource.js": "a79de9c5e399046834bc83d15aaf10fa94ded410d8dc0468d1b28d993713f166",
+    "ui/candidateBoard.js": "9b013629314d01a6c4e025e9ddc8923bddc2d590acfbf4d6b616c0c6f515fd25",
+    "ui/ctoxCommandAdapter.js": "f4c8c72f19615d136c5cdd1b5bcdb70d9fc9b14d3b191e9d93360d4344672518",
+    "ui/index.js": "c6b16c4b7b2d8714e84c4e3c76ef62a4cbbb296b05e6977db424657e9b241aa9",
+    "ui/matchingDefinition.js": "51a92266a400cf968c86f853b3c8af68aae329b6e92166f0640a4125ac9e6427",
+    "ui/matchingTools.js": "36158bd58b3a4311923d60677198e0e7c79548ef3537b164235673dab8014ae5",
+    "ui/v4Runtime.js": "8c6f9008badf21fc0b82e122a41cf5666cafa7e2851816c85a0c66d59276058f",
+    "ui/viewState.js": "ae92ae9c27799a2843075b5619bc12e42b7e2826aacf872b11aca0d08aad50b3",
+    "v4-manifest.json": "9e1d88d31cc0667694622b3b92160c7cb4b76c77b77c3a11dca28eae0b7a9b31"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "core/pipeline.js:4"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "files": {
+      "_evidence": {
+        "code_read": [
+          "ui/ctoxCommandAdapter.js:68"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    }
+  },
+  "handlers": {
+    "matching.match": "handlers/matching.match.js",
+    "matching.source.parse_object": "handlers/matching.source.parse_object.js",
+    "matching.source.parse_requirement": "handlers/matching.source.parse_requirement.js"
+  },
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/matching.jpg (shared/operator-icon-selection.js, sha256 3ececa42f99f…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; modules/matching/V4-PORT.md OFFEN 1; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Operations",
+    "drawers": {
+      "bottom": "Matching prompt, schema, task status, and evidence",
+      "left": "Column import and source configuration",
+      "right": "Object pool configuration and selected record detail"
+    },
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-matching\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-matching\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#f59e0b\" /><stop offset=\"100%\" stop-color=\"#ea580c\" /></linearGradient></defs><path d=\"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71\" fill=\"url(#grad-matching)\" fill-opacity=\"0.12\" stroke=\"url(#grad-matching)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71\" fill=\"url(#grad-matching)\" fill-opacity=\"0.12\" stroke=\"url(#grad-matching)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"12\" r=\"2.5\" fill=\"#ffffff\" stroke=\"url(#grad-matching)\" stroke-width=\"1\"></circle></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 820,
+        "width": 1280
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#7c3aed",
+        "category": "People",
+        "iconAssetId": "workjet.business-os.matching",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "list-detail",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Matching"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {
+    "matching_objects": {
+      "_reasons": [
+        "„title“ nicht mehr Pflicht",
+        "„status“ nicht mehr Pflicht",
+        "„data“ nicht mehr Pflicht"
+      ],
+      "_schema_version": {
+        "from": 1,
+        "to": 2
+      },
+      "_source": "v4/schemas/matching.collections.schema.json migrations",
+      "from_ver": "main@4794af03d",
+      "migrate_fn": null,
+      "steps": []
+    },
+    "matching_requirements": {
+      "_reasons": [
+        "„title“ nicht mehr Pflicht",
+        "„status“ nicht mehr Pflicht",
+        "„data“ nicht mehr Pflicht"
+      ],
+      "_schema_version": {
+        "from": 1,
+        "to": 2
+      },
+      "_source": "v4/schemas/matching.collections.schema.json migrations",
+      "from_ver": "main@4794af03d",
+      "migrate_fn": null,
+      "steps": []
+    },
+    "matching_results": {
+      "_reasons": [
+        "„title“ nicht mehr Pflicht",
+        "„status“ nicht mehr Pflicht",
+        "„data“ nicht mehr Pflicht"
+      ],
+      "_schema_version": {
+        "from": 1,
+        "to": 2
+      },
+      "_source": "v4/schemas/matching.collections.schema.json migrations",
+      "from_ver": "main@4794af03d",
+      "migrate_fn": null,
+      "steps": []
+    }
+  },
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "1c0f9ff073ce92a2ccf755acbc1f05a3ec274aad765628d96d1b1fbabc6d0fc9",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Matching",
+  "triggers": [],
+  "version": "1.0.2"
+}

@@ -1,0 +1,64 @@
+{
+ "app": "mail",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Mail",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Mail-Navigation öffnen",
+    "button:Mails importieren",
+    "button:Mails exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Eingang (6)",
+    "nav:Gesendet (0)",
+    "nav:Aktion nötig (6)",
+    "row:Nachrichten Zeit",
+    "check:Sichtbare Seite auswählen",
+    "row:communication--001 3 neu Budge",
+    "check:Budgetplanung Vertrieb Süd aus",
+    "row:communication--002 12 neu Quar",
+    "check:Quartalsbericht Q3 2026 auswäh",
+    "row:communication--003 1 neu Angeb",
+    "check:Angebot Wartungsvertrag Halle ",
+    "row:communication--004 7 neu Proje",
+    "check:Projektplan Relaunch Kundenpor",
+    "row:communication--005 24 neu Lief",
+    "check:Lieferantenbewertung 2026 ausw",
+    "row:communication--006 5 neu Onboa",
+    "check:Onboarding neue Mitarbeitende "
+   ],
+   "shot": "mail/420-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "mail/420-02-nav_Alle_6_.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "mail",
+  "Mail"
+ ]
+}

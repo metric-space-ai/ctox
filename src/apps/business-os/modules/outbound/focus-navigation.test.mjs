@@ -10,11 +10,14 @@ const microtasks = [];
 const status = { dataset: {} };
 const center = { dataset: {}, getClientRects: () => [1] };
 let rendered = [];
+// v4: App-root statt ctx.host, Rückmeldungen in die Zustandszone (reportStatus/clearStatus), Montage-Token.
+const zone = [];
 const state = {
-  ctx: { host: {
+  root: {
     querySelector: (selector) => selector === '.outbound-center' ? center : status,
     querySelectorAll: () => rendered,
-  } },
+  },
+  mountToken: {},
   campaigns: [{ id: 'campaign' }],
   companies: [{ id: 'company', campaign_id: 'campaign' }],
   pipeline: [{ id: 'pipeline', campaign_id: 'campaign' }],
@@ -23,6 +26,8 @@ const state = {
 };
 const context = vm.createContext({ state, queueMicrotask: (fn) => microtasks.push(fn),
   reportOutboundFocus: (status, id) => receipts.push({ status, id }),
+  reportStatus: (level, code, text) => zone.push({ level, code, text }),
+  clearStatus: () => {},
 });
 vm.runInContext(focus, context);
 function navigate(id, { hidden = false, staleCampaign = false } = {}) {
@@ -53,4 +58,12 @@ assert.equal(state.requestedRecordId, 'company');
 navigate('pipeline', { staleCampaign: true });
 assert.equal(receipts.length, before, 'old campaign render cannot confirm focus');
 assert.equal(state.requestedRecordId, 'pipeline');
+// Unbekannter Datensatz: Hinweis nur in der Zustandszone, genau ein 'unavailable'-Receipt.
+const n = receipts.length;
+navigate('gibt-es-nicht');
+navigate('gibt-es-nicht');
+assert.equal(receipts.length, n + 1);
+assert.equal(receipts.at(-1).status, 'unavailable');
+assert.equal(zone.at(-1).code, 'outbound.route.record');
+assert.equal(status.textContent, undefined, 'kein Statustext im Inhalt');
 console.log('Outbound repeated focus/mode/render receipt regression passed');

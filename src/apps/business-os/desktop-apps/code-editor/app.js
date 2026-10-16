@@ -1,1256 +1,341 @@
-import {
-  canModifyBusinessModule,
-  canViewBusinessModuleSource,
-} from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
+// Code-Editor – Editor-Bibliothek des Quelltext-Modus (Shell v4, Strang UC4). Port-Protokoll: V4-PORT.md.
+//
+// Keine App mehr (DESKTOP_APPS = []), kein Datenweg: Dateien kommen als Eingabe, Änderungen gehen per onChange an den
+// Aufrufer (v4/source: Entwurf → draft.publish). Keine Polls, kein registry.json, keine Befehle, kein Warten.
+//
+//   createCodeEditor({ root, files, onChange, readOnly, activePath, prefer, labels }) → Promise<CodeEditor>
+//     files     [{ path, content, language? }]
+//     onChange  (path, content, { dirty }) => void   – je Eingabe (Monaco/textarea)
+//     readOnly  boolean
+//     prefer    'auto' (Monaco aus ctox:lib/monaco@0, sonst textarea) | 'textarea'
+//   CodeEditor = { kind, open(path), activePath(), getValue(path?), getFiles(), setFiles(files), setReadOnly(on),
+//                  isDirty(path?), revert(path?), format(path?), toggleDiff(on?), focus(), snapshot(), destroy() }
+//   snapshot() = { v:1, activePath, search, diffOpen, drafts: {path: content} }  – für AppMountHandle.snapshot des Aufrufers.
 
-export const manifest = {
-  id: 'code-editor',
-  title: 'Source Editor',
-  glyph: '⌘',
-  defaultWidth: 1080,
-  defaultHeight: 700,
-};
-
-let monacoPromise;
-
-const ACTION_ICON_FALLBACKS = Object.freeze({
-  open: '<path d="M9 3h6v6"/><path d="M15 3 8 10"/><path d="M13 8v6H3V4h6"/>',
-  diff: '<path d="M5 4h10"/><path d="M5 8h10"/><path d="M5 12h6"/><path d="m12 11 3 3-3 3"/>',
-  format: '<path d="m4 5 3-2 9 9-2 3-3-1z"/><path d="m3 13 4 4"/>',
-  undo: '<path d="M4 7h8a4 4 0 1 1 0 8H9"/><path d="m4 7 3-3M4 7l3 3"/>',
-  refresh: '<path d="M14 6V3l3 3-3 3"/><path d="M15 6a6 6 0 1 0 1 6"/>',
-  save: '<path d="M4 3h9l3 3v11H4z"/><path d="M7 3v5h6V3M7 17v-5h6v5"/>',
-  commit: '<circle cx="6" cy="8" r="2"/><circle cx="14" cy="4" r="2"/><circle cx="14" cy="14" r="2"/><path d="M8 8h4M6 10v4h6"/>',
-  history: '<path d="M4 7a7 7 0 1 1 1 7"/><path d="M4 3v4h4M10 6v4l3 2"/>',
-  agent: '<path d="m8 2 1.2 3.4L13 7l-3.8 1.6L8 12l-1.2-3.4L3 7l3.8-1.6z"/><path d="m14 11 .6 1.8L16 13.5l-1.4.7L14 16l-.6-1.8-1.4-.7 1.4-.7z"/>',
+const MONACO_TIMEOUT_MS = 6000;
+const DEFAULT_LABELS = Object.freeze({
+  search: 'Dateien suchen',
+  files: 'Quelltext-Dateien',
+  diff: 'Diff',
+  format: 'Format',
+  revert: 'Verwerfen',
 });
 
-function actionIcon(ctx, name, size = 14, strokeWidth = 1.8) {
-  const shellIcon = ctx?.getActionIcon?.(name, size, strokeWidth);
-  if (typeof shellIcon === 'string' && shellIcon.trim()) return shellIcon;
-  return `<svg viewBox="0 0 20 20" width="${size}" height="${size}" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ACTION_ICON_FALLBACKS[name] || ACTION_ICON_FALLBACKS.open}</svg>`;
-}
+let monacoPromise = null;
 
-export async function mount(container, ctx) {
-  ensureStyles();
+export async function createCodeEditor({ root, files = [], onChange, readOnly = false, activePath = '', prefer = 'auto', labels = {}, restored = null } = {}) {
+  if (!root) throw new Error('createCodeEditor: root fehlt');
+  const L = { ...DEFAULT_LABELS, ...labels };
+  const snap = restored && typeof restored === 'object' ? restored : {};
   const state = {
-    moduleId: ctx.args?.moduleId || '',
-    moduleTitle: ctx.args?.moduleTitle || ctx.args?.moduleId || 'Module',
-    modules: [],
-    files: [],
+    files: normalizeSourceFiles(files),
     activePath: '',
-    search: '',
-    saving: false,
-    loading: false,
-    loadingModules: false,
-    readonly: false,
-    monaco: null,
-    editor: null,
-    model: null,
-    usingMonaco: false,
-    diffOpen: false,
-    historyOpen: false,
-    agentOpen: false,
-    commits: [],
-    sourceDenied: false,
-    lockedModule: Boolean(ctx.args?.lockedModule),
+    search: typeof snap.search === 'string' ? snap.search : '',
+    readOnly: Boolean(readOnly),
+    diffOpen: Boolean(snap.diffOpen),
+    destroyed: false,
   };
+  for (const [path, content] of Object.entries(snap.drafts || {})) {
+    const file = state.files.find((f) => f.path === path);
+    if (file && typeof content === 'string') { file.draft_content = content; file.dirty = content !== file.content; }
+  }
 
-  container.innerHTML = `
-    <section class="source-editor" data-source-editor data-shell-v2="true" data-locked-module="${state.lockedModule ? 'true' : 'false'}">
-      <aside class="source-editor-sidebar">
-        <div class="source-editor-sidebar-head">
-          <strong data-source-module-title>${escapeHtml(state.moduleTitle)}</strong>
-          <span data-source-module-id>${escapeHtml(state.moduleId || 'Modul auswählen')}</span>
-        </div>
-        <div class="source-editor-module-list" data-source-module-list aria-label="Business-OS Apps"></div>
-        <label class="source-editor-search">
-          <span aria-hidden="true">⌕</span>
-          <input data-source-search type="search" placeholder="Dateien suchen" autocomplete="off">
-        </label>
-        <nav data-source-file-list aria-label="Source files"></nav>
-      </aside>
-      <main class="source-editor-main">
-        <header class="source-editor-toolbar" data-shell-v2-header-row="1">
-          <div class="source-editor-file-meta">
-            <strong data-source-active-file>Source</strong>
-            <span data-source-file-detail></span>
-          </div>
-          <div class="source-editor-actions">
-            <button type="button" data-source-open-app aria-label="App öffnen" title="App öffnen"><span class="source-editor-action-icon" aria-hidden="true">${actionIcon(ctx, 'open')}</span><span>App</span></button>
-            <button type="button" data-source-diff aria-label="Diff anzeigen" title="Diff anzeigen"><span class="source-editor-action-icon" aria-hidden="true">${actionIcon(ctx, 'diff')}</span><span>Diff</span></button>
-            <button type="button" data-source-format aria-label="Datei formatieren" title="Datei formatieren"><span class="source-editor-action-icon" aria-hidden="true">${actionIcon(ctx, 'format')}</span><span>Format</span></button>
-            <button type="button" data-source-revert aria-label="Änderungen verwerfen" title="Änderungen verwerfen"><span class="source-editor-action-icon" aria-hidden="true">${actionIcon(ctx, 'undo')}</span><span>Revert</span></button>
-            <button type="button" data-source-reload aria-label="Neu laden" title="Neu laden"><span class="source-editor-action-icon" aria-hidden="true">${actionIcon(ctx, 'refresh')}</span><span>Laden</span></button>
-            <button type="button" data-source-save aria-label="Speichern" title="Speichern"><span class="source-editor-action-icon" aria-hidden="true">${actionIcon(ctx, 'save')}</span><span>Speichern</span></button>
-            <button type="button" data-source-commit aria-label="Commit erstellen" title="Änderungen als Commit versiegeln"><span class="source-editor-action-icon" aria-hidden="true">${actionIcon(ctx, 'commit')}</span><span>Commit</span></button>
-            <button type="button" data-source-history aria-label="History anzeigen" title="Commit-History"><span class="source-editor-action-icon" aria-hidden="true">${actionIcon(ctx, 'history')}</span><span>History</span></button>
-            <button type="button" data-source-agent aria-label="pi-Agent delegieren" title="Coding-Task an den pi-Agent delegieren"><span class="source-editor-action-icon" aria-hidden="true">${actionIcon(ctx, 'agent')}</span><span>Agent</span></button>
-          </div>
-        </header>
-        <div class="source-editor-workbench" data-source-workbench>
-          <div class="source-editor-monaco" data-source-monaco></div>
-          <div class="source-editor-fallback" data-source-fallback hidden>
-            <div class="source-editor-lines" data-source-lines aria-hidden="true">1</div>
-            <textarea data-source-code spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
-          </div>
-          <div class="source-editor-placeholder" data-source-placeholder>
-            <strong>Modul auswählen</strong>
-            <span>Wähle links eine Business-OS App, um ihre Source-Dateien zu laden.</span>
-          </div>
-          <aside class="source-editor-diff" data-source-diff-panel hidden></aside>
-          <aside class="source-editor-diff source-editor-history" data-source-history-panel hidden></aside>
-          <aside class="source-editor-diff source-editor-agent" data-source-agent-panel hidden>
-            <form data-source-agent-form class="source-editor-agent-form">
-              <strong class="source-editor-agent-title">pi-Coding-Agent</strong>
-              <span class="source-editor-agent-sub">Delegiere eine Änderung an dieser App. Das Ergebnis wird als Versionspunkt versiegelt.</span>
-              <textarea data-source-agent-task class="source-editor-agent-task" rows="5" placeholder="Was soll der Agent an dieser App ändern?" required></textarea>
-              <div class="source-editor-agent-actions">
-                <span class="source-editor-agent-model">Model: Kimi K3 (CTOX)</span>
-                <button type="button" data-source-agent-open-app class="source-editor-agent-openapp" title="Diese App in der Coding-Agent-App öffnen"><span class="source-editor-action-icon" aria-hidden="true">${actionIcon(ctx, 'open')}</span><span>Coding-Agent-App</span></button>
-                <button type="submit" data-source-agent-run class="source-editor-agent-run">Delegieren</button>
-              </div>
-              <p data-source-agent-hint class="source-editor-agent-hint" aria-live="polite"></p>
-            </form>
-            <div class="source-editor-agent-thread" data-source-agent-thread aria-live="polite"></div>
-          </aside>
-        </div>
-        <footer class="source-editor-status" data-source-status>Lade Source...</footer>
-      </main>
-    </section>
-  `;
-
+  // Hülle trägt den CSS-Scope der Bibliothek ([data-app="code-editor"], scope-css); Stylesheet liegt im Fenster.
+  const el = document.createElement('div');
+  el.dataset.app = 'code-editor';
+  el.className = 'ctox-code-editor-scope';
+  el.style.cssText = 'height:100%;min-height:0;position:relative;container-type:inline-size';
+  el.innerHTML = `
+    <link rel="stylesheet" href="${new URL('./code-editor.css', import.meta.url).href}">
+    <section class="ctox-code-editor">
+    <aside class="ctox-code-editor__side">
+      <label class="ctox-code-editor__search"><span aria-hidden="true">⌕</span><input type="search" data-ce-search autocomplete="off"></label>
+      <nav class="ctox-code-editor__files" data-ce-files></nav>
+    </aside>
+    <main class="ctox-code-editor__main">
+      <header class="ctox-code-editor__bar">
+        <strong data-ce-active></strong><span data-ce-detail></span>
+        <span class="ctox-code-editor__spacer"></span>
+        <button type="button" data-ce-diff></button>
+        <button type="button" data-ce-format></button>
+        <button type="button" data-ce-revert></button>
+      </header>
+      <div class="ctox-code-editor__work">
+        <div class="ctox-code-editor__host" data-ce-host></div>
+        <aside class="ctox-code-editor__diff" data-ce-diff-panel hidden></aside>
+      </div>
+    </main>
+    </section>`;
+  root.append(el);
   const refs = {
-    moduleTitle: container.querySelector('[data-source-module-title]'),
-    moduleId: container.querySelector('[data-source-module-id]'),
-    moduleList: container.querySelector('[data-source-module-list]'),
-    fileList: container.querySelector('[data-source-file-list]'),
-    search: container.querySelector('[data-source-search]'),
-    activeFile: container.querySelector('[data-source-active-file]'),
-    fileDetail: container.querySelector('[data-source-file-detail]'),
-    code: container.querySelector('[data-source-code]'),
-    lines: container.querySelector('[data-source-lines]'),
-    status: container.querySelector('[data-source-status]'),
-    save: container.querySelector('[data-source-save]'),
-    reload: container.querySelector('[data-source-reload]'),
-    revert: container.querySelector('[data-source-revert]'),
-    format: container.querySelector('[data-source-format]'),
-    openApp: container.querySelector('[data-source-open-app]'),
-    diff: container.querySelector('[data-source-diff]'),
-    diffPanel: container.querySelector('[data-source-diff-panel]'),
-    commit: container.querySelector('[data-source-commit]'),
-    history: container.querySelector('[data-source-history]'),
-    historyPanel: container.querySelector('[data-source-history-panel]'),
-    agent: container.querySelector('[data-source-agent]'),
-    agentPanel: container.querySelector('[data-source-agent-panel]'),
-    agentForm: container.querySelector('[data-source-agent-form]'),
-    agentTask: container.querySelector('[data-source-agent-task]'),
-    agentRun: container.querySelector('[data-source-agent-run]'),
-    agentHint: container.querySelector('[data-source-agent-hint]'),
-    agentThread: container.querySelector('[data-source-agent-thread]'),
-    agentOpenApp: container.querySelector('[data-source-agent-open-app]'),
-    monacoHost: container.querySelector('[data-source-monaco]'),
-    fallback: container.querySelector('[data-source-fallback]'),
-    placeholder: container.querySelector('[data-source-placeholder]'),
+    search: el.querySelector('[data-ce-search]'),
+    files: el.querySelector('[data-ce-files]'),
+    active: el.querySelector('[data-ce-active]'),
+    detail: el.querySelector('[data-ce-detail]'),
+    diff: el.querySelector('[data-ce-diff]'),
+    format: el.querySelector('[data-ce-format]'),
+    revert: el.querySelector('[data-ce-revert]'),
+    host: el.querySelector('[data-ce-host]'),
+    diffPanel: el.querySelector('[data-ce-diff-panel]'),
   };
-  const codingAgentAppAvailable = isDesktopAppTargetAvailable(ctx, 'coding-agents');
-  if (refs.agentOpenApp && !codingAgentAppAvailable) {
-    refs.agentOpenApp.disabled = true;
-    refs.agentOpenApp.title = 'Coding-Agent-App ist in diesem Workspace nicht verfügbar';
-  }
+  refs.search.placeholder = L.search;
+  refs.files.setAttribute('aria-label', L.files);
+  refs.diff.textContent = L.diff;
+  refs.format.textContent = L.format;
+  refs.revert.textContent = L.revert;
+  refs.search.value = state.search;
 
-  refs.search.addEventListener('input', () => {
-    state.search = refs.search.value.trim();
-    renderFileList();
-  });
-  refs.code.addEventListener('input', () => {
-    setActiveDirty(true);
-    updateLineNumbers();
-    renderStatus();
-    updateActionState();
+  const surface = await createSurface(refs.host, { prefer, readOnly: state.readOnly, onInput: handleInput });
+  let silent = false;
+
+  refs.search.addEventListener('input', () => { state.search = refs.search.value; renderFiles(); });
+  refs.diff.addEventListener('click', () => api.toggleDiff());
+  refs.format.addEventListener('click', () => { try { api.format(); } catch { /* ungültiges JSON: Inhalt bleibt */ } });
+  refs.revert.addEventListener('click', () => api.revert());
+
+  function current() { return state.files.find((f) => f.path === state.activePath) || null; }
+  function valueOf(file) { return file ? (file.draft_content ?? file.content ?? '') : ''; }
+
+  function handleInput(value) {
+    if (silent || state.destroyed) return;
+    const file = current();
+    if (!file) return;
+    file.draft_content = value;
+    file.dirty = value !== (file.content ?? '');
+    renderFiles();
+    renderBar();
     if (state.diffOpen) renderDiff();
-  });
-  refs.code.addEventListener('scroll', () => {
-    refs.lines.scrollTop = refs.code.scrollTop;
-  });
-  refs.code.addEventListener('keydown', (event) => {
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') {
-      event.preventDefault();
-      saveActiveFile();
-      return;
-    }
-    if (event.key === 'Tab') {
-      event.preventDefault();
-      insertAtCursor(refs.code, '  ');
-    }
-  });
-  refs.save.addEventListener('click', saveActiveFile);
-  refs.format.addEventListener('click', formatActiveFile);
-  refs.revert.addEventListener('click', revertActiveFile);
-  refs.reload.addEventListener('click', loadBundle);
-  refs.diff.addEventListener('click', () => {
-    if (!activeFile()) return;
-    state.diffOpen = !state.diffOpen;
-    refs.diffPanel.hidden = !state.diffOpen;
-    refs.diff.classList.toggle('is-active', state.diffOpen);
+    onChange?.(file.path, value, { dirty: file.dirty });
+  }
+
+  function setSurfaceValue(text, language) {
+    silent = true;
+    try { surface.setValue(text, language); } finally { silent = false; }
+  }
+
+  function renderFiles() {
+    const rows = filterSourceFiles(state.files, state.search);
+    refs.files.replaceChildren(...rows.map((file) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'ctox-code-editor__file';
+      b.dataset.path = file.path;
+      b.classList.toggle('is-active', file.path === state.activePath);
+      b.classList.toggle('is-dirty', Boolean(file.dirty));
+      b.setAttribute('aria-current', file.path === state.activePath ? 'true' : 'false');
+      b.textContent = file.path;
+      b.addEventListener('click', () => api.open(file.path));
+      return b;
+    }));
+  }
+
+  function renderBar() {
+    const file = current();
+    refs.active.textContent = file ? shortName(file.path) : '';
+    refs.detail.textContent = file ? `${file.language}${file.dirty ? ' · ●' : ''}` : '';
+    const state2 = sourceEditorActionState({ hasFile: Boolean(file), dirty: Boolean(file?.dirty), readOnly: state.readOnly });
+    refs.format.disabled = !state2.canFormat;
+    refs.revert.disabled = !state2.canRevert;
+    refs.diff.disabled = !state2.canDiff;
     refs.diff.setAttribute('aria-pressed', state.diffOpen ? 'true' : 'false');
-    renderDiff();
-    state.editor?.layout?.();
-  });
-  refs.openApp.addEventListener('click', () => {
-    if (!state.moduleId) return;
-    if (typeof ctx.showApp === 'function') ctx.showApp();
-    else location.hash = `#${encodeURIComponent(state.moduleId)}`;
-  });
-  refs.commit.addEventListener('click', commitActiveModule);
-  refs.history.addEventListener('click', () => {
-    if (!state.moduleId) return;
-    state.historyOpen = !state.historyOpen;
-    if (state.historyOpen && state.diffOpen) {
-      state.diffOpen = false;
-      refs.diffPanel.hidden = true;
-      refs.diff.classList.remove('is-active');
-      refs.diff.setAttribute('aria-pressed', 'false');
-    }
-    refs.historyPanel.hidden = !state.historyOpen;
-    refs.history.classList.toggle('is-active', state.historyOpen);
-    refs.history.setAttribute('aria-pressed', state.historyOpen ? 'true' : 'false');
-    if (state.historyOpen) renderHistory();
-  });
-  refs.agent.addEventListener('click', () => {
-    if (!state.moduleId) return;
-    state.agentOpen = !state.agentOpen;
-    if (state.agentOpen) {
-      // Agent is a focused mode — close the diff and history panels.
-      if (state.diffOpen) {
-        state.diffOpen = false;
-        refs.diffPanel.hidden = true;
-        refs.diff.classList.remove('is-active');
-        refs.diff.setAttribute('aria-pressed', 'false');
-      }
-      if (state.historyOpen) {
-        state.historyOpen = false;
-        refs.historyPanel.hidden = true;
-        refs.history.classList.remove('is-active');
-        refs.history.setAttribute('aria-pressed', 'false');
-      }
-    }
-    refs.agentPanel.hidden = !state.agentOpen;
-    refs.agent.classList.toggle('is-active', state.agentOpen);
-    refs.agent.setAttribute('aria-pressed', state.agentOpen ? 'true' : 'false');
-    if (state.agentOpen) {
-      refs.agentTask.focus();
-      loadAgentThread();
-    }
-  });
-  refs.agentForm.addEventListener('submit', (event) => {
-    event.preventDefault();
-    delegateAgentTurn();
-  });
-  refs.agentOpenApp?.addEventListener('click', () => {
-    if (!state.moduleId || !codingAgentAppAvailable) return;
-    // Cross-link into the aggregate coding-agent app, focused on this app.
-    ctx.openDesktopApp?.('coding-agents', { args: { moduleId: state.moduleId, moduleTitle: state.moduleTitle } });
-  });
-
-  const monacoReady = initMonaco().catch((error) => {
-    console.warn('[source-editor] Monaco unavailable, using textarea fallback:', error);
-    refs.monacoHost.hidden = true;
-    refs.fallback.hidden = false;
-    setStatus('Monaco konnte nicht geladen werden. Texteditor-Fallback aktiv.', true);
-  });
-
-  await loadModuleCatalog();
-  if (state.moduleId) {
-    await loadBundle();
-  } else if (state.sourceDenied) {
-    clearEditor('Source nicht freigegeben', 'Diese App kann mit deinem Zugriff nicht geöffnet werden.');
-    setStatus('Source ist fuer diese App nicht freigegeben.', true);
-    updateActionState();
-  } else {
-    clearEditor('Modul auswählen', 'Wähle links eine Business-OS App, um ihre Source-Dateien zu laden.');
-    setStatus(moduleEmptyStatus());
-    updateActionState();
-  }
-  await monacoReady;
-  if (state.files.length) openFile(state.activePath);
-
-  async function initMonaco() {
-    const monaco = await loadMonaco();
-    if (!container.isConnected) return;
-    state.monaco = monaco;
-    state.editor = monaco.editor.create(refs.monacoHost, {
-      value: '',
-      language: 'javascript',
-      theme: 'business-os-dark',
-      automaticLayout: true,
-      minimap: { enabled: false },
-      fontSize: 12,
-      lineHeight: 20,
-      tabSize: 2,
-      insertSpaces: true,
-      scrollBeyondLastLine: false,
-      roundedSelection: false,
-      renderLineHighlight: 'gutter',
-      overviewRulerBorder: false,
-      padding: { top: 12, bottom: 12 },
-    });
-    state.usingMonaco = true;
-    refs.fallback.hidden = true;
-    refs.monacoHost.hidden = false;
-    state.editor.onDidChangeModelContent(() => {
-      setActiveDirty(true);
-      renderStatus();
-      updateActionState();
-      if (state.diffOpen) renderDiff();
-    });
-    state.editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, saveActiveFile);
-    if (state.activePath) setEditorValue(currentFileValue(), activeFile()?.language || 'text', state.activePath);
-    renderStatus();
-    updateActionState();
-  }
-
-  async function loadModuleCatalog() {
-    state.loadingModules = true;
-    renderModuleList();
-    try {
-      const modules = Array.isArray(ctx.modules) && ctx.modules.length
-        ? ctx.modules
-        : await fetchModuleCatalog();
-      state.modules = normalizeModuleCatalog(modules, {
-        session: ctx.session,
-        governance: ctx.governance,
-        requireSourceView: true,
-      });
-      if (state.lockedModule && state.moduleId) {
-        state.modules = state.modules.filter((entry) => entry.id === state.moduleId);
-      }
-      const selected = state.modules.find((entry) => entry.id === state.moduleId);
-      if (selected) {
-        state.moduleTitle = selected.title;
-      } else if (state.moduleId) {
-        state.sourceDenied = true;
-        state.moduleId = '';
-        state.moduleTitle = 'Module';
-        setStatus('Source ist fuer diese App nicht freigegeben.', true);
-      }
-      renderModuleHeader();
-    } catch (error) {
-      console.warn('[source-editor] module catalog unavailable:', error);
-      state.modules = state.moduleId ? [{ id: state.moduleId, title: state.moduleTitle }] : [];
-      renderModuleHeader();
-      if (!state.moduleId) setStatus(`Modulkatalog nicht verfügbar: ${error?.message || error}`, true);
-    } finally {
-      state.loadingModules = false;
-      renderModuleList();
-    }
-  }
-
-  async function selectModule(module) {
-    if (!module?.id || module.id === state.moduleId) return;
-    persistActiveDraft();
-    state.moduleId = module.id;
-    state.moduleTitle = module.title || module.id;
-    state.files = [];
-    state.activePath = '';
-    state.readonly = !canModifySelectedModule(module);
-    refs.search.value = '';
-    state.search = '';
-    renderModuleHeader();
-    renderModuleList();
-    clearEditor('Lade Source...', `${state.moduleTitle} wird geladen.`);
-    ctx.setTitle?.(`${state.moduleTitle} Source`);
-    await loadBundle();
-  }
-
-  async function loadBundle() {
-    if (!state.moduleId) {
-      state.files = [];
-      state.activePath = '';
-      clearEditor('Modul auswählen', 'Wähle links eine Business-OS App, um ihre Source-Dateien zu laden.');
-      renderFileList();
-      setStatus(moduleEmptyStatus());
-      updateActionState();
-      return;
-    }
-    state.loading = true;
-    const selected = selectedModule();
-    if (!canViewSelectedModuleSource(selected)) {
-      state.files = [];
-      state.activePath = '';
-      state.readonly = true;
-      clearEditor('Source nicht freigegeben', `${state.moduleTitle} kann mit deinem Zugriff nicht geöffnet werden.`);
-      renderFileList();
-      setStatus('Source ist fuer diese App nicht freigegeben.', true);
-      updateActionState();
-      state.loading = false;
-      return;
-    }
-    state.readonly = !canModifySelectedModule(selected);
-    setStatus('Lade Source...');
-    clearEditor('Lade Source...', `${state.moduleTitle} wird geladen.`);
-    updateActionState();
-    try {
-      await ensureSourceReplication();
-      const projection = await dispatchSourceCommand('ctox.source.load', {
-        module_id: state.moduleId,
-        title: `Load ${state.moduleId} source files`,
-      });
-      const expectedCount = Number(projection?.result?.count || 0);
-      const files = await waitForSourceFiles(expectedCount);
-      state.files = normalizeSourceFiles(files);
-      renderFileList();
-      openFile(state.activePath && state.files.some((file) => file.path === state.activePath)
-        ? state.activePath
-        : preferredInitialPath(state.files));
-      setStatus(`${state.files.length} Source-Dateien geladen.${state.usingMonaco ? ' Monaco aktiv.' : ''}${state.readonly ? ' Read-only.' : ''}`);
-    } catch (error) {
-      console.error('[source-editor] load failed:', error);
-      state.files = [];
-      state.activePath = '';
-      clearEditor('Source nicht verfügbar', `${state.moduleTitle}: ${error?.message || error}`);
-      renderFileList();
-      setStatus(`Source konnte nicht geladen werden: ${error?.message || error}`, true);
-    } finally {
-      state.loading = false;
-      renderFileList();
-      updateActionState();
-    }
-  }
-
-  function renderModuleHeader() {
-    refs.moduleTitle.textContent = state.moduleTitle || 'Module';
-    refs.moduleId.textContent = state.moduleId || 'Modul auswählen';
-  }
-
-  function renderModuleList() {
-    refs.moduleList.innerHTML = '';
-    refs.moduleList.hidden = state.lockedModule;
-    if (state.lockedModule) return;
-    if (state.loadingModules) {
-      refs.moduleList.innerHTML = '<p class="source-editor-empty">Lade Apps...</p>';
-      return;
-    }
-    if (!state.modules.length) {
-      refs.moduleList.innerHTML = '<p class="source-editor-empty">Keine Apps im Katalog gefunden.</p>';
-      return;
-    }
-    const list = document.createElement('div');
-    list.className = 'source-editor-modules';
-    for (const module of state.modules) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'source-editor-module';
-      button.classList.toggle('is-active', module.id === state.moduleId);
-      button.setAttribute('aria-pressed', module.id === state.moduleId ? 'true' : 'false');
-      button.innerHTML = `
-        <span>${escapeHtml(module.title || module.id)}</span>
-        <small>${escapeHtml(module.id)}</small>
-      `;
-      button.addEventListener('click', () => selectModule(module));
-      list.append(button);
-    }
-    refs.moduleList.append(list);
-  }
-
-  function renderFileList() {
-    refs.fileList.innerHTML = '';
-    if (!state.moduleId) {
-      refs.fileList.innerHTML = '<p class="source-editor-empty">Erst eine App wählen.</p>';
-      return;
-    }
-    if (state.loading) {
-      refs.fileList.innerHTML = '<p class="source-editor-empty">Lade Source-Dateien...</p>';
-      return;
-    }
-    if (!state.files.length) {
-      refs.fileList.innerHTML = '<p class="source-editor-empty">Keine editierbaren Source-Dateien oder Projektion leer.</p>';
-      return;
-    }
-    const files = filteredFiles();
-    if (!files.length) {
-      refs.fileList.innerHTML = '<p class="source-editor-empty">Keine Treffer für diese Suche.</p>';
-      return;
-    }
-    for (const file of files) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'source-editor-file';
-      button.setAttribute('aria-current', file.path === state.activePath ? 'page' : 'false');
-      button.classList.toggle('is-active', file.path === state.activePath);
-      button.classList.toggle('is-dirty', Boolean(file.dirty));
-      button.innerHTML = `
-        <span>${escapeHtml(shortName(file.path))}</span>
-        <small>${escapeHtml(file.path)}</small>
-      `;
-      button.addEventListener('click', () => openFile(file.path));
-      refs.fileList.append(button);
-    }
-  }
-
-  function openFile(path) {
-    persistActiveDraft();
-    const file = state.files.find((entry) => entry.path === path);
-    if (!file) {
-      state.activePath = '';
-      clearEditor('Keine Datei', 'Wähle eine Source-Datei aus der linken Liste.');
-      renderFileList();
-      renderDiff();
-      renderStatus();
-      updateActionState();
-      return;
-    }
-    state.activePath = file.path;
-    refs.activeFile.textContent = file.path;
-    refs.fileDetail.textContent = fileDetail(file);
-    refs.placeholder.hidden = true;
-    refs.monacoHost.classList.remove('is-empty');
-    refs.fallback.classList.remove('is-empty');
-    setEditorValue(file.draft_content ?? file.content ?? '', file.language || 'text', file.path);
-    updateLineNumbers();
-    renderFileList();
-    renderDiff();
-    renderStatus();
-    updateActionState();
-    ctx.setTitle?.(`${state.moduleTitle} · ${shortName(file.path)}`);
-  }
-
-  async function saveActiveFile() {
-    const file = activeFile();
-    if (!file || state.saving || state.readonly) {
-      updateActionState();
-      return;
-    }
-    persistActiveDraft();
-    if (!file.dirty) {
-      renderStatus();
-      updateActionState();
-      return;
-    }
-    const content = file.draft_content ?? file.content ?? '';
-    state.saving = true;
-    updateActionState();
-    setStatus(`Speichere ${file.path}...`);
-    try {
-      await ensureSourceReplication();
-      const projection = await dispatchSourceCommand('ctox.source.save', {
-        module_id: state.moduleId,
-        path: file.path,
-        content,
-        title: `Save ${state.moduleId}/${file.path}`,
-      });
-      const result = projection?.result || {};
-      const projected = result.source_file_id ? await waitForSourceFile(result.source_file_id) : null;
-      file.content = content;
-      file.draft_content = null;
-      file.dirty = false;
-      file.size_bytes = projected?.size_bytes || result.size_bytes || new Blob([file.content]).size;
-      file.modified_at_ms = projected?.updated_at_ms || result.modified_at_ms || Date.now();
-      file.sha256 = projected?.sha256 || result.sha256 || file.sha256 || '';
-      file.previous_sha256 = projected?.previous_sha256 || result.previous_sha256 || file.previous_sha256 || '';
-      file.snapshot_id = projected?.snapshot_id || result.snapshot_id || file.snapshot_id || '';
-      refs.fileDetail.textContent = fileDetail(file);
-      renderFileList();
-      renderDiff();
-      setStatus(`${file.path} gespeichert. Snapshot: ${result.snapshot_id || 'nicht nötig'}.`);
-    } catch (error) {
-      console.error('[source-editor] save failed:', error);
-      setStatus(`Speichern fehlgeschlagen: ${error?.message || error}`, true);
-    } finally {
-      state.saving = false;
-      updateActionState();
-    }
-  }
-
-  function revertActiveFile() {
-    const file = activeFile();
-    if (!file || state.saving) return;
-    file.draft_content = null;
-    file.dirty = false;
-    setEditorValue(file.content ?? '', file.language || 'text', file.path);
-    updateLineNumbers();
-    renderFileList();
-    renderDiff();
-    renderStatus();
-    updateActionState();
-  }
-
-  function formatActiveFile() {
-    const file = activeFile();
-    if (!file || state.saving || state.loading) return;
-    const value = getEditorValue();
-    let formatted;
-    try {
-      formatted = formatSourceContent(value, file.language || languageFromPath(file.path), file.path);
-    } catch (error) {
-      setStatus(`Formatieren fehlgeschlagen: ${error?.message || error}`, true);
-      return;
-    }
-    if (formatted === value) {
-      setStatus(`${file.path} ist bereits formatiert.`);
-      return;
-    }
-    setEditorValue(formatted, file.language || 'text', file.path);
-    updateLineNumbers();
-    setActiveDirty(true);
-    renderDiff();
-    renderStatus();
-    updateActionState();
-  }
-
-  function persistActiveDraft() {
-    const file = activeFile();
-    if (!file) return;
-    const value = getEditorValue();
-    if (value !== (file.content ?? '')) {
-      file.draft_content = value;
-      file.dirty = true;
-    } else {
-      file.draft_content = null;
-      file.dirty = false;
-    }
-  }
-
-  function setActiveDirty(value) {
-    const file = activeFile();
-    if (!file) return;
-    file.dirty = Boolean(value) && getEditorValue() !== (file.content ?? '');
-    file.draft_content = file.dirty ? getEditorValue() : null;
-    renderFileList();
-  }
-
-  function filteredFiles() {
-    return filterSourceFiles(state.files, state.search);
-  }
-
-  function activeFile() {
-    return state.files.find((entry) => entry.path === state.activePath);
-  }
-
-  function currentFileValue() {
-    const file = activeFile();
-    return file ? file.draft_content ?? file.content ?? '' : '';
-  }
-
-  function getEditorValue() {
-    return state.editor ? state.editor.getValue() : refs.code.value;
-  }
-
-  function setEditorValue(value, language, path) {
-    if (state.editor && state.monaco) {
-      const modelPath = sourceModelPath(state.moduleId, path);
-      const uri = typeof state.monaco.Uri.from === 'function'
-        ? state.monaco.Uri.from({ scheme: 'business-os-source', path: modelPath })
-        : state.monaco.Uri.parse(`business-os-source:${modelPath}`);
-      const existing = state.monaco.editor.getModel(uri);
-      const model = existing || state.monaco.editor.createModel(value, monacoLanguage(language), uri);
-      if (model.getValue() !== value) model.setValue(value);
-      state.monaco.editor.setModelLanguage(model, monacoLanguage(language));
-      state.editor.setModel(model);
-      state.model = model;
-    } else {
-      refs.code.value = value;
-      refs.code.dataset.language = language || 'text';
-    }
-  }
-
-  function updateLineNumbers() {
-    const count = Math.max(1, refs.code.value.split('\n').length);
-    let text = '';
-    for (let index = 1; index <= count; index += 1) text += `${index}\n`;
-    refs.lines.textContent = text;
   }
 
   function renderDiff() {
-    if (!state.diffOpen) return;
-    const file = activeFile();
-    if (!file) {
-      refs.diffPanel.innerHTML = '<p class="source-editor-empty">Keine Datei ausgewählt.</p>';
-      return;
+    const file = current();
+    refs.diffPanel.hidden = !state.diffOpen || !file;
+    if (refs.diffPanel.hidden) { refs.diffPanel.replaceChildren(); return; }
+    const diff = buildLineDiff(file.content ?? '', valueOf(file));
+    const head = document.createElement('div');
+    head.className = 'ctox-code-editor__diff-head';
+    head.textContent = `+${diff.added} −${diff.removed}`;
+    const pre = document.createElement('pre');
+    for (const row of diff.rows) {
+      const line = document.createElement('div');
+      line.className = `is-${row.type}`;
+      line.textContent = `${row.type === 'add' ? '+' : '−'} ${row.text}`;
+      pre.append(line);
     }
-    const diff = buildLineDiff(file.content ?? '', getEditorValue());
-    if (!diff.rows.length) {
-      refs.diffPanel.innerHTML = `
-        <div class="source-editor-diff-head">
-          <strong>Keine Änderungen</strong>
-          <span>${escapeHtml(file.path)}</span>
-        </div>
-      `;
-      return;
-    }
-    refs.diffPanel.innerHTML = `
-      <div class="source-editor-diff-head">
-        <strong>${diff.added} hinzugefügt · ${diff.removed} entfernt</strong>
-        <span>${escapeHtml(file.path)}</span>
-      </div>
-      <div class="source-editor-diff-rows">
-        ${diff.rows.map((row) => `
-          <pre class="${row.type === 'add' ? 'is-add' : 'is-remove'}"><b>${row.type === 'add' ? '+' : '-'}</b>${escapeHtml(row.text || ' ')}</pre>
-        `).join('')}
-      </div>
-    `;
+    refs.diffPanel.replaceChildren(head, pre);
   }
 
-  function renderStatus() {
-    const file = activeFile();
-    refs.status.classList.remove('is-error');
-    if (!file) {
-      refs.status.textContent = state.moduleId
-        ? `${state.moduleTitle}: keine Datei ausgewählt.`
-        : moduleEmptyStatus();
-      return;
-    }
-    const mode = state.usingMonaco ? 'Monaco' : 'Texteditor';
-    const suffix = file.dirty ? ' · ungespeichert' : '';
-    const readonly = state.readonly ? ' · read-only fallback' : '';
-    refs.status.textContent = `${state.moduleId}/${file.path} · ${mode}${suffix}${readonly}`;
-  }
-
-  function setStatus(text, error = false) {
-    refs.status.textContent = text;
-    refs.status.classList.toggle('is-error', Boolean(error));
-  }
-
-  function clearEditor(title, detail) {
-    refs.activeFile.textContent = title;
-    refs.fileDetail.textContent = detail || '';
-    refs.placeholder.hidden = false;
-    refs.placeholder.querySelector('strong').textContent = title;
-    refs.placeholder.querySelector('span').textContent = detail || '';
-    refs.monacoHost.classList.add('is-empty');
-    refs.fallback.classList.add('is-empty');
-    setEditorValue('', 'text', 'empty.txt');
-    updateLineNumbers();
-  }
-
-  function updateActionState() {
-    const file = activeFile();
-    persistActiveDraft();
-    const actions = sourceEditorActionState({
-      moduleId: state.moduleId,
-      hasFile: Boolean(file),
-      dirty: Boolean(file?.dirty),
-      saving: state.saving,
-      loading: state.loading,
-      readonly: state.readonly,
-    });
-    refs.openApp.disabled = !actions.openApp;
-    refs.diff.disabled = !actions.diff;
-    refs.format.disabled = !actions.format;
-    refs.revert.disabled = !actions.revert;
-    refs.reload.disabled = !actions.reload;
-    refs.save.disabled = !actions.save;
-    if (refs.commit) refs.commit.disabled = !state.moduleId || state.readonly || state.saving || state.loading;
-    if (refs.history) refs.history.disabled = !state.moduleId;
-    if (refs.agent) refs.agent.disabled = !state.moduleId;
-    if (refs.agentRun) refs.agentRun.disabled = !state.moduleId || state.readonly || state.saving;
-    if (refs.agentOpenApp) refs.agentOpenApp.disabled = !state.moduleId || !codingAgentAppAvailable;
-  }
-
-  async function ensureSourceReplication() {
-    await Promise.all([
-      ctx.sync?.startCollection?.('business_module_source_files'),
-      ctx.sync?.startCollection?.('business_module_commits'),
-      ctx.sync?.startCollection?.('business_commands'),
-    ]);
-  }
-
-  async function loadCommitsFromRxdb() {
-    const collection = ctx.db?.collection?.('business_module_commits');
-    if (!collection) return [];
-    const docs = await collection.find({
-      selector: { module_id: state.moduleId },
-    }).exec();
-    return docs
-      .map((doc) => (doc.toJSON ? doc.toJSON() : doc))
-      .filter((commit) => !commit._deleted)
-      .sort((left, right) => Number(right.seq || 0) - Number(left.seq || 0));
-  }
-
-  async function renderHistory() {
-    if (!refs.historyPanel) return;
-    refs.historyPanel.innerHTML = '<p class="source-editor-empty">Lade History…</p>';
-    let commits = [];
-    try {
-      commits = await loadCommitsFromRxdb();
-    } catch (error) {
-      refs.historyPanel.innerHTML = `<p class="source-editor-empty">History nicht verfügbar: ${escapeHtml(String(error?.message || error))}</p>`;
-      return;
-    }
-    state.commits = commits;
-    if (!commits.length) {
-      refs.historyPanel.innerHTML = '<p class="source-editor-empty">Noch keine Commits. „Commit" versiegelt die aktuellen Änderungen zu einem Versionspunkt.</p>';
-      return;
-    }
-    const rows = commits.map((commit) => {
-      const when = Number(commit.authored_at_ms || commit.created_at_ms || 0);
-      const stamp = when ? new Date(when).toLocaleString() : '';
-      const message = escapeHtml(String(commit.message || commit.origin || 'commit'));
-      const meta = escapeHtml(`#${commit.seq ?? '?'} · ${commit.author || 'unbekannt'}${stamp ? ` · ${stamp}` : ''}`);
-      const files = Array.isArray(commit.file_manifest) ? commit.file_manifest.length : 0;
-      return `<li class="source-editor-commit"><strong>${message}</strong><span>${meta}</span><span class="source-editor-commit-files">${files} Datei${files === 1 ? '' : 'en'}</span></li>`;
-    }).join('');
-    refs.historyPanel.innerHTML = `<ol class="source-editor-commit-list" aria-label="Commit-History">${rows}</ol>`;
-  }
-
-  async function commitActiveModule() {
-    if (!state.moduleId || state.readonly || state.saving) return;
-    const message = await requestCommitMessage();
-    if (message === null) return; // cancelled
-    state.saving = true;
-    updateActionState();
-    setStatus('Committe Änderungen…');
-    try {
-      const accepted = await dispatchSourceCommand('ctox.source.commit', {
-        module_id: state.moduleId,
-        message: String(message || '').trim(),
-        title: `Commit ${state.moduleId} source`,
-      });
-      const result = accepted?.result || {};
-      if (result.ok === false) {
-        setStatus(result.error || 'Nichts zu committen.', true);
-      } else {
-        const seq = result.commit?.seq;
-        setStatus(`Commit erstellt${seq != null ? ` (#${seq})` : ''}.`);
-        if (state.historyOpen) await renderHistory();
-      }
-    } catch (error) {
-      console.error('[source-editor] commit failed:', error);
-      setStatus(`Commit fehlgeschlagen: ${error?.message || error}`, true);
-    } finally {
-      state.saving = false;
-      updateActionState();
-    }
-  }
-
-  function requestCommitMessage() {
-    const editorRoot = container.querySelector('[data-source-editor]');
-    if (!editorRoot) return Promise.resolve(null);
-    editorRoot.querySelector('[data-source-commit-dialog]')?.remove();
-    const overlay = document.createElement('div');
-    overlay.className = 'source-editor-dialog';
-    overlay.dataset.sourceCommitDialog = 'true';
-    overlay.innerHTML = `
-      <form class="source-editor-dialog-card" data-source-commit-form role="dialog" aria-modal="true" aria-labelledby="source-editor-commit-title">
-        <h2 id="source-editor-commit-title">Commit erstellen</h2>
-        <p>Die aktuellen Änderungen werden als Versionspunkt versiegelt.</p>
-        <label>Commit-Nachricht
-          <input data-source-commit-message type="text" maxlength="160" autocomplete="off" required placeholder="Kurz beschreiben, was geändert wurde">
-        </label>
-        <div class="source-editor-dialog-actions">
-          <button type="button" data-source-commit-cancel>Abbrechen</button>
-          <button type="submit" data-source-commit-confirm>Commit erstellen</button>
-        </div>
-      </form>
-    `;
-    editorRoot.append(overlay);
-    const form = overlay.querySelector('[data-source-commit-form]');
-    const input = overlay.querySelector('[data-source-commit-message]');
-    let settled = false;
-    return new Promise((resolve) => {
-      const finish = (value) => {
-        if (settled) return;
-        settled = true;
-        overlay.remove();
-        resolve(value);
-      };
-      form.addEventListener('submit', (event) => {
-        event.preventDefault();
-        finish(input.value.trim());
-      });
-      overlay.querySelector('[data-source-commit-cancel]').addEventListener('click', () => finish(null));
-      overlay.addEventListener('click', (event) => {
-        if (event.target === overlay) finish(null);
-      });
-      overlay.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') {
-          event.preventDefault();
-          finish(null);
-        }
-      });
-      requestAnimationFrame(() => {
-        input.focus();
-      });
-    });
-  }
-
-  async function delegateAgentTurn() {
-    if (!state.moduleId || state.readonly || state.saving) return;
-    const task = String(refs.agentTask.value || '').trim();
-    if (!task) {
-      setAgentHint('Bitte beschreibe die gewünschte Änderung.', true);
-      refs.agentTask.focus();
-      return;
-    }
-    state.saving = true;
-    updateActionState();
-    setAgentHint('pi-Agent arbeitet… das kann einen Moment dauern.');
-    setStatus('pi-Agent arbeitet…');
-    try {
-      const accepted = await dispatchSourceCommand('ctox.coding.turn', {
-        module_id: state.moduleId,
-        prompt: task,
-        title: `Coding turn on ${state.moduleId}`,
-      });
-      const result = accepted?.result || {};
-      if (result.ok === false) {
-        setAgentHint(result.error || 'Turn fehlgeschlagen.', true);
-        setStatus(`Agent: ${result.error || 'Turn fehlgeschlagen.'}`, true);
-      } else {
-        const applied = Array.isArray(result.applied_files) ? result.applied_files.length : 0;
-        setAgentHint(`Fertig — ${applied} Datei${applied === 1 ? '' : 'en'} geändert.`);
-        setStatus(`pi-Agent fertig — ${applied} Datei${applied === 1 ? '' : 'en'} geändert. Lade neu…`);
-        refs.agentTask.value = '';
-        await loadBundle();
-        await loadAgentThread();
-        if (state.historyOpen) await renderHistory();
-      }
-    } catch (error) {
-      console.error('[source-editor] agent turn failed:', error);
-      setAgentHint(`Fehlgeschlagen: ${error?.message || error}`, true);
-      setStatus(`Agent fehlgeschlagen: ${error?.message || error}`, true);
-    } finally {
-      state.saving = false;
-      updateActionState();
-    }
-  }
-
-  function setAgentHint(text, isError = false) {
-    if (!refs.agentHint) return;
-    refs.agentHint.textContent = text || '';
-    refs.agentHint.classList.toggle('is-error', Boolean(isError));
-  }
-
-  // The per-app agent thread: this module's coding turns from the command log,
-  // so the source editor is where you operate the app's coding conversation.
-  async function loadAgentThread() {
-    if (!refs.agentThread) return;
-    if (!state.moduleId) { refs.agentThread.innerHTML = ''; return; }
-    const toPlain = (doc) => (typeof doc?.toJSON === 'function' ? doc.toJSON() : doc);
-    let turns = [];
-    try {
-      const collection = ctx.db?.collection?.('business_commands');
-      let docs = [];
-      if (collection?.find) docs = ((await collection.find().exec()) || []).map(toPlain);
-      else if (collection?.toArray) docs = (await collection.toArray()).map(toPlain);
-      turns = docs
-        .filter((doc) => doc && doc.is_deleted !== true && doc._deleted !== true)
-        .filter((doc) => String(doc.command_type || doc.type || '') === 'ctox.coding.turn')
-        .map((doc) => {
-          const payload = doc.payload && typeof doc.payload === 'object' ? doc.payload : {};
-          const result = doc.result && typeof doc.result === 'object' ? doc.result : {};
-          return {
-            moduleId: String(payload.module_id || result.module_id || ''),
-            prompt: String(payload.prompt || ''),
-            status: String(doc.status || ''),
-            ok: result.ok !== false,
-            error: result.ok === false ? String(result.error || '') : '',
-            applied: Array.isArray(result.applied_files) ? result.applied_files.length : 0,
-            timeMs: Number(doc.created_at_ms || doc.updated_at_ms || 0),
-          };
-        })
-        .filter((turn) => turn.moduleId === state.moduleId)
-        .sort((a, b) => b.timeMs - a.timeMs)
-        .slice(0, 12);
-    } catch (error) {
-      console.warn('[source-editor] agent thread load failed:', error);
-    }
-    renderAgentThread(turns);
-  }
-
-  function renderAgentThread(turns) {
-    if (!refs.agentThread) return;
-    if (!turns.length) {
-      refs.agentThread.innerHTML = '<p class="source-editor-agent-thread-empty">Noch keine Agent-Turns für diese App.</p>';
-      return;
-    }
-    const rows = turns.map((turn) => {
-      const cls = turn.status === 'failed' || !turn.ok
-        ? 'is-error'
-        : turn.status === 'completed' ? 'is-ok' : '';
-      const meta = [];
-      if (turn.timeMs > 0) meta.push(new Date(turn.timeMs).toLocaleString());
-      if (turn.applied) meta.push(`${turn.applied} Datei${turn.applied === 1 ? '' : 'en'}`);
-      if (turn.error) meta.push(turn.error);
-      return `<div class="source-editor-agent-turn ${cls}">
-        <span class="source-editor-agent-turn-prompt">${escapeHtml(turn.prompt || turn.moduleId)}</span>
-        <span class="source-editor-agent-turn-meta">${escapeHtml(meta.filter(Boolean).join(' · '))}</span>
-      </div>`;
-    }).join('');
-    refs.agentThread.innerHTML =
-      `<strong class="source-editor-agent-thread-title">Thread — ${escapeHtml(state.moduleId)}</strong>${rows}`;
-  }
-
-  async function loadSourceFilesFromRxdb() {
-    const collection = ctx.db?.collection?.('business_module_source_files');
-    if (!collection) return [];
-    const docs = await collection.find({
-      selector: { module_id: state.moduleId },
-      sort: [{ path: 'asc' }],
-    }).exec();
-    return docs
-      .map((doc) => doc.toJSON ? doc.toJSON() : doc)
-      .filter((file) => !file._deleted)
-      .sort((left, right) => String(left.path || '').localeCompare(String(right.path || '')));
-  }
-
-  async function dispatchSourceCommand(type, payload) {
-    if (!ctx.commandBus?.dispatch) {
-      throw new Error('business_commands collection is required for source edits');
-    }
-    const commandId = `cmd_${newId()}`;
-    const accepted = await ctx.commandBus.dispatch({
-      id: commandId,
-      module: 'ctox',
-      type,
-      record_id: `${state.moduleId}:${payload.path || 'source'}`,
-      inbound_channel: state.moduleId,
-      payload,
-      client_context: {
-        source: 'business-os-source-editor',
-        module_id: state.moduleId,
-        actor: actorContext(ctx.session),
-      },
-    }, { until: 'accepted' });
-    return assertSourceCommandSucceeded(accepted);
-  }
-
-  async function waitForSourceFiles(expectedCount, timeoutMs = 45000) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const files = await loadSourceFilesFromRxdb();
-      if (expectedCount <= 0 || files.length >= expectedCount) return files;
-      await delay(300);
-    }
-    throw new Error('Source-Dateien konnten nicht geladen werden.');
-  }
-
-  async function waitForSourceFile(id, timeoutMs = 45000) {
-    const collection = ctx.db?.collection?.('business_module_source_files');
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const doc = await collection?.findOne(id).exec();
-      const data = doc?.toJSON?.();
-      if (data && !data._deleted) return data;
-      await delay(300);
-    }
-    return null;
-  }
-
-  function selectedModule() {
-    return state.modules.find((entry) => entry.id === state.moduleId)
-      || (state.moduleId ? { id: state.moduleId, title: state.moduleTitle } : null);
-  }
-
-  function canViewSelectedModuleSource(module) {
-    return canViewBusinessModuleSource(module, {
-      session: ctx.session,
-      governance: ctx.governance,
-    });
-  }
-
-  function canModifySelectedModule(module) {
-    return canModifyBusinessModule(module, {
-      session: ctx.session,
-      governance: ctx.governance,
-    });
-  }
-
-  return () => {
-    state.editor?.dispose?.();
-    state.model?.dispose?.();
-    container.replaceChildren();
-  };
-}
-
-async function fetchModuleCatalog() {
-  const response = await fetch('./modules/registry.json', { cache: 'no-store' });
-  if (!response.ok) throw new Error(`registry.json ${response.status}`);
-  const payload = await response.json();
-  return payload.modules || payload;
-}
-
-export function normalizeModuleCatalog(modules, options = {}) {
-  const rows = Array.isArray(modules) ? modules : [];
-  const seen = new Set();
-  return rows
-    .filter((module) => module && typeof module.id === 'string' && module.id.trim())
-    .filter((module) => module.editable !== false && module.hidden !== true)
-    .map((module) => ({
-      id: module.id.trim(),
-      title: module.title || module.name || module.id.trim(),
-      source: module.source || '',
-    }))
-    .filter((module) => {
-      if (seen.has(module.id)) return false;
-      seen.add(module.id);
+  const api = {
+    kind: surface.kind,
+    open(path) {
+      const file = state.files.find((f) => f.path === path);
+      if (!file) return false;
+      state.activePath = file.path;
+      setSurfaceValue(valueOf(file), file.language);
+      renderFiles(); renderBar(); renderDiff();
       return true;
-    })
-    .filter((module) => !options.requireSourceView || canViewBusinessModuleSource(module, {
-      session: options.session,
-      governance: options.governance,
-    }))
-    .sort((left, right) => left.title.localeCompare(right.title, undefined, { sensitivity: 'base' }));
-}
-
-export function sourceCommandErrorMessage(projection) {
-  const status = String(projection?.status || '');
-  const result = projection?.result && typeof projection.result === 'object' ? projection.result : {};
-  const decision = result.policy_decision && typeof result.policy_decision === 'object'
-    ? result.policy_decision
-    : null;
-  if (status !== 'failed' && decision?.allowed !== false) return '';
-  return String(
-    decision?.display_reason
-      || decision?.reason_code
-      || result.error
-      || projection?.error
-      || 'Source command was denied'
-  );
-}
-
-function assertSourceCommandSucceeded(projection) {
-  const message = sourceCommandErrorMessage(projection);
-  if (message) throw new Error(message);
-  return projection;
-}
-
-export function normalizeSourceFiles(files) {
-  return (Array.isArray(files) ? files : [])
-    .filter((file) => file && !file._deleted && !file.is_deleted && typeof file.path === 'string' && file.path.trim())
-    .map((file) => ({
-      ...file,
-      path: file.path.trim(),
-      language: file.language || languageFromPath(file.path),
-      draft_content: null,
-      dirty: false,
-    }))
-    .sort((left, right) => left.path.localeCompare(right.path, undefined, { sensitivity: 'base' }));
-}
-
-export function filterSourceFiles(files, query) {
-  const needle = String(query || '').trim().toLowerCase();
-  if (!needle) return files;
-  return files.filter((file) => `${file.path} ${file.language || ''}`.toLowerCase().includes(needle));
-}
-
-export function sourceModelPath(moduleId, filePath) {
-  const moduleSegment = String(moduleId || 'unselected').trim().replace(/^\/+|\/+$/g, '') || 'unselected';
-  const fileSegment = String(filePath || 'empty.txt').trim().replace(/\\/g, '/').replace(/^\/+/, '') || 'empty.txt';
-  return `/${moduleSegment}/${fileSegment}`.replace(/\/{2,}/g, '/');
-}
-
-export function sourceEditorActionState(input) {
-  const hasModule = Boolean(input.moduleId);
-  const hasFile = Boolean(input.hasFile);
-  const busy = Boolean(input.loading || input.saving);
-  const dirty = Boolean(input.dirty);
-  return {
-    openApp: hasModule && !busy,
-    diff: hasFile && !busy,
-    format: hasFile && !busy && !Boolean(input.readonly),
-    revert: hasFile && dirty && !busy,
-    reload: hasModule && !Boolean(input.saving),
-    save: hasFile && dirty && !busy && !Boolean(input.readonly),
+    },
+    activePath: () => state.activePath,
+    getValue(path = state.activePath) { return valueOf(state.files.find((f) => f.path === path)); },
+    getFiles() { return state.files.map((f) => ({ path: f.path, content: valueOf(f), language: f.language, dirty: Boolean(f.dirty) })); },
+    setFiles(next) {
+      const drafts = new Map(state.files.filter((f) => f.dirty).map((f) => [f.path, f.draft_content]));
+      state.files = normalizeSourceFiles(next);
+      for (const file of state.files) if (drafts.has(file.path)) { file.draft_content = drafts.get(file.path); file.dirty = file.draft_content !== file.content; }
+      if (!api.open(state.activePath)) api.open(preferredInitialPath(state.files));
+      if (!state.files.length) { state.activePath = ''; setSurfaceValue('', 'plaintext'); renderFiles(); renderBar(); renderDiff(); }
+    },
+    setReadOnly(on) { state.readOnly = Boolean(on); surface.setReadOnly(state.readOnly); renderBar(); },
+    isDirty(path) { return path ? Boolean(state.files.find((f) => f.path === path)?.dirty) : state.files.some((f) => f.dirty); },
+    revert(path = state.activePath) {
+      const file = state.files.find((f) => f.path === path);
+      if (!file || !file.dirty) return;
+      file.draft_content = null; file.dirty = false;
+      if (path === state.activePath) setSurfaceValue(file.content ?? '', file.language);
+      renderFiles(); renderBar(); renderDiff();
+      onChange?.(file.path, file.content ?? '', { dirty: false });
+    },
+    format(path = state.activePath) {
+      const file = state.files.find((f) => f.path === path);
+      if (!file || state.readOnly) return;
+      const next = formatSourceContent(valueOf(file), file.language, file.path);
+      if (path === state.activePath) surface.setValue(next, file.language); else handleInput(next);
+      if (path === state.activePath && surface.kind === 'textarea') handleInput(next);
+    },
+    toggleDiff(on = !state.diffOpen) { state.diffOpen = Boolean(on); renderBar(); renderDiff(); },
+    focus: () => surface.focus(),
+    snapshot() {
+      const drafts = {};
+      for (const f of state.files) if (f.dirty) drafts[f.path] = f.draft_content;
+      return { v: 1, activePath: state.activePath, search: state.search, diffOpen: state.diffOpen, drafts };
+    },
+    destroy() { state.destroyed = true; surface.destroy(); el.remove(); },
   };
+
+  const startPath = [snap.activePath, activePath].find((p) => p && state.files.some((f) => f.path === p)) || preferredInitialPath(state.files);
+  if (!api.open(startPath)) { renderFiles(); renderBar(); }
+  return api;
 }
 
-export function isDesktopAppTargetAvailable(ctx, appId) {
-  const targetId = String(appId || '').trim();
-  if (!targetId) return false;
-  if (typeof ctx?.canOpenDesktopApp === 'function') {
+async function createSurface(host, { prefer, readOnly, onInput }) {
+  if (prefer !== 'textarea') {
     try {
-      return ctx.canOpenDesktopApp(targetId) === true;
-    } catch {
-      return false;
-    }
+      const monaco = await Promise.race([
+        loadMonaco(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('monaco timeout')), MONACO_TIMEOUT_MS)),
+      ]);
+      const el = document.createElement('div');
+      el.className = 'ctox-code-editor__monaco';
+      host.append(el);
+      const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+      const ed = monaco.editor.create(el, {
+        value: '', language: 'plaintext', readOnly, automaticLayout: true, minimap: { enabled: false }, fontSize: 12,
+        scrollBeyondLastLine: false, theme: dark ? 'business-os-dark' : 'vs', tabSize: 2,
+      });
+      ed.onDidChangeModelContent(() => onInput(ed.getValue()));
+      return {
+        kind: 'monaco',
+        setValue(text, language) {
+          const model = ed.getModel();
+          ed.setValue(text ?? '');
+          if (model && language) monaco.editor.setModelLanguage(model, monacoLanguage(language));
+        },
+        setReadOnly(on) { ed.updateOptions({ readOnly: on }); },
+        focus: () => ed.focus(),
+        destroy() { const m = ed.getModel(); ed.dispose(); m?.dispose(); el.remove(); },
+      };
+    } catch { /* Rückfall textarea */ }
   }
-  const apps = typeof ctx?.getDesktopApps === 'function'
-    ? ctx.getDesktopApps()
-    : ctx?.desktopApps;
-  return Array.isArray(apps) && apps.some((entry) => entry?.id === targetId);
-}
-
-function moduleEmptyStatus() {
-  return 'Kein Modul ausgewählt. Links eine Business-OS App auswählen.';
+  const wrap = document.createElement('div');
+  wrap.className = 'ctox-code-editor__fallback';
+  const gutter = document.createElement('pre');
+  gutter.className = 'ctox-code-editor__lines';
+  gutter.setAttribute('aria-hidden', 'true');
+  const ta = document.createElement('textarea');
+  ta.className = 'ctox-code-editor__text';
+  ta.spellcheck = false;
+  ta.wrap = 'off';
+  ta.setAttribute('autocapitalize', 'off');
+  ta.setAttribute('autocomplete', 'off');
+  ta.readOnly = readOnly;
+  let lines = 0;
+  const renderGutter = () => {
+    const n = ta.value.split('\n').length;
+    if (n === lines) return;
+    lines = n;
+    gutter.textContent = Array.from({ length: n }, (_, i) => i + 1).join('\n');
+  };
+  ta.addEventListener('scroll', () => { gutter.scrollTop = ta.scrollTop; });
+  ta.addEventListener('input', () => { renderGutter(); onInput(ta.value); });
+  ta.addEventListener('keydown', (event) => {
+    if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !ta.readOnly) {
+      event.preventDefault();
+      ta.setRangeText('  ', ta.selectionStart, ta.selectionEnd, 'end');
+      ta.dispatchEvent(new Event('input'));
+    }
+  });
+  wrap.append(gutter, ta);
+  host.append(wrap);
+  renderGutter();
+  return {
+    kind: 'textarea',
+    setValue(text) { ta.value = text ?? ''; renderGutter(); },
+    setReadOnly(on) { ta.readOnly = on; },
+    focus: () => ta.focus(),
+    destroy: () => wrap.remove(),
+  };
 }
 
 function loadMonaco() {
-  if (window.monaco?.editor) {
-    defineBusinessTheme(window.monaco);
-    return Promise.resolve(window.monaco);
+  if (globalThis.monaco?.editor) {
+    defineBusinessTheme(globalThis.monaco);
+    return Promise.resolve(globalThis.monaco);
   }
   if (monacoPromise) return monacoPromise;
-  monacoPromise = new Promise(async (resolve, reject) => {
-    const monacoBaseUrl = resolveMonacoBaseUrl(import.meta.url, window.location?.origin);
+  monacoPromise = (async () => {
+    const monacoBaseUrl = resolveMonacoBaseUrl();
     const loaderUrl = `${monacoBaseUrl}vs/loader.js`;
-    window.MonacoEnvironment = {
+    globalThis.MonacoEnvironment = {
       getWorkerUrl() {
-        const baseUrl = monacoBaseUrl;
-        const worker = `
-          self.MonacoEnvironment = { baseUrl: '${baseUrl}' };
-          importScripts('${baseUrl}vs/base/worker/workerMain.js');
-        `;
+        const worker = `self.MonacoEnvironment = { baseUrl: '${monacoBaseUrl}' }; importScripts('${monacoBaseUrl}vs/base/worker/workerMain.js');`;
         return `data:text/javascript;charset=utf-8,${encodeURIComponent(worker)}`;
       },
     };
-    const ready = () => {
-      window.require.config({ paths: { vs: `${monacoBaseUrl}vs` } });
-      window.require(['vs/editor/editor.main'], () => {
-        defineBusinessTheme(window.monaco);
-        resolve(window.monaco);
-      }, reject);
-    };
-    if (window.require?.config) {
-      ready();
-      return;
-    }
-    try {
+    if (!globalThis.require?.config) {
       await verifyJavaScriptAsset(loaderUrl);
-    } catch (error) {
-      reject(error);
-      return;
+      await new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = loaderUrl;
+        script.onload = resolve;
+        script.onerror = () => reject(new Error(`failed to load ${loaderUrl}`));
+        document.head.append(script);
+      });
     }
-    const script = document.createElement('script');
-    script.src = loaderUrl;
-    script.onload = ready;
-    script.onerror = () => reject(new Error(`failed to load ${loaderUrl}`));
-    document.head.append(script);
-  }).catch((error) => {
-    monacoPromise = null;
-    throw error;
-  });
+    return new Promise((resolve, reject) => {
+      globalThis.require.config({ paths: { vs: `${monacoBaseUrl}vs` } });
+      globalThis.require(['vs/editor/editor.main'], () => { defineBusinessTheme(globalThis.monaco); resolve(globalThis.monaco); }, reject);
+    });
+  })().catch((error) => { monacoPromise = null; throw error; });
   return monacoPromise;
 }
 
-export function resolveMonacoBaseUrl(moduleUrl, origin = '') {
+/** Monaco ist Standardbibliothek der Shell (v4/tools/isolation/standard-libs.json). Der Service Worker schreibt das
+ *  Präfix auf /~a/shell@<ver>/lib/monaco@0/ um; ohne ihn bleibt es unauflösbar und der Editor nimmt die textarea. */
+export const MONACO_LIB_BASE = 'ctox:lib/monaco@0/';
+
+/** Absolute Basis-URL von Monaco. */
+export function resolveMonacoBaseUrl(base = MONACO_LIB_BASE, origin = globalThis.location?.origin || '') {
   try {
-    const url = new URL('../../vendor/monaco/', moduleUrl);
-    return url.href;
+    return new URL(base, origin || undefined).href;
   } catch (_error) {
-    const base = origin || globalThis.location?.origin || '';
-    return base ? new URL('/business-os/vendor/monaco/', base).href : '/business-os/vendor/monaco/';
+    return base;
   }
 }
 
 export function isJavaScriptMime(contentType) {
   const mime = String(contentType || '').split(';')[0].trim().toLowerCase();
   return !mime
-    || mime === 'application/javascript'
-    || mime === 'text/javascript'
-    || mime === 'application/ecmascript'
-    || mime === 'text/ecmascript'
-    || mime === 'application/x-javascript'
-    || mime === 'application/octet-stream';
+    || ['application/javascript', 'text/javascript', 'application/ecmascript', 'text/ecmascript', 'application/x-javascript', 'application/octet-stream'].includes(mime);
 }
 
 async function verifyJavaScriptAsset(url) {
-  const response = await fetch(url, { cache: 'force-cache' });
+  const response = await fetch(url, { method: 'HEAD' });
   const contentType = response.headers.get('content-type') || '';
   if (!response.ok) throw new Error(`Monaco loader ${response.status}: ${url}`);
-  if (!isJavaScriptMime(contentType)) {
-    throw new Error(`Monaco loader MIME ${contentType || 'unbekannt'}: ${url}`);
-  }
+  if (!isJavaScriptMime(contentType)) throw new Error(`Monaco loader MIME ${contentType || 'unbekannt'}: ${url}`);
 }
 
 function defineBusinessTheme(monaco) {
@@ -1273,22 +358,65 @@ function defineBusinessTheme(monaco) {
   monaco.__businessOsThemeDefined = true;
 }
 
-function actorContext(session) {
-  const user = session?.user || {};
+export function normalizeSourceFiles(files) {
+  return (Array.isArray(files) ? files : [])
+    .filter((file) => file && !file._deleted && !file.is_deleted && typeof file.path === 'string' && file.path.trim())
+    .map((file) => ({
+      ...file,
+      path: file.path.trim(),
+      content: typeof file.content === 'string' ? file.content : '',
+      language: file.language || languageFromPath(file.path.trim()),
+      draft_content: null,
+      dirty: false,
+    }))
+    .sort((left, right) => left.path.localeCompare(right.path, undefined, { sensitivity: 'base' }));
+}
+
+export function filterSourceFiles(files, query) {
+  const needle = String(query || '').trim().toLowerCase();
+  if (!needle) return files;
+  return files.filter((file) => `${file.path} ${file.language || ''}`.toLowerCase().includes(needle));
+}
+
+export function sourceModelPath(moduleId, filePath) {
+  const moduleSegment = String(moduleId || 'unselected').trim().replace(/^\/+|\/+$/g, '') || 'unselected';
+  const fileSegment = String(filePath || 'empty.txt').trim().replace(/\\/g, '/').replace(/^\/+/, '') || 'empty.txt';
+  return `/${moduleSegment}/${fileSegment}`.replace(/\/{2,}/g, '/');
+}
+
+/** Knopfzustände der Editorleiste (Speichern/Commit/History/Agent gehören dem Aufrufer, v4/source). */
+export function sourceEditorActionState({ hasFile = false, dirty = false, readOnly = false } = {}) {
   return {
-    id: user.id || '',
-    display_name: user.display_name || user.name || user.id || '',
-    role: user.role || 'user',
-    is_admin: Boolean(user.is_admin),
+    canFormat: hasFile && !readOnly,
+    canRevert: hasFile && dirty && !readOnly,
+    canDiff: hasFile,
   };
 }
 
-function newId() {
-  return globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+export function buildLineDiff(beforeRaw, afterRaw) {
+  const before = String(beforeRaw ?? '').split('\n');
+  const after = String(afterRaw ?? '').split('\n');
+  let start = 0;
+  while (start < before.length && start < after.length && before[start] === after[start]) start += 1;
+  let beforeEnd = before.length - 1;
+  let afterEnd = after.length - 1;
+  while (beforeEnd >= start && afterEnd >= start && before[beforeEnd] === after[afterEnd]) { beforeEnd -= 1; afterEnd -= 1; }
+  const rows = [];
+  for (let index = start; index <= beforeEnd; index += 1) rows.push({ type: 'remove', text: before[index] });
+  for (let index = start; index <= afterEnd; index += 1) rows.push({ type: 'add', text: after[index] });
+  return { rows: rows.slice(0, 400), added: Math.max(0, afterEnd - start + 1), removed: Math.max(0, beforeEnd - start + 1) };
 }
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export function formatSourceContent(value, language, path = '') {
+  const source = String(value ?? '');
+  const normalizedLanguage = language || languageFromPath(path);
+  if (normalizedLanguage === 'json') return `${JSON.stringify(JSON.parse(source), null, 2)}\n`;
+  return source
+    .split('\n')
+    .map((line) => line.replace(/[ \t]+$/g, ''))
+    .join('\n')
+    .replace(/\n+$/g, '\n')
+    .replace(/[^\n]$/g, (char) => `${char}\n`);
 }
 
 function preferredInitialPath(files) {
@@ -1298,64 +426,16 @@ function preferredInitialPath(files) {
     || '';
 }
 
-function insertAtCursor(textarea, value) {
-  const start = textarea.selectionStart;
-  const end = textarea.selectionEnd;
-  textarea.setRangeText(value, start, end, 'end');
-  textarea.dispatchEvent(new Event('input', { bubbles: true }));
-}
-
-function buildLineDiff(beforeRaw, afterRaw) {
-  const before = String(beforeRaw ?? '').split('\n');
-  const after = String(afterRaw ?? '').split('\n');
-  let start = 0;
-  while (start < before.length && start < after.length && before[start] === after[start]) start += 1;
-  let beforeEnd = before.length - 1;
-  let afterEnd = after.length - 1;
-  while (beforeEnd >= start && afterEnd >= start && before[beforeEnd] === after[afterEnd]) {
-    beforeEnd -= 1;
-    afterEnd -= 1;
-  }
-  const rows = [];
-  for (let index = start; index <= beforeEnd; index += 1) rows.push({ type: 'remove', text: before[index] });
-  for (let index = start; index <= afterEnd; index += 1) rows.push({ type: 'add', text: after[index] });
-  return {
-    rows: rows.slice(0, 400),
-    added: Math.max(0, afterEnd - start + 1),
-    removed: Math.max(0, beforeEnd - start + 1),
-  };
-}
-
 function shortName(path) {
-  return String(path || '').split('/').pop() || path || 'Source';
-}
-
-function fileDetail(file) {
-  const hash = file.sha256 ? ` · ${file.sha256.slice(0, 10)}` : '';
-  return `${file.language || 'text'} · ${formatBytes(file.size_bytes || 0)}${hash}`;
-}
-
-export function formatSourceContent(value, language, path = '') {
-  const source = String(value ?? '');
-  const normalizedLanguage = language || languageFromPath(path);
-  if (normalizedLanguage === 'json') {
-    return `${JSON.stringify(JSON.parse(source), null, 2)}\n`;
-  }
-  return source
-    .split('\n')
-    .map((line) => line.replace(/[ \t]+$/g, ''))
-    .join('\n')
-    .replace(/\n+$/g, '\n')
-    .replace(/[^\n]$/g, (char) => `${char}\n`);
+  return String(path || '').split('/').pop() || path || '';
 }
 
 function monacoLanguage(language) {
   if (language === 'text') return 'plaintext';
-  if (language === 'markdown') return 'markdown';
   return language || 'plaintext';
 }
 
-function languageFromPath(path) {
+export function languageFromPath(path) {
   const ext = String(path || '').split('.').pop()?.toLowerCase();
   if (ext === 'js' || ext === 'mjs' || ext === 'cjs') return 'javascript';
   if (ext === 'ts' || ext === 'tsx') return 'typescript';
@@ -1364,783 +444,4 @@ function languageFromPath(path) {
   if (ext === 'json') return 'json';
   if (ext === 'md') return 'markdown';
   return 'text';
-}
-
-function formatBytes(value) {
-  const bytes = Number(value || 0);
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function ensureStyles() {
-  if (document.getElementById('source-editor-styles')) return;
-  const style = document.createElement('style');
-  style.id = 'source-editor-styles';
-  style.textContent = `
-    .source-editor {
-      display: grid;
-      grid-template-columns: 248px minmax(0, 1fr);
-      height: 100%;
-      min-height: 0;
-      background: var(--surface);
-      color: var(--text);
-      font: 12px/1.35 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    }
-    .source-editor-sidebar {
-      display: grid;
-      grid-template-rows: auto minmax(96px, 24%) auto minmax(0, 1fr);
-      min-width: 0;
-      border-right: 1px solid var(--hairline, var(--line));
-      background: color-mix(in srgb, var(--surface-2) 62%, var(--surface));
-    }
-    .source-editor[data-locked-module="true"] .source-editor-sidebar {
-      grid-template-rows: auto auto minmax(0, 1fr);
-    }
-    .source-editor[data-locked-module="true"] .source-editor-module-list {
-      display: none;
-    }
-    .source-editor-sidebar-head {
-      display: grid;
-      gap: 2px;
-      padding: 12px;
-      border-bottom: 1px solid var(--hairline, var(--line));
-    }
-    .source-editor-sidebar-head strong,
-    .source-editor-sidebar-head span {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .source-editor-sidebar-head strong { font-size: 13px; }
-    .source-editor-sidebar-head span { color: var(--muted); font-size: 11px; }
-    .source-editor-module-list {
-      min-height: 0;
-      overflow: auto;
-      padding: 8px;
-      border-bottom: 1px solid var(--hairline, var(--line));
-    }
-    .source-editor-modules {
-      display: grid;
-      gap: 5px;
-    }
-    .source-editor-module {
-      display: grid;
-      gap: 1px;
-      width: 100%;
-      min-height: 36px;
-      border: 1px solid transparent;
-      border-radius: 7px;
-      background: transparent;
-      color: var(--text);
-      padding: 6px 8px;
-      text-align: left;
-    }
-    .source-editor-module:hover {
-      background: color-mix(in srgb, var(--surface) 70%, transparent);
-    }
-    .source-editor-module.is-active {
-      border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
-      background: color-mix(in srgb, var(--accent) 12%, var(--surface));
-    }
-    .source-editor-module span,
-    .source-editor-module small {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .source-editor-module span { font-weight: 760; }
-    .source-editor-module small { color: var(--muted); }
-    .source-editor-search {
-      display: grid;
-      grid-template-columns: auto minmax(0, 1fr);
-      align-items: center;
-      gap: 6px;
-      padding: 8px;
-      border-bottom: 1px solid var(--hairline, var(--line));
-      color: var(--muted);
-    }
-    .source-editor-search input {
-      width: 100%;
-      min-width: 0;
-      min-height: 28px;
-      border: 1px solid var(--hairline, var(--line));
-      border-radius: 7px;
-      background: color-mix(in srgb, var(--surface) 76%, var(--surface-2));
-      color: var(--text);
-      padding: 0 8px;
-      outline: none;
-    }
-    .source-editor-search input:focus {
-      border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
-    }
-    .source-editor-sidebar nav {
-      min-height: 0;
-      overflow: auto;
-      padding: 8px;
-    }
-    .source-editor-file {
-      position: relative;
-      display: grid;
-      gap: 2px;
-      width: 100%;
-      min-height: 40px;
-      border: 1px solid transparent;
-      border-radius: 7px;
-      background: transparent;
-      color: var(--text);
-      padding: 7px 8px;
-      text-align: left;
-    }
-    .source-editor-file:hover {
-      background: color-mix(in srgb, var(--surface) 70%, transparent);
-    }
-    .source-editor-file.is-active {
-      border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
-      background: color-mix(in srgb, var(--accent) 12%, var(--surface));
-    }
-    .source-editor-file.is-dirty::after {
-      content: "";
-      position: absolute;
-      top: 9px;
-      right: 8px;
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background: var(--accent);
-    }
-    .source-editor-file span,
-    .source-editor-file small {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      padding-right: 12px;
-    }
-    .source-editor-file span { font-weight: 760; }
-    .source-editor-file small { color: var(--muted); }
-    .source-editor-main {
-      display: grid;
-      grid-template-rows: 46px minmax(0, 1fr) 28px;
-      min-width: 0;
-      min-height: 0;
-      background: color-mix(in srgb, var(--bg) 42%, var(--surface));
-    }
-    .source-editor-toolbar {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 12px;
-      padding: 8px 10px 8px 12px;
-      border-bottom: 1px solid var(--hairline, var(--line));
-      background: color-mix(in srgb, var(--surface) 90%, var(--surface-2));
-    }
-    .source-editor-file-meta {
-      display: grid;
-      gap: 1px;
-      min-width: 0;
-    }
-    .source-editor-file-meta strong,
-    .source-editor-file-meta span {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .source-editor-file-meta strong { font-size: 12px; }
-    .source-editor-file-meta span { color: var(--muted); font-size: 11px; }
-    .source-editor-actions {
-      display: inline-flex;
-      gap: 6px;
-      flex: 0 0 auto;
-    }
-    .source-editor-actions button {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      min-height: 28px;
-      border: 1px solid var(--hairline, var(--line));
-      border-radius: 7px;
-      background: color-mix(in srgb, var(--surface) 78%, var(--surface-2));
-      color: var(--text);
-      padding: 0 10px;
-      font-weight: 730;
-    }
-    .source-editor-actions button:hover,
-    .source-editor-actions button.is-active {
-      border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
-      color: var(--accent);
-    }
-    .source-editor-actions button:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-      color: var(--muted);
-      border-color: var(--hairline, var(--line));
-    }
-    .source-editor-actions button[data-source-save] {
-      color: var(--accent);
-      border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
-    }
-    .source-editor-workbench {
-      position: relative;
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(260px, 34%);
-      min-height: 0;
-      background: #0b1115;
-    }
-    .source-editor-diff[hidden] {
-      display: none;
-    }
-    .source-editor-workbench:has(.source-editor-diff[hidden]) {
-      grid-template-columns: minmax(0, 1fr);
-    }
-    .source-editor-monaco {
-      min-width: 0;
-      min-height: 0;
-      height: 100%;
-    }
-    .source-editor-monaco.is-empty {
-      opacity: 0;
-      pointer-events: none;
-    }
-    .source-editor-monaco[hidden],
-    .source-editor-fallback[hidden] {
-      display: none !important;
-    }
-    .source-editor-fallback {
-      display: grid;
-      grid-template-columns: 58px minmax(0, 1fr);
-      min-height: 0;
-      height: 100%;
-    }
-    .source-editor-fallback.is-empty {
-      visibility: hidden;
-      pointer-events: none;
-    }
-    .source-editor-placeholder {
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      display: grid;
-      gap: 6px;
-      max-width: min(460px, calc(100% - 48px));
-      padding: 18px 20px;
-      border: 1px solid color-mix(in srgb, var(--line) 78%, transparent);
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--surface) 84%, var(--bg));
-      color: var(--text);
-      text-align: center;
-      z-index: 1;
-    }
-    .source-editor-placeholder[hidden] {
-      display: none;
-    }
-    .source-editor-placeholder strong {
-      font-size: 13px;
-    }
-    .source-editor-placeholder span {
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .source-editor-agent-form {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      padding: 14px;
-      height: 100%;
-      box-sizing: border-box;
-    }
-    .source-editor-agent-title {
-      font-size: 13px;
-      font-weight: 600;
-    }
-    .source-editor-agent-sub {
-      font-size: 12px;
-      color: var(--muted);
-      line-height: 1.5;
-    }
-    .source-editor-agent-task {
-      flex: 1 1 auto;
-      min-height: 96px;
-      resize: none;
-      padding: 10px 12px;
-      border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--line) 8%, transparent);
-      color: inherit;
-      font: 13px/1.5 inherit;
-    }
-    .source-editor-agent-task:focus {
-      outline: none;
-      border-color: var(--accent, #6366f1);
-    }
-    .source-editor-agent-actions {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 10px;
-    }
-    .source-editor-agent-model {
-      font-size: 12px;
-      color: var(--muted);
-    }
-    .source-editor-agent-run {
-      padding: 7px 14px;
-      border: 0;
-      border-radius: 8px;
-      background: var(--accent, #6366f1);
-      color: #fff;
-      font-size: 13px;
-      font-weight: 600;
-      cursor: pointer;
-    }
-    .source-editor-agent-run:disabled {
-      opacity: 0.5;
-      cursor: default;
-    }
-    .source-editor-agent-hint {
-      margin: 0;
-      min-height: 16px;
-      font-size: 12px;
-      color: var(--muted);
-    }
-    .source-editor-agent-hint.is-error {
-      color: var(--danger, #dc2626);
-    }
-    .source-editor-agent-openapp {
-      padding: 6px 10px;
-      border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-      border-radius: 8px;
-      background: transparent;
-      color: var(--text, inherit);
-      font-size: 12px;
-      cursor: pointer;
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-    }
-    .source-editor-agent-openapp:hover {
-      background: color-mix(in srgb, var(--accent, #6366f1) 12%, transparent);
-    }
-    .source-editor-agent-thread {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      margin-top: 12px;
-      overflow-y: auto;
-    }
-    .source-editor-agent-thread-title {
-      font-size: 12px;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
-    }
-    .source-editor-agent-thread-empty {
-      margin: 0;
-      font-size: 12px;
-      color: var(--muted);
-    }
-    .source-editor-agent-turn {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      padding: 7px 9px;
-      border-radius: 8px;
-      background: color-mix(in srgb, var(--line) 22%, transparent);
-    }
-    .source-editor-agent-turn.is-ok {
-      background: color-mix(in srgb, var(--success, #16a34a) 12%, transparent);
-    }
-    .source-editor-agent-turn.is-error {
-      background: color-mix(in srgb, var(--danger, #dc2626) 12%, transparent);
-    }
-    .source-editor-agent-turn-prompt {
-      font-size: 13px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .source-editor-agent-turn-meta {
-      font-size: 11px;
-      color: var(--muted);
-    }
-    .source-editor-lines,
-    .source-editor textarea {
-      margin: 0;
-      border: 0;
-      font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-      tab-size: 2;
-    }
-    .source-editor-lines {
-      overflow: hidden;
-      padding: 12px 10px 12px 0;
-      border-right: 1px solid color-mix(in srgb, var(--line) 68%, transparent);
-      color: var(--muted);
-      text-align: right;
-      white-space: pre;
-      user-select: none;
-    }
-    .source-editor textarea {
-      width: 100%;
-      min-width: 0;
-      height: 100%;
-      min-height: 0;
-      resize: none;
-      outline: 0;
-      background: transparent;
-      color: var(--text);
-      padding: 12px 14px;
-      white-space: pre;
-      overflow: auto;
-    }
-    .source-editor-diff {
-      min-width: 0;
-      min-height: 0;
-      overflow: auto;
-      border-left: 1px solid var(--hairline, var(--line));
-      background: color-mix(in srgb, var(--surface) 72%, var(--bg));
-    }
-    .source-editor-diff-head {
-      position: sticky;
-      top: 0;
-      display: grid;
-      gap: 2px;
-      padding: 10px 12px;
-      border-bottom: 1px solid var(--hairline, var(--line));
-      background: color-mix(in srgb, var(--surface) 92%, var(--bg));
-      z-index: 1;
-    }
-    .source-editor-diff-head strong {
-      font-size: 12px;
-    }
-    .source-editor-diff-head span {
-      min-width: 0;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      color: var(--muted);
-      font-size: 11px;
-    }
-    .source-editor-diff-rows {
-      padding: 8px 0;
-    }
-    .source-editor-diff pre {
-      margin: 0;
-      padding: 3px 10px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
-      white-space: pre;
-    }
-    .source-editor-diff pre b {
-      display: inline-block;
-      width: 16px;
-      font-weight: 800;
-    }
-    .source-editor-diff pre.is-add {
-      background: color-mix(in srgb, #1a7f4f 18%, transparent);
-      color: #bcebd1;
-    }
-    .source-editor-diff pre.is-remove {
-      background: color-mix(in srgb, #9b3030 18%, transparent);
-      color: #f1c2c2;
-    }
-    .source-editor-status {
-      display: flex;
-      align-items: center;
-      min-width: 0;
-      border-top: 1px solid var(--hairline, var(--line));
-      color: var(--muted);
-      padding: 0 12px;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .source-editor-status.is-error {
-      color: var(--danger);
-    }
-    .source-editor-empty {
-      margin: 0;
-      padding: 10px 8px;
-      color: var(--muted);
-    }
-    @container business-app-window (max-width: 860px) {
-      .source-editor { grid-template-columns: 190px minmax(0, 1fr); }
-      .source-editor-actions button { padding: 0 8px; }
-      .source-editor-workbench { grid-template-columns: minmax(0, 1fr); }
-      .source-editor-diff { display: none; }
-    }
-    @container business-app-window (max-width: 640px) {
-      .source-editor {
-        grid-template-columns: minmax(0, 1fr);
-        grid-template-rows: minmax(190px, 38%) minmax(0, 1fr);
-      }
-      .source-editor-sidebar {
-        grid-template-rows: auto minmax(84px, 1fr) auto minmax(72px, 1fr);
-        border-right: 0;
-        border-bottom: 1px solid var(--hairline, var(--line));
-      }
-      .source-editor-main {
-        grid-template-rows: auto minmax(0, 1fr) 32px;
-      }
-      .source-editor-toolbar {
-        align-items: flex-start;
-        flex-wrap: wrap;
-        min-height: 0;
-      }
-      .source-editor-actions {
-        width: 100%;
-        overflow-x: auto;
-        padding-bottom: 2px;
-      }
-      .source-editor-actions button {
-        flex: 0 0 34px;
-        justify-content: center;
-        padding: 0;
-      }
-      .source-editor-actions button span:not([aria-hidden="true"]) {
-        display: none;
-      }
-      .source-editor-placeholder {
-        max-width: calc(100% - 24px);
-        padding: 14px;
-      }
-      .source-editor-fallback {
-        grid-template-columns: 44px minmax(0, 1fr);
-      }
-      .source-editor-lines {
-        padding-right: 8px;
-      }
-    }
-    .source-editor-action-icon {
-      display: inline-flex;
-      flex: 0 0 auto;
-      width: 14px;
-      height: 14px;
-      align-items: center;
-      justify-content: center;
-      line-height: 0;
-    }
-    .source-editor-action-icon svg {
-      display: block;
-      width: 100%;
-      height: 100%;
-    }
-    .source-editor-dialog {
-      position: absolute;
-      inset: 0;
-      z-index: 20;
-      display: grid;
-      place-items: center;
-      padding: 16px;
-      background: color-mix(in srgb, #061017 68%, transparent);
-    }
-    .source-editor-dialog-card {
-      width: min(420px, 100%);
-      min-width: 0;
-      display: grid;
-      gap: 12px;
-      box-sizing: border-box;
-      padding: 18px;
-      border: 1px solid var(--hairline, var(--line));
-      border-radius: 10px;
-      background: var(--surface, #111a20);
-      color: var(--text);
-      box-shadow: 0 18px 48px color-mix(in srgb, #000 35%, transparent);
-    }
-    .source-editor-dialog-card h2,
-    .source-editor-dialog-card p {
-      margin: 0;
-    }
-    .source-editor-dialog-card h2 {
-      font-size: 14px;
-    }
-    .source-editor-dialog-card p {
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .source-editor-dialog-card label {
-      display: grid;
-      gap: 6px;
-      color: var(--muted);
-      font-size: 12px;
-    }
-    .source-editor-dialog-card input {
-      width: 100%;
-      min-width: 0;
-      min-height: 34px;
-      box-sizing: border-box;
-      border: 1px solid var(--hairline, var(--line));
-      border-radius: 7px;
-      background: var(--surface-2, #18232a);
-      color: var(--text);
-      padding: 0 9px;
-      outline: none;
-    }
-    .source-editor-dialog-card input:focus {
-      border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-    }
-    .source-editor-dialog-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: 8px;
-      flex-wrap: wrap;
-    }
-    .source-editor-dialog-actions button {
-      min-height: 32px;
-      border: 1px solid var(--hairline, var(--line));
-      border-radius: 7px;
-      background: var(--surface-2, #18232a);
-      color: var(--text);
-      padding: 0 11px;
-      font-weight: 700;
-    }
-    .source-editor-dialog-actions [data-source-commit-confirm] {
-      border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
-      background: var(--accent);
-      color: var(--on-accent, #fff);
-    }
-    /* Shell v2 owns the window chrome. This editor only supplies its embedded workbench. */
-    .shell-window[data-shell-contract="v2"] .source-editor,
-    .source-editor[data-shell-v2="true"] {
-      position: relative;
-      min-width: 0;
-      min-height: 0;
-      padding: 0;
-      background: var(--shell-v2-surface, var(--surface));
-    }
-    .shell-window[data-shell-contract="v2"] .source-editor-sidebar,
-    .source-editor[data-shell-v2="true"] .source-editor-sidebar {
-      grid-template-rows: var(--shell-v2-header-row-size, 37px) minmax(96px, 24%) auto minmax(0, 1fr);
-      background: var(--shell-v2-surface-alt, var(--surface-2));
-    }
-    .shell-window[data-shell-contract="v2"] .source-editor-sidebar-head,
-    .source-editor[data-shell-v2="true"] .source-editor-sidebar-head {
-      box-sizing: border-box;
-      min-height: var(--shell-v2-header-row-size, 37px);
-      height: var(--shell-v2-header-row-size, 37px);
-      padding: 0 8px 0 calc(var(--shell-v2-icon-size, 80px) + 8px);
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      overflow: hidden;
-    }
-    .shell-window[data-shell-contract="v2"] .source-editor-sidebar-head strong,
-    .source-editor[data-shell-v2="true"] .source-editor-sidebar-head strong {
-      font-size: 12px;
-    }
-    .shell-window[data-shell-contract="v2"] .source-editor-sidebar-head span,
-    .source-editor[data-shell-v2="true"] .source-editor-sidebar-head span {
-      flex: 0 1 auto;
-    }
-    .shell-window[data-shell-contract="v2"] .source-editor-main,
-    .source-editor[data-shell-v2="true"] .source-editor-main {
-      grid-template-rows: var(--shell-v2-header-row-size, 37px) minmax(0, 1fr) 28px;
-      background: var(--shell-v2-surface, var(--surface));
-    }
-    .shell-window[data-shell-contract="v2"] .source-editor-toolbar,
-    .source-editor[data-shell-v2="true"] .source-editor-toolbar {
-      box-sizing: border-box;
-      min-width: 0;
-      min-height: var(--shell-v2-header-row-size, 37px);
-      height: var(--shell-v2-header-row-size, 37px);
-      flex-wrap: nowrap;
-      overflow: hidden;
-      padding: 0 8px;
-      background: var(--shell-v2-surface-alt, var(--surface-2));
-    }
-    .shell-window[data-shell-contract="v2"] .source-editor-file-meta,
-    .source-editor[data-shell-v2="true"] .source-editor-file-meta {
-      flex: 1 1 auto;
-      overflow: hidden;
-    }
-    .shell-window[data-shell-contract="v2"] .source-editor-actions,
-    .source-editor[data-shell-v2="true"] .source-editor-actions {
-      min-width: 0;
-      max-width: 100%;
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      overflow-y: hidden;
-      scrollbar-width: thin;
-    }
-    .shell-window[data-shell-contract="v2"] .source-editor-actions button,
-    .source-editor[data-shell-v2="true"] .source-editor-actions button {
-      flex: 0 0 auto;
-      white-space: nowrap;
-    }
-    .shell-window[data-shell-contract="v2"] .source-editor-workbench,
-    .source-editor[data-shell-v2="true"] .source-editor-workbench {
-      grid-template-columns: minmax(0, 1fr) minmax(220px, 34%);
-      background: var(--shell-v2-editor-surface, #0b1115);
-    }
-    .shell-window[data-shell-contract="v2"] .source-editor-status,
-    .source-editor[data-shell-v2="true"] .source-editor-status {
-      padding: 0 8px;
-      background: var(--shell-v2-surface, var(--surface));
-    }
-    .shell-window[data-shell-contract="v2"] .source-editor-agent-actions,
-    .source-editor[data-shell-v2="true"] .source-editor-agent-actions {
-      min-width: 0;
-      flex-wrap: nowrap;
-      overflow-x: auto;
-      scrollbar-width: thin;
-    }
-    .shell-window[data-shell-contract="v2"] .source-editor-agent-model,
-    .source-editor[data-shell-v2="true"] .source-editor-agent-model {
-      min-width: max-content;
-    }
-    @container business-app-window (max-width: 640px) {
-      .shell-window[data-shell-contract="v2"] .source-editor,
-      .source-editor[data-shell-v2="true"] {
-        grid-template-rows: minmax(168px, 36%) minmax(0, 1fr);
-      }
-      .shell-window[data-shell-contract="v2"] .source-editor-sidebar,
-      .source-editor[data-shell-v2="true"] .source-editor-sidebar {
-        grid-template-rows: var(--shell-v2-header-row-size, 37px) minmax(72px, 1fr) auto minmax(60px, 1fr);
-      }
-      .shell-window[data-shell-contract="v2"] .source-editor-toolbar,
-      .source-editor[data-shell-v2="true"] .source-editor-toolbar {
-        align-items: center;
-        flex-wrap: nowrap;
-        overflow: hidden;
-      }
-      .shell-window[data-shell-contract="v2"] .source-editor-actions,
-      .source-editor[data-shell-v2="true"] .source-editor-actions {
-        width: auto;
-        padding-bottom: 0;
-      }
-      .shell-window[data-shell-contract="v2"] .source-editor-actions button,
-      .source-editor[data-shell-v2="true"] .source-editor-actions button {
-        flex: 0 0 32px;
-        justify-content: center;
-        padding: 0;
-      }
-      .shell-window[data-shell-contract="v2"] .source-editor-actions button > span:not(.source-editor-action-icon),
-      .source-editor[data-shell-v2="true"] .source-editor-actions button > span:not(.source-editor-action-icon) {
-        display: none;
-      }
-      .shell-window[data-shell-contract="v2"] .source-editor-workbench,
-      .source-editor[data-shell-v2="true"] .source-editor-workbench {
-        grid-template-columns: minmax(0, 1fr);
-      }
-      .shell-window[data-shell-contract="v2"] .source-editor-diff,
-      .source-editor[data-shell-v2="true"] .source-editor-diff {
-        display: none;
-      }
-    }
-  `;
-  document.head.append(style);
-}
-
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
-  }[char]));
 }

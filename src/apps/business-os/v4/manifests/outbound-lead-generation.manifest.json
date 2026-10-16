@@ -1,0 +1,1577 @@
+{
+  "_capability_evidence": {
+    "agent.task.cancel": [
+      "handlers/_lib/person-research.js"
+    ],
+    "agent.task.enqueue": [
+      "handlers/_lib/lead-research.js",
+      "handlers/_lib/person-research.js",
+      "handlers/_lib/research-source-adapter.js",
+      "handlers/_lib/sellify-remarks.js",
+      "handlers/outbound.research.adapters.reconcile.js"
+    ],
+    "agent.task.find": [
+      "handlers/_lib/person-research.js",
+      "handlers/_lib/research-writeback.js"
+    ],
+    "agent.task.get": [
+      "handlers/_lib/lead-research.js",
+      "handlers/_lib/person-research.js",
+      "handlers/_lib/research-source-adapter.js",
+      "handlers/_lib/research-writeback.js",
+      "handlers/_lib/sellify-remarks.js",
+      "handlers/outbound.research.adapters.reconcile.done.js"
+    ],
+    "agent.task.set_metadata": [
+      "handlers/_lib/person-research.js"
+    ],
+    "agent.task.update": [
+      "handlers/_lib/person-research.js"
+    ],
+    "agent.task.workspace.read": [
+      "handlers/_lib/research-writeback-sanitize.js"
+    ],
+    "browser.auth_assist.request": [
+      "handlers/_lib/research-source-adapter.js"
+    ],
+    "command.get": [
+      "handlers/_lib/research-writeback.js"
+    ],
+    "config.get": [
+      "handlers/outbound.update_digest.send_now.js"
+    ],
+    "fence.claim": [
+      "handlers/_lib/contact-email-validation.js",
+      "handlers/_lib/person-research.js",
+      "handlers/_lib/research-writeback.js",
+      "handlers/outbound.contacts.email_validate.js"
+    ],
+    "fence.release": [
+      "handlers/_lib/contact-email-validation.js",
+      "handlers/_lib/person-research.js",
+      "handlers/_lib/research-writeback.js",
+      "handlers/outbound.contacts.email_validate.js"
+    ],
+    "files.get": [
+      "handlers/_lib/scrape-registry.js"
+    ],
+    "files.put": [
+      "handlers/_lib/scrape-registry.js"
+    ],
+    "mail.send": [
+      "handlers/_lib/policy-report.js"
+    ],
+    "process.run": [
+      "handlers/_lib/scrape-runner.js"
+    ],
+    "secret.exists": [
+      "handlers/_lib/research-source-adapter.js",
+      "handlers/outbound.research.adapters.reconcile.js"
+    ],
+    "secret.scope": [
+      "handlers/_lib/research-source-adapter.js",
+      "handlers/outbound.research.adapters.reconcile.js"
+    ]
+  },
+  "_config_keys": [
+    "CTO_EMAIL_ADDRESS"
+  ],
+  "_declaration": "customer-modules/outbound-lead-generation/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "local-modules/outbound-lead-generation/index.html",
+  "_source_dir": "src/apps/business-os/customer-modules/outbound-lead-generation",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "Befehlstyp outbound.research_policy.publish hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
+    "Befehlstyp outbound.research_source.auth_assist hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
+    "Befehlstyp outbound.research_source.generate_adapter hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
+    "Befehlstyp outbound.research_source.reprobe hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
+    "Befehlstyp outbound.research_source.test hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
+    "Befehlstyp outbound.research_source.upsert hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
+    "Befehlstyp outbound.sellify.lookup hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
+    "Befehlstyp outbound.update_digest.send_now hat Handler in mehreren Apps (outbound, outbound-lead-generation); der Core muss eindeutig routen.",
+    "module.json.entry zeigt auf local-modules/…; Kundeninstanzen tragen ggf. eine abweichende installierte module.json (~/.local/state/ctox-sync-v4/docs/thesen-olg-installiert-20261015/module.json) – vor Aktivierung abgleichen.",
+    "Abnahme Nicht-Admin (V4-PORT.md §13) legt die Mindestrechte fest; Logo (layout.icon_svg) muss erhalten bleiben.",
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "outbound-lead-generation",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "agent.task.cancel",
+    "agent.task.enqueue",
+    "agent.task.find",
+    "agent.task.get",
+    "agent.task.set_metadata",
+    "agent.task.update",
+    "agent.task.workspace.read",
+    "browser.auth_assist.request",
+    "command.get",
+    "config.get",
+    "fence.claim",
+    "fence.release",
+    "files.get",
+    "files.put",
+    "mail.send",
+    "process.run",
+    "secret.exists",
+    "secret.scope"
+  ],
+  "collections": {
+    "outbound_lead_generation_adapters": {
+      "_owner_basis": "Entscheidung: §16.21 Eigentum (Registry, Basis-Release-Import): OLG; browser deklariert foreign",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "auth_status": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "last_command_id": {
+            "type": "string"
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "last_task_id": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "scrape_status": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "source_id",
+          "status",
+          "scrape_status",
+          "auth_status",
+          "last_command_id",
+          "last_error",
+          "payload",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 2
+      }
+    },
+    "outbound_lead_generation_field_status_witnesses": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "description": "Feld-Status-Zeugen je Lead (id = record_id), nur vom Writeback-Handler in derselben Transaktion wie der Lead geschrieben. Vorher SQLite outbound_native_field_status_witnesses. Strang OLGSCR.",
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "record_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "witnesses": {
+            "items": {
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "person_key": {
+                  "type": "string"
+                },
+                "scope": {
+                  "enum": [
+                    "lead",
+                    "person",
+                    "contact"
+                  ],
+                  "type": "string"
+                },
+                "status": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "scope",
+                "person_key",
+                "field",
+                "status"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "record_id",
+          "witnesses"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "outbound_lead_generation_imports": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "created_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "lead_count": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "source_type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "source_type",
+          "status",
+          "lead_count",
+          "payload",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "outbound_lead_generation_leads": {
+      "_class_proposal": "syncProfile eager (schema.js Kommentar Owner 15.10.2026: „es gibt kein Nachladen, Daten werden gepusht“) → full; client_limit/byte_budget an der Ist-Menge messen (thesen)",
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "_schema_wrapper": {
+        "syncProfile": "eager"
+      },
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "campaign": {
+            "type": "string"
+          },
+          "city": {
+            "type": "string"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "contacts": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "country": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "domain": {
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "field_status": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "import_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "person_field_status": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "research_status": {
+            "type": "string"
+          },
+          "selected_contact_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "sellify_status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "validation_status": {
+            "type": "string"
+          },
+          "website": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "import_id",
+          "campaign",
+          "name",
+          "domain",
+          "website",
+          "city",
+          "country",
+          "research_status",
+          "validation_status",
+          "sellify_status",
+          "task_id",
+          "command_id",
+          "data",
+          "contacts",
+          "selected_contact_ids",
+          "evidence",
+          "payload",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 1
+      }
+    },
+    "outbound_lead_generation_policy_report_reviews": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "description": "Freigabe-Buchführung des Update-Verteilers je Versand (id = approval_key policy-report:<report_key>:<action_digest>). Vorher communication_founder_reply_reviews (reviewer policy-report) im Kern (record_and_send_policy_report_email). Nur der Handler outbound.update_digest.send_now schreibt. Strang OLG3.",
+        "primaryKey": "id",
+        "properties": {
+          "account_key": {
+            "type": "string"
+          },
+          "action_digest": {
+            "type": "string"
+          },
+          "action_json": {
+            "type": "string"
+          },
+          "approval_key": {
+            "type": "string"
+          },
+          "approved_at": {
+            "type": "string"
+          },
+          "body_sha256": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 400,
+            "type": "string"
+          },
+          "inbound_message_key": {
+            "type": "string"
+          },
+          "report_key": {
+            "type": "string"
+          },
+          "review_summary": {
+            "type": "string"
+          },
+          "reviewer": {
+            "type": "string"
+          },
+          "send_result": {
+            "type": "object"
+          },
+          "sent_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "approval_key",
+          "inbound_message_key",
+          "action_digest",
+          "action_json",
+          "body_sha256",
+          "reviewer",
+          "review_summary",
+          "approved_at"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "outbound_lead_generation_research_policies": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "configuration_digest": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "field_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "instructions": {
+            "type": "string"
+          },
+          "min_independent_sources": {
+            "type": "number"
+          },
+          "reconciliation_command_id": {
+            "type": "string"
+          },
+          "reconciliation_error": {
+            "type": "string"
+          },
+          "reconciliation_status": {
+            "type": "string"
+          },
+          "reconciliation_task_id": {
+            "type": "string"
+          },
+          "rules": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "skill_name": {
+            "type": "string"
+          },
+          "skill_version": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "version_number": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "version_number",
+          "status",
+          "skill_name",
+          "skill_version",
+          "min_independent_sources",
+          "rules",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "outbound_lead_generation_scrape_account_states": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "description": "Anbieterkonto inaktiv je Ziel (id = target_key). Vorher scrape_account_state (account_state.rs). Strang OLGSCR.",
+        "primaryKey": "id",
+        "properties": {
+          "causal_run_id": {
+            "type": "string"
+          },
+          "credential_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "credential_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "failed_probes": {
+            "type": "integer"
+          },
+          "generation": {
+            "type": "integer"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "last_probe_run_id": {
+            "type": "string"
+          },
+          "next_probe_at_ms": {
+            "type": "integer"
+          },
+          "probe_lease_owner": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "probe_lease_until_ms": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "target_key": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "target_id",
+          "generation",
+          "reason",
+          "causal_run_id",
+          "last_probe_run_id",
+          "failed_probes",
+          "next_probe_at_ms",
+          "probe_lease_until_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "outbound_lead_generation_scrape_runs": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "description": "Scrape-Lauf (id = run_id); Manifest/Artefakte in files. Vorher scrape_run + scrape_artifact. Strang OLGSCR.",
+        "primaryKey": "id",
+        "properties": {
+          "artifacts": {
+            "items": {
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "command_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "result": {
+            "type": "object"
+          },
+          "run_id": {
+            "type": "string"
+          },
+          "run_manifest_ref": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "script_revision_no": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "script_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "target_key": {
+            "type": "string"
+          },
+          "trigger_kind": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "run_id",
+          "target_id",
+          "trigger_kind",
+          "started_at",
+          "status",
+          "result"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "outbound_lead_generation_scrape_scripts": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "description": "Skript-Revision (id = <target_key>:r<revision_no>); Text in files (script_ref). Vorher scrape_script_revision.script_body. Strang OLGSCR.",
+        "primaryKey": "id",
+        "properties": {
+          "change_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "entry_command": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "maxLength": 200,
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision_no": {
+            "type": "integer"
+          },
+          "script_ref": {
+            "type": "string"
+          },
+          "script_sha256": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "integer"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "target_key": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "target_key",
+          "target_id",
+          "revision_no",
+          "language",
+          "script_sha256",
+          "script_ref",
+          "created_at"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "outbound_lead_generation_scrape_targets": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "description": "Scrape-Ziel (id = target_key). Vorher Core-SQLite scrape_target (capabilities/scrape/mod.rs:99). Strang OLGSCR.",
+        "primaryKey": "id",
+        "properties": {
+          "config": {
+            "type": "object"
+          },
+          "created_at": {
+            "type": "string"
+          },
+          "display_name": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "latest_script_revision_no": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "latest_script_sha256": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output_schema": {
+            "type": "object"
+          },
+          "schedule_hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "script_registered": {
+            "type": "boolean"
+          },
+          "start_url": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "target_key": {
+            "type": "string"
+          },
+          "target_kind": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "workspace_dir": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "target_id",
+          "target_key",
+          "display_name",
+          "start_url",
+          "target_kind",
+          "status",
+          "config",
+          "output_schema",
+          "workspace_dir",
+          "created_at",
+          "updated_at",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "outbound_lead_generation_sources": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "adapter_status": {
+            "type": "string"
+          },
+          "auth_status": {
+            "type": "string"
+          },
+          "countries": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "credential_secret_name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "field_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "requires_credential": {
+            "type": "boolean"
+          },
+          "scrape_status": {
+            "type": "string"
+          },
+          "target_key": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "url",
+          "countries",
+          "field_keys",
+          "enabled",
+          "requires_credential",
+          "credential_secret_name",
+          "target_key",
+          "adapter_status",
+          "scrape_status",
+          "auth_status",
+          "payload",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "outbound_research_policies": {
+      "_owner_basis": "Entscheidung: §16.21 Eigentum: OLG (einziger Schreiber outbound.research_policy.publish; heute nur nativ in business_records)",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "app": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "policy_contract": {
+            "type": "string"
+          },
+          "published_at_ms": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "app",
+          "published_at_ms",
+          "policy_contract",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "sellify_campaigns": {
+      "_class_proposal": "heute demand-only (shared/sync.js:3736 isDemandOnlyPullCollection)",
+      "_owner_basis": "Entscheidung: §16.21 Eigentum: OLG (Projektion der externen SQL-Quelle Sellify)",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "window",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "sellify_companies": {
+      "_class_proposal": "heute demand-only (shared/sync.js:3737 isDemandOnlyPullCollection)",
+      "_owner_basis": "Entscheidung: §16.21 Eigentum: OLG (Projektion der externen SQL-Quelle Sellify)",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "window",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "sellify_people": {
+      "_class_proposal": "heute demand-only (shared/sync.js:3738 isDemandOnlyPullCollection)",
+      "_owner_basis": "Entscheidung: §16.21 Eigentum: OLG (Projektion der externen SQL-Quelle Sellify)",
+      "_schema_source": "v4/schemas/outbound-lead-generation.collections.schema.json",
+      "byte_budget": null,
+      "class": "window",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "is_deleted",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [
+    {
+      "from": [
+        "outbound"
+      ],
+      "type": "outbound.research_source.reprobe"
+    },
+    {
+      "from": [
+        "outbound"
+      ],
+      "type": "outbound.research_source.test"
+    },
+    {
+      "from": [
+        "outbound"
+      ],
+      "type": "outbound.scrape.script.read"
+    },
+    {
+      "from": [
+        "outbound"
+      ],
+      "type": "outbound.scrape.target.upsert"
+    },
+    {
+      "from": [
+        "outbound"
+      ],
+      "type": "outbound.update_digest.send_now"
+    }
+  ],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "outbound_lead_generation_adapters": [
+      "read",
+      "write"
+    ],
+    "outbound_lead_generation_scrape_account_states": [
+      "read"
+    ],
+    "outbound_lead_generation_scrape_runs": [
+      "read",
+      "watch"
+    ],
+    "outbound_lead_generation_scrape_scripts": [
+      "read"
+    ],
+    "outbound_lead_generation_scrape_targets": [
+      "read",
+      "watch"
+    ],
+    "outbound_research_policies": [
+      "read",
+      "write"
+    ],
+    "sellify_campaigns": [
+      "read"
+    ],
+    "sellify_companies": [
+      "read"
+    ],
+    "sellify_people": [
+      "read"
+    ]
+  },
+  "files": {
+    "OLG725.md": "baba5a14bec20b7ba6df76507ad874110830b30e56db7d2a72df75d684c293ee",
+    "README.md": "7c5762338e4a3b8120ecf823363b3dd7967eec4db8852fce2213b8ac71869a86",
+    "V4-HANDLERS.md": "82635f236fc9536797aeca3de6a5de2c9bf5773eab91e9ac80b390619f1cf2ff",
+    "V4-PORT.md": "428a408300283b86dfde02a1c6356dbda78a6b7b8331b836a97f41b4c9868c74",
+    "adapter-dedupe.mjs": "bd7c1d612afd359cd70077862df65e63ac029e86c771db70863195eedf80656f",
+    "assets/icon/outbound-lead-generation.svg": "da19e50be20343aa5a1d9de7e7be2413e5db41faaa5b92ad690c24dddbedc94e",
+    "collections.schema.json": "bc6c7f13a81b9e0ac1e24fd9b9184fed8ccfd604487e0d1abf1a7a640a79e18b",
+    "current-state-export.mjs": "098965416e3a989f76b8220d62677b62b0b5292da2b7048367c7c8b89e14b5f8",
+    "field-catalog.mjs": "6356e6538d5d2d9d9a093db23b20aea26a1c6bbe709a1f84e6828ea924e06b25",
+    "handlers/INVARIANTS.md": "184e6eb833d0694ac1f3cdaf775da0e5f76f27a563f3a4bfc2c77bc9f1ac5136",
+    "handlers/_lib/agent-reply.js": "aed1d7c5a6043ec948cf9fed7354dc62cf532d461585897d9930b5cf9803cf58",
+    "handlers/_lib/contact-email-validation.js": "1ca2e812b34374f1a03a60099f39f0d6a81832cf873577ea9aea99e379f77e8d",
+    "handlers/_lib/field-status-witnesses.js": "dd5b14c8889c37a3e8d75340105a441b227f297790526fc7b4cd61cf3633f4c2",
+    "handlers/_lib/lead-research.js": "8675273efae631c3a9b8ca14f83406254253e16a77a4cf07283032a30d3a5678",
+    "handlers/_lib/legacy.js": "2d67fdd14f7ae83261ad7126072b6e51f28b29c4b86fb20c6048aa3108791fca",
+    "handlers/_lib/olg.js": "7abef2f0a8d6f63d8a78a7a949708bf19cf4658f6eb51e638d57d8d8462d2c72",
+    "handlers/_lib/person-research-capture.js": "c5ad3275a18dcc23c3dd65936b1e6cc10c2cfadeb3bdc5d28f5508116bce568a",
+    "handlers/_lib/person-research.js": "3621a47ae33bf7a3a937c2ef3eccff2d2a2c6206f309fbcd28ad22e2bc0a3c9f",
+    "handlers/_lib/policy-report.js": "853da4112fce494add26ecd6425658b82f811705a9592a36229a05ce0531e0ae",
+    "handlers/_lib/research-evidence.js": "94ff44c5500f980e7e06cf0b5892ad72d1f1daf77f5dab1baa4e78da1b91ae2b",
+    "handlers/_lib/research-field-status.js": "9bcdaa8fef76973e667a525f957f5cd204a50c917ca2fb3f2c1b5470a6f27f64",
+    "handlers/_lib/research-outcome-patch.js": "0e85d04c21e97abb9e05ac0de92b653507b280e6761661380fe0da6e6714b59e",
+    "handlers/_lib/research-source-adapter.js": "c50a56c45875719752c740b75edccd5f6c514a60edb5156cc497c9e550f8edf1",
+    "handlers/_lib/research-validation.js": "b8c1278fd2468afa05baae61ae9582e993915fcd2119307fe0a7eba089d34328",
+    "handlers/_lib/research-writeback-checks.js": "872be12465ba84d2dc1da2c2a8d5f52c215baed21973e65ab5034884303b3503",
+    "handlers/_lib/research-writeback-payload.js": "96e997be42bbca48679244e501435dc0837a1099d303ea3cb640a5462ba47b38",
+    "handlers/_lib/research-writeback-sanitize.js": "80c73843b045774aaf2f023e97d124c4a295a2e2968ad6aa3dd81beeb442261f",
+    "handlers/_lib/research-writeback.js": "770b98947a2f95477bef1b7bce1815264147962510ebda9893fef55248a94364",
+    "handlers/_lib/scrape-registry.js": "d1d2f2cab93061cc96be5d7a59e6770d5fc2849c32a160237275d32316b937be",
+    "handlers/_lib/scrape-runner.js": "029f11e95efc1ba97b7a0da6a3a99389741296011b18625bd240a1f1a97cc48d",
+    "handlers/_lib/sellify-lookup.js": "99f18c477d30ecd978243c0c4f56fc35150f2cad178bf8a4f60c5a0578071902",
+    "handlers/_lib/sellify-remarks.js": "ccb71a4c3e9afe3a70af5bd5e6d8f3ebedbd470b80d605dd0338fdf4477f7d3e",
+    "handlers/_lib/update-digest.js": "bc71f8debb935a0e6c824b4630a657d79e53ac4e8d11e4e39e06869305e32e15",
+    "handlers/outbound.campaign.research.js": "d582ad7221fe1bb2871eb7cb43a6530774c1a0eba87e2fddc91532f02f31872c",
+    "handlers/outbound.contacts.email_validate.js": "fef59c426514850a835eff55d493ffd319383f7d29870090422056315f7315e8",
+    "handlers/outbound.contacts.email_validation_sweep.js": "293e3d748f96880f7ccfa3b8e5fe61b5a9b6edf2bb2556125713709b5d501f46",
+    "handlers/outbound.lead.research.done.js": "0fc09c5a00d9ae840ca24c9dce6c27f0fafa54e2b92ce3594019a8e8384b057c",
+    "handlers/outbound.lead.research.failed.js": "cf5358e73d4eb939204b775508bb09e1dd04e00360534d087e3d59dc332a6262",
+    "handlers/outbound.lead.research.js": "efac5d392fe9fccc9a710808c7b7dec6d9d9a0d22521ffbbcfa465bc154c5914",
+    "handlers/outbound.lead.research_writeback.js": "3b505535390b4ae3215234a7963b1315c201a149bdc479035724faa63c8c532b",
+    "handlers/outbound.research.adapters.reconcile.done.js": "dcd77d4fcdd426e211a9bbc0c7c09d3a11d4ed0a62fc007cad598e2174d5a5f4",
+    "handlers/outbound.research.adapters.reconcile.js": "646dc55dd436fd8c34b26a8f57a0fcd9b8b8ee96b86da792fa629eea0ac68cab",
+    "handlers/outbound.research_policy.publish.js": "b7e5db870c5ee39e9c191c18b7c5053e8a1cbc157769636aaf24cdc18214d67d",
+    "handlers/outbound.research_source.auth_assist.js": "ac3d1f5315f7b7eabf132d644de355c42e1f4ab74bd7b3332fe8cd5a6957c9d5",
+    "handlers/outbound.research_source.generate_adapter.js": "7c237e6b01fc9ef8888397c5c387599e44dfe43ae051308d533633962740226c",
+    "handlers/outbound.research_source.generation.done.js": "8008ae453cc7b397c28f22b28c8a5268cc1ecb6072d6319e0e6589e2744fe791",
+    "handlers/outbound.research_source.reprobe.js": "3c371c9c3cb0fcbb29916dbd404882b3b16dd80389afa88ee105d455a16cdc97",
+    "handlers/outbound.research_source.test.js": "a7e6a748e7f3751b4800ffe05bcac5f7141bbf0887f49608bfb74f1b653f233c",
+    "handlers/outbound.research_source.upsert.js": "2c4ab6bb7df94ce925003d5ce9aa55cd637812d30a485db0244445ae8a1fdcf6",
+    "handlers/outbound.scrape.execute.js": "2601b02b0f426fdf4887f3778f92300677813eabef3943a0b12589f094243296",
+    "handlers/outbound.scrape.script.read.js": "5918dce3688bb7cbb91f6620ed69fc57d9cb55cffcb7180e33206572d8c2113a",
+    "handlers/outbound.scrape.script.register.js": "aa50ab4a0aa43a37a0ab12523972c9c7f37afc58c4268b04ddf092e52db95163",
+    "handlers/outbound.scrape.target.upsert.js": "e3b19492a89704e76b1ae38510dc714ec9d6098a14062d2d5e9566201521d740",
+    "handlers/outbound.sellify.lookup.js": "184f1fd791fb0267f412d52449d579749b57aad9010d113fe70678f677856918",
+    "handlers/outbound.sellify.remarks.check.js": "c376860fe3a113f98ff5229609981305676e415fe264c6ff0f30ff707447721d",
+    "handlers/outbound.sellify.remarks.complete.js": "b2fb336ba9ac2df35eb945970103cab23e8360d5e3fc2f9392a91dd7902a643c",
+    "handlers/outbound.sellify.remarks.failed.js": "dc9b1a42d744cc6a6b8b26aff4f0b8268e14d970b62cb9ea69facfb7c9ce4fc0",
+    "handlers/outbound.update_digest.send_now.js": "6a48b8aedbb948c0410311c8e72ebf38f5115f046380c1676aef19dec8ab348c",
+    "handlers/web_stack.person_research.done.js": "6a1b9e8e77a0c24d7765235937307a4bc4e75767ae66bdf4001ac41be4279d33",
+    "handlers/web_stack.person_research.failed.js": "c7a801859242357bcbcca4f39a51231b788ec2f2451c1e55dd2d04da432a2c4f",
+    "handlers/web_stack.person_research.js": "976f8679e116ed50b645b14770ae36a3ceda3674da9f6bcd8329085bd798e098",
+    "icon.svg": "da19e50be20343aa5a1d9de7e7be2413e5db41faaa5b92ad690c24dddbedc94e",
+    "import-preview-groups.js": "12c6f881d4dc5674f4fe8af73b37f9d8ac06578c78ffc764ea9ae504a1e27666",
+    "in-flight-lead-sweep.mjs": "edd455435b3239bb506083a7284fafefb500668198191e8dc366b0a5744163e5",
+    "index.css": "7a071144c456337bf55a73a90e954475c4740391c24696973a721c57702613b5",
+    "index.html": "29830dda4bfab99f6216f266e5ea7472ca1e908b5b6891ee85c04a0932ebb9bf",
+    "index.js": "6030297708997f396892a0f2863e28da05a1b48bf606a315fa7ac0fc4e496384",
+    "locales/de.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "locales/en.json": "ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "module.json": "2be4554a9011dfdf78e9a95ef3471cefa8ef58c8eb912f94c12a33b2b7449607",
+    "prompts/gap-closure.md": "c3015301a6512090c5ca607283f728e7f882a748d74cf30c07b0ab4f5886b50d",
+    "prompts/lead-research-continuation.md": "97b4de827e807eef59ed1a406dc33495ddc87f5033c0f3ec190e236d6b7b75c2",
+    "prompts/lead-research.md": "69da06557bd7809f52ee8f1b0aa8e8ad8ea059b6091295cf6072b35eeb3e3472",
+    "prompts/person-research.md": "f0697815873910e86a5fc3defa871c100b32aad14293ddf85fcfe3cb86b1d739",
+    "prompts/sellify-remarks.md": "6b3dcde5a252eeed89f30d90f3d4efc1a1cd7bcaa87aa22fefd741e98cff7c3e",
+    "reconcile-basis.mjs": "02fada0d55979277335d4e27ab88600eb4768a4ecee3dd145ba85aa913295972",
+    "required-field-selection.mjs": "abe8f15411dc94f58cf8bfeb496be7bab8106a04db15635702e88f3a2ce07f72",
+    "runtime/host.mjs": "7082c81da157597e56d8c1a332c154c84f75879c53f90d9d23551df17965e3a1",
+    "runtime/host.ts": "807e3edf51ef0bee3c905c671a9bcb42ceab17328519855ed3f039936ae77ae7",
+    "skills/person-research/SKILL.md": "5a2bb8067519010b5f061a1010042cc3da3b89ed83378191c4af5488aed10f4e",
+    "skills/research/SKILL.md": "a1e9839ceda30b47f9abde91152161a7c18e390ebd773ad6939c422b1975d978",
+    "stacked-detail-reveal.mjs": "73d5acaa4bbabcda5963995132830e07defc5251e4f00f275eeeb6e982d3433d",
+    "v4-manifest.json": "590e261a001baf45bbd61313ccc91a349acac575ccbdd2e5e06b7ea950f8b2ef",
+    "v4-port.mjs": "6502d3ca4346dbb4b8d9c5e4a53d38f2beef09fa54e47e29350713731585d69c",
+    "vendor/jszip/jszip.mjs": "402aaa9a35fe54e4a50d846446033091ee28ac7f0c5d67aff30395a2e14a0043",
+    "xlsx-export.js": "4ee1d20ae516e67a8e6baf266bc753d5848bbe96329e91f6def7050d24756f6c"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/research-writeback.js:8",
+          "index.js:1069",
+          "index.js:1071"
+        ],
+        "code_write": [],
+        "declaration_basis": "customer-modules/outbound-lead-generation/V4-PORT.md §13, §16a",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "files": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/research-source-adapter.js:17",
+          "handlers/_lib/scrape-registry.js:5",
+          "handlers/_lib/scrape-registry.js:324"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "notes": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/scrape-registry.js:126"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "notes"
+    },
+    "outbound_research_adapters": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/research-source-adapter.js:29"
+        ],
+        "code_write": [],
+        "declaration_basis": "customer-modules/outbound-lead-generation/V4-PORT.md §13, §16a",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "outbound"
+    },
+    "spreadsheets": {
+      "_evidence": {
+        "code_read": [
+          "current-state-export.mjs:50"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "spreadsheets"
+    }
+  },
+  "handlers": {
+    "outbound.campaign.research": "handlers/outbound.campaign.research.js",
+    "outbound.contacts.email_validate": "handlers/outbound.contacts.email_validate.js",
+    "outbound.contacts.email_validation_sweep": "handlers/outbound.contacts.email_validation_sweep.js",
+    "outbound.lead.research": "handlers/outbound.lead.research.js",
+    "outbound.lead.research.done": "handlers/outbound.lead.research.done.js",
+    "outbound.lead.research.failed": "handlers/outbound.lead.research.failed.js",
+    "outbound.lead.research_writeback": "handlers/outbound.lead.research_writeback.js",
+    "outbound.research.adapters.reconcile": "handlers/outbound.research.adapters.reconcile.js",
+    "outbound.research.adapters.reconcile.done": "handlers/outbound.research.adapters.reconcile.done.js",
+    "outbound.research_policy.publish": "handlers/outbound.research_policy.publish.js",
+    "outbound.research_source.auth_assist": "handlers/outbound.research_source.auth_assist.js",
+    "outbound.research_source.generate_adapter": "handlers/outbound.research_source.generate_adapter.js",
+    "outbound.research_source.generation.done": "handlers/outbound.research_source.generation.done.js",
+    "outbound.research_source.reprobe": "handlers/outbound.research_source.reprobe.js",
+    "outbound.research_source.test": "handlers/outbound.research_source.test.js",
+    "outbound.research_source.upsert": "handlers/outbound.research_source.upsert.js",
+    "outbound.scrape.execute": "handlers/outbound.scrape.execute.js",
+    "outbound.scrape.script.read": "handlers/outbound.scrape.script.read.js",
+    "outbound.scrape.script.register": "handlers/outbound.scrape.script.register.js",
+    "outbound.scrape.target.upsert": "handlers/outbound.scrape.target.upsert.js",
+    "outbound.sellify.lookup": "handlers/outbound.sellify.lookup.js",
+    "outbound.sellify.remarks.check": "handlers/outbound.sellify.remarks.check.js",
+    "outbound.sellify.remarks.complete": "handlers/outbound.sellify.remarks.complete.js",
+    "outbound.sellify.remarks.failed": "handlers/outbound.sellify.remarks.failed.js",
+    "outbound.update_digest.send_now": "handlers/outbound.update_digest.send_now.js",
+    "web_stack.person_research": "handlers/web_stack.person_research.js",
+    "web_stack.person_research.done": "handlers/web_stack.person_research.done.js",
+    "web_stack.person_research.failed": "handlers/web_stack.person_research.failed.js"
+  },
+  "layout": {
+    "_icon_file": "icon.svg",
+    "_icon_svg_source": "icon.svg (module.json hat kein icon_svg; Owner-Auflage 15.10.: Logo muss erhalten bleiben)",
+    "_multi_instance_basis": "v4-manifest.json; customer-modules/outbound-lead-generation/V4-PORT.md OFFEN 6 (UI-Port) „Manifest-Wunsch layout.multi_instance: false“; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Sales",
+    "icon": "icon.svg",
+    "icon_asset": "assets/icon/outbound-lead-generation.svg",
+    "icon_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 1024 1024\" role=\"img\" aria-label=\"Outbound Lead Generation\">\n  <defs>\n    <linearGradient id=\"background\" x1=\"0\" y1=\"0\" x2=\"1024\" y2=\"1024\" gradientUnits=\"userSpaceOnUse\">\n      <stop stop-color=\"#f6a55e\"/>\n      <stop offset=\"1\" stop-color=\"#de6b68\"/>\n    </linearGradient>\n  </defs>\n  <path fill=\"url(#background)\" d=\"M0 0h1024v1024H0z\"/>\n  <path fill=\"none\" stroke=\"#fff\" stroke-width=\"96\" stroke-linecap=\"round\" d=\"M465 760c-169 0-306-137-306-306s137-306 306-306c136 0 251 89 291 211\"/>\n  <path fill=\"none\" stroke=\"#fff\" stroke-width=\"96\" stroke-linecap=\"round\" stroke-linejoin=\"round\" d=\"m590 605 268-268M686 337h172v172\"/>\n  <circle cx=\"465\" cy=\"454\" r=\"88\" fill=\"#fff\"/>\n</svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 780,
+        "width": 1240
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {
+    "outbound_lead_generation_adapters": {
+      "_source": "v4/schemas/outbound-lead-generation.collections.schema.json migration_strategies",
+      "from_ver": 0,
+      "migrate_fn": null,
+      "steps": [
+        {
+          "operations": [
+            {
+              "default": "",
+              "field": "last_task_id",
+              "op": "set_from_first_truthy",
+              "paths": [
+                "last_task_id"
+              ]
+            }
+          ],
+          "to_ver": 1
+        },
+        {
+          "operations": [
+            {
+              "default": "",
+              "field": "last_task_id",
+              "op": "set_from_first_truthy",
+              "paths": [
+                "last_task_id"
+              ]
+            }
+          ],
+          "to_ver": 2
+        }
+      ]
+    },
+    "outbound_lead_generation_leads": {
+      "_reasons": [
+        "Feld „field_status“ neu ohne Default",
+        "Feld „person_field_status“ neu ohne Default"
+      ],
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_source": "v4/schemas/outbound-lead-generation.collections.schema.json migrations",
+      "from_ver": "main@4794af03d",
+      "migrate_fn": null,
+      "steps": []
+    }
+  },
+  "min_app_api": "4.0",
+  "prompts": [
+    {
+      "name": "gap-closure",
+      "path": "prompts/gap-closure.md"
+    },
+    {
+      "name": "lead-research-continuation",
+      "path": "prompts/lead-research-continuation.md"
+    },
+    {
+      "name": "lead-research",
+      "path": "prompts/lead-research.md"
+    },
+    {
+      "name": "person-research",
+      "path": "prompts/person-research.md"
+    },
+    {
+      "name": "sellify-remarks",
+      "path": "prompts/sellify-remarks.md"
+    }
+  ],
+  "provenance": {
+    "base_hash": "861aa0d520661e0e39116663275c119ea5b3f28ad4d0679d7423f7a605444546",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "skills": [
+    {
+      "name": "person-research",
+      "path": "skills/person-research/SKILL.md"
+    },
+    {
+      "name": "research",
+      "path": "skills/research/SKILL.md"
+    }
+  ],
+  "styles": [
+    "index.css"
+  ],
+  "title": "Outbound Lead Generation",
+  "triggers": [
+    {
+      "every": "PT1H",
+      "handler": "handlers/outbound.contacts.email_validation_sweep.js"
+    }
+  ],
+  "version": "1.0.317",
+  "write_guard": {
+    "outbound_lead_generation_leads": {
+      "_basis": "src/core/business_os/outbound_field_review.rs:31-80 field_status_snapshot, :88 peer_lead_write_allowed",
+      "_todo": [
+        "Rust schützt nur gestempelte Einträge (revision/review gesetzt, :26-30); ungestempelte Altfelder bleiben schreibbar – command_only_fields ist strenger, beim Abgleich auf thesen prüfen.",
+        "Zweite Regel :97-105 (research_status needs_review|completed → failed nur per Befehl) ist mit command_only_fields nicht ausdrückbar; Core-Regel oder Befehlspflicht für research_status festlegen.",
+        "field_status/person_field_status stehen nicht in den Schema-properties (additionalProperties: true); im korrigierten Schema (v4/schemas) deklarieren."
+      ],
+      "command_only_fields": [
+        "contacts[].field_status",
+        "field_status",
+        "person_field_status"
+      ]
+    }
+  }
+}

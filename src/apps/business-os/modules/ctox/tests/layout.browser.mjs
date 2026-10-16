@@ -1,452 +1,242 @@
-// Component browser acceptance: real renderer and shell CSS, synthetic task data.
-// Production authentication, replication and performance are separate gates.
+// Component browser acceptance on the v4 contract: the real mount(root, api) against the frozen
+// App-API stub (Pin 67229d2, CTOX_APP_API_STUB), real app CSS plus the shell theme, synthetic task data.
+// Geometry across five widths, the routing-failure card, the job editor, the in-window task drawer,
+// crew controls and the grouped creature click. Production authentication, replication and
+// performance are separate gates.
+//
+// v4-Umstellung (V4-PORT.md): die früheren Szenarien „verzögerter Harness-Status" und „Status während
+// der Aufgaben-Hydration" prüften Lese-Wettläufe des RxDB-Lesewegs (findOne/$.subscribe, Lese-Koaleszenz).
+// Diesen Leseweg gibt es nicht mehr: api.query/api.get liefern synchron den lokalen Stand, jede Änderung
+// kommt als Abo-Emission. Sie sind ersetzt durch „Pause → Befehl, bestätigter Status erst aus der
+// Projektion". Das Settings-Szenario (react-settings, Shell) gehört nicht zur App.
+//
+// Lauf: node --test src/apps/business-os/modules/ctox/tests/layout.browser.mjs (anderer Stub: CTOX_APP_API_STUB=<dir>)
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import http from 'node:http';
+import { createServer } from 'node:http';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-import { build } from 'esbuild';
-import { chromium } from 'playwright';
-import { stampShellDocument } from '../../../scripts/build-shell-artifact.mjs';
+import { dirname, join, normalize, extname } from 'node:path';
+import { homedir } from 'node:os';
 
-const root = fileURLToPath(new URL('../../../', import.meta.url));
-const out = process.env.CTOX_EVIDENCE_DIR || path.resolve(root, '../../../output/welsch-harness-layout-20260906');
-await mkdir(out, { recursive: true });
-const bundle = await build({ entryPoints: [path.join(root, 'modules/ctox/index.js')], bundle: true, write: false, format: 'esm', platform: 'browser', logLevel: 'silent' });
-const markup = await readFile(path.join(root, 'modules/ctox/index.html'), 'utf8');
-const html = stampShellDocument(Buffer.from(`<!doctype html><html data-theme="dark"><head>
+// Stub: CTOX_APP_API_STUB, sonst die eingecheckte Pin-Kopie 68b83a3 (tests/fixtures/app-api-stub/PIN.md) – auch in CI.
+const STUB = process.env.CTOX_APP_API_STUB || join(dirname(fileURLToPath(import.meta.url)), 'fixtures/app-api-stub');
+const HERE = dirname(fileURLToPath(import.meta.url));
+const BOS = normalize(join(HERE, '../../..'));
+const OUT = process.env.CTOX_EVIDENCE_DIR || join(HERE, 'shots');
+const require = createRequire(import.meta.url);
+// Lader (OLDTEST-Muster): playwright aus dem Checkout (CI: npm ci), sonst PLAYWRIGHT_MODULE, sonst Haupt-Checkout.
+function loadPlaywright() {
+  try { return require('playwright'); } catch {
+    return require(process.env.PLAYWRIGHT_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/playwright'));
+  }
+}
+const { chromium } = loadPlaywright();
+const TYPES = { '.js': 'text/javascript', '.mjs': 'text/javascript', '.css': 'text/css', '.html': 'text/html', '.json': 'application/json', '.svg': 'image/svg+xml' };
+
+const PAGE = `<!doctype html><html data-theme="light"><head><meta charset="utf-8">
 <link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/shared/base.css">
-<link rel="stylesheet" href="/modules/ctox/index.css"></head><body>
-<div class="shell-window-layer" style="position:fixed;inset:0"><section class="shell-window is-focused" data-shell-window="true" data-shell-contract="v2" data-shell-window-chrome="shared-v2" data-shell-header-rows="2" data-shell-icon-rows="2" data-owner-id="desktop-app:ctox" style="position:absolute;inset:0;width:100%;height:100%">
-<div class="shell-window-content"><div class="module-root shell-window-module-root" data-module-root="ctox" data-module-ready="true"><aside class="shell-window-module-pane shell-window-module-pane--left"></aside><div class="shell-window-module-column-resizer shell-window-module-column-resizer--left"></div><main class="module-content" data-module-content>${markup}</main><div class="shell-window-module-column-resizer shell-window-module-column-resizer--right"></div><aside class="shell-window-module-pane shell-window-module-pane--right"></aside></div></div>
-</section></div><script type="module">
-import {__ctoxTestHooks as hooks} from '/bundle.js';
-import {readEmbeddedIdentity} from '/shared/shell-release-status.js';
-const host=document.querySelector('[data-module-root]');
-window.CTOX_BUSINESS_OS_APP = { openSettingsDrawer: (options) => { window.openedSettings = options; } };
-const data=hooks.mergeBundleWithCommands({runs:[],queue:[],communications:[],tickets:[],tools:[]},
-[{id:'layout-command',command_id:'layout-command',execution_task_id:'layout-task',execution_mode:'queue',execution_phase:'queued',status:'accepted',payload:{title:'Cereda'},execution_progress:{phase:'queued',steps:[]}}],
-[{id:'layout-task',command_id:'layout-command',status:'queued',route_status:'failed',failure_class:'terminal',failure_attempt_count:4,status_note:'thread/start MCP handshake timeout',updated_at_ms:Date.now()}]);
-const model=hooks.buildHarnessModel(data,{ok:false},'de');
-const task=model.tasks.find(task=>task.id==='layout-task');
-const state={ctx:{host},model,lang:'de',flow:{ok:false},selectedTaskId:task.id,selectedStepIndex:0,selectedTaskStepIndex:2,selectedNodeId:'',zoom:1,taskSearch:'',taskViewMode:'cards',taskPrimaryView:'all',taskSourceFilter:'all',taskPinFilter:'all',taskSort:'updated',taskSortDirection:'desc',pinnedTaskIds:new Set(),webStackPanelOpen:false,webStack:{loading:false,data:null,error:''},dataLoaded:true,dataError:'',runtimeStatus:'ready',flowViewport:{left:0,top:0}};
-host.querySelector('[data-ctox-left]').innerHTML=hooks.taskColumnMarkup(model.tasks,state);
-hooks.renderMain({...state,model:null}); // Locale notification before hydration must not throw.
-hooks.renderMain(state);
-state.ctx.session = { user: { role: 'admin' } };
-window.crewFixture = { state, hooks };
-document.body.dataset.loadedVersion=readEmbeddedIdentity(document).version;
-document.body.dataset.fixtureReady='true';
-</script></body></html>`), { version: '1.2.3-beta.1', sourceCommit: 'a'.repeat(40) });
-const server = http.createServer(async (req,res) => {
-  try {
-    const pathname=new URL(req.url,'http://localhost').pathname;
-    if(pathname==='/'){res.setHeader('content-type','text/html');res.end(html);return;}
-    if(pathname==='/bundle.js'){res.setHeader('content-type','text/javascript');res.end(bundle.outputFiles[0].contents);return;}
-    const file=path.resolve(root, '.'+pathname);
-    if(!file.startsWith(root)){res.writeHead(403).end();return;}
-    res.setHeader('content-type',file.endsWith('.css')?'text/css':file.endsWith('.js')?'text/javascript':'application/octet-stream');
-    res.end(await readFile(file));
-  }catch{res.writeHead(404).end();}
+<link rel="stylesheet" href="/modules/ctox/index.css">
+<style>html,body{margin:0}#win{position:fixed;inset:0;overflow:hidden}</style>
+</head><body><div id="win"></div></body></html>`;
+
+let server, browser, base;
+const results = [];
+
+before(async () => {
+  server = createServer(async (req, res) => {
+    const path = decodeURIComponent(new URL(req.url, 'http://x').pathname);
+    if (path === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(PAGE); return; }
+    const [rootDir, rel] = path.startsWith('/__stub/') ? [STUB, path.slice('/__stub'.length)] : [BOS, path];
+    const file = normalize(join(rootDir, rel));
+    if (!file.startsWith(rootDir)) { res.writeHead(403); res.end(); return; }
+    try {
+      let body = await readFile(file);
+      if (/\.m?js$/.test(file)) body = Buffer.from(body.toString('utf8').replace(/(['"])ctox:shared\//g, '$1/shared/'));
+      res.writeHead(200, { 'content-type': TYPES[extname(file)] || 'application/octet-stream' }); res.end(body);
+    } catch { res.writeHead(404); res.end(); }
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  base = `http://127.0.0.1:${server.address().port}/`;
+  browser = await chromium.launch({ headless: true });
+  await mkdir(OUT, { recursive: true });
 });
-await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-const browser=await chromium.launch({headless:true, ...(process.env.PLAYWRIGHT_CHANNEL ? {channel:process.env.PLAYWRIGHT_CHANNEL} : {})});
-const results=[];
-try {
-  for(const width of [430,630,768,1000,1280]){
-    const page=await browser.newPage({viewport:{width,height:710}});
-    const errors=[];
-    const requests=[];
-    page.on('pageerror',error=>errors.push(String(error)));
-    page.on('request',request=>requests.push(new URL(request.url()).pathname));
-    await page.goto(`http://127.0.0.1:${server.address().port}/`);
-    await page.locator('body[data-fixture-ready="true"]').waitFor({timeout:10000}).catch(error=>{throw new Error(errors.join('\n')||String(error));});
-    const measured=await page.locator('[data-flow-canvas]').evaluate(canvas=>({height:canvas.getBoundingClientRect().height,width:canvas.getBoundingClientRect().width,nodes:canvas.querySelectorAll('.ctox-flow-node-g').length}));
-    results.push({viewportWidth:width,...measured,errors});
-    await page.screenshot({path:path.join(out,`${width}.png`)});
-    assert.equal(errors.length,0);
-    assert.equal(await page.locator('body').getAttribute('data-loaded-version'),'1.2.3-beta.1');
-    assert.ok(!requests.includes('/ctox-shell-manifest.json'),'loaded identity must not require a second manifest request');
-    assert.equal(measured.nodes,16);
-    const reason=await page.locator('.ctox-task-reason').textContent();
-    assert.match(reason,/4 Versuche/);
-    assert.match(reason,/Verbindung zu einem Werkzeug/);
-    assert.doesNotMatch(reason,/MCP|thread\/start/);
-    assert.match(await page.locator('[data-pg-band="waiting"]').textContent(),/\(0\)/);
-    assert.equal(await page.locator('.ctox-task-pipeline').getAttribute('aria-label'),'Fehler');
-    assert.equal(await page.locator('[data-task-id="layout-task"][data-creature-node-id="model-failed"]').count(),1);
-    assert.ok(measured.height>=200,`Harness collapsed at width ${width}: ${JSON.stringify(measured)}`);
-    await page.locator('[data-node-id="queued"]').scrollIntoViewIfNeeded();
-    const visible=await page.locator('[data-node-id="queued"]').evaluate(node=>{const r=node.getBoundingClientRect();return document.elementsFromPoint(r.x+r.width/2,r.y+r.height/2).some(e=>e===node||node.contains(e));});
-    assert.ok(visible,`Harness node is clipped at width ${width}`);
-    if(width===1280){
-      const headerHeight = await page.locator('[data-ctox-main] > header').evaluate(node => node.getBoundingClientRect().height);
-      assert.ok(headerHeight <= 40, `Header must be one row, got ${headerHeight}`);
-      const gap = await page.locator('.ctox-harness-app').evaluate(node => {
-        const frame = node.getBoundingClientRect();
-        const main = node.querySelector('[data-ctox-main]').getBoundingClientRect();
-        return frame.bottom - main.bottom;
-      });
-      assert.ok(gap <= 16, `Unused bottom reserve: ${gap}px`);
-      await page.locator('[data-job-toggle]').click();
-      assert.deepEqual(await page.locator('[data-job-panel] select[name="priority"] option').allTextContents(), ['Dringend', 'Hoch', 'Normal', 'Niedrig']);
-      await page.locator('[data-job-panel] input[name="title"]').fill('Ungespeicherter Entwurf');
-      await page.evaluate(() => window.crewFixture.hooks.renderMain(window.crewFixture.state));
-      assert.equal(await page.locator('[data-job-panel] input[name="title"]').inputValue(), 'Ungespeicherter Entwurf');
-      await page.locator('[data-job-toggle]').click();
-      assert.equal(await page.locator('[data-job-panel]').isVisible(), false);
-      await page.locator('[data-ctox-main] .ctox-more-actions > summary').click();
-      const manage = page.locator('[data-manage-channels]');
-      assert.equal(await manage.isVisible(), true);
-      await manage.click();
-      assert.deepEqual(await page.evaluate(() => window.openedSettings), { initialTab: 'channels' });
-      assert.equal(await page.locator('.ctox-more-actions-body:popover-open').count(), 0);
-      await page.evaluate(() => {
-        window.crewFixture.state.ctx.openLeftDrawer = content => {
-          document.getElementById("fixture-task-drawer")?.remove();
-          const panel = document.createElement("aside");
-          panel.id = "fixture-task-drawer";
-          panel.style.cssText = "position:fixed;inset:0 0 0 50%;overflow:auto;z-index:100";
-          panel.append(content);
-          document.body.append(panel);
-        };
-      });
-      await page.locator("[data-ctox-main] .ctox-more-actions > summary").click();
-      await page.locator("[data-open-selected-task]").click();
-      const taskHistory = page.locator(".ctox-drawer-timeline");
-      assert.equal(await taskHistory.getAttribute("open"), null);
-      assert.equal(await taskHistory.locator(".ctox-drawer-steps").isVisible(), false);
-      assert.ok(await taskHistory.evaluate(e => e.getBoundingClientRect().height) <= 40);
-      await taskHistory.locator("summary").click();
-      assert.equal(await taskHistory.locator(".ctox-drawer-steps").isVisible(), true);
-      await page.evaluate(() => {
-        const {state,hooks}=window.crewFixture;
-        hooks.syncDetailDrawer(state); // unchanged refresh must preserve the actual DOM
-        state.model.tasks[0].statusNote = 'A new persisted status arrived';
-        hooks.syncDetailDrawer(state); // changed facts must preserve disclosure state too
-      });
-      assert.equal(await taskHistory.getAttribute("open"), "");
-      assert.equal(await taskHistory.locator(".ctox-drawer-steps").isVisible(), true);
-      await page.locator(".ctox-drawer-edit-fold > summary").click();
-      const drawerTitle = page.locator("#fixture-task-drawer input[name=title]");
-      await drawerTitle.fill("Entwurf bleibt bei Live-Updates");
-      await page.evaluate(() => {
-        const {state,hooks}=window.crewFixture;
-        state.model.tasks[0].statusNote = 'Another update while typing';
-        hooks.syncDetailDrawer(state);
-      });
-      assert.equal(await drawerTitle.inputValue(), "Entwurf bleibt bei Live-Updates");
-      assert.equal(await drawerTitle.evaluate(e=>e === document.activeElement), true);
-      await taskHistory.locator("summary").click();
-      assert.equal(await taskHistory.locator(".ctox-drawer-steps").isVisible(), false);
-      await page.locator("#fixture-task-drawer").evaluate(e => e.remove());
-      await page.locator('[data-node-id="model-failed"]').scrollIntoViewIfNeeded();
-      for(const theme of ['dark','light']){
-        await page.locator('html').evaluate((element,theme)=>element.dataset.theme=theme,theme);
-        await page.screenshot({path:path.join(out,`routing-failed-${theme}.png`)});
-      }
-      await page.evaluate(() => {
-        const {state,hooks}=window.crewFixture;
-        state.selectedTaskId='';
-        state.model.tasks=[];
-        state.model.timeline=state.model.nodes.slice(0,2);
-        hooks.renderMain(state);
-      });
-      const history = page.locator('.ctox-history-fold');
-      assert.equal(await history.count(), 1, 'Actual history remains accessible');
-      assert.equal(await history.getAttribute('open'), null);
-      const closedHeight = await history.evaluate(e=>e.getBoundingClientRect().height);
-      assert.ok(closedHeight <= 40, 'Closed history uses one row');
-      await history.locator('summary').click();
-      assert.equal(await history.getAttribute('open'), '');
-      assert.ok(await history.evaluate(e=>e.getBoundingClientRect().height) > closedHeight);
-      await history.locator('summary').click();
-      assert.equal(await history.getAttribute('open'), null);
-    }
-    if (width === 1280) {
-      await page.evaluate(async () => {
-        const { openReactSettings } = await import('/shared/react-settings.js');
-        const mount = document.createElement('aside');
-        mount.id = 'runtime-settings-fixture';
-        mount.style.cssText = 'position:fixed;inset:0;overflow:auto;z-index:1000;background:var(--bg)';
-        document.body.append(mount);
-        let projection = {
-          id: 'runtime-settings', updated_at_ms: 1, can_manage: true,
-          runtime: { provider: 'minimax', chat_model: 'MiniMax-M3', reasoning_effort: 'high' },
-          auth: { mode: 'api_key', api_key_configured: false },
-          diagnostics: { auth_needs_attention: true },
-        };
-        window.runtimeFixtureCommands = [];
-        await openReactSettings({
-          mount, modules: [], session: { user: { id: 'owner', role: 'admin', is_admin: true } },
-          sync: { startCollection: async () => {} },
-          db: { collection: name => name === 'business_commands' ? {} : name === 'ctox_runtime_settings' ? {
-            findOne: () => ({ exec: async () => ({ toJSON: () => projection }) }),
-          } : null },
-          commandBus: { dispatch: async command => {
-            window.runtimeFixtureCommands.push(command);
-            projection = { ...projection, updated_at_ms: Date.now(), runtime: { ...command.payload },
-              auth: { mode: command.payload.auth_mode, api_key_configured: true }, diagnostics: {} };
-            return { result: { ok: true }, status: 'accepted' };
-          } },
-        });
-      });
-      const settings = page.locator('#runtime-settings-fixture');
-      await settings.locator('[data-runtime-api-key]').fill('fixture-only-not-a-real-key');
-      await settings.locator('[data-runtime-save]').click();
-      await settings.getByText('Runtime/Auth gespeichert.', { exact: true }).waitFor();
-      const saved = await page.evaluate(() => window.runtimeFixtureCommands);
-      assert.equal(saved.length, 1);
-      assert.equal(saved[0].type, 'ctox.runtime_settings.save');
-      assert.equal(saved[0].payload.provider, 'minimax');
-      assert.equal(saved[0].payload.api_key, 'fixture-only-not-a-real-key');
-      assert.equal(saved[0].client_context.actor.id, 'owner');
-      await settings.locator('[data-runtime-refresh]').click();
-      await settings.getByPlaceholder('Gespeichert · leer lassen, um ihn zu behalten').waitFor();
-      assert.equal(await settings.locator('[role=alert]').count(), 0);
-      await page.screenshot({path:path.join(out,'runtime-save-reload.png')});
-      await settings.evaluate(e => e.remove());
-    }
-    if (width === 1280) {
-      await assertDelayedHarnessStatus(page);
-      await assertStatusDuringTaskHydration(page);
-      await assertGroupedCreatureMouseClick();
-    }
-    await page.close();
-  }
-  console.log(JSON.stringify({passed:results.length,results}));
-}finally{
-  await writeFile(path.join(out,'results.json'),JSON.stringify(results,null,2));
-  await browser.close();
-  await new Promise(resolve=>server.close(resolve));
+
+after(async () => {
+  await writeFile(join(OUT, 'layout-results.json'), JSON.stringify(results, null, 2)).catch(() => {});
+  await browser?.close();
+  await new Promise((r) => server?.close(r));
+});
+
+// One page per scenario: a fresh stub kernel with the routing-failure fixture, mounted into #win.
+async function openFixture(width, { extra = null } = {}) {
+  const page = await browser.newPage({ viewport: { width, height: 710 } });
+  const errors = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
+  page.__errors = errors;
+  await page.goto(base);
+  await page.evaluate(async (extraFixture) => {
+    const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
+    const mod = await import('/modules/ctox/index.js');
+    const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: ['apps.source.edit'] } });
+    await kernel.ready;
+    await kernel.sim.push('business_apps', [{ id: 'ctox', title: 'Crew' }, { id: 'shell', title: 'Shell' }]);
+    await kernel.sim.push('business_commands', [{ id: 'layout-command', command_id: 'layout-command', execution_task_id: 'layout-task', execution_mode: 'queue', execution_phase: 'queued', status: 'accepted', payload: { title: 'Cereda' }, execution_progress: { phase: 'queued', steps: [] }, updated_at_ms: Date.now() }]);
+    await kernel.sim.push('ctox_queue_tasks', [{ id: 'layout-task', command_id: 'layout-command', status: 'queued', route_status: 'failed', failure_class: 'terminal', failure_attempt_count: 4, status_note: 'thread/start MCP handshake timeout', updated_at_ms: Date.now() }]);
+    await kernel.sim.push('ctox_harness_status', [{ id: 'harness', paused: false, service_running: true, worker_capacity: 1, updated_at_ms: 1 }]);
+    if (extraFixture) for (const [collection, docs] of Object.entries(extraFixture)) await kernel.sim.push(collection, docs);
+    await kernel.sim.settle();
+    window.__k = kernel;
+    window.__api = kernel.appApi('ctox', '1.1.2');
+    window.__app = await mod.mount(document.getElementById('win'), window.__api, {});
+    window.__commands = () => window.__api.query('business_commands', { sort: [{ created_at: 'asc' }] }).get().filter((c) => c.type);
+    window.__zone = () => kernel.statusZone.forApp('ctox').get().filter((e) => e.source === 'app');
+  }, extra);
+  await settle(page);
+  return page;
 }
 
-// A member with several tasks opens their list on a real mouse click. The
-// canvas' pan pointer capture used to retarget pointerup/click to the canvas,
-// so the ×N list only opened by keyboard (thesen, 28.09.2026).
-async function assertGroupedCreatureMouseClick() {
-  // Own page: the status fixtures above install a task source that would
-  // replace these tasks on the next live read.
-  const page = await browser.newPage({ viewport: { width: 1280, height: 710 } });
-  await page.goto(`http://127.0.0.1:${server.address().port}/`);
-  await page.locator('body[data-fixture-ready="true"]').waitFor({ timeout: 10000 });
-  await page.evaluate(() => {
-    const {state,hooks}=window.crewFixture;
-    state.crewMembers=[{id:'crew:tavi',name:'Tavi',shape:'blob',color:'#00aa9a',archived:false,state:'on_duty'}];
-    const task=(id)=>({id,taskId:id,title:`Task ${id}`,status:'running',routeStatus:'running',crewMemberId:'crew:tavi',updatedAtMs:Date.now(),executionProgress:{phase:'working',steps:[]}});
-    state.model={...state.model,tasks:[task('g1'),task('g2'),task('g3')]};
-    state.selectedTaskId='g1';
-    hooks.renderMain(state);
-  });
-  const slot = page.locator('.ctox-flow-creature-slot[data-crew-tasks]');
-  assert.equal(await slot.count(), 1, 'one being carries the three tasks');
-  const box = await slot.boundingBox();
-  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
-  const popover = page.locator('[data-crew-tasks-pop]');
-  await popover.waitFor({ timeout: 3000 });
-  assert.equal(await popover.locator('[data-crew-pop-task]').count(), 3, 'the list names every task of the member');
-  await popover.locator('[data-crew-pop-task="g2"]').click();
-  assert.equal(await page.locator('[data-crew-tasks-pop]').count(), 0, 'picking a task closes the list');
-  assert.equal(await page.evaluate(() => window.crewFixture.state.selectedTaskId), 'g2', 'the picked task is selected');
-  await page.close();
+async function settle(page) {
+  await page.evaluate(() => window.__k.sim.settle());
+  await page.waitForTimeout(220);
 }
 
-async function assertDelayedHarnessStatus(page) {
-  await page.evaluate(async () => {
-    const {state, hooks} = window.crewFixture;
-    let projection = { id: 'harness', paused: false, service_running: true, worker_capacity: 1, updated_at_ms: 1 };
-    const listeners = new Set();
-    window.harnessControlCommands = [];
-    const emptyCollection = { find: () => ({ exec: async () => [] }), findOne: () => ({ exec: async () => null }) };
-    state.ctx.db = { collection: name => name === 'ctox_harness_status' ? {
-      findOne: () => ({ exec: async () => ({ toJSON: () => ({...projection}) }) }),
-      $: { subscribe: listener => { listeners.add(listener); return { unsubscribe: () => listeners.delete(listener) }; } },
-    } : emptyCollection };
-    state.ctx.commandBus = { dispatch: async command => {
-      window.harnessControlCommands.push(command);
-      // Command completion precedes the separate native status projection.
-      return { status: 'completed', result: { ok: true } };
-    } };
-    state.ctx.sync = { mode: 'webrtc', diagnostics: { peerConnected: true, channelState: 'open' } };
-    window.publishHarnessStatus = paused => {
-      projection = { ...projection, paused, updated_at_ms: projection.updated_at_ms + 1 };
-      for (const listener of listeners) listener({ documentData: {...projection} });
-    };
-    window.stopHarnessStatusFixture = hooks.wireLocalRealtime(state);
-    await hooks.renderFromLocalCache(state);
+for (const width of [430, 630, 768, 1000, 1280]) {
+  test(`Geometrie und Fehlerkarte bei ${width}px`, async () => {
+    const page = await openFixture(width);
+    try {
+      await page.evaluate(() => document.querySelector('[data-select-task-id="layout-task"]')?.click());
+      await settle(page);
+      const measured = await page.locator('[data-flow-canvas]').evaluate((canvas) => ({ height: canvas.getBoundingClientRect().height, width: canvas.getBoundingClientRect().width, nodes: canvas.querySelectorAll('.ctox-flow-node-g').length }));
+      results.push({ viewportWidth: width, ...measured, errors: page.__errors });
+      await page.screenshot({ path: join(OUT, `layout-${width}.png`) });
+      assert.deepEqual(page.__errors, []);
+      assert.equal(measured.nodes, 16);
+      const reason = await page.locator('.ctox-task-reason').first().textContent();
+      assert.match(reason, /4 Versuche/);
+      assert.match(reason, /Verbindung zu einem Werkzeug/);
+      assert.doesNotMatch(reason, /MCP|thread\/start/);
+      assert.match(await page.locator('[data-pg-band="waiting"]').textContent(), /\(0\)/);
+      assert.equal(await page.locator('.ctox-task-pipeline').first().getAttribute('aria-label'), 'Fehler');
+      assert.equal(await page.locator('[data-task-id="layout-task"][data-creature-node-id="model-failed"]').count(), 1);
+      assert.ok(measured.height >= 200, `Harness collapsed at width ${width}: ${JSON.stringify(measured)}`);
+      await page.locator('[data-node-id="queued"]').scrollIntoViewIfNeeded();
+      const visible = await page.locator('[data-node-id="queued"]').evaluate((node) => { const r = node.getBoundingClientRect(); return document.elementsFromPoint(r.x + r.width / 2, r.y + r.height / 2).some((e) => e === node || node.contains(e)); });
+      assert.ok(visible, `Harness node is clipped at width ${width}`);
+      // Nichts außerhalb des App-Fensters, keine horizontale Seitenverschiebung.
+      assert.deepEqual(await page.evaluate(() => [...document.body.children].map((el) => el.id || el.tagName)), ['win']);
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1));
+    } finally { await page.close(); }
   });
-  const menu = page.locator('[data-ctox-main] .ctox-more-actions > summary');
-  const pause = page.locator('[data-harness-pause]');
-  const note = page.locator('.ctox-paused-note');
-  const harness = page.locator('[data-ctox-harness]');
-  const assertHarnessStatus = async paused => {
-    const accessibleStatus = await harness.getAttribute('aria-label');
-    assert.match(accessibleStatus, paused ? /^Die Crew ist pausiert$/ : /^Die Crew bearbeitet die Aufgabenliste$/);
-    assert.equal(await harness.getAttribute('title'), accessibleStatus);
-  };
-  for (const paused of [true, false]) {
-    await menu.click();
-    assert.equal(await pause.getAttribute('aria-pressed'), String(!paused));
+}
+
+test('1280: Kopfzeile einreihig, Editor-Entwurf überlebt Live-Änderung, Mehr-Menü im Fenster ohne Kanäle-Knopf', async () => {
+  const page = await openFixture(1280);
+  try {
+    await page.evaluate(() => document.querySelector('[data-select-task-id="layout-task"]')?.click());
+    await settle(page);
+    const headerHeight = await page.locator('[data-ctox-main] > header').evaluate((node) => node.getBoundingClientRect().height);
+    assert.ok(headerHeight <= 40, `Header must be one row, got ${headerHeight}`);
+    const gap = await page.locator('.ctox-harness-app').evaluate((node) => node.getBoundingClientRect().bottom - node.querySelector('[data-ctox-main]').getBoundingClientRect().bottom);
+    assert.ok(gap <= 16, `Unused bottom reserve: ${gap}px`);
+    await page.locator('[data-job-toggle]').click();
+    assert.deepEqual(await page.locator('[data-job-panel] select[name="priority"] option').allTextContents(), ['Dringend', 'Hoch', 'Normal', 'Niedrig']);
+    await page.locator('[data-job-panel] input[name="title"]').fill('Ungespeicherter Entwurf');
+    await page.locator('[data-job-panel] input[name="title"]').blur();
+    await page.evaluate(() => window.__k.sim.push('ctox_queue_tasks', { id: 'layout-task', command_id: 'layout-command', status: 'queued', route_status: 'failed', failure_class: 'terminal', failure_attempt_count: 4, status_note: 'Neuer persistierter Status', updated_at_ms: Date.now() }));
+    await settle(page);
+    assert.equal(await page.locator('[data-job-panel] input[name="title"]').inputValue(), 'Ungespeicherter Entwurf');
+    await page.locator('[data-job-toggle]').click();
+    assert.equal(await page.locator('[data-job-panel]').isVisible(), false);
+    await page.locator('[data-ctox-main] .ctox-more-actions > summary').click();
+    // „Kanäle verwalten“ entfällt (FR4-3): keine v4-App trägt die Kanal-Einstellungen, also kein Navigationsziel.
+    assert.equal(await page.locator('[data-manage-channels]').count(), 0);
+    const webstack = page.locator('[data-webstack-toggle]');
+    assert.equal(await webstack.isVisible(), true);
+    // Das Menü liegt im App-Fenster (kein Top-Layer-Popover).
+    assert.equal(await page.evaluate(() => document.getElementById('win').contains(document.querySelector('.ctox-more-actions-body'))), true);
+    await page.locator('[data-ctox-main] .ctox-more-actions > summary').click();
+    assert.equal(await page.locator('.ctox-more-actions[open]').count(), 0);
+    assert.deepEqual(page.__errors, []);
+  } finally { await page.close(); }
+});
+
+test('1280: Aufgaben-Drawer im root, Verlauf-Klappe und Entwurf überleben Live-Updates', async () => {
+  const page = await openFixture(1280);
+  try {
+    await page.evaluate(() => document.querySelector('[data-select-task-id="layout-task"]')?.click());
+    await settle(page);
+    await page.locator('[data-ctox-main] .ctox-more-actions > summary').click();
+    await page.locator('[data-open-selected-task]').click();
+    await settle(page);
+    assert.equal(await page.evaluate(() => document.getElementById('win').contains(document.querySelector('[data-ctox-drawer]'))), true);
+    const taskHistory = page.locator('[data-ctox-drawer] .ctox-drawer-timeline');
+    assert.equal(await taskHistory.getAttribute('open'), null);
+    assert.ok(await taskHistory.evaluate((e) => e.getBoundingClientRect().height) <= 40);
+    await taskHistory.locator('summary').click();
+    assert.equal(await taskHistory.locator('.ctox-drawer-steps').isVisible(), true);
+    await page.evaluate(() => window.__k.sim.push('ctox_queue_tasks', { id: 'layout-task', command_id: 'layout-command', status: 'queued', route_status: 'failed', failure_class: 'terminal', failure_attempt_count: 4, status_note: 'A new persisted status arrived', updated_at_ms: Date.now() }));
+    await settle(page);
+    assert.equal(await page.locator('[data-ctox-drawer] .ctox-drawer-timeline').getAttribute('open'), '');
+    await page.locator('[data-ctox-drawer] .ctox-drawer-edit-fold > summary').click();
+    const drawerTitle = page.locator('[data-ctox-drawer] input[name=title]');
+    await drawerTitle.fill('Entwurf bleibt bei Live-Updates');
+    await page.evaluate(() => window.__k.sim.push('ctox_queue_tasks', { id: 'layout-task', command_id: 'layout-command', status: 'queued', route_status: 'failed', failure_class: 'terminal', failure_attempt_count: 4, status_note: 'Another update while typing', updated_at_ms: Date.now() }));
+    await settle(page);
+    assert.equal(await drawerTitle.inputValue(), 'Entwurf bleibt bei Live-Updates');
+    assert.equal(await drawerTitle.evaluate((e) => e === document.activeElement), true);
+    await page.screenshot({ path: join(OUT, 'layout-1280-drawer.png') });
+    assert.deepEqual(page.__errors, []);
+  } finally { await page.close(); }
+});
+
+test('Crew-Steuerung: Pause ist ein Befehl, der bestätigte Zustand kommt nur aus der Projektion', async () => {
+  const page = await openFixture(1280);
+  try {
+    await page.locator('[data-ctox-main] .ctox-more-actions > summary').click();
+    const pause = page.locator('[data-harness-pause]');
+    assert.equal(await pause.getAttribute('aria-pressed'), 'false');
     await pause.click();
-    await page.waitForFunction(count => window.harnessControlCommands.length === count, paused ? 1 : 2);
-    assert.equal(await note.isVisible(), !paused, 'command completion must not optimistically change native status');
-    await assertHarnessStatus(!paused);
-    await page.locator('[data-ctox-main] .ctox-more-actions-body').waitFor({ state: 'hidden' });
-    await menu.click();
-    assert.equal(await pause.getAttribute('aria-pressed'), String(!paused), 'reopening before projection must retain the last confirmed status');
-    await page.evaluate(paused => {
-      window.retainedPauseButton = document.querySelector('[data-harness-pause]');
-      window.publishHarnessStatus(paused);
-    }, paused);
-    await page.waitForFunction(paused => document.querySelector('[data-harness-pause]')?.getAttribute('aria-pressed') === String(paused), paused);
-    assert.equal(await pause.evaluate(button => button === window.retainedPauseButton), true, 'late projection must patch the active control without replacing its menu');
-    assert.equal(await page.locator('.ctox-more-actions-body:popover-open').count(), 1);
-    assert.equal(await note.isVisible(), paused, 'paused note must follow the native projection in both directions');
-    await assertHarnessStatus(paused);
-    assert.equal(await pause.textContent(), paused ? 'Crew weiterarbeiten lassen' : 'Crew pausieren');
-    // Status patches arrive ahead of the debounced general render.
-    await page.waitForFunction(() => window.crewFixture.state.mainRenderPending, null, {timeout:10000});
-    await page.keyboard.press('Escape');
-    await page.waitForFunction(() => !window.crewFixture.state.mainRenderPending);
-    assert.equal(await page.locator('.ctox-more-actions-body:popover-open').count(), 0, 'closing the menu must flush the deferred main render');
-    assert.equal(await note.isVisible(), paused);
-    await assertHarnessStatus(paused);
-  }
-  const commands = await page.evaluate(() => window.harnessControlCommands);
-  assert.deepEqual(commands.map(command => [command.command_type, command.payload.paused]), [
-    ['ctox.queue.pause', true], ['ctox.queue.pause', false],
-  ]);
-  await page.screenshot({ path: path.join(out, 'harness-resumed-without-reload.png') });
-  await page.evaluate(() => window.stopHarnessStatusFixture());
-  results.push({ scenario: 'delayed-native-pause-resume-with-open-menu', passed: true });
-}
+    await settle(page);
+    const cmd = await page.evaluate(() => window.__commands().at(-1));
+    assert.equal(cmd.type, 'ctox.queue.pause');
+    assert.equal(cmd.payload.paused, true);
+    // Kein Rückschluss aus dem Befehl: ohne neue Projektion bleibt der Knopf unverändert.
+    await page.locator('[data-ctox-main] .ctox-more-actions > summary').click();
+    assert.equal(await page.locator('[data-harness-pause]').getAttribute('aria-pressed'), 'false');
+    await page.evaluate(() => window.__k.sim.push('ctox_harness_status', { id: 'harness', paused: true, service_running: true, worker_capacity: 1, updated_at_ms: 2 }));
+    await settle(page);
+    assert.equal(await page.locator('[data-harness-pause]').getAttribute('aria-pressed'), 'true');
+    assert.ok((await page.evaluate(() => window.__zone().map((e) => e.code))).includes('ctox.harness.paused'));
+    assert.equal(await page.locator('[data-ctox-harness]').getAttribute('aria-label'), null, 'kein Zustandstext am Fenster');
+    results.push({ scenario: 'pause-command-then-projection', passed: true });
+    assert.deepEqual(page.__errors, []);
+  } finally { await page.close(); }
+});
 
-async function assertStatusDuringTaskHydration(page) {
-  await page.evaluate(async () => {
-    const {state, hooks} = window.crewFixture;
-    state.detailDrawer = null;
-    document.getElementById("fixture-task-drawer")?.remove();
-    let projection = {id:'harness',paused:false,worker_capacity:1,updated_at_ms:1};
-    const listeners = new Set();
-    const doc = value => ({toJSON: () => ({...value})});
-    const task = {id:'status-task',command_id:'status-command',status:'completed',updated_at_ms:1};
-    const command = {id:'status-command',command_id:'status-command',execution_task_id:'status-task',execution_mode:'queue',status:'completed',payload:{title:'Completed status fixture'},updated_at_ms:1};
-    window.holdStatusTaskReads = false;
-    window.statusTaskReadsHeld = 0;
-    window.statusReadCount = 0;
-    const releases = [];
-    window.releaseStatusTaskReads = () => {
-      window.holdStatusTaskReads = false;
-      for (const release of releases.splice(0)) release([]);
-    };
-    state.ctx.db = {collection: name => name === 'ctox_harness_status' ? {
-      findOne: () => ({exec: async () => {
-        window.statusReadCount++;
-        const snapshot = doc(projection);
-        if (window.holdNextStatusRead) {
-          window.holdNextStatusRead = false;
-          return new Promise(resolve => { window.releaseOlderStatusRead = () => resolve(snapshot); });
-        }
-        return snapshot;
-      }}),
-      $: {subscribe: listener => {listeners.add(listener); return {unsubscribe: () => listeners.delete(listener)};}},
-    } : {
-      findOne: () => ({exec: async () => null}),
-      find: () => ({exec: async () => {
-        if (['ctox_harness_events','ctox_runs'].includes(name) && window.holdStatusTaskReads) {
-          window.statusTaskReadsHeld++;
-          return new Promise(resolve => releases.push(resolve));
-        }
-        return name === 'business_commands' ? [doc(command)] : name === 'ctox_queue_tasks' ? [doc(task)] : [];
-      }}),
-    }};
-    window.statusCommands = [];
-    state.ctx.commandBus = {dispatch: async command => {
-      window.statusCommands.push(command);
-      return {status:'completed',result:{ok:true}};
-    }};
-    window.publishHeldTaskStatus = paused => {
-      projection = {...projection,paused,updated_at_ms:projection.updated_at_ms+1};
-      for (const listener of listeners) listener({documentData:{...projection}});
-    };
-    window.stopHeldTaskStatus = hooks.wireLocalRealtime(state);
-    state.harnessStatus = null;
-    hooks.renderMain(state);
-    window.releaseOlderStatusRead = null;
-    window.holdNextStatusRead = true;
-    await hooks.renderFromLocalCache(state);
-  });
-  assert.equal(await page.locator('[data-harness-pause]').count(), 0, 'initial task hydration can finish before status');
-  await page.evaluate(async () => {
-    const {state, hooks} = window.crewFixture;
-    await hooks.renderFromLocalCache(state);
-    await hooks.renderFromLocalCache(state);
-  });
-  await page.evaluate(() => window.releaseOlderStatusRead());
-  await page.locator('[data-harness-pause]').waitFor({state:'attached'});
-  assert.equal(await page.locator('[data-harness-capacity]').inputValue(), '1');
-  assert.equal(await page.evaluate(() => window.statusReadCount), 1, 'unrelated hydration must join the pending status read without invalidating it');
-  await page.evaluate(() => {
-    window.holdStatusTaskReads = true;
-    window.pendingTaskHydration = window.crewFixture.hooks.renderFromLocalCache(window.crewFixture.state);
-  });
-  await page.waitForFunction(() => window.statusTaskReadsHeld > 0 && window.crewFixture.state.refreshInFlight);
-  const menu = page.locator('[data-ctox-main] .ctox-more-actions > summary');
-  const button = page.locator('[data-harness-pause]');
-  const harness = page.locator('[data-ctox-harness]');
-  await menu.click();
-  await button.click();
-  await page.waitForFunction(() => window.statusCommands.length === 1);
-  await page.locator('[data-ctox-main] .ctox-more-actions-body').waitFor({state:'hidden'});
-  await menu.click();
-  await page.evaluate(() => {
-    window.heldTaskPauseButton = document.querySelector('[data-harness-pause]');
-    window.publishHeldTaskStatus(true);
-  });
-  await page.waitForFunction(() => document.querySelector('[data-harness-pause]')?.getAttribute('aria-pressed') === 'true', null, {timeout:10000});
-  assert.equal(await harness.getAttribute('aria-label'), 'Die Crew ist pausiert');
-  assert.equal(await button.evaluate(node => node === window.heldTaskPauseButton), true);
-  assert.equal(await page.locator('.ctox-paused-note').isVisible(), true);
-  await button.click();
-  await page.waitForFunction(() => window.statusCommands.length === 2);
-  await page.locator('[data-ctox-main] .ctox-more-actions-body').waitFor({state:'hidden'});
-  assert.equal(await harness.getAttribute('aria-label'), 'Die Crew ist pausiert', 'completion alone must not resume the displayed status');
-  await page.evaluate(() => window.publishHeldTaskStatus(false));
-  await page.waitForFunction(() => document.querySelector('[data-harness-pause]')?.getAttribute('aria-pressed') === 'false', null, {timeout:10000});
-  assert.equal(await harness.getAttribute('aria-label'), 'Die Crew bearbeitet die Aufgabenliste');
-  assert.equal(await page.locator('.ctox-paused-note').isVisible(), false);
-  assert.equal(await page.evaluate(() => window.crewFixture.state.refreshInFlight), true, 'task detail reads must still be pending');
-  // A superseded status read must not briefly apply its captured paused value.
-  await page.evaluate(() => {
-    window.observedStatusChanges = [];
-    window.statusObserver = new MutationObserver(() => window.observedStatusChanges.push(document.querySelector('[data-harness-pause]').getAttribute('aria-pressed')));
-    window.statusObserver.observe(document.querySelector('[data-harness-pause]'), {attributes:true,attributeFilter:['aria-pressed']});
-    window.releaseOlderStatusRead = null;
-    window.holdNextStatusRead = true;
-    window.publishHeldTaskStatus(true);
-  });
-  await page.waitForFunction(() => typeof window.releaseOlderStatusRead === 'function');
-  await page.evaluate(() => {window.publishHeldTaskStatus(false); window.releaseOlderStatusRead();});
-  await page.waitForFunction(() => !window.crewFixture.state.harnessStatusRead);
-  assert.equal(await page.evaluate(() => window.observedStatusChanges.includes('true')), false, 'superseded status read must never publish its stale value');
-  await page.evaluate(() => {window.statusObserver.disconnect(); window.publishHeldTaskStatus(true);});
-  await page.waitForFunction(() => document.querySelector('[data-harness-pause]')?.getAttribute('aria-pressed') === 'true');
-  // Mutation delivery occurs after the read loop returns, before its finalizer.
-  await page.evaluate(() => {
-    window.settlementEventDelivered = false;
-    const observer = new MutationObserver(() => {
-      observer.disconnect();
-      window.settlementEventDelivered = true;
-      window.publishHeldTaskStatus(true);
-    });
-    observer.observe(document.querySelector('[data-harness-pause]'), {attributes:true,attributeFilter:['aria-pressed']});
-    window.publishHeldTaskStatus(false);
-  });
-  await page.waitForFunction(() => window.settlementEventDelivered && !window.crewFixture.state.harnessStatusRead);
-  assert.equal(await button.getAttribute('aria-pressed'), 'true', 'status event at promise settlement must receive a follow-up read');
-  await page.evaluate(async () => {window.releaseStatusTaskReads(); await window.pendingTaskHydration;});
-  assert.equal(await button.getAttribute('aria-pressed'), 'true', 'general hydration started with false must not overwrite the newer true status');
-  assert.equal(await harness.getAttribute('aria-label'), 'Die Crew ist pausiert');
-  await page.evaluate(() => window.stopHeldTaskStatus());
-  results.push({scenario:'pause-resume-during-selected-task-hydration',passed:true});
-}
+// A member with several tasks opens their list on a real mouse click. The canvas' pan pointer capture
+// used to retarget pointerup/click to the canvas, so the ×N list only opened by keyboard (thesen, 28.09.2026).
+test('Wesen mit mehreren Aufgaben: echter Mausklick öffnet die Liste, Auswahl wählt die Aufgabe', async () => {
+  const task = (id) => ({ id, title: `Task ${id}`, status: 'running', route_status: 'running', crew_member_id: 'crew:tavi', updated_at_ms: Date.now(), execution_progress: { phase: 'working', steps: [] } });
+  const page = await openFixture(1280, { extra: {
+    ctox_crew_members: [{ id: 'crew:tavi', name: 'Tavi', shape: 'blob', color: '#00aa9a', archived: false, state: 'on_duty', updated_at_ms: 1 }],
+    ctox_queue_tasks: [task('g1'), task('g2'), task('g3')],
+  } });
+  try {
+    await page.evaluate(() => document.querySelector('[data-select-task-id="g1"]')?.click());
+    await settle(page);
+    const slot = page.locator('.ctox-flow-creature-slot[data-crew-tasks]');
+    assert.equal(await slot.count(), 1, 'one being carries the three tasks');
+    const box = await slot.boundingBox();
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    const popover = page.locator('[data-crew-tasks-pop]');
+    await popover.waitFor({ timeout: 3000 });
+    assert.equal(await popover.locator('[data-crew-pop-task]').count(), 3, 'the list names every task of the member');
+    await popover.locator('[data-crew-pop-task="g2"]').click();
+    assert.equal(await page.locator('[data-crew-tasks-pop]').count(), 0, 'picking a task closes the list');
+    assert.equal(await page.evaluate(() => window.__app.snapshot().selectedTaskId), 'g2', 'the picked task is selected');
+    assert.deepEqual(page.__errors, []);
+  } finally { await page.close(); }
+});

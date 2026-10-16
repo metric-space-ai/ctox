@@ -1,0 +1,20 @@
+[package]
+name = "ctox-process-network"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[dependencies]
+anyhow = "1"
+tempfile = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+async-trait = "0.1"
+ctox-network-proxy = { path = "../../harness/network-proxy" }
+ctox-linux-sandbox = { path = "../../harness/linux-sandbox" }
+libc = "0.2"
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "time", "net"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

@@ -4,7 +4,9 @@
 
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import {
+import { loadInvoicesModule } from './_v4-node.mjs';
+
+const {
   computeInvoiceTotals,
   invoiceBand,
   countsFor,
@@ -14,7 +16,8 @@ import {
   parseInvoiceImport,
   renderInvoiceListMarkup,
   renderInvoiceRow,
-} from '../index.js';
+  buildAllocatePaymentCommand,
+} = await loadInvoicesModule();
 
 // Shared fixture: one invoice per real financial bucket plus edge states that
 // only belong under "Alle".
@@ -128,25 +131,20 @@ test('renderInvoiceListMarkup keeps the same rows/order when the selection chang
   assert.deepEqual(selectedIds(b), ['inv_overdue']);
 });
 
-test('renderInvoiceListMarkup gates the empty state on collection readiness', () => {
-  const notReady = { collection: 'accounting_invoices', state: 'catching-up', ready: false, syncing: true, updatedAt: 0 };
-  const live = { collection: 'accounting_invoices', state: 'live', ready: true, syncing: false, updatedAt: 1 };
-  // Empty + not yet replicated → syncing shell (role=status), never "no data".
-  const syncing = renderInvoiceListMarkup([], { readiness: notReady });
-  assert.match(syncing, /class="ctox-syncing"/);
-  assert.match(syncing, /role="status"/);
-  assert.doesNotMatch(syncing, /ctox-empty/);
-  // Empty + live → the honest empty hint.
-  const empty = renderInvoiceListMarkup([], { readiness: live });
-  assert.match(empty, /class="ctox-empty"/);
-  assert.doesNotMatch(empty, /ctox-syncing/);
-  // No readiness passed (filter/search empty) → plain empty hint.
-  const filterEmpty = renderInvoiceListMarkup([], {});
-  assert.match(filterEmpty, /class="ctox-empty"/);
-  assert.doesNotMatch(filterEmpty, /ctox-syncing/);
-  // Rows always win over readiness.
-  const withRows = renderInvoiceListMarkup(SAMPLE, { readiness: notReady });
-  assert.deepEqual(rowIds(withRows), SAMPLE.map((i) => i.id));
+test('renderInvoiceListMarkup renders nothing for an empty list (v4: no empty/syncing copy)', () => {
+  assert.equal(renderInvoiceListMarkup([], {}), '');
+  assert.equal(renderInvoiceListMarkup([], { view: 'list' }), '');
+  assert.doesNotMatch(renderInvoiceListMarkup(SAMPLE, {}), /ctox-syncing|ctox-empty|role="status"/);
+  assert.deepEqual(rowIds(renderInvoiceListMarkup(SAMPLE, {})), SAMPLE.map((i) => i.id));
+});
+
+test('buildAllocatePaymentCommand never sends an empty payment_id (V4-HANDLERS I8)', () => {
+  const empty = buildAllocatePaymentCommand('inv_1', { payment_id: '   ', amount_cents: '1190', skonto_cents: '' });
+  assert.equal(Object.hasOwn(empty.payload, 'payment_id'), false);
+  assert.deepEqual(empty.payload, { invoice_id: 'inv_1', amount_cents: 1190, skonto_cents: 0 });
+  assert.equal(empty.record_id, 'inv_1');
+  const withId = buildAllocatePaymentCommand('inv_1', { payment_id: ' pay_7 ', amount_cents: 500 });
+  assert.equal(withId.payload.payment_id, 'pay_7');
 });
 
 test('renderInvoiceRow stamps the agent right-click context trio', () => {
@@ -187,4 +185,14 @@ test('parseInvoiceImport yields create payloads only for customer + line entries
   assert.equal(entry.lines[0].account_code, '8400', 'lines are sanitised with a default SKR account');
   // A bare array is accepted too.
   assert.equal(parseInvoiceImport([{ party_id: 'c', lines: [{ quantity: 1000, unit_price_cents: 1 }] }]).length, 1);
+});
+
+test('Eingabe in Stück und Euro: deutsche Dezimalzahlen werden intern zu Tausendsteln bzw. Cent', async () => {
+  const mod = await import('../index.js');
+  assert.equal(mod.euroToCents('119,00'), 11900);
+  assert.equal(mod.euroToCents('1.234,56'), 123456);
+  assert.equal(mod.euroToCents('12.5'), 1250);
+  assert.equal(mod.euroToCents(''), 0);
+  assert.equal(mod.unitsToMilli('1,5'), 1500);
+  assert.equal(mod.unitsToMilli('2'), 2000);
 });

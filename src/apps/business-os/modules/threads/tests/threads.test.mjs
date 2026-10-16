@@ -6,7 +6,9 @@ import {
   buildThreadsCommand,
   splitUserIds,
 } from '../commands.js';
-import { collections } from '../schema.js';
+import { readFileSync } from 'node:fs';
+import { threadName, isIdentifier, namingLookupIds, commandTypeName } from '../naming.js';
+import { opsFixture } from './fixtures/ops-fixture.mjs';
 import { collectUniquePages } from '../paging.js';
 import { normalizeInternalDeepLink, sourceDeepLinkFor, sourceFocusSupported } from '../links.js';
 
@@ -64,7 +66,11 @@ await assert.rejects(
   /doppelten Datensatz/,
 );
 
+// schema.js ist gelöscht (R17): einzige Schemaquelle ist collections.schema.json.
+const { collections: schemaCollections } = JSON.parse(readFileSync(new URL('../collections.schema.json', import.meta.url), 'utf8'));
+const collections = Object.fromEntries(Object.entries(schemaCollections).map(([name, entry]) => [name, entry.schema || entry]));
 assert.ok(THREAD_COLLECTIONS.includes('user_threads'));
+for (const name of THREAD_COLLECTIONS) assert.ok(collections[name], `collections.schema.json trägt ${name}`);
 assert.ok(collections.user_threads);
 assert.ok(collections.user_thread_states);
 assert.ok(collections.user_thread_messages);
@@ -119,9 +125,15 @@ const js = await readFile(fileURLToPath(new URL('../index.js', import.meta.url))
 const html = await readFile(fileURLToPath(new URL('../index.html', import.meta.url)), 'utf8');
 const css = await readFile(fileURLToPath(new URL('../index.css', import.meta.url)), 'utf8');
 
-for (const attr of ['data-pg-search', 'data-pg-view', 'data-pg-tray-toggle', 'data-pg-tray', 'data-pg-reset', 'data-pg-filter', 'data-pg-band', 'data-pg-count', 'data-pg-footer']) {
+for (const attr of ['data-pg-search', 'data-pg-view', 'data-pg-tray-toggle', 'data-pg-tray', 'data-pg-reset', 'data-pg-filter', 'data-pg-band', 'data-pg-count']) {
   assert.match(html, new RegExp(attr), `index.html carries ${attr}`);
 }
+// Owner-Regel: keine Fußzeile, keine Zähl-/Zustandszeile (Tab-Zähler im Band bleiben – Navigation).
+assert.doesNotMatch(html, /data-pg-footer|threads-footer/);
+assert.doesNotMatch(js, /setFooter|data-pg-footer|FILTER_LABELS| · als /);
+// Reiter/Ansichten im Originalwortlaut, gekennzeichnet für den Wächter.
+assert.match(html, /<!-- v4-allow: label -->\s*<button[^>]*data-pg-band="waiting"[^>]*>Wartet</);
+assert.match(html, /<!-- v4-allow: label -->\s*<option value="delegated">Wartet auf andere</);
 assert.match(js, /ctox-pane-grammar-change/);
 assert.match(js, /__ctoxPaneGrammar/);
 assert.doesNotMatch(js, /data-toggle-filters|data-reset-filters|data-filter-select|\[data-view-mode\]|\[data-center-view\]/);
@@ -142,7 +154,7 @@ const secondarySurfaces = [
   ['event message', js.match(/<div class="threads-message is-event"[^>]*>/)?.[0] || '', 'thread_message'],
   ['conversation message', js.match(/<article class="threads-message[^>]*>/)?.[0] || '', 'thread_message'],
   ['approval card', js.match(/<article class="threads-approval-card"[^>]*>/)?.[0] || '', 'thread_approval'],
-  ['notification item', js.match(/<div class="ctox-callout threads-notification-item"[^>]*>/)?.[0] || '', 'thread_notification'],
+  ['notification item', js.match(/<div class="threads-notification-item"[^>]*>/)?.[0] || '', 'thread_notification'],
 ];
 for (const [surface, openingTag, recordType] of secondarySurfaces) {
   for (const attr of ['data-context-record-id', 'data-context-record-type', 'data-context-label']) {
@@ -156,38 +168,63 @@ assert.match(secondarySurfaces[2][1], /data-approval-id/);
 // Selection is an in-place is-selected/aria-selected flip, never a rebuild.
 assert.match(js, /applyThreadSelection/);
 assert.match(js, /aria-selected/);
-// Header actions exist (create + export); markup is fetched with the JS
-// cache-buster; no standing briefing row; module UI state uses storageScope.
+// Header actions exist (create + export); no standing briefing row.
 assert.match(html, /data-action="create-note"/);
 assert.match(html, /data-action="export-threads"/);
-assert.match(js, /loadModuleMarkup/);
-assert.match(js, /\?v=\$\{version\}/);
-assert.match(js, /storageScope/);
 assert.doesNotMatch(html, /data-personal-briefing|threads-briefing/);
 assert.doesNotMatch(css, /\.threads-briefing/);
 // Kit tokens are owned by the kit (shared/base.css), never re-defined here.
 assert.doesNotMatch(css, /--kit-fill:\s|--kit-hover:\s|--kit-fill-strong:\s|--focus-ring:\s/);
 
-// Personal counts and empty state must wait for the thread, state and approval
-// collections. A partial replication cannot claim the inbox is complete.
-// Search and filter empties also stay provisional until their window is ready.
-assert.match(js, /collectionReadiness/);
-assert.match(js, /subscribeCollectionReadiness/);
-assert.match(js, /subscribe\.call\(state\.ctx\.sync, 'user_threads'/);
-assert.match(js, /state\.cleanup\.push\(wireReadiness\(\)\)/);
-assert.match(js, /ctox-syncing" role="status" aria-live="polite"/);
-assert.match(js, /syncingThreads/);
-assert.match(js, /const complete = state\.filter === 'inbox'/);
-assert.match(js, /state\.recentThreadsComplete && readiness\?\.ready === true/);
-assert.match(js, /partialSearchResults/);
-assert.match(js, /loadPersonalPages\('user_thread_states'/);
-assert.match(js, /loadPersonalPages\('ctox_task_approval_requests'/);
-assert.match(js, /filter === 'inbox' \? personalCollectionsReady\(\)/);
+// App-API 4.0 (PORTING.md): mount(root, api, {restored}) → {unmount, snapshot}; Daten nur über Live-Abfragen;
+// keine Readiness, keine Schleifen, kein Cache-Buster, kein HTTP-Datenweg, kein Speicher außerhalb snapshot().
+assert.match(js, /export async function mount\(root, api, \{ restored \} = \{\}\)/);
+assert.match(js, /snapshot,\n\s*\};/);
+assert.match(js, /api\.query\('user_threads'|live\('user_threads'/);
+assert.match(js, /autoWirePaneGrammar\(root\)/);
+assert.match(js, /from 'ctox:shared\/stable-dom\.js'/);
+assert.match(js, /fetch\(new URL\('\.\/index\.html', import\.meta\.url\)\)/);
+assert.doesNotMatch(js, /\bctx\.|collectionReadiness|subscribeCollectionReadiness|setInterval|storageScope|sessionStorage|localStorage|\?v=|location\.hash|window\.(confirm|prompt|alert)|new Notification/);
+assert.doesNotMatch(js, /ctox-syncing|syncingThreads|partialSearchResults|commandReceipt/);
+assert.doesNotMatch(html, /role="status"|data-sync-state|data-thread-command-receipt/);
 for (const locale of ['de', 'en']) {
   const messages = JSON.parse(await readFile(fileURLToPath(new URL(`../locales/${locale}.json`, import.meta.url)), 'utf8'));
-  assert.ok(messages.syncingThreads, `locales/${locale}.json carries syncingThreads`);
+  for (const stateKey of ['syncingThreads', 'noThreads', 'noSelection']) assert.equal(messages[stateKey], undefined, `${locale}: kein Zustandstext ${stateKey}`);
 }
 
-await import('./search-rescan.test.mjs');
-await import('./detail-generation.test.mjs');
+// workjet#594: Name nach Projekt und Aufgabe, nie eine Kennung (naming.js, Rückfall-Reihenfolge in V4-PORT.md).
+assert.equal(isIdentifier('a0796d32-2ca9-4f1e-9b7a-3c5d8e2f1a46'), true);
+assert.equal(isIdentifier('CTOX Arbeit 5c1e8a27-b4d6-4c93-a0f5-8e7d2b1c9a60'), true);
+assert.equal(isIdentifier('cmd_42'), true);
+assert.equal(isIdentifier('Angebot Müller GmbH prüfen'), false);
+assert.equal(isIdentifier('ctox.workjet.project.list'), false);
+const fx = opsFixture();
+const pick = (rows) => (id) => rows.find((row) => row.id === id) || null;
+const lookups = {
+  command: pick(fx.collections.business_commands), task: pick(fx.collections.ctox_queue_tasks),
+  project: pick(fx.collections.workjet_projects), appTitle: (module) => pick(fx.collections.business_apps)(module)?.title,
+};
+const names = Object.fromEntries(fx.collections.user_threads.map((thread) => [thread.id, threadName(thread, lookups)]));
+assert.deepEqual([names[fx.ids.t1].project, names[fx.ids.t1].task], ['CTOX Shell v4', 'Login-Seite auf App-API 4.0 umstellen und Abnahme fahren']);
+// Stufe 8: Befehlstyp nie roh, sondern Quelle + Ableitung aus der festen Tabelle (COMMAND_TYPE_NAMES).
+assert.equal(names[fx.ids.t2].title, 'Workjet · Projektliste');
+assert.deepEqual(commandTypeName('ctox.workjet.project.list'), { source: 'Workjet', action: 'Projektliste' });
+assert.deepEqual(commandTypeName('ctox.workjet.project.list', 'en'), { source: 'Workjet', action: 'Project list' });
+assert.deepEqual(commandTypeName('ctox.workjet.project.supervisor.turn.submit'), { source: 'Workjet', action: 'Supervisor-Zug' });
+assert.deepEqual(commandTypeName('ctox.workjet.exit_model.refresh'), { source: 'Workjet', action: '' });
+assert.equal(commandTypeName('ctox.workjetx.foo'), null, 'nur an Segmentgrenzen');
+assert.equal(commandTypeName('crm.lead.update'), null, 'ohne Tabellentreffer nichts erfunden');
+{
+  const t2 = fx.collections.user_threads.find((thread) => thread.id === fx.ids.t2);
+  const unknown = { ...lookups, command: (id) => ({ ...lookups.command(id), command_type: 'crm.lead.update' }) };
+  assert.doesNotMatch(threadName(t2, unknown).title, /crm\.lead\.update/, 'unbekannter Befehlstyp nie roh');
+}
+assert.equal(names[fx.ids.t3].title, 'CTOX Shell v4 · Nachtlauf: Abnahme Kundenpipeline auf gpu3');
+assert.equal(names[fx.ids.t4].title, 'Workjet Desktop · Supervisor');
+assert.equal(names[fx.ids.t5].title, 'Angebot Müller GmbH prüfen');
+for (const name of Object.values(names)) assert.doesNotMatch(name.title, /[0-9a-f]{8}-[0-9a-f]{4}/);
+// Ohne Nachschlagedaten (z. B. workjet_projects nicht freigegeben) bleibt es bei lesbaren Rückfallstufen.
+assert.equal(threadName(fx.collections.user_threads[0], { appTitle: () => 'CTOX' }).title, 'CTOX Arbeit');
+assert.deepEqual(namingLookupIds(fx.collections.user_threads).commandIds, [fx.ids.C1, fx.ids.C2]);
+
 console.log('threads module smoke ok');

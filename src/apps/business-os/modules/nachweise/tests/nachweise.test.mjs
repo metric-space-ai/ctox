@@ -16,10 +16,10 @@ test('credentials: manifest is consistent and has no inline SVG', () => {
   assert.ok(!manifest.layout || !manifest.layout.icon_svg, 'no inline SVG in manifest');
 });
 
-test('credentials: schema declares its owned collection', () => {
-  const schemaSrc = read('schema.js');
-  assert.match(schemaSrc, /business_credentials/);
-  assert.match(schemaSrc, /export const collections/);
+test('credentials: collections.schema.json is the only schema source (schema.js removed, §16.13)', () => {
+  const schema = JSON.parse(read('collections.schema.json'));
+  assert.ok(schema.collections.business_credentials, 'business_credentials declared');
+  assert.throws(() => read('schema.js'), /ENOENT/, 'schema.js is gone');
 });
 
 test('credentials: left column carries the canonical grammar markup pins', () => {
@@ -37,7 +37,7 @@ test('credentials: left column carries the canonical grammar markup pins', () =>
   assert.match(html, /data-pg-tray-toggle/, 'filter tray toggle');
   assert.match(html, /data-pg-tray\b/, 'collapsed tray');
   assert.match(html, /data-pg-reset/, 'tray reset control');
-  assert.match(html, /data-pg-footer/, 'one-line footer target');
+  assert.doesNotMatch(html, /data-pg-footer/, 'keine Fußzeile, die nur den Reiterzähler wiederholt (Textdiät Regel 5)');
 });
 
 test('credentials: counted band has >= 2 real views derived from status', () => {
@@ -66,7 +66,7 @@ test('credentials: import/export/new/collapse handlers are wired in index.js', (
   assert.match(indexJs, /URL\.createObjectURL/, 'export uses an object URL');
   // Import = file input reading JSON, upserting via the record helpers.
   assert.match(indexJs, /type = 'file'/, 'import creates a file input');
-  assert.match(indexJs, /\.upsert\(/, 'import upserts records');
+  assert.match(indexJs, /api\.put\(PRIMARY, prepareImport\(/, 'import writes records through api.put');
   assert.match(indexJs, /prepareImport\(/, 'import normalizes via the record helper');
   // The single view toggle: it swaps SVG icons, and SVGElement has no `hidden`
   // IDL property — assigning `.hidden` sets a JS expando the stylesheet never
@@ -80,8 +80,9 @@ test('credentials: existing command flows are untouched', () => {
   // The two server-authoritative commands keep their exact types and payloads.
   assert.match(indexJs, /ats\.deployment\.check/, 'deployment gate command');
   assert.match(indexJs, /ats\.leistungsnachweis\.signoff/, 'sign-off command');
-  // Capture stays a plain RxDB insert (no command).
-  assert.match(indexJs, /\.insert\(record\)/, 'credential capture is a plain insert');
+  // Capture stays a plain collection write (no command), now through api.put.
+  assert.match(indexJs, /api\.put\(PRIMARY, record\)/, 'credential capture is a plain write');
+  assert.match(indexJs, /api\.command\(type, payload\)/, 'commands go through api.command without waiting');
 });
 
 test('credentials: auto-reveal follows hasSelection && !userCollapsed', async () => {
@@ -95,8 +96,8 @@ test('credentials: record list renders selector rows from a stub doc array', asy
   const mod = await import('../index.js');
   const now = 1_781_990_000_000;
   const rows = [
-    { id: 'c1', subject_id: 'cand-1', credential_type: 'staplerschein', verified: true, valid_until_ms: now + 365 * 24 * 3600 * 1000 },
-    { id: 'c2', subject_id: 'cand-2', credential_type: 'g25', verified: false },
+    { id: 'c1', subject_id: 'cand-1', subject_name: 'Clara Eins', credential_type: 'staplerschein', verified: true, valid_until_ms: now + 365 * 24 * 3600 * 1000 },
+    { id: 'c2', subject_id: 'cand-2', subject_name: 'Dirk Zwei', credential_type: 'g25', verified: false },
   ];
   const out = mod.renderRecordList(rows, { view: 'cards', selectedId: 'c1', nowMs: now });
   assert.match(out, /data-context-record-id="c1"/, 'row carries the record id');
@@ -107,15 +108,14 @@ test('credentials: record list renders selector rows from a stub doc array', asy
   assert.ok(!/<details/.test(out), 'shards do not expand inline');
   assert.ok(!/<button/.test(out), 'shards carry no per-row buttons');
 
-  const empty = mod.renderRecordList([], { view: 'cards', nowMs: now });
-  assert.match(empty, /ctox-empty/, 'empty state renders the kit empty class');
+  assert.equal(mod.renderRecordList([], { view: 'cards', nowMs: now }), '', 'an empty list renders nothing (App-API 4.0)');
 });
 
 test('credentials: card and list views are different shapes, not two paddings', async () => {
   const mod = await import('../index.js');
   const now = 1_781_990_000_000;
   const rows = [{
-    id: 'c1', subject_id: 'cand-1', credential_type: 'staplerschein', issuer: 'TÜV Nord',
+    id: 'c1', subject_id: 'cand-1', subject_name: 'Clara Eins', credential_type: 'staplerschein', issuer: 'TÜV Nord',
     verified: true, valid_until_ms: now + 365 * 24 * 3600 * 1000,
   }];
   const cards = mod.renderRecordList(rows, { view: 'cards', nowMs: now });
@@ -124,7 +124,7 @@ test('credentials: card and list views are different shapes, not two paddings', 
   // Cards: 2 meta lines under the title = a 3-line shard, with the fields that
   // decide a credential (subject, issuer, expiry date, remaining days).
   assert.equal((cards.match(/nachweise-row-meta/g) || []).length, 2, 'shard carries two meta lines');
-  assert.match(cards, /cand-1/, 'shard names the subject');
+  assert.match(cards, /Clara Eins/, 'shard names the subject');
   assert.match(cards, /TÜV Nord/, 'shard names the issuer');
   assert.match(cards, /nachweise-row-head/, 'shard separates title row from meta');
 
@@ -133,23 +133,17 @@ test('credentials: card and list views are different shapes, not two paddings', 
   assert.equal((list.match(/nachweise-row-meta/g) || []).length, 0, 'list row has no meta lines');
   assert.ok(!/nachweise-row-head/.test(list), 'list row is a single flat line');
   assert.equal((list.match(/ctox-badge/g) || []).length, 1, 'list row carries exactly one short meta');
-  assert.match(list, /nachweise-row-title">[^<]*·[^<]*cand-1/, 'list title carries type and subject');
+  assert.match(list, /nachweise-row-title">[^<]*·[^<]*Clara Eins/, 'list title carries type and subject');
   assert.ok(list.length < cards.length, 'the list row is the denser of the two');
 });
 
-test('credentials: empty list follows collection readiness (syncing vs empty)', async () => {
+test('credentials: no readiness / syncing state in the content (App-API 4.0, R4/R11)', async () => {
   const mod = await import('../index.js');
   const now = 1_781_990_000_000;
-  const syncing = mod.renderRecordList([], { view: 'cards', nowMs: now, readiness: { ready: false, state: 'catching-up' } });
-  assert.match(syncing, /ctox-syncing/, 'unready collection renders the syncing shell');
-  assert.ok(!/ctox-empty/.test(syncing), 'no empty state while the collection is not ready');
-  assert.match(syncing, /role="status"/, 'syncing shell is a polite status region');
-  const ready = mod.renderRecordList([], { view: 'cards', nowMs: now, readiness: { ready: true, state: 'live' } });
-  assert.match(ready, /ctox-empty/, 'ready + empty renders the plain empty state');
-  // Rows always win, even when the collection is still catching up.
-  const rows = [{ id: 'c1', subject_id: 'cand-1', credential_type: 'g25', verified: false }];
-  const withRows = mod.renderRecordList(rows, { view: 'cards', nowMs: now, readiness: { ready: false, state: 'catching-up' } });
-  assert.match(withRows, /data-context-record-id="c1"/, 'rows win over the syncing shell');
+  assert.equal(mod.renderRecordList([], { view: 'cards', nowMs: now, readiness: { ready: false } }), '');
+  const rows = [{ id: 'c1', subject_id: 'cand-1', subject_name: 'Clara Eins', credential_type: 'g25', verified: false }];
+  assert.match(mod.renderRecordList(rows, { view: 'cards', nowMs: now }), /data-context-record-id="c1"/);
+  assert.doesNotMatch(indexJs, /ctox-syncing|renderListOrState|collectionReadiness|commandBus|ctx\.db/, 'no v3 data/sync paths left');
 });
 
 test('credentials: band + counts derive from the derived credential status', async () => {

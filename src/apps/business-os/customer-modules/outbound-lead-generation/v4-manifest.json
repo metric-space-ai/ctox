@@ -1,0 +1,109 @@
+{
+  "_basis": {
+    "commands_in": "customer-modules/outbound-lead-generation/V4-HANDLERS.md „Angebot an den Strang outbound“; modules/outbound/V4-HANDLERS.md „Manifest-Wünsche“ Befehls-Ziel; outbound.scrape.script.read: customer-modules/outbound-lead-generation/OLG725.md (Kern §16.47 Nr. 4, files.get nur eigene App)",
+    "exports": "customer-modules/outbound-lead-generation/V4-HANDLERS.md „Angebot an den Strang outbound“ (Witnesses nicht exportiert); modules/outbound/V4-HANDLERS.md „Manifest-Wünsche“ (Sellify-Export)",
+    "foreign_collections": "customer-modules/outbound-lead-generation/V4-PORT.md §13, §16a",
+    "layout_icon_svg_from": "customer-modules/outbound-lead-generation/V4-PORT.md §12 (Owner-Auflage 15.10.: Logo muss erhalten bleiben)",
+    "multi_instance": "customer-modules/outbound-lead-generation/V4-PORT.md OFFEN 6 (UI-Port) „Manifest-Wunsch layout.multi_instance: false“; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "triggers": "customer-modules/outbound-lead-generation/V4-HANDLERS.md OLG3 „Manifest: beide Befehle + Trigger … aufnehmen“",
+    "write_guard": "§16.21 write_guard; customer-modules/outbound-lead-generation/V4-PORT.md §16 Nr. 5"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "class_proposals": {
+    "outbound_lead_generation_leads": "syncProfile eager (schema.js Kommentar Owner 15.10.2026: „es gibt kein Nachladen, Daten werden gepusht“) → full; client_limit/byte_budget an der Ist-Menge messen (thesen)"
+  },
+  "commands_in": [
+    {
+      "from": [
+        "outbound"
+      ],
+      "type": "outbound.scrape.target.upsert"
+    },
+    {
+      "from": [
+        "outbound"
+      ],
+      "type": "outbound.research_source.test"
+    },
+    {
+      "from": [
+        "outbound"
+      ],
+      "type": "outbound.research_source.reprobe"
+    },
+    {
+      "from": [
+        "outbound"
+      ],
+      "type": "outbound.update_digest.send_now"
+    },
+    {
+      "from": [
+        "outbound"
+      ],
+      "type": "outbound.scrape.script.read"
+    }
+  ],
+  "exports": {
+    "outbound_lead_generation_scrape_account_states": [
+      "read"
+    ],
+    "outbound_lead_generation_scrape_runs": [
+      "read",
+      "watch"
+    ],
+    "outbound_lead_generation_scrape_scripts": [
+      "read"
+    ],
+    "outbound_lead_generation_scrape_targets": [
+      "read",
+      "watch"
+    ],
+    "sellify_campaigns": [
+      "read"
+    ],
+    "sellify_companies": [
+      "read"
+    ],
+    "sellify_people": [
+      "read"
+    ]
+  },
+  "foreign_collections": {
+    "business_commands": [
+      "read"
+    ],
+    "outbound_research_adapters": [
+      "read",
+      "write"
+    ]
+  },
+  "layout_icon_svg_from": "icon.svg",
+  "multi_instance": false,
+  "todo": [
+    "module.json.entry zeigt auf local-modules/…; Kundeninstanzen tragen ggf. eine abweichende installierte module.json (~/.local/state/ctox-sync-v4/docs/thesen-olg-installiert-20261015/module.json) – vor Aktivierung abgleichen.",
+    "Abnahme Nicht-Admin (V4-PORT.md §13) legt die Mindestrechte fest; Logo (layout.icon_svg) muss erhalten bleiben."
+  ],
+  "triggers": [
+    {
+      "every": "PT1H",
+      "handler": "handlers/outbound.contacts.email_validation_sweep.js"
+    }
+  ],
+  "write_guard": {
+    "outbound_lead_generation_leads": {
+      "_basis": "src/core/business_os/outbound_field_review.rs:31-80 field_status_snapshot, :88 peer_lead_write_allowed",
+      "_todo": [
+        "Rust schützt nur gestempelte Einträge (revision/review gesetzt, :26-30); ungestempelte Altfelder bleiben schreibbar – command_only_fields ist strenger, beim Abgleich auf thesen prüfen.",
+        "Zweite Regel :97-105 (research_status needs_review|completed → failed nur per Befehl) ist mit command_only_fields nicht ausdrückbar; Core-Regel oder Befehlspflicht für research_status festlegen.",
+        "field_status/person_field_status stehen nicht in den Schema-properties (additionalProperties: true); im korrigierten Schema (v4/schemas) deklarieren."
+      ],
+      "command_only_fields": [
+        "contacts[].field_status",
+        "field_status",
+        "person_field_status"
+      ]
+    }
+  }
+}

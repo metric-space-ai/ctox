@@ -23,16 +23,18 @@ for (const className of ['ctox-workspace', 'ctox-pane', 'ctox-action-strip', 'ct
 // The accent-heavy Run Control is deliberately scarce: one source declaration
 // per signature automation surface. Routine forms must use the compact
 // workbench and ordinary buttons instead.
-for (const [id, file] of [
-  ['research', 'index.js'],
-  ['outbound', 'index.js'],
-  ['iot', 'index.js'],
-  ['creator', 'index.html'],
-  ['coding-agents', 'index.html'],
+// Paths are relative to src/apps/business-os. The coding agent's run surface moved from the Coding Agents app into
+// the shell's code view (agent sidebar, Strang AGENT); the duty moved with the function.
+for (const [id, rel] of [
+  ['research', 'modules/research/index.js'],
+  ['outbound', 'modules/outbound/index.js'],
+  ['iot', 'modules/iot/index.js'],
+  ['creator', 'modules/creator/index.html'],
+  ['coding agent sidebar', 'v4/source/agent-panel.js'],
 ]) {
-  const source = readModule(id, file);
+  const source = readFileSync(join(root, rel), 'utf8');
   const count = (source.match(/ctox-run-control/g) || []).length;
-  assert.equal(count, 1, `${id} must expose exactly one signature Run Control source`);
+  assert.equal(count, 1, `${id} (${rel}) must expose exactly one signature Run Control source`);
 }
 
 for (const id of ['consent', 'credentials', 'esign', 'intake', 'interviews', 'nachweise', 'placements', 'submissions']) {

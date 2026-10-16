@@ -325,6 +325,17 @@ fn lifecycle_rejection(old: &Value, next: &Value) -> Option<String> {
     }
     None
 }
+/// E27.1 (K-WJ-6): a command `result` is a VALUE, not a merge patch. A patch
+/// that carries `result` replaces it wholesale, so null fields (e.g. a timed-out
+/// `exit_code`) survive; a patch without `result` leaves it untouched. Mirrors
+/// `kernel/fake-core.mjs`. `error` is a scalar string and needs no extra rule.
+/// Write path and pre-validation share this so both see the same document.
+pub fn apply_command_patch(target: &mut Value, patch: &Value) {
+    super::super::merge_patch(target, patch);
+    if let Some(result) = patch.get("result") {
+        target["result"] = result.clone();
+    }
+}
 /// Validate the submitted intent before field merge can mask an invalid state or stale token.
 pub fn check_command_input(
     tx: &Transaction<'_>,
@@ -342,7 +353,7 @@ pub fn check_command_input(
     }
     let mut proposed = old.clone();
     if request.op == WriteOp::Patch {
-        super::super::merge_patch(&mut proposed, input)
+        apply_command_patch(&mut proposed, input)
     } else {
         proposed = input.clone()
     }

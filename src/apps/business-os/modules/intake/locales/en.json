@@ -1,9 +1,6 @@
 {
   "title": "Application intake",
-  "subtitle": "Generic multichannel intake: normalized applications from a careers page, job board, email, or QR code.",
   "add": "Create",
-  "empty": "No entries yet.",
-  "syncing": "Syncing data.",
   "listTitle": "Applications",
   "newTitle": "New application",
   "import": "Import",

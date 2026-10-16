@@ -1,0 +1,499 @@
+{
+ "app": "shiftflow",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Einsatzplanung",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neue Schicht",
+    "button:Schichten importieren",
+    "button:Schichten exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filtern",
+    "nav:Woche (0)",
+    "nav:Entwürfe (1)",
+    "button:Dienstplan automatisch generie",
+    "button:Vorherige Woche",
+    "button:Nächste Woche",
+    "nav:Dienstplan (0)",
+    "nav:Konflikte (0)",
+    "nav:Zeiterfassung (2)",
+    "nav:Abrechnung (2)",
+    "button:Mitarbeiter-Timeline",
+    "button:Projekt-Timeline",
+    "button:Dienstplan veröffentlichen",
+    "button:Mitarbeiter-Details: Lena Schu",
+    "button:Mitarbeiter-Details: Paul Koch",
+    "button:Mitarbeiter-Details: Anna Schm",
+    "button:Mitarbeiter-Details: Lukas Web",
+    "button:Mitarbeiter-Details: Sophie Me",
+    "button:Mitarbeiter-Details: Jonas Wag"
+   ],
+   "shot": "shiftflow/420-01-open.png"
+  },
+  {
+   "step": "nav Woche (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/420-02-nav_Woche_0_.png"
+  },
+  {
+   "step": "nav Entwürfe (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/420-03-nav_Entw_rfe_1_.png"
+  },
+  {
+   "step": "nav Dienstplan (0)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Konflikte (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/420-04-nav_Konflikte_0_.png"
+  },
+  {
+   "step": "nav Zeiterfassung (2)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/420-05-nav_Zeiterfassung_2_.png"
+  },
+  {
+   "step": "nav Abrechnung (2)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 864>406"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/420-06-nav_Abrechnung_2_.png"
+  },
+  {
+   "step": "zurück zu Reiter Woche (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 864>406"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/420-07-zur_ck_zu_Reiter_Woche_0_.png"
+  },
+  {
+   "step": "button Neue Schicht",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 864>406"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "shiftflow/420-08-button_Neue_Schicht.png"
+  },
+  {
+   "step": "formular 1 Felder → Einplanen",
+   "changed": true,
+   "ops": [
+    "put planning_shifts/shift_1792086828849 local=ok result=accepted {\"id\":\"shift_1792086828849\",\"kind\":\"shift\",\"status\":\"published\",\"created_at_ms\":1792086828849,\"employee_id\":\"employee-001\",\"project_id\":\"pro"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 864>406"
+   ],
+   "open": true,
+   "kind": "submit",
+   "shot": "shiftflow/420-09-formular_1_Felder_Einplanen.png"
+  },
+  {
+   "step": "button Schichten importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 864>406"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "shiftflow/420-10-button_Schichten_importieren.png"
+  },
+  {
+   "step": "button Schichten exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 864>406"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "shiftflow/420-11-button_Schichten_exportieren.png"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 864>406"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "shiftflow/420-12-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 864>406"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "shiftflow/420-13-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filtern",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 864>406"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "shiftflow/420-14-button_Filtern.png"
+  },
+  {
+   "step": "button Dienstplan automatisch generieren",
+   "changed": true,
+   "ops": [
+    "put planning_shifts/shift_auto_1792086831857_1 local=ok result=accepted {\"id\":\"shift_auto_1792086831857_1\",\"kind\":\"shift\",\"employee_id\":\"employee-002\",\"project_id\":\"project-002\",\"title\":\"Dienst Projektplan Relaun",
+    "put planning_shifts/shift_auto_1792086831859_2 local=ok result=accepted {\"id\":\"shift_auto_1792086831859_2\",\"kind\":\"shift\",\"employee_id\":\"employee-002\",\"project_id\":\"project-002\",\"title\":\"Dienst Projektplan Relaun",
+    "put planning_shifts/shift_auto_1792086831860_3 local=ok result=accepted {\"id\":\"shift_auto_1792086831860_3\",\"kind\":\"shift\",\"employee_id\":\"employee-002\",\"project_id\":\"project-002\",\"title\":\"Dienst Projektplan Relaun",
+    "put planning_shifts/shift_auto_1792086831861_4 local=ok result=accepted {\"id\":\"shift_auto_1792086831861_4\",\"kind\":\"shift\",\"employee_id\":\"employee-002\",\"project_id\":\"project-002\",\"title\":\"Dienst Projektplan Relaun",
+    "put planning_shifts/shift_auto_1792086831862_5 local=ok result=accepted {\"id\":\"shift_auto_1792086831862_5\",\"kind\":\"shift\",\"employee_id\":\"employee-002\",\"project_id\":\"project-002\",\"title\":\"Dienst Projektplan Relaun"
+   ],
+   "zone": [
+    "{\"level\":\"info\",\"code\":\"shiftflow.autogenerate.done\",\"text\":\"Dienstplanentwurf für Montag bis Freitag wurde angelegt.\"}"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 864>406"
+   ],
+   "open": true,
+   "kind": "button",
+   "shot": "shiftflow/420-15-button_Dienstplan_automatisch_generieren.png"
+  },
+  {
+   "step": "nav Woche (5)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 864>406"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/420-16-nav_Woche_5_.png"
+  },
+  {
+   "step": "nav Entwürfe (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [
+    "seitlicher Scroll in div.ctox-table-wrap 864>406"
+   ],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/420-17-nav_Entw_rfe_6_.png"
+  },
+  {
+   "step": "nav Dienstplan (5)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/420-18-nav_Dienstplan_5_.png"
+  },
+  {
+   "step": "row Dienst Projektplan Relaunch Kundenportal Mo., 12.10. · 08:00",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "shiftflow/420-19-row_Dienst_Projektplan_Relaunch_Kundenpo.png"
+  },
+  {
+   "step": "row Dienst Projektplan Relaunch Kundenportal Di., 13.10. · 08:00",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row"
+  },
+  {
+   "step": "button Schicht öffnen: Dienst Projektplan Relaunch Kundenportal — M",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Bearbeiten: Dienst Projektplan Relaunch Kundenportal",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "shiftflow/420-20-button_Bearbeiten_Dienst_Projektplan_Rel.png"
+  },
+  {
+   "step": "Overlay geschlossen (Escape/Schließen) vor Schicht öffnen: Dienst Projektplan Relaunch Kundenportal — D"
+  },
+  {
+   "step": "button Schicht öffnen: Dienst Projektplan Relaunch Kundenportal — D",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Schicht öffnen: Dienst Projektplan Relaunch Kundenportal — F",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Schicht öffnen: Budgetplanung Vertrieb Süd — Sa., 24.10. · 1",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "shiftflow/420-21-button_Schicht_ffnen_Budgetplanung_Vertr.png"
+  },
+  {
+   "step": "button Bearbeiten: Budgetplanung Vertrieb Süd",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear shiftflow.autogenerate.done"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "shiftflow/420-22-button_Bearbeiten_Budgetplanung_Vertrieb.png"
+  },
+  {
+   "step": "Overlay geschlossen (Escape/Schließen) vor Vorherige Woche"
+  },
+  {
+   "step": "button Vorherige Woche",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "shiftflow/420-23-button_Vorherige_Woche.png"
+  },
+  {
+   "step": "nav Woche (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/420-24-nav_Woche_1_.png"
+  },
+  {
+   "step": "nav Dienstplan (1)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 1428,
+   "shot": "shiftflow/420-25-suche_ohne_Treffer.png",
+   "textAfter": 632
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "shiftflow/420-26-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "planning_shifts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "planning_shifts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "planning_shifts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "planning_shifts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "planning_shifts",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "planning_shifts",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "shiftflow",
+  "Einsatzplanung"
+ ]
+}

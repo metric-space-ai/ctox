@@ -4,8 +4,28 @@ import { Buffer } from 'node:buffer';
 import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
 
-import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join as joinPath } from 'node:path';
+// Lader (OLDTEST): esbuild aus dem Klon, sonst ESBUILD_MODULE, sonst aus dem Haupt-Checkout
+// ~/Documents/ctox/src/apps/business-os/node_modules (wie die v4-api-Tests mit PLAYWRIGHT_MODULE). Nicht installieren.
+const requireDev = createRequire(import.meta.url);
+function loadDev(name, envVar) {
+  try { return requireDev(name); } catch {
+    return requireDev(process.env[envVar] || joinPath(homedir(), 'Documents/ctox/src/apps/business-os/node_modules', name));
+  }
+}
+const { build } = loadDev('esbuild', 'ESBUILD_MODULE');
 
+// Lader (OLDTEST): wie der Service Worker – ctox:shared/x → shared/x (§16.15); ctox:lib/<name>@<major>/ ist eine
+// Shell-Standardbibliothek, die erst zur Laufzeit gebunden wird (dynamischer Import) – im Bündel extern lassen.
+const CTOX_SPECIFIERS = {
+  name: 'ctox-specifiers',
+  setup(b) {
+    b.onResolve({ filter: /^ctox:shared\// }, (args) => ({ path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)) }));
+    b.onResolve({ filter: /^ctox:lib\// }, (args) => ({ path: args.path, external: true }));
+  },
+};
 async function importBrowserBundle(relativePath) {
   const bundledModule = await build({
     entryPoints: [fileURLToPath(new URL(relativePath, import.meta.url))],
@@ -13,6 +33,7 @@ async function importBrowserBundle(relativePath) {
     format: 'esm',
     platform: 'browser',
     write: false,
+    plugins: [CTOX_SPECIFIERS],
   });
 
   const [{ text: bundledSource }] = bundledModule.outputFiles;
@@ -49,175 +70,90 @@ test('native Word dirty events never republish a stale persisted version head', 
   assert.deepEqual(cancelled, [1]);
 });
 
-for (const scenario of ['missing-head', 'missing-history', 'head-after-recovery', 'no-head']) {
+// App-API 4.0: Lesen nur über api.get/api.query (synchron, lokal vollständig); Meldungen über api.status.
+function docApi({ get = () => null, query = () => [] } = {}) {
+  return {
+    get: (collection, id) => ({ get: () => get(collection, id) }),
+    query: (collection, q) => ({ get: () => query(collection, q), subscribe: () => () => {} }),
+    status: { report() {}, clear() {} },
+    metrics: { get: () => ({ backlog: 0 }) },
+  };
+}
+
+for (const scenario of ['missing-head', 'missing-history', 'no-head']) {
   test(`Word version loading ${scenario} never rewrites the authoritative head`, async () => {
+    // v4: kein Recovery-Pfad mehr (Szenario head-after-recovery entfällt); die Regel bleibt: der Kopf des Dokuments
+    // wird beim Lesen nie umgeschrieben, und eine fehlende exakte Version fällt nie auf eine andere zurück.
     const record = { id: 'word', title: 'Word', document_type: 'word_document',
       current_version_id: scenario === 'no-head' ? '' : 'v3' };
-    let reads = 0;
     let fallbackReads = 0;
     const exactId = scenario === 'missing-history' ? 'history-v1' : 'v3';
+    const api = docApi({
+      get(collection, id) {
+        assert.equal(collection, 'document_versions', 'reading a version cannot write the documents collection');
+        assert.equal(id, exactId);
+        return null;
+      },
+      query(collection, q) {
+        if (collection !== 'document_versions') return [];
+        assert.equal(q?.selector?.document_id, 'word', 'the head fallback stays inside this document');
+        fallbackReads += 1;
+        assert.equal(scenario, 'no-head', 'missing exact version must not fall back to another version');
+        return [{ id: 'v2', document_id: 'word' }];
+      },
+    });
     const state = { documents: [record], selectedId: 'word', selectedVersion: null,
       editorHandle: null, dirty: false,
       requestedVersionId: scenario === 'missing-history' ? exactId : '',
       requestedVersionDocumentId: 'word',
-      ctx: {
-        db: { collection(name) {
-          assert.equal(name, 'document_versions', 'reading a version cannot write the documents collection');
-          return {
-            findOne(id) { assert.equal(id, exactId); return { async exec() {
-              reads += 1;
-              return scenario === 'head-after-recovery' && reads > 1
-                ? { toJSON: () => ({ id: 'v3', document_id: 'word' }) } : null;
-            } }; },
-            find() {
-              fallbackReads += 1;
-              assert.equal(scenario, 'no-head', 'missing exact version must not fall back to another version');
-              return { exec: async () => [{ toJSON: () => ({ id: 'v2', document_id: 'word' }) }] };
-            },
-          };
-        } },
-        sync: { startCollection: async () => ({ state: { waitForOpenPeerId: async () => 'native' } }) },
-      },
+      api,
+      t: (_key, fallback) => fallback,
     };
     const loaded = await hooks.loadSelectedVersion(state);
-    assert.equal(loaded?.id || null, scenario === 'no-head' ? 'v2' : scenario === 'head-after-recovery' ? 'v3' : null);
+    assert.equal(loaded?.id || null, scenario === 'no-head' ? 'v2' : null);
     assert.equal(record.current_version_id, scenario === 'no-head' ? '' : 'v3');
     assert.equal(fallbackReads, scenario === 'no-head' ? 1 : 0);
   });
 }
 
-test('document chunk refresh does not re-query the file library, runbooks or Knowledge', async () => {
-  const queried = [];
-  const state = { documents: [], selectedId: '', ctx: {
-    host: { querySelector: () => null },
-    db: { collection(name) { queried.push(name); return { find: () => ({ exec: async () => [] }) }; } },
-  } };
-  await hooks.refreshDocumentsFromLocal(state, new Set(['document_blob_chunks']));
-  assert.deepEqual(queried, []);
+test('document refresh for unrelated changes reads no collection and no version', async () => {
+  // v4: Bibliothek, Runbooks und Knowledge kommen über Abos; ein Refresh liest nur die Version des ausgewählten
+  // Dokuments und nur, wenn sich documents/document_versions geändert haben.
+  const reads = [];
+  const api = docApi({
+    get: (collection, id) => { reads.push(`get:${collection}`); return id === 'v2' ? { id: 'v2', document_id: 'doc' } : null; },
+    query: (collection) => { reads.push(`query:${collection}`); return []; },
+  });
+  const state = { api, root: { isConnected: true, querySelector: () => null },
+    documents: [{ id: 'doc', current_version_id: 'v2' }], selectedId: 'doc', selectedVersion: { id: 'v1' } };
+  await hooks.refreshDocumentsFromLocal(state, new Set(['files']));
+  await hooks.refreshDocumentsFromLocal(state, new Set(['knowledge_items']));
+  assert.deepEqual(reads, [], 'unrelated changes never reread the selected version');
+  // Ist die angezeigte Version schon der Kopf, liest auch eine documents-Änderung nichts nach.
+  state.selectedVersion = { id: 'v2' };
   await hooks.refreshDocumentsFromLocal(state, new Set(['documents']));
-  assert.deepEqual(queried, ['documents']);
+  assert.deepEqual(reads, []);
 });
 
-test('document library distinguishes pending sync, a completed empty read, and a failed read', async () => {
-  const state = {
-    documents: [],
-    documentsReadComplete: false,
-    documentsReadError: null,
-    documentsReadiness: { state: 'catching-up', ready: false },
-    selectedId: '',
-    ctx: {
-      host: { querySelector: () => null },
-      db: { collection: () => ({ find: () => ({ exec: async () => [] }) }) },
-    },
-  };
-  assert.equal(hooks.documentListState(state, []), 'loading');
-  state.documentsReadiness = { state: 'offline-pending', ready: false };
-  assert.equal(hooks.documentListState(state, []), 'offline-pending');
-
-  state.documentsReadiness = { state: 'live', ready: true };
-  assert.equal(hooks.documentListState(state, []), 'loading', 'readiness alone cannot prove an empty local read');
-  await hooks.refreshDocuments(state);
-  assert.equal(state.documentsReadComplete, true);
+test('document library state is rows, filtered or empty – no sync, pending or error state in the app', () => {
+  // v4 (R11): Lade-/Sync-/Fehlerzustände leben in der Shell-Zone; die Liste kennt nur Zeilen, Filter-Leere und Leere.
+  const state = { documents: [] };
   assert.equal(hooks.documentListState(state, []), 'empty');
-  state.ctx.sync = { collectionReadiness: () => null };
-  state.documentsReadiness = null;
-  assert.equal(hooks.documentListState(state, []), 'loading', 'a readiness-capable shell must affirm live before empty');
-  state.documentsReadiness = { state: 'live', ready: true };
-
-  state.ctx.db = { collection: () => ({ find: () => ({ exec: async () => { throw new Error('local read failed'); } }) }) };
-  await assert.rejects(hooks.refreshDocuments(state), /local read failed/);
-  assert.equal(hooks.documentListState(state, []), 'error');
   state.documents = [{ id: 'cached' }];
-  assert.equal(hooks.documentListState(state, [{ id: 'cached' }]), 'rows', 'cached rows stay usable while a refresh fails');
+  assert.equal(hooks.documentListState(state, [{ id: 'cached' }]), 'rows');
   assert.equal(hooks.documentListState(state, []), 'filtered', 'filters describe existing local rows');
-});
-
-test('readiness event recovers a collection missing at mount and stops after disposal', async () => {
-  let collectionPresent = false;
-  let reads = 0;
-  let listener;
-  let unsubscribed = false;
-  let localCleanups = 0;
-  const doc = { id: 'doc1', title: 'Recovered', filename: 'recovered.md', current_version_id: 'v1' };
-  const state = {
-    documents: [], documentsReadComplete: false, documentsReadiness: null,
-    selectedId: '', selectedVersion: null, disposed: false,
-    localSubscriptionCleanup: () => { localCleanups += 1; },
-    ctx: {
-      host: { querySelector: () => null },
-      db: { collection(name) {
-        return name === 'documents' && collectionPresent
-          ? { find: () => ({ exec: async () => { reads += 1; return [{ toJSON: () => doc }]; } }) }
-          : null;
-      } },
-      sync: {
-        collectionReadiness: () => ({ state: 'never-synced', ready: false }),
-        subscribeCollectionReadiness: (_name, callback) => {
-          listener = callback;
-          return () => { unsubscribed = true; };
-        },
-      },
-    },
-  };
-  await hooks.refreshDocuments(state);
-  assert.equal(state.documentsReadComplete, false);
-  const cleanup = hooks.wireDocumentReadiness(state);
-  state.selectedId = 'doc1';
-  state.selectedVersion = { id: 'v1' };
-  collectionPresent = true;
-  listener({ state: 'live', ready: true });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(state.documentsReadComplete, true);
-  assert.equal(state.documents[0]?.id, 'doc1');
-  assert.equal(reads, 1);
-  assert.equal(localCleanups, 1, 'the old subscription is replaced when the collection arrives');
-
-  state.disposed = true;
-  cleanup();
-  listener({ state: 'offline-pending', ready: false });
-  await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(unsubscribed, true);
-  assert.equal(reads, 1, 'disposed modules cannot trigger another read');
-});
-
-test('missing documents collection is never reported as an empty library', async () => {
-  const state = {
-    documents: [], documentsReadComplete: false, selectedId: '',
-    ctx: { host: { querySelector: () => null }, db: { collection: () => null } },
-  };
-  await hooks.refreshDocuments(state);
-  assert.equal(hooks.documentListState(state, []), 'loading');
-  state.documents = [{ id: 'cached' }];
-  await hooks.refreshDocuments(state);
-  assert.equal(state.documents[0].id, 'cached', 'a missing collection cannot erase previously visible rows');
-});
-
-test('Knowledge refresh reads only changed collections and preserves other cached context', async () => {
-  const queried = [];
-  const items = [{ id: 'cached-item' }];
-  const runbooks = [{ id: 'cached-runbook' }];
-  const state = { knowledgeItems: items, knowledgeRunbooks: runbooks, knowledgeTables: [{ id: 'old' }], ctx: {
-    db: { collection(name) { queried.push(name); return { find: () => ({ exec: async () => [] }) }; } },
-  } };
-  await hooks.refreshKnowledge(state, new Set(['knowledge_tables']));
-  assert.deepEqual(queried, ['knowledge_tables']);
-  assert.equal(state.knowledgeItems, items);
-  assert.equal(state.knowledgeRunbooks, runbooks);
-  assert.deepEqual(state.knowledgeTables, []);
 });
 
 test('document background refresh does not render after disposal during its read', async () => {
   let active = true;
-  let release;
-  const held = new Promise(resolve => { release = resolve; });
-  const state = { documents: [], selectedId: '', ctx: {
-    host: { querySelector: () => assert.fail('disposed app must not render') },
-    db: { collection() { return { find: () => ({ exec: () => held }) }; } },
-  } };
-  const pending = hooks.refreshDocumentsFromLocal(state, new Set(['documents']), () => active);
-  active = false;
-  release([]);
-  await pending;
+  const api = docApi({
+    // Die Fensterschließung fällt mitten in das Lesen der Version.
+    get: () => { active = false; return { id: 'v2', document_id: 'doc' }; },
+  });
+  const state = { api, documents: [{ id: 'doc', current_version_id: 'v2' }], selectedId: 'doc', selectedVersion: null,
+    root: { isConnected: true, querySelector: () => assert.fail('disposed app must not render') } };
+  await hooks.refreshDocumentsFromLocal(state, new Set(['documents']), () => active);
+  assert.equal(active, false);
 });
 
 test('document records without is_deleted are active', () => {
@@ -297,8 +233,9 @@ test('only transient Office startup and load-version failures are retryable', ()
   })), true);
   assert.equal(hooks.isTransientOfficeStartupError(new Error('CTOX Documents app-ready timed out')), true);
   assert.equal(hooks.isTransientOfficeStartupError(new Error('CTOX document fork SDK load timed out')), true);
-  assert.equal(hooks.isTransientOfficeStartupError(new Error('WebRTC replication cancelled')), true);
-  assert.equal(hooks.isTransientOfficeStartupError(new Error('QUERY_CANCELLED while reading the document version')), true);
+  // v4: Replikations-/Abfrageabbrüche gibt es nicht mehr (Daten lokal über api.query); sie sind kein Startfehler.
+  assert.equal(hooks.isTransientOfficeStartupError(new Error('WebRTC replication cancelled')), false);
+  assert.equal(hooks.isTransientOfficeStartupError(new Error('QUERY_CANCELLED while reading the document version')), false);
   assert.equal(hooks.isTransientOfficeStartupError(new Error('Document SHA-256 mismatch')), false);
   assert.equal(hooks.isTransientOfficeStartupError(new Error('Document blob was not found')), false);
   assert.equal(hooks.isTransientOfficeStartupError(Object.assign(new Error('Read access denied'), {
@@ -358,98 +295,6 @@ test('transient loadVersion timeout reinitializes the Office editor once and con
   assert.deepEqual(retryFeedback, [{ message: 'Office RPC timed out: bridge.loadVersion', attempt: 1 }]);
   assert.deepEqual(waits, [25]);
   assert.deepEqual(result, { recovered: true, recoveryAttempts: 1 });
-});
-
-test('document versions open from local state before waiting for full replication', async () => {
-  const events = [];
-  const localVersion = { id: 'merge_1_recipient_1' };
-  const result = await hooks.resolveLocalFirst(
-    async () => {
-      events.push('local');
-      return localVersion;
-    },
-    async () => events.push('sync'),
-  );
-
-  assert.equal(result, localVersion);
-  assert.deepEqual(events, ['local']);
-});
-
-test('missing or transient local document versions wait for replication once', async () => {
-  const events = [];
-  let localReads = 0;
-  const result = await hooks.resolveLocalFirst(
-    async () => {
-      localReads += 1;
-      events.push(`local-${localReads}`);
-      if (localReads === 1) throw new Error('WebRTC replication cancelled');
-      return { id: 'merge_1_recipient_2' };
-    },
-    async () => events.push('sync'),
-  );
-
-  assert.deepEqual(result, { id: 'merge_1_recipient_2' });
-  assert.deepEqual(events, ['local-1', 'sync', 'local-2']);
-});
-
-test('document metadata deadlines recover once with a bounded network read', async () => {
-  const budgets = [];
-  let recoveries = 0;
-  const version = { id: 'reconnected_version' };
-  const result = await hooks.resolveLocalFirst(async (timeoutMs) => {
-    budgets.push(timeoutMs);
-    if (budgets.length === 1) {
-      return hooks.withDocumentVersionTimeout(new Promise(() => {}), 1, 'metadata deadline');
-    }
-    return version;
-  }, async () => { recoveries += 1; });
-  assert.equal(result, version);
-  assert.deepEqual(budgets, [4500, 60000]);
-  assert.equal(recoveries, 1);
-});
-
-test('document metadata timeout does not relabel permission or integrity errors', async () => {
-  const error = Object.assign(new Error('permission denied'), { code: 'permission_denied' });
-  let recoveries = 0;
-  await assert.rejects(hooks.resolveLocalFirst(
-    () => hooks.withDocumentVersionTimeout(Promise.reject(error), 100, 'deadline'),
-    async () => { recoveries += 1; },
-  ), actual => actual === error);
-  assert.equal(recoveries, 0);
-});
-
-test('document recovery upgrades a follower and waits for its native peer, not full replication', async () => {
-  const events = [];
-  const direct = { state: {
-    async waitForOpenPeerId(timeoutMs) {
-      assert.equal(timeoutMs, 60000);
-      events.push('native-peer');
-      return 'native';
-    },
-    async awaitInitialReplication() { assert.fail('no full collection download'); },
-    async awaitInSync() { assert.fail('no full collection synchronization'); },
-  } };
-  await hooks.awaitDocumentVersionReplication({ mode: 'follower' }, { sync: {
-    async startCollection(name, options) {
-      assert.equal(name, 'document_versions');
-      assert.deepEqual(options, { forceDirect: true });
-      events.push('direct');
-      return { ready: Promise.resolve(direct) };
-    },
-  } });
-  assert.deepEqual(events, ['direct', 'native-peer']);
-});
-
-test('document recovery propagates a refused channel without another metadata read', async () => {
-  let reads = 0;
-  let starts = 0;
-  const refused = Object.assign(new Error('forbidden'), { code: 'permission_denied' });
-  await assert.rejects(hooks.resolveLocalFirst(async () => { reads += 1; return null; },
-    () => hooks.awaitDocumentVersionReplication(null, { sync: {
-      async startCollection() { starts += 1; throw refused; },
-    } })), actual => actual === refused);
-  assert.equal(reads, 1);
-  assert.equal(starts, 1);
 });
 
 test('non-retryable Office load failures fail closed without reinitialization', async () => {
@@ -721,37 +566,33 @@ test('table-only Knowledge is selectable as data context, never as a procedural 
   assert.equal(context.selection_type, 'table');
   assert.equal(context.is_procedural_skill, false);
   assert.deepEqual(context.table_ids, ['table:loads']);
-  assert.match(hooks.knowledgeContextInstruction(context), /kein prozeduraler Skill/);
+  // Anweisungstext zur Knowledge-Auswahl: prompts/knowledge-table.md im Handler (handlers/tests/automation.test.mjs).
 });
 
-test('only superseded draft blobs are reclaimed, never the original or current blob', () => {
-  // Successive autosaves: the previous draft blob is collectable.
-  assert.equal(hooks.isReclaimableDraftBlob('v1_draft_100', 'v1_draft_200'), true);
-  // The original imported source blob must be preserved on first edit.
-  assert.equal(hooks.isReclaimableDraftBlob('v1_blob', 'v1_draft_200'), false);
-  // Never delete the blob the version still points at.
-  assert.equal(hooks.isReclaimableDraftBlob('v1_draft_200', 'v1_draft_200'), false);
-  // No previous blob -> nothing to reclaim.
-  assert.equal(hooks.isReclaimableDraftBlob('', 'v1_draft_200'), false);
-});
-
-test('typed runtime settings select CTOX Documents by default and preserve explicit legacy rollback', () => {
-  assert.equal(hooks.officeEngineFromSettings({ office: { documents_engine: 'ctox_office' } }), 'ctox_documents');
-  assert.equal(hooks.officeEngineFromSettings({ office: { documents_engine: 'ctox_documents' } }), 'ctox_documents');
-  assert.equal(hooks.officeEngineFromSettings({ office: { documents_engine: 'legacy' } }), 'legacy');
-  assert.equal(hooks.officeEngineFromSettings({}), 'ctox_documents');
-});
-
-test('CTOX Documents permissions expose comments and review only with full write access', () => {
-  const writable = hooks.ctoxDocumentsPermissions({
-    permissions: { canWriteCollection: () => true },
-  });
-  assert.deepEqual(writable, { read: true, write: true, export: true, comment: true, review: true });
-
-  const readOnly = hooks.ctoxDocumentsPermissions({
-    permissions: { canWriteCollection: (name) => name !== 'document_versions' },
-  });
-  assert.deepEqual(readOnly, { read: true, write: false, export: true, comment: false, review: false });
+test('CTOX Documents permissions: comment and review follow write; the app holds no permission facade', async () => {
+  // v4: ctx.permissions ist entfallen, Schreibrechte setzt der Kern beim Schreiben durch. Die App-Regel bleibt:
+  // Kommentieren und Review gibt es nie ohne Schreiben. FIX5: `write` spiegelt api.actor (Rolle + Rechteliste).
+  const actorApi = (role, list) => ({ actor: { id: 'u1', display_name: 'U', role, permissions: { get: () => list, subscribe: () => () => {} } } });
+  const cases = [
+    [{}, false],
+    [actorApi('user', []), false],
+    [actorApi('user', ['data.read', 'apps.source.view']), false],
+    [actorApi('founder', []), false],
+    [actorApi('user', ['data.write']), true],
+    [actorApi('admin', []), true],
+    [actorApi('business_os_owner', []), true],
+  ];
+  for (const [api, canWrite] of cases) {
+    const permissions = hooks.ctoxDocumentsPermissions(api);
+    const label = JSON.stringify([api.actor?.role, api.actor?.permissions?.get()]);
+    assert.equal(permissions.read, true, label);
+    assert.equal(permissions.export, true, label);
+    assert.equal(permissions.write, canWrite, label);
+    assert.equal(permissions.comment, canWrite, label);
+    assert.equal(permissions.review, canWrite, label);
+  }
+  const source = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /ctx\.permissions|canWriteCollection/);
 });
 
 test('visibleDocuments filters active normalized rows by status, tag, search, and sort', () => {
@@ -1010,14 +851,7 @@ test('mail merge navigator loads recipient versions and resolves recipient searc
     },
   ];
   const state = {
-    ctx: {
-      db: {
-        collection(name) {
-          if (name !== 'document_versions') return null;
-          return { find: () => ({ exec: async () => versions }) };
-        },
-      },
-    },
+    api: docApi({ query: (name) => (name === 'document_versions' ? versions : []) }),
     documents: [hooks.normalizeDocumentRecord({
       id: 'merge_1',
       title: 'MURRELEKTRONIK 2022',
@@ -1095,19 +929,11 @@ test('mail merge navigator uses the selected typed export when grouped revisions
     provenance: { app_id: 'crm-app', source: 'campaign-mail-merge', selection_id: 268 },
   };
   const state = {
-    ctx: {
-      db: {
-        collection(name) {
-          if (name !== 'document_versions') return null;
-          return {
-            find({ selector }) {
-              requestedDocumentIds.push(selector.document_id);
-              return { exec: async () => versions[selector.document_id] || [] };
-            },
-          };
-        },
-      },
-    },
+    api: docApi({ query(name, { selector } = {}) {
+      if (name !== 'document_versions') return [];
+      requestedDocumentIds.push(selector.document_id);
+      return versions[selector.document_id] || [];
+    } }),
     documents: [
       hooks.normalizeDocumentRecord({ ...common, id: 'merge_old', current_version_id: 'merge_old_v1', updated_at_ms: 100 }),
       hooks.normalizeDocumentRecord({ ...common, id: 'merge_current', current_version_id: 'merge_current_v1', updated_at_ms: 200 }),
@@ -1204,23 +1030,23 @@ test('Documents UI is a two-pane file manager and Word editor without a right ac
   assert.doesNotMatch(html, /documents-actions-resizer/);
   assert.doesNotMatch(html, /data-documents-actions-drawer/);
   assert.match(css, /\.documents-library-resizer[\s\S]*cursor:\s*col-resize/);
-  assert.match(css, /\.documents-workbench\s*\{[\s\S]*container-type:\s*inline-size/);
+  // v4: CSS ist auf [data-app="documents"] gescoped (scope-css, :where(...)).
+  assert.match(css, /:where\(\.documents-workbench\)\s*\{[\s\S]*container-type:\s*inline-size/);
   assert.match(css, /@container documents-workbench \(max-width: 560px\)[\s\S]*\.documents-recipient-navigator[\s\S]*minmax\(0, 1fr\)/);
-  assert.match(css, /\.documents-strip-leading\s*\{[\s\S]*overflow:\s*hidden/);
+  assert.match(css, /:where\(\.documents-strip-leading\)\s*\{[\s\S]*overflow:\s*hidden/);
   assert.match(source, /new ResizeObserver/);
   assert.match(source, /root\.classList\.toggle\('is-compact', width <= 768\)/);
   assert.match(html, /data-pg-search/);
   assert.match(html, /data-pg-view-cycle="list,cards"/);
   assert.match(html, /data-pg-footer/);
   assert.match(source, /autoWirePaneGrammar/);
-  assert.match(source, /shellRightPane\.hidden = true/);
-  assert.match(css, /\.documents-module\.is-compact \.documents-library-resizer[\s\S]*display:\s*none/);
-  assert.match(css, /SuperDoc 1\.32\.0 ships 32px toolbar controls/);
-  assert.match(css, /@media \(pointer: coarse\)[\s\S]*\.documents-superdoc-toolbar \.superdoc-toolbar[\s\S]*--sd-ui-toolbar-height:\s*44px/);
-  assert.match(css, /@media \(pointer: coarse\)[\s\S]*\.documents-superdoc-toolbar \.toolbar-item[\s\S]*min-width:\s*44px/);
+  // v4: der Rahmen hat keine rechte Shell-Spalte mehr, die die App verstecken müsste.
+  assert.doesNotMatch(source, /shellRightPane/);
+  assert.match(css, /:where\(\.documents-module\)\.is-compact \.documents-library-resizer[\s\S]*display:\s*none/);
   assert.doesNotMatch(source, /data-documents-actions-toggle/);
-  assert.match(source, /revisionedModuleAssetUrl\('\.\/index\.html'\)/);
-  assert.match(source, /revisionedModuleAssetUrl\('\.\/index\.css'\)/);
+  // v4 (§16.15): index.html relativ und ohne ?v= (der Service Worker versioniert), index.css lädt die Shell aus dem Manifest.
+  assert.match(source, /fetch\(new URL\('\.\/index\.html', import\.meta\.url\)\)/);
+  assert.doesNotMatch(source, /revisionedModuleAssetUrl|index\.css\?v=|index\.html\?v=/);
   assert.equal(moduleJson.title, 'Dokumente');
   assert.equal(moduleJson.layout.shell_contract, 'v2');
   assert.equal(deMessages.documentsTitle, 'Dokumente');
@@ -1231,10 +1057,11 @@ test('Documents context menu stays inside the module shell', async () => {
     readFile(new URL('./index.css', import.meta.url), 'utf8'),
     readFile(new URL('./index.js', import.meta.url), 'utf8'),
   ]);
-  assert.match(source, /const root = state\.ctx\.host\.querySelector\('\[data-documents-module\]'\) \|\| state\.ctx\.host/);
+  // v4: Fenster-Root aus mount(root, api) statt ctx.host.
+  assert.match(source, /const root = state\.root\.querySelector\('\[data-documents-module\]'\) \|\| state\.root/);
   assert.match(source, /root\.append\(menu\)/);
   assert.match(source, /const rootRect = state\.contextMenu\.parentElement\.getBoundingClientRect\(\)/);
-  assert.match(css, /\.shell-window\[data-shell-contract="v2"\] \.documents-context-menu\s*\{[\s\S]*position:\s*absolute/);
+  assert.match(css, /\[data-app="documents"\] \.documents-context-menu\s*\{\s*position:\s*absolute/);
 });
 
 test('new document validation requires title, runbook, and prompt', () => {
@@ -1248,7 +1075,8 @@ test('visible new-document controls create a blank Word document directly', asyn
     readFile(new URL('./index.js', import.meta.url), 'utf8'),
     readFile(new URL('./index.html', import.meta.url), 'utf8'),
   ]);
-  assert.match(source, /data-documents-empty-new[^\n]+createBlankWordDocument/);
+  // v4 (R11): leere Ansichten rendern nichts – der frühere Leer-Knopf data-documents-empty-new entfällt.
+  assert.doesNotMatch(source, /data-documents-empty-new/);
   assert.match(source, /data-documents-new-markdown[^\n]+[\s\S]{0,160}createBlankWordDocument/);
   assert.match(source, /sourceKind:\s*'created_blank'/);
   assert.match(html, /data-documents-new-markdown[^>]+Leeres Word-Dokument erstellen/);
@@ -1300,41 +1128,28 @@ test('file-open deduplication reuses the imported document with the same source 
   assert.equal(hooks.documentBySourceSha(records, 'missing'), null);
 });
 
-test('document blob chunks are persisted with one bulk write', async () => {
-  const bulkWrites = [];
-  let acknowledged = false;
-  const blobChunks = {
-    bulkUpsert: async (docs) => {
-      bulkWrites.push(docs);
-      return docs.map(row => ({ toJSON: () => ({ ...row, _meta: { lwt: Date.now() } }) }));
-    },
-    insert: async () => { throw new Error('document_blob_chunks insert must not run per chunk'); },
-  };
-  const ctx = {
-    sync: { async leaseCollection() { return { bridge: { state: {
-      async waitForOpenPeerId() { return 'native'; },
-      async pushDocumentsToPeer(_peer, rows) { assert.equal(rows.length, bulkWrites[0].length); acknowledged = true; },
-    } }, async release() {} }; } },
-    db: {
-      collection(name) {
-        if (name === 'document_blob_chunks') return blobChunks;
-        if (name === 'documents' || name === 'document_versions') return {};
-        return null;
-      },
-    },
-  };
-
+test('document bytes are persisted as one file through api.files', async () => {
+  // v4: keine document_blob_chunks mehr; die Bytes gehen als EIN Blob über api.files.put, die Referenz wird erst
+  // nach der lokalen Annahme (handle.local) zurückgegeben.
+  const puts = [];
+  let accepted = false;
+  const api = { files: { put(blob, meta) {
+    puts.push({ blob, meta });
+    // Lokale Annahme kommt später als die Referenz: wer nicht auf `local` wartet, gibt die Referenz zu früh heraus.
+    return { local: new Promise((resolve) => setTimeout(() => { accepted = true; resolve(); }, 5)), ref: Promise.resolve('sha-ref') };
+  } } };
   const bytes = new Uint8Array(260 * 1024);
   bytes.fill(66);
-  await hooks.saveBlobChunks(ctx, {
+  const out = await hooks.saveBlobChunks({ api }, {
     blobId: 'blob_bulk',
     documentId: 'doc_bulk',
     versionId: 'version_bulk',
     mimeType: 'application/octet-stream',
     bytes,
   });
-
-  assert.equal(bulkWrites.length, 1, 'blob chunks are written through one bulkUpsert call');
-  assert.ok(bulkWrites[0].length > 1, 'test payload spans multiple chunk documents');
-  assert.equal(acknowledged, true, 'source bytes are acknowledged before exposing references');
+  assert.equal(puts.length, 1, 'bytes are written through one api.files.put call');
+  assert.equal(puts[0].blob.size, bytes.byteLength);
+  assert.equal(puts[0].meta.id, 'blob_bulk');
+  assert.equal(accepted, true, 'the reference is exposed only after the local acceptance');
+  assert.equal(out.ref, 'sha-ref');
 });

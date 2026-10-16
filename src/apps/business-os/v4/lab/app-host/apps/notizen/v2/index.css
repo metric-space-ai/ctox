@@ -1,0 +1,4 @@
+[data-app="notizen"] .n2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px; height: 100%; box-sizing: border-box; }
+[data-app="notizen"] .n2__verlauf { overflow: auto; border: 1px solid #ccd; background: #f7f8ff; }
+[data-app="notizen"] .n2__verlauf p { margin: 2px 6px; }
+[data-app="notizen"] .n2__edit { display: flex; flex-direction: column; gap: 6px; }

@@ -1,0 +1,31 @@
+{
+  "_app_id": "cv-print-builder",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {},
+  "_foreign_copies_not_taken": [
+    {
+      "name": "business_chats",
+      "owner": "ctox"
+    },
+    {
+      "name": "desktop_file_chunks",
+      "owner": "desktop"
+    },
+    {
+      "name": "desktop_files",
+      "owner": "desktop"
+    },
+    {
+      "name": "document_versions",
+      "owner": "documents"
+    },
+    {
+      "name": "documents",
+      "owner": "documents"
+    }
+  ],
+  "collections": {},
+  "migrations": {}
+}

@@ -1,3 +1,6 @@
+/* v4: das App-root ist der Größencontainer (früher das Shell-Fenster außerhalb von root). */
+[data-app="calendar"] { container: business-app-window / inline-size; }
+
 /* --- Business OS Calendar & Booking App Styling ---
    Frame, panes, headers, titles, resizers, buttons, badges, inputs, list rows
    and empty states come from the shared kit (app.css + shared/base.css):
@@ -8,19 +11,21 @@
 
 /* Shell V2 keeps calendar pane headers on the compact two-row grid; navigation
    and filter controls scroll locally instead of wrapping. */
-.shell-window[data-shell-contract="v2"] .calendar-app { position: relative; padding: 0; overflow: hidden; background: var(--shell-v2-surface, var(--bg)); }
-.shell-window[data-shell-contract="v2"] .calendar-app .ctox-pane { border: 0; border-radius: 0; background: var(--shell-v2-surface, var(--surface)); box-shadow: none; }
-.shell-window[data-shell-contract="v2"] .calendar-app .ctox-pane-header { box-sizing: border-box; min-height: var(--shell-v2-header-row-size, 37px); padding: 0 8px; background: var(--shell-v2-surface-alt, var(--surface-2)); border-bottom: 1px solid var(--shell-v2-line, var(--line)); display: grid; grid-template-rows: var(--shell-v2-header-row-size, 37px) auto; align-content: start; }
-.shell-window[data-shell-contract="v2"] .calendar-app .ctox-pane-title-row { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); }
-.shell-window[data-shell-contract="v2"] .calendar-app .ctox-pane-titles { flex-direction: row; align-items: baseline; gap: 8px; padding-top: 0; overflow: hidden; }
-.shell-window[data-shell-contract="v2"] .calendar-app .ctox-pane-kicker { flex: 0 0 auto; line-height: 1; }
-.shell-window[data-shell-contract="v2"] .calendar-app .ctox-pane-title { margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.1; }
-.shell-window[data-shell-contract="v2"] .calendar-app .ctox-filterbar { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); box-sizing: border-box; padding: 0; flex-wrap: nowrap; overflow-x: auto; }
+/* FIX8: Flächen über Theme-Tokens statt der fest dunklen Shell-v2-Fläche (#10151c/#141b24); im hellen Theme
+   lagen Kopfzeilen sonst dunkel auf dunkel (Muster modules/knowledge, modules/esign). */
+[data-app="calendar"] .calendar-app { position: relative; padding: 0; overflow: hidden; background: var(--bg); color: var(--text); }
+[data-app="calendar"] .calendar-app .ctox-pane { border: 0; border-radius: 0; background: var(--surface); color: var(--text); box-shadow: none; }
+[data-app="calendar"] .calendar-app .ctox-pane-header { box-sizing: border-box; min-height: var(--shell-v2-header-row-size, 37px); padding: 0 8px; background: var(--surface-2); color: var(--text); border-bottom: 1px solid var(--shell-v2-line, var(--line)); display: grid; grid-template-rows: minmax(var(--shell-v2-header-row-size, 37px), auto) auto; align-content: start; }
+[data-app="calendar"] .calendar-app .ctox-pane-title-row { min-height: var(--shell-v2-header-row-size, 37px); }
+[data-app="calendar"] .calendar-app .ctox-pane-titles { flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 0 8px; padding-top: 0; }
+[data-app="calendar"] .calendar-app .ctox-pane-kicker { flex: 0 0 auto; line-height: 1; }
+[data-app="calendar"] .calendar-app .ctox-pane-title { margin-top: 0; line-height: 1.1; }
+[data-app="calendar"] .calendar-app .ctox-filterbar { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); box-sizing: border-box; padding: 0; flex-wrap: nowrap; overflow-x: auto; }
 
 /* custom: EventCalendar (vendor widget) mount + theme bridge — the week/day
    grid is a third-party component that only understands its own --ec-* custom
    properties, so the shell tokens are mapped onto them here. */
-.calendar-grid-container {
+[data-app="calendar"] .calendar-grid-container {
   flex: 1 1 auto;
   padding: 10px;
   overflow: auto;
@@ -31,13 +36,13 @@
   min-height: 0;
 }
 
-#eventCalendarView {
+[data-app="calendar"] #eventCalendarView {
   flex: 1 1 auto;
   min-height: 0;
 }
 
-.ec-theme-business-os.ec,
-.ec-theme-business-os .ec {
+[data-app="calendar"] .ec-theme-business-os.ec,
+[data-app="calendar"] .ec-theme-business-os .ec {
   --ec-bg-color: var(--surface);
   --ec-text-color: var(--text);
   --ec-border-color: color-mix(in srgb, var(--line) 42%, transparent);
@@ -50,7 +55,9 @@
   --ec-today-bg-color: color-mix(in srgb, var(--accent) 10%, var(--surface));
   --ec-highlight-color: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
   --ec-event-bg-color: var(--accent);
-  --ec-event-text-color: var(--accent-contrast);
+  /* --accent-contrast ist kein Theme-Token; Rückfall Weiß auf --accent. Je Termin setzt
+     calendar-view-adapter.js textColor passend zur Terminfarbe. */
+  --ec-event-text-color: var(--accent-contrast, #fff);
   --ec-popup-bg-color: var(--surface);
   color-scheme: light dark;
   background: transparent;
@@ -60,25 +67,25 @@
   height: 100%;
 }
 
-.ec-theme-business-os .ec-header {
+[data-app="calendar"] .ec-theme-business-os .ec-header {
   border-bottom: 1px solid var(--line);
   background: var(--surface);
 }
 
-.ec-theme-business-os .ec-day {
+[data-app="calendar"] .ec-theme-business-os .ec-day {
   border-right: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
 }
 
-.ec-theme-business-os .ec-main,
-.ec-theme-business-os .ec-sidebar,
-.ec-theme-business-os .ec-col-head,
-.ec-theme-business-os .ec-col-group,
-.ec-theme-business-os .ec-slots {
+[data-app="calendar"] .ec-theme-business-os .ec-main,
+[data-app="calendar"] .ec-theme-business-os .ec-sidebar,
+[data-app="calendar"] .ec-theme-business-os .ec-col-head,
+[data-app="calendar"] .ec-theme-business-os .ec-col-group,
+[data-app="calendar"] .ec-theme-business-os .ec-slots {
   background-color: var(--surface);
   color: var(--text);
 }
 
-.ec-theme-business-os .ec-event {
+[data-app="calendar"] .ec-theme-business-os .ec-event {
   border-radius: var(--control-radius);
   border: 1px solid color-mix(in srgb, var(--accent) 68%, var(--line)) !important;
   box-shadow: none;
@@ -88,19 +95,28 @@
   overflow: hidden;
 }
 
-.ec-theme-business-os .ec-event-body,
-.ec-theme-business-os .ec-event-time,
-.ec-theme-business-os .ec-event-title {
+[data-app="calendar"] .ec-theme-business-os .ec-event-body,
+[data-app="calendar"] .ec-theme-business-os .ec-event-time,
+[data-app="calendar"] .ec-theme-business-os .ec-event-title {
   min-width: 0;
   max-width: 100%;
   overflow: hidden;
-  text-overflow: ellipsis;
+}
+
+/* Woche/Tag/Liste: Termintitel brechen um statt mit Ellipse abgeschnitten zu werden (Geometrie G4).
+   Im Monatsraster bleibt es bei einer Zeile mit Ellipse – dort fachlich gewollt (feste Tageszelle,
+   data-v4-allow-ellipsis + Tooltip aus calendar-view-adapter.js). */
+[data-app="calendar"] .ec-theme-business-os .ec-time-grid .ec-event-title,
+[data-app="calendar"] .ec-theme-business-os .ec-list .ec-event-title {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
 }
 
 /* Explicit workspace tracks: left(1) resizer(2) center(3) resizer(4) right(5).
    The center (calendar grid) keeps a hard minimum so the side panes yield to
    it in a narrow window instead of collapsing the main view to 0. */
-.calendar-app {
+[data-app="calendar"] .calendar-app {
   grid-template-columns:
     var(--ctox-left-width, 340px)
     12px
@@ -109,64 +125,64 @@
     var(--ctox-right-width, 320px);
 }
 
-.calendar-left { grid-column: 1; }
-.calendar-app > [data-resizer="left"] { grid-column: 2; }
-.calendar-center { grid-column: 3; }
-.calendar-app > [data-resizer="right"] { grid-column: 4; }
-.calendar-right { grid-column: 5; }
+[data-app="calendar"] .calendar-left { grid-column: 1; }
+[data-app="calendar"] .calendar-app > [data-resizer="left"] { grid-column: 2; }
+[data-app="calendar"] .calendar-center { grid-column: 3; }
+[data-app="calendar"] .calendar-app > [data-resizer="right"] { grid-column: 4; }
+[data-app="calendar"] .calendar-right { grid-column: 5; }
 
 /* Grammar column rows: header band / filterbar / tray / view band / recessed
    well / footer. The header band is its own row because the shell-v2 chrome
    claims exactly one band row across the top; filterbar and tray follow below
    it. The well stays pinned to the 1fr track so it always fills the space. */
-.calendar-left {
+[data-app="calendar"] .calendar-left {
   grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
 }
-.calendar-left > .ctox-pane-header { grid-row: 1; }
-.calendar-left > .ctox-filterbar { grid-row: 2; }
-.calendar-left > .ctox-filter-tray { grid-row: 3; }
-.calendar-left > [data-calendar-left-band] { grid-row: 4; }
-.calendar-left-body { grid-row: 5; }
-.calendar-left > .ctox-pane-footer { grid-row: 6; }
+[data-app="calendar"] .calendar-left > .ctox-pane-header { grid-row: 1; }
+[data-app="calendar"] .calendar-left > .ctox-filterbar { grid-row: 2; }
+[data-app="calendar"] .calendar-left > .ctox-filter-tray { grid-row: 3; }
+[data-app="calendar"] .calendar-left > [data-calendar-left-band] { grid-row: 4; }
+[data-app="calendar"] .calendar-left-body { grid-row: 5; }
+[data-app="calendar"] .calendar-left > .ctox-pane-footer { grid-row: 6; }
 
 /* Center rows: header / view band / calendar grid. */
-.calendar-center {
+[data-app="calendar"] .calendar-center {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 /* Right rows: header band / context body. The head keeps its own auto row so
    the fixed shell-v2 band height does not push the body out of the pane. */
-.calendar-right {
+[data-app="calendar"] .calendar-right {
   grid-template-rows: auto minmax(0, 1fr);
 }
 
 /* Third pane hidden by default; auto-reveals on selection. Collapsed = the
    center grid takes the freed width. */
-.calendar-app.is-context-hidden {
+[data-app="calendar"] .calendar-app.is-context-hidden {
   grid-template-columns:
     var(--ctox-left-width, 340px)
     12px
     minmax(320px, 1fr);
 }
 
-.calendar-app.is-context-hidden .calendar-right,
-.calendar-app.is-context-hidden > [data-resizer="right"] {
+[data-app="calendar"] .calendar-app.is-context-hidden .calendar-right,
+[data-app="calendar"] .calendar-app.is-context-hidden > [data-resizer="right"] {
   display: none;
 }
 
-.calendar-toggle-context[aria-pressed="true"] {
+[data-app="calendar"] .calendar-toggle-context[aria-pressed="true"] {
   background: var(--accent-soft);
   color: color-mix(in srgb, var(--accent) 78%, var(--text));
 }
 
 /* custom: the shard/list switch is ONE button that names the view it produces;
    the two glyphs live in the same button and the current view picks one. */
-.calendar-view-toggle > [data-view-icon] {
+[data-app="calendar"] .calendar-view-toggle > [data-view-icon] {
   display: none;
 }
 
-.calendar-view-toggle[data-pg-view="cards"] > [data-view-icon="list"],
-.calendar-view-toggle[data-pg-view="list"] > [data-view-icon="cards"] {
+[data-app="calendar"] .calendar-view-toggle[data-pg-view="cards"] > [data-view-icon="list"],
+[data-app="calendar"] .calendar-view-toggle[data-pg-view="list"] > [data-view-icon="cards"] {
   display: block;
 }
 
@@ -177,14 +193,14 @@
    single short meta on the right, tight leading. Both variants are in the
    markup; the active view decides which one is painted.
    ------------------------------------------------------------- */
-.calendar-row-text {
+[data-app="calendar"] .calendar-row-text {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
 
-.calendar-row-meta {
+[data-app="calendar"] .calendar-row-meta {
   color: var(--muted);
   font-size: var(--fs-xs, 11px);
   line-height: 1.35;
@@ -194,7 +210,7 @@
 }
 
 /* The short meta belongs to the list row only. */
-.calendar-row-brief {
+[data-app="calendar"] .calendar-row-brief {
   display: none;
   flex: 0 0 auto;
   color: var(--muted);
@@ -204,17 +220,17 @@
 }
 
 /* KARTEN (default view). */
-.calendar-left-list .ctox-list-item {
+[data-app="calendar"] .calendar-left-list .ctox-list-item {
   padding: 10px 14px;
 }
 
-.calendar-left-list .calendar-item-title,
-.calendar-left-list .booking-page-item-title {
+[data-app="calendar"] .calendar-left-list .calendar-item-title,
+[data-app="calendar"] .calendar-left-list .booking-page-item-title {
   font-weight: 600;
 }
 
 /* LISTE: one row, one line. */
-.calendar-left-list.is-list-view .ctox-list-item {
+[data-app="calendar"] .calendar-left-list.is-list-view .ctox-list-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -222,35 +238,35 @@
   min-height: 28px;
 }
 
-.calendar-left-list.is-list-view .calendar-row-text {
+[data-app="calendar"] .calendar-left-list.is-list-view .calendar-row-text {
   flex-direction: row;
   align-items: baseline;
   gap: 0;
 }
 
-.calendar-left-list.is-list-view .calendar-row-meta {
+[data-app="calendar"] .calendar-left-list.is-list-view .calendar-row-meta {
   display: none;
 }
 
 /* Title takes the slack so the short meta sits flush right on every row. */
-.calendar-left-list.is-list-view .calendar-item-left,
-.calendar-left-list.is-list-view .booking-page-item-left {
+[data-app="calendar"] .calendar-left-list.is-list-view .calendar-item-left,
+[data-app="calendar"] .calendar-left-list.is-list-view .booking-page-item-left {
   flex: 1 1 auto;
 }
 
-.calendar-left-list.is-list-view .calendar-row-brief {
+[data-app="calendar"] .calendar-left-list.is-list-view .calendar-row-brief {
   display: inline;
   margin-left: auto;
 }
 
-.calendar-left-list.is-list-view .calendar-item-title,
-.calendar-left-list.is-list-view .booking-page-item-title {
+[data-app="calendar"] .calendar-left-list.is-list-view .calendar-item-title,
+[data-app="calendar"] .calendar-left-list.is-list-view .booking-page-item-title {
   font-weight: 500;
   line-height: 1.4;
 }
 
 /* Left empty state stacks a title over a muted hint line. */
-.calendar-left-empty {
+[data-app="calendar"] .calendar-left-empty {
   display: grid;
   gap: 2px;
   justify-items: start;
@@ -260,11 +276,11 @@
 /* custom: sidebar micro-layout — section stacking, label/action rows and the
    hairline separator between sections; the kit has no sidebar-section
    pattern, only full pane headers. */
-.calendar-sidebar-section {
+[data-app="calendar"] .calendar-sidebar-section {
   margin-bottom: 12px;
 }
 
-.calendar-section-title-bar {
+[data-app="calendar"] .calendar-section-title-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -272,18 +288,18 @@
   padding: 0 14px;
 }
 
-.calendar-section-title-bar .ctox-field-label {
+[data-app="calendar"] .calendar-section-title-bar .ctox-field-label {
   margin: 0;
 }
 
-.calendar-separator {
+[data-app="calendar"] .calendar-separator {
   border: 0;
   border-top: 1px solid var(--hairline, var(--line));
   margin: 12px 0;
 }
 
 /* custom: prev/today/next cluster inside the pane actions row. */
-.calendar-navigation {
+[data-app="calendar"] .calendar-navigation {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -291,23 +307,23 @@
 
 /* custom: the live data-status badge sits in the actions row, hidden by
    default and only revealed when there is a real status (no DB / error). */
-.calendar-data-status[hidden] {
+[data-app="calendar"] .calendar-data-status[hidden] {
   display: none;
 }
 
 /* custom: calendar source rows — kit .ctox-list-item extended with the
    visibility checkbox and the calendar color identity dot, plus hover-reveal
    row actions; the kit has no pattern for either. */
-.calendar-item,
-.booking-page-item {
+[data-app="calendar"] .calendar-item,
+[data-app="calendar"] .booking-page-item {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.calendar-item-left,
-.booking-page-item-left {
+[data-app="calendar"] .calendar-item-left,
+[data-app="calendar"] .booking-page-item-left {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -315,7 +331,7 @@
   overflow: hidden;
 }
 
-.calendar-item-checkbox {
+[data-app="calendar"] .calendar-item-checkbox {
   width: 14px;
   height: 14px;
   margin: 0;
@@ -324,15 +340,15 @@
   accent-color: var(--accent);
 }
 
-.calendar-item-color-indicator {
+[data-app="calendar"] .calendar-item-color-indicator {
   width: 10px;
   height: 10px;
   flex: 0 0 auto;
   border-radius: 50%;
 }
 
-.calendar-item-title,
-.booking-page-item-title {
+[data-app="calendar"] .calendar-item-title,
+[data-app="calendar"] .booking-page-item-title {
   min-width: 0;
   font-weight: 500;
   white-space: nowrap;
@@ -340,8 +356,8 @@
   text-overflow: ellipsis;
 }
 
-.calendar-item-actions,
-.booking-page-item-actions {
+[data-app="calendar"] .calendar-item-actions,
+[data-app="calendar"] .booking-page-item-actions {
   display: flex;
   gap: 3px;
   flex: 0 0 auto;
@@ -349,34 +365,34 @@
   transition: opacity 0.2s;
 }
 
-.calendar-item:hover .calendar-item-actions,
-.calendar-item:focus-within .calendar-item-actions,
-.booking-page-item:hover .booking-page-item-actions,
-.booking-page-item:focus-within .booking-page-item-actions {
+[data-app="calendar"] .calendar-item:hover .calendar-item-actions,
+[data-app="calendar"] .calendar-item:focus-within .calendar-item-actions,
+[data-app="calendar"] .booking-page-item:hover .booking-page-item-actions,
+[data-app="calendar"] .booking-page-item:focus-within .booking-page-item-actions {
   opacity: 1;
 }
 
 /* custom: auditing rows (holds/bookings) — title+badge head line and muted
    detail lines inside kit .ctox-list-item rows. */
-.calendar-audit-head {
+[data-app="calendar"] .calendar-audit-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
 }
 
-.calendar-audit-item small {
+[data-app="calendar"] .calendar-audit-item small {
   display: block;
   color: var(--muted);
 }
 
-.calendar-audit-item small.is-expiry {
+[data-app="calendar"] .calendar-audit-item small.is-expiry {
   color: var(--warning);
 }
 
 /* custom: selected-booking-page context card — a kit .ctox-callout stacked
    with label, title, detail line and the clear action. */
-.calendar-context-card {
+[data-app="calendar"] .calendar-context-card {
   display: grid;
   gap: 6px;
   justify-items: start;
@@ -390,7 +406,7 @@
    "Speichern" stays inside the viewport on short windows. Kicker/title
    typography uses the standard .ctox-pane-kicker/.ctox-pane-title classes.
    ------------------------------------------------------------- */
-.ctox-bottom-drawer {
+[data-app="calendar"] .ctox-bottom-drawer {
   position: absolute;
   left: 0;
   right: 0;
@@ -412,27 +428,27 @@
   overflow: hidden;
 }
 
-.ctox-bottom-drawer.is-open {
+[data-app="calendar"] .ctox-bottom-drawer.is-open {
   transform: translateY(0);
   pointer-events: auto;
   visibility: visible;
 }
 
-.ctox-drawer-handle {
+[data-app="calendar"] .ctox-drawer-handle {
   display: flex;
   justify-content: center;
   padding: 8px 0 4px;
   flex-shrink: 0;
 }
 
-.ctox-drawer-handle-bar {
+[data-app="calendar"] .ctox-drawer-handle-bar {
   width: 40px;
   height: 4px;
   border-radius: 2px;
   background: color-mix(in srgb, var(--line) 60%, transparent);
 }
 
-.ctox-drawer-header {
+[data-app="calendar"] .ctox-drawer-header {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
@@ -442,14 +458,14 @@
   box-sizing: border-box;
 }
 
-.ctox-drawer-header-left {
+[data-app="calendar"] .ctox-drawer-header-left {
   display: flex;
   flex-direction: column;
   gap: 2px;
   min-width: 0;
 }
 
-.ctox-drawer-body {
+[data-app="calendar"] .ctox-drawer-body {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -459,13 +475,13 @@
 /* Forms inside the drawer: zero outer padding on the form itself so the
    sticky action bar can hug the drawer edges. Inner spacing handled by
    .calendar-drawer-form-inner. */
-.ctox-drawer-body form {
+[data-app="calendar"] .ctox-drawer-body form {
   display: flex;
   flex-direction: column;
   min-height: 0;
 }
 
-.calendar-drawer-form-inner {
+[data-app="calendar"] .calendar-drawer-form-inner {
   padding: 16px 20px;
   display: flex;
   flex-direction: column;
@@ -474,13 +490,13 @@
 /* custom: stacked drawer form fields — the kit's compact form is a single
    inline row, while drawer forms stack label above field (labels use the
    standard .ctox-field-label). */
-.calendar-form-group {
+[data-app="calendar"] .calendar-form-group {
   display: grid;
   gap: 4px;
   margin-bottom: 12px;
 }
 
-.calendar-form-row {
+[data-app="calendar"] .calendar-form-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
@@ -488,24 +504,24 @@
 
 /* custom: per-field validation message (aria-invalid styling itself comes
    from the kit); the kit has no error-text element. */
-.calendar-field-error {
+[data-app="calendar"] .calendar-field-error {
   min-height: 14px;
   color: var(--danger);
   font-size: 11px;
   line-height: 1.25;
 }
 
-.calendar-field-error:empty {
+[data-app="calendar"] .calendar-field-error:empty {
   display: none;
 }
 
 /* custom: native color well sizing inside a kit input. */
-.calendar-app input[type="color"].ctox-input {
+[data-app="calendar"] .calendar-app input[type="color"].ctox-input {
   height: 38px;
   padding: 2px;
 }
 
-.calendar-drawer-actions {
+[data-app="calendar"] .calendar-drawer-actions {
   position: sticky;
   bottom: 0;
   display: flex;
@@ -520,7 +536,7 @@
   z-index: 2;
 }
 
-.calendar-drawer-actions-right {
+[data-app="calendar"] .calendar-drawer-actions-right {
   display: flex;
   gap: 8px;
   margin-left: auto;
@@ -528,7 +544,7 @@
 
 /* custom: presence hint badge inside the drawer header (advisory "someone
    else is editing this event" indicator). */
-.calendar-presence-hint {
+[data-app="calendar"] .calendar-presence-hint {
   align-self: flex-start;
   margin-top: 4px;
 }
@@ -545,38 +561,38 @@
    share the top row, the booking context moves into a full-width second row.
    Both rows keep their own pane heads. */
 @container business-app-window (max-width: 1024px) {
-  .calendar-app[data-calendar-root],
-  .calendar-app.is-context-hidden {
+  [data-app="calendar"] .calendar-app[data-calendar-root],
+  [data-app="calendar"] .calendar-app.is-context-hidden {
     grid-template-columns: minmax(260px, var(--ctox-left-width, 340px)) minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) minmax(180px, 34%);
     column-gap: 12px;
     row-gap: 8px;
   }
 
-  .calendar-left {
+  [data-app="calendar"] .calendar-left {
     grid-column: 1;
     grid-row: 1;
   }
 
-  .calendar-center {
+  [data-app="calendar"] .calendar-center {
     grid-column: 2;
     grid-row: 1;
   }
 
-  .calendar-right {
+  [data-app="calendar"] .calendar-right {
     grid-column: 1 / -1;
     grid-row: 2;
   }
 
   /* No resize channel in the collapsed forms: the handles would keep an empty
      12px track alive. */
-  .calendar-app[data-calendar-root] [data-resizer] {
+  [data-app="calendar"] .calendar-app[data-calendar-root] [data-resizer] {
     display: none !important;
   }
 
   /* In the collapsed forms the context pane stays reachable even when the
      wide-mode auto-reveal has it hidden. */
-  .calendar-app.is-context-hidden .calendar-right {
+  [data-app="calendar"] .calendar-app.is-context-hidden .calendar-right {
     display: flex;
   }
 }
@@ -584,8 +600,8 @@
 /* 768px — two columns become one: the panes stack in source order and the
    sheet scrolls as a whole. */
 @container business-app-window (max-width: 768px) {
-  .calendar-app[data-calendar-root],
-  .calendar-app.is-context-hidden {
+  [data-app="calendar"] .calendar-app[data-calendar-root],
+  [data-app="calendar"] .calendar-app.is-context-hidden {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(260px, auto) minmax(360px, 1fr) minmax(200px, auto);
     height: auto;
@@ -600,30 +616,30 @@
     padding: 0;
   }
 
-  .calendar-left,
-  .calendar-center,
-  .calendar-right {
+  [data-app="calendar"] .calendar-left,
+  [data-app="calendar"] .calendar-center,
+  [data-app="calendar"] .calendar-right {
     grid-column: 1;
     grid-row: auto;
     height: auto;
     min-height: 220px;
   }
 
-  .ctox-bottom-drawer {
+  [data-app="calendar"] .ctox-bottom-drawer {
     bottom: var(--calendar-shell-dock-offset, 62px);
     height: min(620px, calc(100% - var(--calendar-shell-dock-offset, 62px) - 16px));
   }
 
-  .calendar-drawer-form-inner {
+  [data-app="calendar"] .calendar-drawer-form-inner {
     padding: 14px;
   }
 
-  .calendar-form-row {
+  [data-app="calendar"] .calendar-form-row {
     grid-template-columns: 1fr;
     gap: 0;
   }
 
-  .calendar-drawer-actions {
+  [data-app="calendar"] .calendar-drawer-actions {
     padding: 10px 14px;
     flex-wrap: wrap;
   }
@@ -640,22 +656,22 @@
      floor and let .calendar-grid-container (overflow: auto) scroll it
      horizontally inside the pane — never the whole sheet. Month/list views
      stay fluid via :has(). */
-  .ec-theme-business-os.ec:has(.ec-time-grid),
-  .ec-theme-business-os .ec:has(.ec-time-grid) {
+  [data-app="calendar"] .ec-theme-business-os.ec:has(.ec-time-grid),
+  [data-app="calendar"] .ec-theme-business-os .ec:has(.ec-time-grid) {
     min-width: 560px;
   }
 
   /* The drawer is a bottom sheet inside the app window; on the phone sheet it
      spans the full width and nearly the full height, still clearing the
      shell's fixed chat dock at the bottom of the viewport. */
-  .ctox-bottom-drawer {
+  [data-app="calendar"] .ctox-bottom-drawer {
     bottom: calc(var(--calendar-shell-dock-offset, 52px) + env(safe-area-inset-bottom, 0px));
     height: calc(100% - var(--calendar-shell-dock-offset, 52px) - env(safe-area-inset-bottom, 0px) - 8px);
     border-top-left-radius: 14px;
     border-top-right-radius: 14px;
   }
 
-  .calendar-drawer-actions {
+  [data-app="calendar"] .calendar-drawer-actions {
     padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px));
   }
 }
@@ -663,48 +679,48 @@
 /* Touch targets on coarse pointers (phone/tablet): every interactive control
    reaches the 44px minimum, icon-only pane buttons in both dimensions. */
 @media (pointer: coarse) {
-  .calendar-app button,
-  .calendar-app input,
-  .calendar-app select,
-  .calendar-app textarea {
+  [data-app="calendar"] .calendar-app button,
+  [data-app="calendar"] .calendar-app input,
+  [data-app="calendar"] .calendar-app select,
+  [data-app="calendar"] .calendar-app textarea {
     min-height: 44px;
   }
 
-  .calendar-app .ctox-pane-icon {
+  [data-app="calendar"] .calendar-app .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .calendar-app .ctox-pane-tab {
+  [data-app="calendar"] .calendar-app .ctox-pane-tab {
     min-height: 44px;
   }
 
-  .calendar-app .ctox-list-item {
+  [data-app="calendar"] .calendar-app .ctox-list-item {
     min-height: 44px;
   }
 
   /* Native color well keeps its look but becomes tappable. */
-  .calendar-app input[type="color"].ctox-input {
+  [data-app="calendar"] .calendar-app input[type="color"].ctox-input {
     height: 44px;
   }
 
   /* The visibility checkbox is a tap target of its own. */
-  .calendar-app .calendar-item-checkbox {
+  [data-app="calendar"] .calendar-app .calendar-item-checkbox {
     width: 22px;
     height: 22px;
   }
 
   /* EventCalendar header buttons (Monat/Woche/Tag/Liste) are vendor markup. */
-  .ec-theme-business-os .ec-header .ec-button,
-  .ec-theme-business-os.ec .ec-header .ec-button {
+  [data-app="calendar"] .ec-theme-business-os .ec-header .ec-button,
+  [data-app="calendar"] .ec-theme-business-os.ec .ec-header .ec-button {
     min-height: 44px;
     padding-inline: 12px;
   }
 
   /* Touch equivalent for the hover-reveal row actions: on coarse pointers
      there is no hover, so the row actions are always visible. */
-  .calendar-item-actions,
-  .booking-page-item-actions {
+  [data-app="calendar"] .calendar-item-actions,
+  [data-app="calendar"] .booking-page-item-actions {
     opacity: 1;
   }
 }
@@ -718,48 +734,40 @@
      · window control 74x74 top right (2 * header row)
    Geometry only; no new chrome, no colour. Reference: modules/knowledge/index.css.
    ========================================================================== */
-.shell-window[data-shell-contract="v2"] .calendar-app > .ctox-pane > .ctox-pane-header {
+[data-app="calendar"] .calendar-app > .ctox-pane > .ctox-pane-header {
   box-sizing: border-box;
-  height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
   padding-top: 0;
   padding-bottom: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .calendar-app .ctox-pane-header .ctox-pane-title-row {
-  height: 100%;
-}
-
-/* Kicker and title share the single band row instead of stacking, and the
-   title is allowed to shrink so long labels ellipsize instead of squeezing to
-   a few pixels. The action block keeps its intrinsic width (never flex: 1). */
-.shell-window[data-shell-contract="v2"] .calendar-app .ctox-pane-header .ctox-pane-titles {
+/* Kicker and title share the band row instead of stacking. VIS3: no ellipsis
+   (frame kit) - if they do not fit side by side the title moves to its own
+   line and wraps at word boundaries; the head grows past the 37px band. The
+   action block keeps its intrinsic width (never flex: 1). */
+[data-app="calendar"] .calendar-app .ctox-pane-header .ctox-pane-titles {
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: 0 8px;
   min-width: 0;
   padding-top: 0;
-  overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .calendar-app .ctox-pane-header .ctox-pane-title {
+[data-app="calendar"] .calendar-app .ctox-pane-header .ctox-pane-title {
   margin-top: 0;
-  min-width: 0;
   line-height: 1.1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.shell-window[data-shell-contract="v2"] .calendar-app .ctox-pane-header .ctox-pane-actions {
+[data-app="calendar"] .calendar-app .ctox-pane-header .ctox-pane-actions {
   flex: 0 0 auto;
 }
 
 /* First head of the top row: clear the app icon. Row 2 (filterbar) still sits
    beside the 80px icon, so it keeps the same indent and a min-height that lets
    the tray in row 3 start below the icon. */
-.shell-window[data-shell-contract="v2"] .calendar-left > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .calendar-left > .ctox-filterbar {
+[data-app="calendar"] .calendar-left > .ctox-pane-header,
+[data-app="calendar"] .calendar-left > .ctox-filterbar {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
 }
 
@@ -767,20 +775,20 @@
    column a kicker beside the title squeezes the title — and with it the shell's
    version-menu trigger — down to a few pixels (contract §4). The kicker steps
    aside; the pane's own band below still names Kalender / Buchungsseiten. */
-.shell-window[data-shell-contract="v2"] .calendar-left > .ctox-pane-header .ctox-pane-kicker {
+[data-app="calendar"] .calendar-left > .ctox-pane-header .ctox-pane-kicker {
   display: none;
 }
 
-.shell-window[data-shell-contract="v2"] .calendar-left > .ctox-filterbar {
+[data-app="calendar"] .calendar-left > .ctox-filterbar {
   box-sizing: border-box;
   min-height: calc(var(--shell-v2-icon-size, 80px) - var(--shell-v2-header-row-size, 37px));
 }
 
 /* Last head of the top row: clear the window control. Which pane that is
    depends on the collapsed context column. */
-.shell-window[data-shell-contract="v2"] .calendar-app.is-context-hidden .calendar-center > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .calendar-app:not(.is-context-hidden) .calendar-right > .ctox-pane-header {
-  padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
+[data-app="calendar"] .calendar-app.is-context-hidden .calendar-center > .ctox-pane-header,
+[data-app="calendar"] .calendar-app:not(.is-context-hidden) .calendar-right > .ctox-pane-header {
+  padding-right: var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size, 37px) * 2));
 }
 
 /* Two columns (<= 1024px): the context pane drops to the second row, so the
@@ -789,13 +797,13 @@
    spelled out so these rules match the specificity of the wide-mode pair above
    and win by source order. */
 @container business-app-window (max-width: 1024px) {
-  .shell-window[data-shell-contract="v2"] .calendar-app.is-context-hidden .calendar-center > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .calendar-app:not(.is-context-hidden) .calendar-center > .ctox-pane-header {
-    padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
+  [data-app="calendar"] .calendar-app.is-context-hidden .calendar-center > .ctox-pane-header,
+  [data-app="calendar"] .calendar-app:not(.is-context-hidden) .calendar-center > .ctox-pane-header {
+    padding-right: var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size, 37px) * 2));
   }
 
-  .shell-window[data-shell-contract="v2"] .calendar-app.is-context-hidden .calendar-right > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .calendar-app:not(.is-context-hidden) .calendar-right > .ctox-pane-header {
+  [data-app="calendar"] .calendar-app.is-context-hidden .calendar-right > .ctox-pane-header,
+  [data-app="calendar"] .calendar-app:not(.is-context-hidden) .calendar-right > .ctox-pane-header {
     padding-right: 14px;
   }
 }
@@ -805,15 +813,24 @@
    the second row, still inside the 74px control zone, and clears it too. The
    panes below the fold need no reservation any more. */
 @container business-app-window (max-width: 768px) {
-  .shell-window[data-shell-contract="v2"] .calendar-left > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .calendar-left > .ctox-filterbar {
-    padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
+  [data-app="calendar"] .calendar-left > .ctox-pane-header,
+  [data-app="calendar"] .calendar-left > .ctox-filterbar {
+    padding-right: var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size, 37px) * 2));
   }
 
-  .shell-window[data-shell-contract="v2"] .calendar-app.is-context-hidden .calendar-center > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .calendar-app:not(.is-context-hidden) .calendar-center > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .calendar-app.is-context-hidden .calendar-right > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .calendar-app:not(.is-context-hidden) .calendar-right > .ctox-pane-header {
+  [data-app="calendar"] .calendar-app.is-context-hidden .calendar-center > .ctox-pane-header,
+  [data-app="calendar"] .calendar-app:not(.is-context-hidden) .calendar-center > .ctox-pane-header,
+  [data-app="calendar"] .calendar-app.is-context-hidden .calendar-right > .ctox-pane-header,
+  [data-app="calendar"] .calendar-app:not(.is-context-hidden) .calendar-right > .ctox-pane-header {
     padding-right: 14px;
   }
 }
+
+/* Textdiät Regel 3: Ansichtswechsel nur über die Reiter der App; die leere Werkzeugleiste der Bibliothek entfällt. */
+[data-app="calendar"] .ec-theme-business-os .ec-toolbar { display: none; }
+
+/* FIX8: Termindetails (Klick auf Termin) – nur lesen, „Bearbeiten“ rechts unten wie die Formularaktionen. */
+[data-app="calendar"] .calendar-event-details { display: grid; gap: 12px; padding: 16px 16px 0; }
+[data-app="calendar"] .calendar-event-details-fields dd { white-space: pre-wrap; overflow-wrap: anywhere; }
+[data-app="calendar"] .ctox-bottom-drawer:has([data-calendar-event-details]) { height: auto; max-height: min(560px, calc(100% - var(--calendar-shell-dock-offset, 58px) - 32px)); }
+[data-app="calendar"] .calendar-event-details .calendar-drawer-actions { margin: 0 -16px; }

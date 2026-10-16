@@ -1,0 +1,530 @@
+{
+  "_capability_evidence": {
+    "agent.task.enqueue": [
+      "handlers/kundenpipeline.delegate.js",
+      "handlers/kundenpipeline.mail.inbound.js"
+    ],
+    "agent.task.get": [
+      "handlers/kundenpipeline.auftrag.complete.js",
+      "handlers/kundenpipeline.triage.failed.js",
+      "handlers/kundenpipeline.triage.write.js"
+    ],
+    "identity.users.list": [
+      "handlers/_lib/hub.js"
+    ],
+    "mail.send": [
+      "handlers/kundenpipeline.mail.send.js"
+    ],
+    "mail.server.config.get": [
+      "handlers/kundenpipeline.mail.send.js"
+    ]
+  },
+  "_declaration": "modules/kundenpipeline/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/kundenpipeline/index.html",
+  "_rust_basis": "`rs:decision_hub.rs` 1 566 Z. (nur diese App), Sonderweg im Default-Arm `rs:command_plane.rs:2416–2426`, 13 Fundstellen `rs:threads.rs`.",
+  "_source_dir": "src/apps/business-os/modules/kundenpipeline",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "kundenpipeline",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "agent.task.enqueue",
+    "agent.task.get",
+    "identity.users.list",
+    "mail.send",
+    "mail.server.config.get"
+  ],
+  "collections": {
+    "kundenpipeline_entscheidungen": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/kundenpipeline.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "status",
+          "vorgang_id",
+          "typ"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "aktionen_json": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "antwort_json": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "assigned_user_id": {
+            "type": "string"
+          },
+          "backing_ref": {
+            "type": "string"
+          },
+          "correlation_json": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "detail_seiten_json": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "expires_at_ms": {
+            "type": "number"
+          },
+          "frage_json": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "owner_user_id": {
+            "type": "string"
+          },
+          "participant_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "request_fingerprint": {
+            "type": "string"
+          },
+          "requested_by": {
+            "type": "string"
+          },
+          "source_json": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "titel": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "typ": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "vorgang_id": {
+            "type": "string"
+          },
+          "zeilen_json": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "status"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "kundenpipeline_projekte": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/kundenpipeline.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "name",
+          "active"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "adressen": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "code_projekt": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "name"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "kundenpipeline_vorgaenge": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/kundenpipeline.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "status",
+          "kunde_id"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "audit_json": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "kunde_id": {
+            "type": "string"
+          },
+          "kunde_name": {
+            "type": "string"
+          },
+          "mails_json": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "notes": {
+            "type": "string"
+          },
+          "quelle_json": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "run_json": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "triage_json": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "title",
+          "status"
+        ],
+        "type": "object",
+        "version": 1
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "kundenpipeline_entscheidungen": [
+      "read"
+    ]
+  },
+  "files": {
+    "V4-HANDLERS.md": "b33bdc71b307399005bb87266ba658132c23b6d4b9b74b3c55ae1a1e0b32501b",
+    "V4-PORT.md": "6d6fb8822f02bb13197fa5678fac7a348c1803fef219c582190cc157d04b816a",
+    "assets/icon/decision-hub-256.png": "cb491ce77d4a7f5d1a40d9fe9c126e3ea33837dce26ef2d0e89cdc7d4edd5ad3",
+    "assets/icon/decision-hub-60.png": "36b3cd7f2e83066f2a41d4435df68e5490be6f264108a2ac8610a3ff711579d5",
+    "assets/icon/kundenpipeline-icon.svg": "cbd2f9324d9bd0b14f99e44eb89bee7357e06f4ebeb88b4effd57afa38d7e257",
+    "assets/icon/provenance.json": "7ba16765b3dd0607fa42c834435f98d19a1bea9b9b73d704ec9350d3d49203c2",
+    "collections.schema.json": "cca0a00d9f0ee52924ebb35a3ca1dbab2e516bd08295e5f660c12b2375674729",
+    "handlers/_lib/hub.js": "9609892b022c0f3074a2ff5063f3d37ff9c2786b22296fa44430348bc41411dc",
+    "handlers/kundenpipeline.auftrag.complete.js": "1cf6568c70bdd99f23cc1133e667dd490fba1250d31ac35f4a73da2eaab97dfc",
+    "handlers/kundenpipeline.auftrag.failed.js": "2da4ac3d4221c9426a28ed36baef9d12351c68b1d65e09c68f29e3ed5f28194d",
+    "handlers/kundenpipeline.decision.answer.js": "0c1a0abd4a7450b906e67e9a2e688a451b8ba1009f79ff442e3daac5a03fc1f0",
+    "handlers/kundenpipeline.decision.request.js": "85ebaebcb42df7d09e94bea7e9cfaca4e8b12f83a8287bc9504d0bd6a278a46b",
+    "handlers/kundenpipeline.decision.resolve.js": "c3308dbf05c20b60b835a70b025ee70e3dd4b5955fd59bd0e7630f08aa16ecc9",
+    "handlers/kundenpipeline.delegate.js": "91d52e53db6ef7e8ed8000cde4577a73fb5e8925e2a72715295fed8201cf6df6",
+    "handlers/kundenpipeline.mail.inbound.js": "e1fc003130f2f5f3eb856531da0a9d06415cbbba78f51797206a20588fba2676",
+    "handlers/kundenpipeline.mail.send.js": "117c32a512ec4a9a605e5d739f1c9f76330df53941ca1b21ee9a44c5e2c2c4da",
+    "handlers/kundenpipeline.triage.failed.js": "2fbfa728e35d10bfb1bc5a36e30f5a42143d09c9c692d9ddd4e1c2d616a5ce0f",
+    "handlers/kundenpipeline.triage.write.js": "7f9e5fef8dd5cb092814d758ba83c8e4514a53bf4732c2fcb648a2798497218e",
+    "icon.svg": "223d6ac37d7d907fe55c42b11e185667a6861196feb776ee0afd26a207dec79b",
+    "index.css": "1be34278985a1acbec693edbb952c4696ed0a267eacd0420d289f11e0af1559e",
+    "index.html": "dfd7c0bfd8356048051472a24ea93d7d5fb31cde8e12bf40854e3e8c0a262d4d",
+    "index.js": "eec5a3885853299ace391ed7f7b764bb24fe7f4385c438e92bdb8c4a3abe5503",
+    "locales/de.json": "cd02d84923c2916c463a7afd4260af9c6d2db9dd4e0931e3e84b1d5aa499c6ef",
+    "locales/en.json": "ffda428dcef6f680e0aef471bd79b56c774cb7a06478136605c051f6898c594f",
+    "module.json": "b4af398b5d26a4fd1491ca8933b20e8beb155a44c433255df10dbc5464541c41",
+    "prompts/delegate.md": "a32bae321983a772ec2c52deeaf62ba6303c323d25446b930bf6cb1f58dd0449",
+    "prompts/triage.md": "f53890e568836b2d81d29773579362377601bf88cce027f2f873d56c32f4a29d",
+    "skills/triage/SKILL.md": "5fe537b09b2ed7af1918c6dd5bbbd42a45e12af194874331534c8013e048a0cf",
+    "v4-manifest.json": "0acbbf5a56babc409785ec5a1791a25ca8926aa109618ab63626a65697439097"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "business_users": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/hub.js:183"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "communication_messages": {
+      "_evidence": {
+        "code_read": [
+          "handlers/kundenpipeline.mail.inbound.js:4"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/kundenpipeline/V4-HANDLERS.md „Manifest-Wünsche (Generator-Lauf)“",
+        "sources": [
+          "code",
+          "trigger",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "watch"
+      ],
+      "owner_app": "conversations"
+    }
+  },
+  "handlers": {
+    "kundenpipeline.auftrag.complete": "handlers/kundenpipeline.auftrag.complete.js",
+    "kundenpipeline.auftrag.failed": "handlers/kundenpipeline.auftrag.failed.js",
+    "kundenpipeline.decision.answer": "handlers/kundenpipeline.decision.answer.js",
+    "kundenpipeline.decision.request": "handlers/kundenpipeline.decision.request.js",
+    "kundenpipeline.decision.resolve": "handlers/kundenpipeline.decision.resolve.js",
+    "kundenpipeline.delegate": "handlers/kundenpipeline.delegate.js",
+    "kundenpipeline.mail.inbound": "handlers/kundenpipeline.mail.inbound.js",
+    "kundenpipeline.mail.send": "handlers/kundenpipeline.mail.send.js",
+    "kundenpipeline.triage.failed": "handlers/kundenpipeline.triage.failed.js",
+    "kundenpipeline.triage.write": "handlers/kundenpipeline.triage.write.js"
+  },
+  "layout": {
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; modules/kundenpipeline/V4-PORT.md OFFEN 3; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Operations",
+    "default_height": 760,
+    "default_width": 1120,
+    "icon_asset": "assets/icon/decision-hub-256.png",
+    "icon_asset_60": "assets/icon/decision-hub-60.png",
+    "icon_asset_srcset": "assets/icon/decision-hub-256.png 1x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M5 5.5h14v13H5z\" stroke=\"currentColor\" stroke-width=\"1.8\"/><path d=\"M8 9h8M8 12h5M8 15h7\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/><circle cx=\"18\" cy=\"18\" r=\"3\" fill=\"var(--surface)\" stroke=\"currentColor\" stroke-width=\"1.6\"/><path d=\"M18 16.7v1.5l1 0.6\" stroke=\"currentColor\" stroke-width=\"1.3\" stroke-linecap=\"round\"/></svg>",
+    "min_height": 480,
+    "min_width": 640,
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 760,
+        "width": 1120
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#d29a72",
+        "category": "Operations",
+        "iconAssetId": "workjet.business-os.kundenpipeline",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "list-detail",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Decision Hub"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {
+    "kundenpipeline_vorgaenge": {
+      "_reasons": [
+        "Typ von „run_json“: object → object|null",
+        "Typ von „triage_json“: object → object|null"
+      ],
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_source": "v4/schemas/kundenpipeline.collections.schema.json migrations",
+      "from_ver": "main@4794af03d",
+      "migrate_fn": null,
+      "steps": []
+    }
+  },
+  "min_app_api": "4.0",
+  "prompts": [
+    {
+      "name": "delegate",
+      "path": "prompts/delegate.md"
+    },
+    {
+      "name": "triage",
+      "path": "prompts/triage.md"
+    }
+  ],
+  "provenance": {
+    "base_hash": "583a668f29aa4df0ac494ff09ad07d211412aeccd93b0561b4e39dd139191591",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "skills": [
+    {
+      "name": "triage",
+      "path": "skills/triage/SKILL.md"
+    }
+  ],
+  "styles": [
+    "index.css"
+  ],
+  "title": "Decision Hub",
+  "triggers": [
+    {
+      "handler": "handlers/kundenpipeline.mail.inbound.js",
+      "on": {
+        "collection": "communication_messages",
+        "op": "insert"
+      }
+    }
+  ],
+  "version": "0.1.0"
+}

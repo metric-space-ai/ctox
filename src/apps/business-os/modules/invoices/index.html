@@ -13,8 +13,8 @@
 
     <!-- LINKS: Rechnungsliste auf der kanonischen Spalten-Grammatik. Suche,
          Ansichtswechsel, Filterfach, Reset und das gezaehlte Band sind
-         shell-verdrahtet ueber die data-pg-*-Attribute; das Modul schreibt
-         dafuer weder CSS noch JS. -->
+         von der App selbst verdrahtet (autoWirePaneGrammar(root)) ueber die
+         data-pg-*-Attribute; das Modul schreibt dafuer kein CSS. -->
     <aside class="ctox-pane invoices-rail"
            data-invoices-rail
            data-left-content
@@ -25,14 +25,12 @@
       <header class="ctox-pane-header ctox-pane-band" data-invoices-rail-head>
         <div class="ctox-pane-title-row" data-shell-v2-header-row="1">
           <div class="ctox-pane-titles">
-            <span class="ctox-pane-kicker" data-copy="kicker">CTOX</span>
             <h2 class="ctox-pane-title" data-copy="invoices">Rechnungen</h2>
           </div>
           <!-- Genau EINE gefuellte Primaeraktion pro Kopf: "Neue Rechnung". -->
           <div class="ctox-pane-actions" data-invoices-rail-actions>
             <button class="ctox-pane-icon is-primary" type="button" data-action="new" data-copy-label="newInvoice" aria-label="Neue Rechnung" title="Neue Rechnung"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
-            <button class="ctox-pane-icon" type="button" data-action="import" data-copy-label="import" aria-label="Importieren" title="Importieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>
-            <button class="ctox-pane-icon" type="button" data-action="export" data-copy-label="export" aria-label="Exportieren" title="Exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg></button>
+            <button class="ctox-pane-icon" type="button" data-action="more" data-copy-label="more" aria-label="Weitere Aktionen" title="Weitere Aktionen"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg></button>
           </div>
         </div>
         <div class="ctox-filterbar" data-shell-v2-header-row="2">
@@ -57,9 +55,8 @@
         <div class="ctox-pane-tabs"></div>
       </nav>
       <div class="ctox-pane-body ctox-well">
-        <div class="ctox-record-list" data-invoices-list><div class="ctox-empty" data-copy="listEmpty">Noch keine Rechnungen vorhanden.</div></div>
+        <div class="ctox-record-list" data-invoices-list></div>
       </div>
-      <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
     </aside>
 
     <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="480" data-copy-label="resizeColumn" aria-label="Spaltenbreite anpassen"></button>
@@ -76,17 +73,13 @@
       <header class="ctox-pane-header ctox-pane-band" data-invoices-main-head>
         <div class="ctox-pane-title-row" data-shell-v2-header-row="1">
           <div class="ctox-pane-titles">
-            <span class="ctox-pane-kicker" data-invoices-main-kicker data-copy="invoices">Rechnungen</span>
+            <span class="ctox-pane-kicker" data-invoices-main-kicker></span>
             <h1 class="ctox-pane-title" data-invoices-main-title data-copy="invoice">Rechnung</h1>
           </div>
           <div class="ctox-pane-actions" data-invoices-main-actions></div>
         </div>
       </header>
-      <div class="ctox-pane-body" data-invoices-main-body><p class="ctox-empty" data-copy="emptyHint">Wähle eine Rechnung aus der Liste oder erstelle einen neuen Entwurf.</p></div>
+      <div class="ctox-pane-body" data-invoices-main-body></div>
     </section>
   </main>
-
-  <!-- Modulweiter Befehls-/Datenfehlerstreifen. Bleibt versteckt, solange
-       nichts fehlschlaegt, und ersetzt niemals den Rahmen. -->
-  <div class="invoices-error-banner" data-invoices-banner hidden></div>
 </div>

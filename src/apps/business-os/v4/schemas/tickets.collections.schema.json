@@ -1,0 +1,359 @@
+{
+  "_app_id": "tickets",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {
+    "ctox_ticket_approvals": {
+      "source": "modules/tickets/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_ticket_cases": {
+      "source": "modules/tickets/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_ticket_clarification_requests": {
+      "source": "modules/tickets/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_ticket_control_bundles": {
+      "source": "modules/tickets/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_ticket_event_routing_state": {
+      "source": "modules/tickets/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_ticket_events": {
+      "source": "modules/tickets/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_ticket_items": {
+      "source": "modules/tickets/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_ticket_label_assignments": {
+      "source": "modules/tickets/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_ticket_self_work_items": {
+      "source": "modules/tickets/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_ticket_self_work_notes": {
+      "source": "modules/tickets/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_ticket_verifications": {
+      "source": "modules/tickets/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_ticket_writebacks": {
+      "source": "modules/tickets/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    }
+  },
+  "collections": {
+    "ctox_ticket_approvals": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_cases": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_clarification_requests": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_control_bundles": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_event_routing_state": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_events": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_items": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_label_assignments": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_self_work_items": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_self_work_notes": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_verifications": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_ticket_writebacks": {
+      "additionalProperties": true,
+      "indexes": [
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "migrations": {}
+}

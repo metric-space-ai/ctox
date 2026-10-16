@@ -1,0 +1,244 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/explorer/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/explorer/index.html",
+  "_rust_basis": "keine app-eigene Logik (`\"explorer\"` nur in ID-Liste `store.rs:36560`).",
+  "_source_dir": "src/apps/business-os/modules/explorer",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "explorer",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {},
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {},
+  "files": {
+    "V4-PORT.md": "31dea3251d68fce6440b399e2c3fa5dfb99cbf10a0037b1b18b00ec79d708536",
+    "assets/icon.png": "1c329f27f464aa0a5adfafaa0553226bcf1ad8312d9a712b0775c10467e71631",
+    "assets/icon@512.png": "7ef0e24a291ce31f1bb6d86283cb0b90bd14a2023589bb9be6452553c84846b1",
+    "collections.schema.json": "c924a4d56a0c0666457c8031098897d3abd233256aa7aa7fddb2a8ade07fa5bb",
+    "icon.svg": "6d32249bab6963fecbb5d0036a6a051d182d28462500dfb142056a4d1b43ffed",
+    "index.css": "8548a3c4f4577346108e0c9084bf600363261be63537563a6b146a06fe7870f6",
+    "index.html": "9de8a697b4176c3f32d6d0d45ef2819b46b35f7249a89b6f652745ccdc47ae0e",
+    "index.js": "d10f49a241c10b1d7fdcd92c6ef35e17008d83445a0064386eacbc196894dc52",
+    "locales/de.json": "bc9ce76f8c5f35f5cd5e191d953e4eff75097a19d3c094a337f19d4eb0ccf381",
+    "locales/en.json": "942fd7173be03e0523688d93696e778eaec1a22802ad0b9494e27b6aa201b6bf",
+    "module.json": "c24f018777a95e4d570cdf12230ee87ad6b05aaf5284fd1827ba57adef265123",
+    "v4-manifest.json": "b5ddda0b730e32aa4dde2331a01bca5ca5be2f06d50102d635fdb1fe3594e0a5"
+  },
+  "foreign_collections": {
+    "desktop_file_chunks": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "desktop"
+    },
+    "desktop_files": {
+      "_evidence": {
+        "code_read": [
+          "index.js:3",
+          "index.js:190",
+          "index.js:191"
+        ],
+        "code_write": [
+          "index.js:711",
+          "index.js:821",
+          "index.js:833"
+        ],
+        "declaration_basis": "modules/explorer/V4-PORT.md OFFEN 1 und 6",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "desktop"
+    },
+    "documents": {
+      "_evidence": {
+        "code_read": [
+          "index.js:197",
+          "index.js:1085",
+          "index.js:1118"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/explorer/V4-PORT.md OFFEN 1 und 6",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "documents"
+    },
+    "files": {
+      "_evidence": {
+        "code_read": [
+          "index.js:4",
+          "index.js:301",
+          "index.js:928"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/explorer/V4-PORT.md OFFEN 1 und 6",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "knowledge_items": {
+      "_evidence": {
+        "code_read": [
+          "index.js:199"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/explorer/V4-PORT.md OFFEN 1 und 6",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "knowledge"
+    },
+    "matching_objects": {
+      "_evidence": {
+        "code_read": [
+          "index.js:200"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/explorer/V4-PORT.md OFFEN 1 und 6",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "matching"
+    },
+    "outbound_companies": {
+      "_evidence": {
+        "code_read": [
+          "index.js:201"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/explorer/V4-PORT.md OFFEN 1 und 6",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "outbound"
+    },
+    "spreadsheets": {
+      "_evidence": {
+        "code_read": [
+          "index.js:198",
+          "index.js:1082",
+          "index.js:1117"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/explorer/V4-PORT.md OFFEN 1 und 6",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "spreadsheets"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_replaced": {
+      "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/explorer.png"
+    },
+    "_icon_asset_source": "shared/assets/workjet-icons/grok-shell-v1/explorer.png (shared/grok-shell-icon-selection.js, sha256 7ef0e24a291c…, 512 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "category": "Workspace",
+    "default_height": 640,
+    "default_width": 980,
+    "icon_asset": "assets/icon.png",
+    "icon_asset_srcset": "assets/icon.png 1x, assets/icon@512.png 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-explorer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-explorer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#06b6d4\" /><stop offset=\"100%\" stop-color=\"#8b5cf6\" /></linearGradient></defs><path d=\"M3 7.5h7l2-2h9v13.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7.5Z\" fill=\"url(#grad-explorer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-explorer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M3 10h18\" stroke=\"url(#grad-explorer)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
+    "min_height": 480,
+    "min_width": 640,
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 640,
+        "width": 980
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "6dc641d76b07611f0e307c9aa89ef4be4f37285e5e9e6eab5dad4a225fd356e8",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Explorer",
+  "triggers": [],
+  "version": "1.0.0"
+}

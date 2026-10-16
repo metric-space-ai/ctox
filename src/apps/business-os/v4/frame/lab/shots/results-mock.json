@@ -1,0 +1,1137 @@
+[
+  {
+    "name": "Launcher zeigt die 3 Apps aus kernel.apps",
+    "ok": true,
+    "detail": "ledger,notes,tasks"
+  },
+  {
+    "name": "Icon ueber versionierte URL",
+    "ok": true,
+    "detail": "/~a/notes@1.0.0~shell@lab/icon.svg"
+  },
+  {
+    "name": "Kategorie-Gruppen aus Manifest-layout",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Keine Monogramme, wenn layout ein Icon hat",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Suche filtert",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Leere Suche zeigt keinen Platzhaltertext",
+    "ok": true,
+    "detail": "\"\""
+  },
+  {
+    "name": "Pin erscheint in der Reiterleiste",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "3 Fenster offen und App montiert",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Taskleiste zeigt 3 Fenster",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Fenstertitel aus api.shell.setTitle",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "registerHeader(el): Referenz im Kopf-Slot, ersetzt, null entfernt, Nicht-Element invalid",
+    "ok": true,
+    "detail": "{\"afterA\":\"a\",\"sameRef\":true,\"afterB\":\"b\",\"invalid\":\"CtoxError:invalid\",\"afterNull\":0}"
+  },
+  {
+    "name": "FR5-1 confirm: Blatt im App-Fenster (Fenster nach vorn, Reservezone + Knöpfe frei), Inhalt inert, anderes Fenster frei, deutsch + destruktiv rot",
+    "ok": true,
+    "detail": "{\"n\":1,\"inWindow\":true,\"inside\":true,\"belowTitle\":true,\"front\":true,\"contentInert\":true,\"otherInert\":false,\"focusInSheet\":true,\"ok\":\"Löschen\",\"okDanger\":true,\"cancel\":\"Abbrechen\"}"
+  },
+  {
+    "name": "FR5-1 Fokusfalle: Tab/Shift+Tab bleiben im Blatt",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "FR5-1 Enter bestätigt (true), Blatt weg, Inhalt wieder bedienbar",
+    "ok": true,
+    "detail": "{\"r1\":{\"done\":true,\"value\":true},\"after1\":{\"n\":0,\"inWindow\":false,\"inside\":false,\"belowTitle\":false,\"front\":true,\"contentInert\":false,\"otherInert\":false,\"focusInSheet\":false,\"okDanger\":false}}"
+  },
+  {
+    "name": "FR5-1 Esc bricht ab (confirm → false)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "FR5-1 prompt: Eingabefeld mit Startwert, Enter liefert Text, Esc liefert null",
+    "ok": true,
+    "detail": "{\"gp\":{\"n\":1,\"inWindow\":true,\"inside\":true,\"belowTitle\":true,\"front\":true,\"contentInert\":true,\"otherInert\":false,\"focusInSheet\":true,\"ok\":\"Anlegen\",\"okDanger\":false,\"cancel\":\"Abbrechen\",\"input\":\"Alt\"},\"rp\":{\"done\":true,\"value\":\"Projekt X\"},\"rpEsc\":{\"done\":true,\"value\":null}}"
+  },
+  {
+    "name": "FR5-1 Auswahl: vorgewählt, Pfeiltaste wechselt, Enter liefert den Wert",
+    "ok": true,
+    "detail": "{\"done\":true,\"value\":\"high\"}"
+  },
+  {
+    "name": "FR5-1 Reihenfolge: zweiter Dialog erst nach dem ersten, alert → true",
+    "ok": true,
+    "detail": "{\"first\":\"Erste\",\"second\":\"Zweite\",\"out\":[[\"a\",false],[\"b\",true]]}"
+  },
+  {
+    "name": "FR5-2 Rechtsklick: Menü im Fenster mit den angebotenen Standardeinträgen + „CTOX fragen…“",
+    "ok": true,
+    "detail": "{\"n\":1,\"inWindow\":true,\"labels\":[\"Öffnen\",\"Umbenennen\",\"Löschen\",\"CTOX fragen…\"],\"focus\":true}"
+  },
+  {
+    "name": "FR5-2 Wahl „Löschen“ → ctox:context-action {action, record} am Datensatz",
+    "ok": true,
+    "detail": "[{\"action\":\"delete\",\"record\":{\"id\":\"t-7\",\"type\":\"task\",\"label\":\"Aufgabe 7\"}}]"
+  },
+  {
+    "name": "FR5-2 ohne data-context-actions nur „CTOX fragen…“; Esc schließt",
+    "ok": true,
+    "detail": "{\"n\":1,\"inWindow\":true,\"labels\":[\"CTOX fragen…\"],\"focus\":true}"
+  },
+  {
+    "name": "FR5-2 App-eigenes Menü (preventDefault) und Eingabefeld ohne Datensatz: Rahmen bleibt still",
+    "ok": true,
+    "detail": "0/0"
+  },
+  {
+    "name": "FR5-2 Tastatur Shift+F10: Menü am fokussierten Datensatz, Pfeil + Enter wählt („Umbenennen“)",
+    "ok": true,
+    "detail": "{\"mk\":{\"n\":1,\"inWindow\":true,\"labels\":[\"Öffnen\",\"Umbenennen\",\"Löschen\",\"CTOX fragen…\"],\"focus\":true},\"ev2\":[{\"action\":\"rename\",\"record\":{\"id\":\"t-7\",\"type\":\"task\",\"label\":\"Aufgabe 7\"}}]}"
+  },
+  {
+    "name": "FR5-2 „CTOX fragen…“ → Eingabeblatt → Standardbefehl ctox.chat.task mit Datensatzbezug",
+    "ok": true,
+    "detail": "{\"type\":\"ctox.chat.task\",\"payload\":{\"source_app\":\"tasks\",\"record_ref\":\"t-7\",\"selection\":\"\",\"text\":\"Was ist hier offen?\",\"mode\":\"ask\",\"context\":{\"record_type\":\"task\",\"record_id\":\"t-7\",\"label\":\"Aufgabe 7\"},\"title\":\"Aufgabe 7\"},\"opts\":{\"record_id\":\"t-7\"}}"
+  },
+  {
+    "name": "Shell-Tausch: Fenster an gleicher Stelle/Groesse",
+    "ok": true,
+    "detail": "{\"before\":{\"notes\":{\"x\":190,\"y\":110,\"w\":760,\"h\":520,\"z\":14,\"focused\":true,\"snap\":\"\"},\"tasks\":{\"x\":640,\"y\":48,\"w\":640,\"h\":744,\"z\":10,\"focused\":false,\"snap\":\"right\"},\"ledger\":{\"x\":246,\"y\":166,\"w\":760,\"h\":520,\"z\":12,\"focused\":false,\"snap\":\"\"}},\"after\":{\"tasks\":{\"x\":640,\"y\":48,\"w\":640,\"h\":744,\"z\":10,\"focused\":false,\"snap\":\"right\"},\"ledger\":{\"x\":246,\"y\":166,\"w\":760,\"h\":520,\"z\":12,\"focused\":false,\"snap\":\"\"},\"notes\":{\"x\":190,\"y\":110,\"w\":760,\"h\":520,\"z\":14,\"focused\":true,\"snap\":\"\"}}}"
+  },
+  {
+    "name": "Shell-Tausch: Fokus-Reihenfolge erhalten",
+    "ok": true,
+    "detail": "tasks,ledger,notes / tasks,ledger,notes"
+  },
+  {
+    "name": "Shell-Tausch: fokussiertes Fenster erhalten",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Shell-Tausch: App-Snapshot (Formular) erhalten",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Shell-Tausch: Pin erhalten",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Pin steht in shell_preferences (eine Zeile, id = Nutzer)",
+    "ok": true,
+    "detail": "{\"taskbar_pins\":{\"version\":2,\"pins\":[\"notes\"],\"updated_at_ms\":1792130368082},\"launcher_order\":[],\"updated_at_ms\":1792130368082,\"id\":\"owner\"}"
+  },
+  {
+    "name": "Shell-Tausch: genau ein Rahmen, ein Satz Shell-CSS (Theme, base, Shell-V2-Chrome, Rahmen, Shell-V2-Kopfleiste, Shell-V2-Desktop/Startmenü/Crew)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Shell-Tausch: Kernel-Abos nicht verdoppelt",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Shell-Tausch ohne Rueckfall",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Shell-Tausch <= 2 s",
+    "ok": true,
+    "detail": "23.4 ms, Snapshot 1363 B"
+  },
+  {
+    "name": "Fenstertitel ohne Versionsnummer",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Zonen-Platz im Chrome, ohne Eintraege 0 px",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Doppelpuffer: waehrend des Tauschs stehen alter und neuer Rahmen (neu unsichtbar)",
+    "ok": true,
+    "detail": "{\"frames\":2,\"building\":true,\"retiring\":true}"
+  },
+  {
+    "name": "Doppelpuffer: nie weniger als 3 sichtbare Fenster mit Inhalt (MutationObserver + rAF)",
+    "ok": true,
+    "detail": "MO 36 Proben min 3, rAF 87 Proben min 3"
+  },
+  {
+    "name": "Doppelpuffer: Pixelprobe mitten im Tausch = Bild vorher (>= 99 %)",
+    "ok": true,
+    "detail": "100.00 % gleich, nachher 100.00 %"
+  },
+  {
+    "name": "Doppelpuffer: nach dem Tausch wieder genau ein Rahmen",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "5 Shell-Tausche: Listener, Observer, Kernel-Abos, Fenster konstant",
+    "ok": true,
+    "detail": "30/34/2/1/3 | 30/34/2/1/3 | 30/34/2/1/3 | 30/34/2/1/3 | 30/34/2/1/3"
+  },
+  {
+    "name": "Fensterinhalt nach 6 Tauschen erhalten",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "FR6a Meldungen am Icon: Badge mit Zahl am App-Icon (Warnung gelb), Liste zu bis zum Klick; Klick auf Icon öffnet sie unter dem Icon im Fenster mit „Ausblenden“; Esc schließt; Badge-Klick schaltet um",
+    "ok": true,
+    "detail": "{\"z0\":{\"badge\":\"1\",\"level\":\"warn\",\"bg\":\"rgb(183, 121, 31)\",\"atIcon\":true,\"listOpen\":false,\"listInWin\":false,\"listBelowIcon\":true,\"statusbar\":false,\"rows\":[]},\"z1\":{\"open\":true,\"inWin\":true,\"below\":true,\"rows\":[\"Ausblenden\"]},\"z2\":false,\"z3\":true}"
+  },
+  {
+    "name": "FR6a Fehler: Badge rot mit 2, kurzer Puls, öffnet sich nicht selbst; Liste: Fehler oben mit „Erneut“ + „Ausblenden“; keine Statusleiste unten",
+    "ok": true,
+    "detail": "{\"z4\":{\"level\":\"error\",\"pulse\":true,\"open\":false,\"bg\":\"rgb(197, 48, 48)\"},\"rows\":[\"Erneut+Ausblenden\",\"Ausblenden\"]}"
+  },
+  {
+    "name": "Neue App erscheint ohne Reload",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Entfernte App verschwindet aus Launcher",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Fenster der entfernten App geschlossen",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "activation.onChange tauscht Fensterinhalt live (Host.swap)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Launcher-Icon folgt neuer Version",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "api.shell.assetUrl(appId, path): /~a/<app>@<aktive ver>~shell@<shell_ver>/<pfad>, folgt der Aktivierung, unbekannt → null",
+    "ok": true,
+    "detail": "{\"shellVer\":\"lab\",\"mountOwn\":\"/~a/notes@1.0.0~shell@lab/assets/a%20b.png\",\"ledgerBinds\":1,\"other\":\"/~a/ledger@1.1.0~shell@lab/icon.svg\",\"own\":\"/~a/notes@1.0.0~shell@lab/assets/a%20b.png\",\"unknown\":null,\"emptyPath\":null,\"oneArg\":null}"
+  },
+  {
+    "name": "Bindung je Mount: host.assetUrl über artifacts.bind, genau ein bind je Mount",
+    "ok": true,
+    "detail": "{\"mountOwn\":\"/~a/notes@1.0.0~shell@lab/assets/a%20b.png\",\"ledgerBinds\":1}"
+  },
+  {
+    "name": "Fensterwechsel per Taskleiste und Alt+`",
+    "ok": true,
+    "detail": "desk_win_rpae8yf4dob8"
+  },
+  {
+    "name": "Breite 900: kein horizontaler Ueberlauf, Fenster nicht ueber Taskleiste/Rand",
+    "ok": true,
+    "detail": "{\"scrollW\":900,\"vw\":900,\"barBottom\":760,\"vh\":760,\"winOverBar\":false,\"winOutside\":false}"
+  },
+  {
+    "name": "Breite 420: kein horizontaler Ueberlauf, Fenster nicht ueber Taskleiste/Rand",
+    "ok": true,
+    "detail": "{\"scrollW\":420,\"vw\":420,\"barBottom\":860,\"vh\":860,\"winOverBar\":false,\"winOutside\":false}"
+  },
+  {
+    "name": "Schmal: Desktop-Knopf zeigt Launcher",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "FR2-1 Inhaltsbereich ist Size-Container business-app-window, Haltepunkte 1024/768 greifen ohne App-Deklaration",
+    "ok": true,
+    "detail": "[{\"w\":1088,\"bp\":\"wide\",\"name\":\"business-app-window\",\"type\":\"inline-size\"},{\"w\":888,\"bp\":\"mid\",\"name\":\"business-app-window\",\"type\":\"inline-size\"},{\"w\":588,\"bp\":\"narrow\",\"name\":\"business-app-window\",\"type\":\"inline-size\"}]"
+  },
+  {
+    "name": "FR2-1 doppelte Container-Deklaration (App-root + Rahmen) unschädlich",
+    "ok": true,
+    "detail": "wide,mid,narrow"
+  },
+  {
+    "name": "FR6a v2-Reservezonen wie Shell-V2: --shell-v2-icon-size 80 px (Kopf links 94 px, Icon-Header 80 px), --shell-v2-control-inset = --shell-controls-inset = Cluster + 8",
+    "ok": true,
+    "detail": "{\"padL\":\"94px\",\"padR\":\"74px\",\"h\":\"37px\",\"r18\":\"98px\",\"icon\":\"80px\",\"chromeIcon\":\"80px\",\"ctrlInset\":\"98px\",\"cluster\":90,\"iconBox\":80}"
+  },
+  {
+    "name": "data-app nur am Inhalts-root (Chrome: data-window-app), App-CSS [data-app] trifft keine Fensterknöpfe",
+    "ok": true,
+    "detail": "{\"chromeWithDataApp\":0,\"rootsWithDataApp\":1,\"windows\":1,\"windowApp\":\"crm\",\"links\":[\"/v4/frame/theme/theme.css\",\"/shared/base.css\",\"/shared/shell-v2-chrome.css\",\"/v4/frame/frame.css\",\"/shared/shell-v2-topbar.css\",\"/v4/frame/shell-v2-desktop.css\"],\"surface\":\"#ffffff\",\"space\":\"8px\",\"text\":\"#27272a\"}"
+  },
+  {
+    "name": "Theme-Schnittstelle: theme.css + shared/base.css + shared/shell-v2-chrome.css + frame.css + shared/shell-v2-topbar.css + shell-v2-desktop.css (FR6d) aus dem Shell-Artefakt, Tokens im App-root gesetzt",
+    "ok": true,
+    "detail": "{\"links\":[\"/v4/frame/theme/theme.css\",\"/shared/base.css\",\"/shared/shell-v2-chrome.css\",\"/v4/frame/frame.css\",\"/shared/shell-v2-topbar.css\",\"/v4/frame/shell-v2-desktop.css\"],\"surface\":\"#ffffff\",\"space\":\"8px\"}"
+  },
+  {
+    "name": "FR2-3 Spaltenteiler im Inhaltsbereich verdrahtet (Zeiger + Tastatur), Breite je Fenster in window_state",
+    "ok": true,
+    "detail": "{\"role\":\"separator\",\"cssVar\":\"324px\",\"leftW\":324,\"stored\":{\"app\":\"crm\",\"widths\":{\"--crm-left\":324}},\"appDefault\":{\"app\":\"crm\",\"widths\":{\"--crm-left\":324}}}"
+  },
+  {
+    "name": "FR2-3 nach Remount (Shell-Tausch): Breite wiederhergestellt und Griff neu verdrahtet",
+    "ok": true,
+    "detail": "{\"afterSwap\":{\"cssVar\":\"324px\",\"role\":\"separator\"},\"afterKey\":\"348px\"}"
+  },
+  {
+    "name": "FR2-3 neues Fenster derselben App startet mit der zuletzt gezogenen Breite (cols:<app>)",
+    "ok": true,
+    "detail": "348px"
+  },
+  {
+    "name": "FR2-3 Schließen löscht den Fensterschlüssel",
+    "ok": true,
+    "detail": "null"
+  },
+  {
+    "name": "FR2-7 navigate reicht {chat} unverändert als RouteEvent {from, to, params} durch (offenes Fenster)",
+    "ok": true,
+    "detail": "{\"from\":\"notes\",\"to\":\"crm\",\"params\":{\"chat\":{\"commandId\":\"cmd-1\",\"taskId\":\"t-1\"}}}"
+  },
+  {
+    "name": "FR2-7 navigate auf eine fehlende App liefert false (keine App-Sonderfälle im Rahmen)",
+    "ok": true,
+    "detail": "false"
+  },
+  {
+    "name": "FR2-7 navigate öffnet fehlendes Fenster und liefert die Parameter nach mount",
+    "ok": true,
+    "detail": "{\"from\":\"notes\",\"to\":\"crm\",\"params\":{\"chat\":{\"taskId\":\"neu\"}}}"
+  },
+  {
+    "name": "navigate auf geschlossene App: Fenster geht auf, ctx.route und erstes onRoute tragen exakt die params (auch bei spätem onRoute)",
+    "ok": true,
+    "detail": "{\"sync\":{\"ok\":true,\"mount\":{\"from\":\"notes\",\"to\":\"crm\",\"params\":{\"login\":{\"url\":\"https://example.test/anmelden\",\"user\":\"lab\"},\"n\":1}},\"route\":{\"from\":\"notes\",\"to\":\"crm\",\"params\":{\"login\":{\"url\":\"https://example.test/anmelden\",\"user\":\"lab\"},\"n\":1}},\"count\":1,\"expect\":{\"login\":{\"url\":\"https://example.test/anmelden\",\"user\":\"lab\"},\"n\":1}},\"late\":{\"ok\":true,\"mount\":{\"from\":\"notes\",\"to\":\"crm\",\"params\":{\"login\":{\"url\":\"https://example.test/anmelden\",\"user\":\"lab\"},\"n\":2}},\"route\":{\"from\":\"notes\",\"to\":\"crm\",\"params\":{\"login\":{\"url\":\"https://example.test/anmelden\",\"user\":\"lab\"},\"n\":2}},\"count\":1,\"expect\":{\"login\":{\"url\":\"https://example.test/anmelden\",\"user\":\"lab\"},\"n\":2}}}"
+  },
+  {
+    "name": "Zone: Aktion als Knopf am Eintrag; Klick ruft run() und schließt den Eintrag; Fehlschlag lässt ihn stehen; Knopf auch in der Liste",
+    "ok": true,
+    "detail": "{\"z1\":{\"ran\":1,\"btn\":\"Erneut\"},\"z2\":{\"zoneVisible\":true,\"line\":\"Abgleich offen\",\"listButtons\":[\"Erneut\",\"Ausblenden\"]}}"
+  },
+  {
+    "name": "FR4-1 Spaltengrammatik nach mount vom Rahmen verdrahtet (Suche meldet, Ablage öffnet, Band wählt, Punkt aktiv), App ohne eigenen Aufruf",
+    "ok": true,
+    "detail": "{\"pane\":true,\"wired\":\"true\",\"handle\":true,\"events\":2,\"trayOpen\":true,\"band\":\"offen\",\"dot\":true}"
+  },
+  {
+    "name": "FR4-1 später gerenderte Pane verdrahtet; selbst verdrahtete Pane bleibt einfach verdrahtet (gleicher Griff, 1 Ereignis, Ablage schaltet 1×)",
+    "ok": true,
+    "detail": "{\"lateWired\":true,\"selfSame\":true,\"selfEvents\":1,\"selfTrayOpen\":true}"
+  },
+  {
+    "name": "FR4-1 nach Remount (Shell-Tausch) neu verdrahtet",
+    "ok": true,
+    "detail": "{\"pane\":true,\"wired\":\"true\",\"handle\":true,\"events\":2,\"trayOpen\":true,\"band\":\"offen\",\"dot\":true}"
+  },
+  {
+    "name": "FR4-2 info nach 6 s weg, gleicher Inhalt lebt nicht wieder auf, neuer Inhalt erscheint; success nie angezeigt; Kernel-Eintrag geräumt",
+    "ok": true,
+    "detail": "{\"zi0\":[\"info:app:export\",\"info:shell.hinweis\"],\"zi1\":{\"vis\":false,\"n\":0,\"again\":0,\"fresh\":[\"Hinweis 2\"],\"kernelRow\":null}}"
+  },
+  {
+    "name": "FR4-2 error ohne eigene Aktion: Knopf „Ausblenden“; quittiert je Tab (Strom-Wiederholung und Shell-Tausch bleiben still); nach clear wieder sichtbar",
+    "ok": true,
+    "detail": "{\"za\":{\"afterRepeat\":0,\"stored\":1},\"zb\":{\"afterSwap\":0,\"reappear\":[\"command:fr4-1|Ausblenden\"]}}"
+  },
+  {
+    "name": "FR4-3 navigate(\"code-editor\") und navigate(\"shell\", {open:\"settings\"}): false, ein Zoneneintrag der aufrufenden App (mit „Ausblenden“)",
+    "ok": true,
+    "detail": "{\"a\":false,\"b\":false,\"c\":false,\"one\":[\"error|Ziel „code-editor“ ist nicht vorhanden|Ausblenden\"],\"two\":[\"Ziel „shell“ ist nicht vorhanden\"]}"
+  },
+  {
+    "name": "FR4-5 openSource ohne kernel.source: false, kein Fenster, ein Zoneneintrag „Quelltext von „notes“ ist nicht verfügbar“ (mit „Ausblenden“)",
+    "ok": true,
+    "detail": "{\"r\":{\"a\":false,\"b\":false,\"win\":false},\"z\":[\"error|Quelltext von „notes“ ist nicht verfügbar|Ausblenden\"]}"
+  },
+  {
+    "name": "FR4-4 gesperrte Kit-Knöpfe (normal, is-primary, ctox-run-control, Icon, is-danger) ≥ 3:1 in hell und dunkel",
+    "ok": true,
+    "detail": "{\"light\":[{\"cls\":\"ctox-button\",\"r\":5.36},{\"cls\":\"ctox-button is-primary\",\"r\":5.36},{\"cls\":\"ctox-button ctox-run-control\",\"r\":5.36},{\"cls\":\"ctox-icon-button\",\"r\":5.36},{\"cls\":\"ctox-button is-danger\",\"r\":5.36}],\"dark\":[{\"cls\":\"ctox-button\",\"r\":4.52},{\"cls\":\"ctox-button is-primary\",\"r\":4.52},{\"cls\":\"ctox-button ctox-run-control\",\"r\":4.52},{\"cls\":\"ctox-icon-button\",\"r\":4.52},{\"cls\":\"ctox-button is-danger\",\"r\":4.52}]}"
+  },
+  {
+    "name": "FR2-4 zwei Fenster derselben App: eigener root und eigenes api-Objekt, Eingaben getrennt",
+    "ok": true,
+    "detail": "{\"a\":\"v4app:notes#4\",\"b\":\"v4app:notes#5\",\"ownRoot\":true,\"ownApi\":true,\"values\":[\"Fenster A\",\"Fenster B\"]}"
+  },
+  {
+    "name": "FR2-4 zwei Fenster überleben Shell-Tausch getrennt; Schließen von A lässt B montiert und bedienbar",
+    "ok": true,
+    "detail": "{\"afterSwap\":[\"Fenster A\",\"Fenster B\"],\"afterClose\":{\"aGone\":true,\"b\":\"Fenster B\",\"bState\":\"mounted\",\"bTitle\":\"Notizen B\"}}"
+  },
+  {
+    "name": "FR2-4 multi_instance:false im Layout verhindert ein zweites Fenster",
+    "ok": true,
+    "detail": "{\"same\":true,\"n\":1}"
+  },
+  {
+    "name": "FR2-6 Launcher-Reihenfolge per Ziehen (Gruppe Arbeit) und Alt+Pfeil, gespeichert in shell_preferences",
+    "ok": true,
+    "detail": "{\"order0\":\"tasks,notes\",\"order1\":\"notes,tasks\",\"prefOrder\":[\"notes\",\"tasks\",\"ledger\",\"crm\"],\"order2\":\"tasks,notes\",\"focusKept\":\"notes\"}"
+  },
+  {
+    "name": "FR2-5 Anheften per Ziehen auf die Taskleiste (an Position), Lösen per Ziehen auf die Fläche",
+    "ok": true,
+    "detail": "crm,ledger → crm"
+  },
+  {
+    "name": "Keine Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "FR3-2 Kategorie-Gruppen nach normalisiertem Schlüssel: eine Gruppe je Kategorie, Überschrift deutsch aus dem Glossar",
+    "ok": true,
+    "detail": "{\"groupsSeen\":[{\"label\":\"Arbeit\",\"head\":\"Arbeit\",\"n\":4},{\"label\":\"Entwicklung\",\"head\":\"Entwicklung\",\"n\":3},{\"label\":\"Finanzen\",\"head\":\"Finanzen\",\"n\":1}],\"upper\":[\"ARBEIT\",\"ENTWICKLUNG\",\"FINANZEN\"]}"
+  },
+  {
+    "name": "FR3-2 Suche über die Gruppenbezeichnung findet alle Schreibweisen",
+    "ok": true,
+    "detail": "Entwicklung:3"
+  },
+  {
+    "name": "FR5-3 Glossar: Suche nach dem deutschen Kategoriebegriff, Überschrift wie Shell-V2 in Versalien (Owner 15.10.: bestehende Shell bleibt)",
+    "ok": true,
+    "detail": "Entwicklung:3 / uppercase"
+  },
+  {
+    "name": "FR3-1 Ohne kernel.source und apps.source.edit kein Einstieg „Neue App“",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "FR3-2 ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Befehl (1): Fehler-Endzustand genau einmal – nach 2× Wiederzustellung, Remount, Shell-Tausch; zweiter Tab höchstens einmal",
+    "ok": true,
+    "detail": "{\"a0\":1,\"a1\":1,\"a2\":1,\"a3\":1,\"tab2\":0,\"swA\":{\"swapped\":true,\"error\":\"\"},\"text\":\"Befehl „lab.cmd“ fehlgeschlagen: kaputt\"}"
+  },
+  {
+    "name": "Befehl (1): Ablehnung genau ein Eintrag, Rücknahme (cancelled) still",
+    "ok": true,
+    "detail": "{\"newB\":1,\"rejTexts\":[\"Befehl „lab.cmd“ abgelehnt: forbidden\"],\"cancelled\":false,\"afterX\":2,\"afterB\":2,\"idB\":\"cmd-2\"}"
+  },
+  {
+    "name": "Befehl (2): kein Rückwärtsübergang (running/failed nach done, running/done nach failed ändern die Zone nicht)",
+    "ok": true,
+    "detail": "{\"arrived\":\"failed,done\",\"z0\":3,\"z1\":3,\"l0\":\"Befehl „lab.cmd“ fehlgeschlagen: D-Fehler\",\"l1\":\"Befehl „lab.cmd“ fehlgeschlagen: D-Fehler\",\"c\":0,\"d\":1}"
+  },
+  {
+    "name": "Befehl (3): vertauschte Statusdokumente – n+1 wartet auf n, Zone schließt n vor n+1 ab",
+    "ok": true,
+    "detail": "{\"held\":0,\"posE1\":3,\"posE2\":4,\"line\":\"Befehl „lab.cmd“ fehlgeschlagen: zwei\"}"
+  },
+  {
+    "name": "Befehl (4): done auf demselben Ziel – Fehler bleibt, kein Erfolgs-Zustandstext",
+    "ok": true,
+    "detail": "{\"f0\":6,\"f1\":6,\"line\":\"Befehl „lab.cmd“ fehlgeschlagen: Ziel-Fehler\",\"allTexts\":[\"Befehl „lab.cmd“ fehlgeschlagen: kaputt\",\"Befehl „lab.cmd“ abgelehnt: forbidden\",\"Befehl „lab.cmd“ fehlgeschlagen: D-Fehler\",\"Befehl „lab.cmd“ fehlgeschlagen: eins\",\"Befehl „lab.cmd“ fehlgeschlagen: zwei\",\"Befehl „lab.cmd“ fehlgeschlagen: Ziel-Fehler\"]}"
+  },
+  {
+    "name": "Befehl: ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "FR6a Icon aus EINER Quelle: Launcher, Taskleiste und Fenster zeigen dieselbe URL; App ohne Icon bekommt ein Ersatz-Icon (Verlauf + Buchstabe, generated), nie ein Monogramm; Palette-Quelle nie leer",
+    "ok": true,
+    "detail": "{\"notes\":{\"same\":true,\"gen\":false,\"src\":\"icon\",\"palette\":\"icon\",\"monogram\":false},\"crm\":{\"same\":true,\"gen\":true,\"src\":\"icon\",\"palette\":\"icon\",\"monogram\":false},\"studio\":{\"same\":true,\"gen\":true,\"src\":\"generated\",\"palette\":\"generated\",\"monogram\":false}}"
+  },
+  {
+    "name": "G9 nahtlos (Pixel): ΔE Logo-Rand ↔ Kante oben/links < 12 für alle Lab-Apps; falsches frame_palette im Manifest (Grün) wirkt nicht",
+    "ok": true,
+    "detail": "{\"g9rows\":[{\"app\":\"notes\",\"top\":0,\"left\":0},{\"app\":\"crm\",\"top\":0,\"left\":0},{\"app\":\"studio\",\"top\":0.6,\"left\":0.6}],\"studioJoint\":\"#9cb236\"}"
+  },
+  {
+    "name": "G9 Mutationsprobe: händisch gesetzte Kantenfarbe wird erkannt (ΔE ≥ 12)",
+    "ok": true,
+    "detail": "[{\"app\":\"studio\",\"top\":69.2,\"left\":69.7}]"
+  },
+  {
+    "name": "G0 Shell-Treue: Icon-Header, Eckerweiterungen und Hover-Icons des v4-Rahmens = app.js-Pfad (app.css) derselben App (≥ 98 % Pixel je Bereich)",
+    "ok": true,
+    "detail": "{\"icon\":1,\"nw\":1,\"ne\":1,\"sw\":1,\"se\":1,\"cluster\":1}"
+  },
+  {
+    "name": "G0 Mutationsprobe: verkleinerter Icon-Header weicht ab (< 98 %)",
+    "ok": true,
+    "detail": "0.0594"
+  },
+  {
+    "name": "G8 Rahmen-Labor: kein Bedienelement der App schneidet die reservierten Zonen (Icon oben links, Knopfcluster oben rechts); Zonen decken das schwebende Chrome; eingerückt wird nur, was eine Zone schneidet (Zeile 2 nur links, Zeile 3 voll)",
+    "ok": true,
+    "detail": "{\"hits\":[],\"zones\":[[206,254,288,328],[996,254,1094,298]],\"zonesCoverChrome\":true,\"searchFull\":true,\"search\":[88,6],\"filter\":[6,6]}"
+  },
+  {
+    "name": "FR6a Andock-Raster bei Hover: 3×3 räumlich (Ecken, Kanten, Mitte = Maximieren), darunter „Freie Größe“, „Minimieren“ und (M-11) „Vollbild“, deutsche Bezeichnungen",
+    "ok": true,
+    "detail": "{\"open\":true,\"order\":[\"top-left\",\"top\",\"top-right\",\"left\",\"maximize\",\"right\",\"bottom-left\",\"bottom\",\"bottom-right\",\"free\",\"minimize\",\"fullscreen\"],\"labels\":[\"Oben links anordnen\",\"Obere Hälfte\",\"Oben rechts anordnen\",\"Linke Hälfte\",\"Maximieren\",\"Rechte Hälfte\",\"Unten links anordnen\",\"Untere Hälfte\",\"Unten rechts anordnen\",\"Freie Größe\",\"Minimieren\",\"Vollbild\"],\"spatial\":true}"
+  },
+  {
+    "name": "FR6a Raster per Klick und Tastatur: aktuelle Lage markiert und fokussiert, Pfeile bewegen räumlich (links → Mitte → rechts → unten rechts), Enter wendet an, Esc schließt; Strg+Wahl+U / Strg+Wahl+→",
+    "ok": true,
+    "detail": "{\"afterLeft\":\"left\",\"cur\":{\"current\":\"left\",\"focus\":\"left\"},\"focusDown\":\"bottom-right\",\"afterKey\":{\"zone\":\"bottom-right\",\"open\":false},\"escClosed\":true,\"viaKeyU\":\"top-left\",\"viaKeyR\":\"right\"}"
+  },
+  {
+    "name": "FR6a Doppelklick auf freie Stelle des Pane-Kopfs: maximieren, erneut: wiederherstellen",
+    "ok": true,
+    "detail": "{\"dbl1\":true,\"dbl2\":false}"
+  },
+  {
+    "name": "FR6a Vollbild: api.shell.window.fullscreen() (App-Knopf) → Fensterinhalt im Element-Vollbild; exitFullscreen() beendet; F11 schaltet für das fokussierte Fenster",
+    "ok": true,
+    "detail": "{\"fs1\":{\"el\":true,\"ret\":true},\"fs2\":{\"exit\":true,\"el\":false},\"fs3\":true,\"fs4\":false}"
+  },
+  {
+    "name": "G8 bei 420 px: keine App-Bedienelemente in den Zonen; nur Zonen-Schnitt eingerückt (Suchfeld rechts voll, Filterzeile ganz voll)",
+    "ok": true,
+    "detail": "{\"hits\":[],\"zones\":[[6,54,88,128],[316,54,414,98]],\"zonesCoverChrome\":true,\"searchFull\":true,\"search\":[88,6],\"filter\":[6,6]}"
+  },
+  {
+    "name": "G8 ohne Kit-Kopf (ZONE2): die Zonen-Garantie rückt die ganze App aus, kein Bedienelement schneidet eine Zone",
+    "ok": true,
+    "detail": "{\"hits\":[],\"zgAttr\":\"top\"}"
+  },
+  {
+    "name": "G8 Mutationsprobe: ohne Kit-Kopf und ohne Zonen-Garantie liegen Knöpfe unter dem Cluster bzw. Icon – die Prüfung findet sie",
+    "ok": true,
+    "detail": "[\"<button style=\\\"height:26px;padding:0 8px\",\"<select data-studio-lang=\\\"\\\" aria-label=\\\"\",\"<button style=\\\"height:26px;padding:0 8px\",\"<input data-studio-search=\\\"\\\" placeholder\"]"
+  },
+  {
+    "name": "FR6a ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "FR6b-T1 (FR6c) Reiterleiste oben: EIN Reiter je App, 6 Crew-Chats unter EINEM Reiter „Crew“ mit Zahl 6 (sichtbar); Einzelfenster ohne Zahl; keine Taskleiste unten",
+    "ok": true,
+    "detail": "{\"entries\":[{\"group\":\"notes\",\"label\":\"Notizen\",\"count\":0,\"countShown\":false,\"title\":\"Notizen\",\"active\":false,\"hidden\":false},{\"group\":\"tasks\",\"label\":\"Aufgaben\",\"count\":0,\"countShown\":false,\"title\":\"Aufgaben\",\"active\":false,\"hidden\":false},{\"group\":\"ledger\",\"label\":\"Buchhaltung\",\"count\":0,\"countShown\":false,\"title\":\"Buchhaltung\",\"active\":false,\"hidden\":false},{\"group\":\"crew\",\"label\":\"Crew\",\"count\":6,\"countShown\":true,\"title\":\"Crew (6)\",\"active\":true,\"hidden\":false}],\"more\":\"\",\"fits\":true,\"bottomBar\":false,\"barW\":916}"
+  },
+  {
+    "name": "FR6b-T2 Klick auf „Crew“ wechselt reihum: 6 Klicks = 6 verschiedene Crew-Fenster, der 7. beginnt von vorn",
+    "ok": true,
+    "detail": "[\"v4app:crew-cleo#9\",\"v4app:crew-anna#4\",\"v4app:crew-ben#5\",\"v4app:crew-cleo#6\",\"v4app:crew-anna#7\",\"v4app:crew-ben#8\",\"v4app:crew-cleo#9\"]"
+  },
+  {
+    "name": "FR6b-T3 (FR6c) Rechtsklick auf den Reiter zeigt die Fensterliste (6 Chats, direkt unter dem Reiter); Auswahl holt genau dieses Fenster nach vorn; Esc schließt",
+    "ok": true,
+    "detail": "{\"menu\":{\"open\":true,\"items\":[\"Chat Anna\",\"Chat Ben\",\"Chat Cleo\",\"Chat Anna\",\"Chat Ben\",\"Chat Cleo\"],\"inBar\":true},\"pickId\":\"desk_win_azw5jm4y68nz\",\"picked\":true,\"pickedOwner\":\"v4app:crew-cleo#6\",\"menuClosed\":true,\"escClosed\":true}"
+  },
+  {
+    "name": "FR6b-T4 (FR6c) Reiterleiste wächst nie über ihre Breite: 1280 alles sichtbar ohne „+N“; auf 260 px Überlauf „+N“ (gruppiert, Crew zählt als EIN Eintrag), der aktive Reiter bleibt sichtbar, alles passt; wieder breit → kein „+N“",
+    "ok": true,
+    "detail": "{\"b1\":{\"more\":\"\",\"fits\":true},\"bNarrow\":{\"entries\":[{\"group\":\"notes\",\"label\":\"Notizen\",\"count\":0,\"countShown\":false,\"title\":\"Notizen\",\"active\":false,\"hidden\":false},{\"group\":\"tasks\",\"label\":\"Aufgaben\",\"count\":0,\"countShown\":false,\"title\":\"Aufgaben\",\"active\":true,\"hidden\":false},{\"group\":\"ledger\",\"label\":\"Buchhaltung\",\"count\":0,\"countShown\":false,\"title\":\"Buchhaltung\",\"active\":false,\"hidden\":true},{\"group\":\"crew\",\"label\":\"Crew\",\"count\":6,\"countShown\":true,\"title\":\"Crew (6)\",\"active\":false,\"hidden\":true}],\"more\":\"+2\",\"fits\":true,\"bottomBar\":false,\"barW\":260},\"bBack\":{\"more\":\"\",\"fits\":true}}"
+  },
+  {
+    "name": "FR6b-T5 (FR6c) 420 px: 4 Einträge, Crew mit 6, Leiste passt (keine Überbreite), der aktive Reiter ist sichtbar, Zahnrad ausgeblendet",
+    "ok": true,
+    "detail": "{\"b420\":{\"entries\":[{\"group\":\"tasks\",\"label\":\"Aufgaben\",\"count\":0,\"countShown\":false,\"title\":\"Aufgaben\",\"active\":true,\"hidden\":false},{\"group\":\"notes\",\"label\":\"Notizen\",\"count\":0,\"countShown\":false,\"title\":\"Notizen\",\"active\":false,\"hidden\":true},{\"group\":\"ledger\",\"label\":\"Buchhaltung\",\"count\":0,\"countShown\":false,\"title\":\"Buchhaltung\",\"active\":false,\"hidden\":true},{\"group\":\"crew\",\"label\":\"Crew\",\"count\":6,\"countShown\":true,\"title\":\"Crew (6)\",\"active\":false,\"hidden\":true}],\"more\":\"+3\",\"fits\":true,\"bottomBar\":false,\"barW\":166},\"gear420\":\"none\"}"
+  },
+  {
+    "name": "FR6b-P1 (FR6c) Pin und Fenster = EIN Reiter: angeheftet ohne Fenster = Reiter mit data-pinned, ohne Laufend-Zustand, vorn in Pin-Reihenfolge; angeheftete App mit Fenster und angeheftetes Crew-Mitglied verschmelzen mit ihrem Reiter; Klick öffnet, derselbe Reiter läuft",
+    "ok": true,
+    "detail": "{\"e1\":[{\"key\":\"crm\",\"pin\":\"crm\",\"count\":0,\"pinned\":true,\"label\":\"Kontakte\",\"running\":false},{\"key\":\"notes\",\"pin\":\"notes\",\"count\":1,\"pinned\":true,\"label\":\"Notizen\",\"running\":true},{\"key\":\"crew\",\"pin\":\"crew-anna\",\"count\":6,\"pinned\":true,\"label\":\"Crew\",\"running\":true},{\"key\":\"tasks\",\"pin\":\"\",\"count\":1,\"pinned\":false,\"label\":\"Aufgaben\",\"running\":true},{\"key\":\"ledger\",\"pin\":\"\",\"count\":1,\"pinned\":false,\"label\":\"Buchhaltung\",\"running\":true}],\"e2\":[{\"key\":\"crm\",\"pin\":\"crm\",\"count\":1,\"pinned\":true,\"label\":\"Kontakte\",\"running\":true},{\"key\":\"notes\",\"pin\":\"notes\",\"count\":1,\"pinned\":true,\"label\":\"Notizen\",\"running\":true},{\"key\":\"crew\",\"pin\":\"crew-anna\",\"count\":6,\"pinned\":true,\"label\":\"Crew\",\"running\":true},{\"key\":\"tasks\",\"pin\":\"\",\"count\":1,\"pinned\":false,\"label\":\"Aufgaben\",\"running\":true},{\"key\":\"ledger\",\"pin\":\"\",\"count\":1,\"pinned\":false,\"label\":\"Buchhaltung\",\"running\":true}]}"
+  },
+  {
+    "name": "FR6b-O1 (FR6c) Überlauf „+N“: zu schmal → hintere Reiter im Menü, der aktive (crm) bleibt sichtbar, nichts ragt über die Leiste; „+N“ listet genau die verborgenen; Auswahl aktiviert den Reiter und holt ihn aus dem Überlauf; wieder breit → kein „+N“",
+    "ok": true,
+    "detail": "{\"o1\":{\"entries\":[{\"group\":\"crm\",\"label\":\"Kontakte\",\"count\":0,\"countShown\":false,\"title\":\"Kontakte\",\"active\":true,\"hidden\":false},{\"group\":\"notes\",\"label\":\"Notizen\",\"count\":0,\"countShown\":false,\"title\":\"Notizen\",\"active\":false,\"hidden\":true},{\"group\":\"crew\",\"label\":\"Crew\",\"count\":6,\"countShown\":true,\"title\":\"Crew (6)\",\"active\":false,\"hidden\":true},{\"group\":\"tasks\",\"label\":\"Aufgaben\",\"count\":0,\"countShown\":false,\"title\":\"Aufgaben\",\"active\":false,\"hidden\":true},{\"group\":\"ledger\",\"label\":\"Buchhaltung\",\"count\":0,\"countShown\":false,\"title\":\"Buchhaltung\",\"active\":false,\"hidden\":true}],\"more\":\"+4\",\"fits\":true,\"bottomBar\":false,\"barW\":230},\"list\":[\"notes\",\"crew\",\"tasks\",\"ledger\"],\"lastHidden\":\"ledger\",\"picked1\":{\"group\":\"ledger\",\"label\":\"Buchhaltung\",\"count\":0,\"countShown\":false,\"title\":\"Buchhaltung\",\"active\":true,\"hidden\":false},\"o1b\":{\"more\":\"+4\",\"fits\":true},\"o2\":{\"more\":\"\"}}"
+  },
+  {
+    "name": "FR6b-D1 (FR6c) „Desktop“ im Launcher-Fuß (links, daneben „Einstellungen“, frei klickbar): alle Fenster minimiert (Desktop frei); zweiter Klick stellt genau die vorher sichtbaren wieder her (gleiche Reihenfolge, gleiches vorderstes), das vorher minimierte bleibt unten",
+    "ok": true,
+    "detail": "{\"deskBtnFree\":{\"hit\":true,\"foot\":true,\"first\":true,\"nextIsSettings\":true},\"n\":9,\"midVis\":0,\"same\":true,\"topBefore\":\"v4app:ledger#3\",\"topAfter\":\"v4app:ledger#3\",\"tasksWin\":\"desk_win_iibdj1f69cb0\",\"before\":10}"
+  },
+  {
+    "name": "FR6b-D2 Strg+Alt+D: minimiert alle, erneut: stellt sie wieder her",
+    "ok": true,
+    "detail": "{\"k1\":0,\"k2\":9}"
+  },
+  {
+    "name": "FR6b-D3 Kürzel überschreibt keinen Browser-Standard: nur Strg+Alt+D wird abgefangen; Strg+D, Cmd+D, Alt+D, Strg+Umschalt+D, Cmd+Alt+D, Cmd+Umschalt+B, Strg+B, Strg+Umschalt+B laufen unberührt durch",
+    "ok": true,
+    "detail": "{\"Strg+D (Lesezeichen)\":false,\"Cmd+D (Lesezeichen macOS)\":false,\"Alt+D (Adressleiste Windows/Linux)\":false,\"Strg+Umschalt+D (alle Tabs merken)\":false,\"Cmd+Alt+D (Dock macOS)\":false,\"Cmd+Umschalt+B (Lesezeichenleiste macOS)\":false,\"Strg+B\":false,\"Strg+Umschalt+B (Lesezeichenleiste Win/Linux)\":false,\"Strg+Alt+D (Desktop)\":true}"
+  },
+  {
+    "name": "FR6b-R1 Strg+Alt+B im App-Fenster: Blatt IM Fenster „Problem melden“ – „Was ist passiert?“ (mehrzeilig), dann „Was hast du erwartet?“; Esc bricht ohne Speichern ab",
+    "ok": true,
+    "detail": "{\"s1\":{\"title\":\"Problem melden\",\"text\":\"Was ist passiert?\",\"multi\":\"TEXTAREA\",\"inWin\":true,\"outside\":0},\"s2\":\"Was hast du erwartet?\",\"afterCancel\":true}"
+  },
+  {
+    "name": "FR6b-R2 (Attrappe ohne App-API-Datenteil): Speichern scheitert sichtbar NUR in der Zone des Fensters (shell.report, error), kein Rückgabewert",
+    "ok": true,
+    "detail": "{\"wishTitle\":\"Wunsch äußern\",\"res\":null,\"zoneAfter\":[\"error|lab.sync\",\"error|shell.report\"]}"
+  },
+  {
+    "name": "FR6b-R3 App-Menü am Icon-Header: „Problem melden“ und „Wunsch äußern“ für alle Nutzer (auch ohne apps.source.view), „Code ansehen“ nur mit Recht; Eintrag öffnet das Melde-Blatt im Fenster",
+    "ok": true,
+    "detail": "{\"withPerms\":[\"report-bug\",\"report-wish\"],\"noPerms\":[\"report-bug\",\"report-wish\"],\"viaMenu\":\"Wunsch äußern\"}"
+  },
+  {
+    "name": "FR6b ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "FR6c-group gruppiert: EIN Reiter je App, Crew-Chats unter „Crew“, keine Taskleiste unten",
+    "ok": true,
+    "detail": "{\"entries\":[{\"g\":\"tasks\",\"label\":\"Aufgaben\",\"count\":0,\"pin\":\"tasks\",\"run\":\"true\",\"active\":false,\"hidden\":false},{\"g\":\"crew\",\"label\":\"Crew\",\"count\":6,\"pin\":\"crew-anna\",\"run\":\"focused\",\"active\":true,\"hidden\":false},{\"g\":\"notes\",\"label\":\"Notizen\",\"count\":0,\"pin\":\"\",\"run\":\"true\",\"active\":false,\"hidden\":false},{\"g\":\"ledger\",\"label\":\"Buchhaltung\",\"count\":0,\"pin\":\"\",\"run\":\"true\",\"active\":false,\"hidden\":false}],\"more\":\"\",\"fits\":true,\"bottomBar\":false}"
+  },
+  {
+    "name": "FR6c-count Zahl ab zwei Fenstern (Crew 6), Einzelfenster ohne Zahl",
+    "ok": true,
+    "detail": "{\"entries\":[{\"g\":\"tasks\",\"label\":\"Aufgaben\",\"count\":0,\"pin\":\"tasks\",\"run\":\"true\",\"active\":false,\"hidden\":false},{\"g\":\"crew\",\"label\":\"Crew\",\"count\":6,\"pin\":\"crew-anna\",\"run\":\"focused\",\"active\":true,\"hidden\":false},{\"g\":\"notes\",\"label\":\"Notizen\",\"count\":0,\"pin\":\"\",\"run\":\"true\",\"active\":false,\"hidden\":false},{\"g\":\"ledger\",\"label\":\"Buchhaltung\",\"count\":0,\"pin\":\"\",\"run\":\"true\",\"active\":false,\"hidden\":false}],\"more\":\"\",\"fits\":true,\"bottomBar\":false}"
+  },
+  {
+    "name": "FR6c-pin Pin verschmolzen: angeheftete App und angeheftetes Crew-Mitglied = derselbe Reiter",
+    "ok": true,
+    "detail": "{\"entries\":[{\"g\":\"tasks\",\"label\":\"Aufgaben\",\"count\":0,\"pin\":\"tasks\",\"run\":\"true\",\"active\":false,\"hidden\":false},{\"g\":\"crew\",\"label\":\"Crew\",\"count\":6,\"pin\":\"crew-anna\",\"run\":\"focused\",\"active\":true,\"hidden\":false},{\"g\":\"notes\",\"label\":\"Notizen\",\"count\":0,\"pin\":\"\",\"run\":\"true\",\"active\":false,\"hidden\":false},{\"g\":\"ledger\",\"label\":\"Buchhaltung\",\"count\":0,\"pin\":\"\",\"run\":\"true\",\"active\":false,\"hidden\":false}],\"more\":\"\",\"fits\":true,\"bottomBar\":false}"
+  },
+  {
+    "name": "FR6c-active Überlauf „+N“ gruppiert, aktives Fenster (Crew, letzter Reiter) bleibt sichtbar, Leiste wächst nie über ihre Breite",
+    "ok": true,
+    "detail": "{\"entries\":[{\"g\":\"crew\",\"label\":\"Crew\",\"count\":6,\"pin\":\"crew-anna\",\"run\":\"focused\",\"active\":true,\"hidden\":false},{\"g\":\"tasks\",\"label\":\"Aufgaben\",\"count\":0,\"pin\":\"tasks\",\"run\":\"true\",\"active\":false,\"hidden\":true},{\"g\":\"notes\",\"label\":\"Notizen\",\"count\":0,\"pin\":\"\",\"run\":\"true\",\"active\":false,\"hidden\":true},{\"g\":\"ledger\",\"label\":\"Buchhaltung\",\"count\":0,\"pin\":\"\",\"run\":\"true\",\"active\":false,\"hidden\":true}],\"more\":\"+3\",\"fits\":true,\"bottomBar\":false}"
+  },
+  {
+    "name": "FR6c-desktop Desktop im Startmenü-Fuß (links, „Einstellungen“ daneben): schließt das Menü, 9 → 0 sichtbare Fenster, zweiter Klick → 9",
+    "ok": true,
+    "detail": "{\"foot\":[\"Desktop\",\"Einstellungen\"],\"b\":9,\"m\":0,\"a\":9,\"closed\":true}"
+  },
+  {
+    "name": "FR6c-menu FR6d Startmenü aus dem Raster-Knopf (16/48, 360 px breit wie Shell-V2 auf welsch), Suche fokussiert; Esc schließt, Klick daneben schließt",
+    "ok": true,
+    "detail": "{\"closed0\":true,\"open1\":true,\"searchFocus\":true,\"panel\":[16,48,360],\"esc\":true,\"open2\":true,\"outside\":true}"
+  },
+  {
+    "name": "FR6c-menuEsc FR6d Startmenü: Esc schließt",
+    "ok": true,
+    "detail": "{\"closed0\":true,\"open1\":true,\"searchFocus\":true,\"panel\":[16,48,360],\"esc\":true,\"open2\":true,\"outside\":true}"
+  },
+  {
+    "name": "FR6c-surface FR6d Desktop als eigene Fläche wie Shell-V2: 6 App-Symbole im Raster 120 × 140 ab 24/24 (112 × 136), frei klickbar hinter den minimierten Fenstern",
+    "ok": true,
+    "detail": "{\"n\":6,\"hit\":true,\"pos\":[24,72,112,136]}"
+  },
+  {
+    "name": "FR6c-crew FR6d Crew-Leiste unten links: Pille „Crew“ mit den 3 Crew-Mitgliedern, Kalender-Navigator ‹ 📅 ›; Klick auf Ben holt dessen Chat nach vorn (Reiter „Crew“ aktiv); Tag zurück/vor, nie über heute",
+    "ok": true,
+    "detail": "{\"members\":[\"crew-anna\",\"crew-ben\",\"crew-cleo\"],\"label\":\"Crew\",\"nav\":3,\"rect\":[18,782],\"visible\":true,\"front0\":\"crew-anna\",\"front1\":\"crew-ben\",\"activeTab\":\"crew\",\"days\":[\"2026-10-16\",\"2026-10-15\",\"2026-10-16\"]}"
+  },
+  {
+    "name": "FR6c-gear 420 px: Zahnrad weg, aktiver Reiter sichtbar, „Einstellungen“ oberster Eintrag im Konto-Blatt und öffnet das Blatt",
+    "ok": true,
+    "detail": "{\"gear\":\"none\",\"acc\":\"Einstellungen\",\"s\":true,\"n420\":{\"entries\":[{\"g\":\"crew\",\"label\":\"Crew\",\"count\":6,\"pin\":\"crew-anna\",\"run\":\"focused\",\"active\":true,\"hidden\":false},{\"g\":\"tasks\",\"label\":\"Aufgaben\",\"count\":0,\"pin\":\"tasks\",\"run\":\"true\",\"active\":false,\"hidden\":true},{\"g\":\"notes\",\"label\":\"Notizen\",\"count\":0,\"pin\":\"\",\"run\":\"true\",\"active\":false,\"hidden\":true},{\"g\":\"ledger\",\"label\":\"Buchhaltung\",\"count\":0,\"pin\":\"\",\"run\":\"true\",\"active\":false,\"hidden\":true}],\"more\":\"+3\",\"fits\":true,\"bottomBar\":false}}"
+  },
+  {
+    "name": "FR6c ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "FR6d-G0 Startmenü, Desktop und Crew-Leiste = app.css-Pfad (ui-contract + app.css + base.css + mobile-host.css + modules/desktop/index.css + business-chat-Stil) mit demselben DOM (ohne den v4-Zusatz „Neue App“), hell 1280 (≥ 99,9 % Pixel)",
+    "ok": true,
+    "detail": "{\"desktop\":1,\"crew\":1,\"start\":1,\"startMut\":0.9424}"
+  },
+  {
+    "name": "FR6d-G0 Mutationsprobe: verschobene Startmenü-Einträge (Innenabstand Rumpf 40 px) weichen ab (< 98 %)",
+    "ok": true,
+    "detail": "{\"desktop\":1,\"crew\":1,\"start\":1,\"startMut\":0.9424}"
+  },
+  {
+    "name": "FR6c-group Mutationsprobe (taskbar.js): Punkt „group“ wird rot",
+    "ok": true,
+    "detail": "{\"group\":false,\"count\":false,\"pin\":false,\"desktop\":true,\"menu\":true,\"menuEsc\":true,\"surface\":true,\"crew\":false,\"gear\":true}"
+  },
+  {
+    "name": "FR6c-count Mutationsprobe (topbar.js): Punkt „count“ wird rot",
+    "ok": true,
+    "detail": "{\"group\":true,\"count\":false,\"pin\":true,\"active\":true,\"desktop\":true,\"menu\":true,\"menuEsc\":true,\"surface\":true,\"crew\":true,\"gear\":true}"
+  },
+  {
+    "name": "FR6c-pin Mutationsprobe (taskbar.js): Punkt „pin“ wird rot",
+    "ok": true,
+    "detail": "{\"group\":false,\"count\":true,\"pin\":false,\"active\":true,\"desktop\":true,\"menu\":true,\"menuEsc\":true,\"surface\":true,\"crew\":true,\"gear\":true}"
+  },
+  {
+    "name": "FR6c-active Mutationsprobe (topbar.js): Punkt „active“ wird rot",
+    "ok": true,
+    "detail": "{\"group\":true,\"count\":true,\"pin\":true,\"active\":false,\"desktop\":true,\"menu\":true,\"menuEsc\":true,\"surface\":true,\"crew\":true,\"gear\":false}"
+  },
+  {
+    "name": "FR6c-desktop Mutationsprobe (launcher.js): Punkt „desktop“ wird rot",
+    "ok": true,
+    "detail": "{\"group\":true,\"count\":true,\"pin\":true,\"active\":true,\"desktop\":false,\"menu\":true,\"menuEsc\":true,\"surface\":false,\"crew\":true,\"gear\":true}"
+  },
+  {
+    "name": "FR6c-menu Mutationsprobe (launcher.js): Punkt „menu“ wird rot",
+    "ok": true,
+    "detail": "{\"group\":true,\"count\":true,\"pin\":true,\"active\":true,\"desktop\":true,\"menu\":false,\"menuEsc\":true,\"surface\":true,\"crew\":true,\"gear\":true}"
+  },
+  {
+    "name": "FR6c-menuEsc Mutationsprobe (launcher.js): Punkt „menuEsc“ wird rot",
+    "ok": true,
+    "detail": "{\"group\":true,\"count\":true,\"pin\":true,\"active\":true,\"desktop\":true,\"menu\":false,\"menuEsc\":false,\"surface\":true,\"crew\":true,\"gear\":true}"
+  },
+  {
+    "name": "FR6c-surface Mutationsprobe (desktop.js): Punkt „surface“ wird rot",
+    "ok": true,
+    "detail": "{\"group\":true,\"count\":true,\"pin\":true,\"active\":true,\"desktop\":true,\"menu\":true,\"menuEsc\":true,\"surface\":false,\"crew\":true,\"gear\":true}"
+  },
+  {
+    "name": "FR6c-crew Mutationsprobe (crew-bar.js): Punkt „crew“ wird rot",
+    "ok": true,
+    "detail": "{\"group\":true,\"count\":true,\"pin\":true,\"active\":true,\"desktop\":true,\"menu\":true,\"menuEsc\":true,\"surface\":true,\"crew\":false,\"gear\":true}"
+  },
+  {
+    "name": "FR6c-gear Mutationsprobe (topbar.js): Punkt „gear“ wird rot",
+    "ok": true,
+    "detail": "{\"group\":true,\"count\":true,\"pin\":true,\"active\":true,\"desktop\":true,\"menu\":true,\"menuEsc\":true,\"surface\":true,\"crew\":true,\"gear\":false}"
+  },
+  {
+    "name": "Z45-1 alles live: Gesamtzustand ok, kein Verbindungseintrag am Badge",
+    "ok": true,
+    "detail": "{\"o0\":{\"level\":\"ok\",\"source\":\"v4\"},\"app\":{\"level\":\"ok\",\"unknown\":[],\"collections\":{\"z45_items\":\"live\"}},\"z0\":[]}"
+  },
+  {
+    "name": "Z45-2 catching_up: Zustandspunkt sofort gelb (warn), Badge-Eintrag (T.warn, gelb) erst nach 2 s, mit Aktion T.action (stub); andere App bleibt still",
+    "ok": true,
+    "detail": "{\"oWarn\":{\"level\":\"warn\",\"pending\":[\"z45_items\"]},\"zEarly\":[],\"zWarn\":[\"warn|T.warn|Ausblenden\"],\"bWarn\":{\"level\":\"warn\",\"n\":\"1\"},\"nWarn\":[]}"
+  },
+  {
+    "name": "Z45-4 wieder alles live: Eintrag verschwindet still, Gesamtzustand ok",
+    "ok": true,
+    "detail": "[]"
+  },
+  {
+    "name": "Z45-5 error: sofort T.error am Badge (rot), Gesamtzustand error mit Code",
+    "ok": true,
+    "detail": "{\"zErr\":[\"error|T.error|Ausblenden\"],\"bErr\":{\"level\":\"error\",\"n\":\"1\"},\"oErr\":{\"level\":\"error\",\"errors\":[{\"name\":\"z45_items\",\"code\":\"forbidden\",\"message\":\"Recht entzogen\"}]}}"
+  },
+  {
+    "name": "Z45-6 Gegenprobe: Rückstand in fremder Collection → Gesamtzustand warn, Badge der App bleibt still",
+    "ok": true,
+    "detail": "{\"o\":{\"level\":\"warn\",\"pending\":[\"files\"]},\"zOther\":[]}"
+  },
+  {
+    "name": "Z45-7 V3-Rückfall (Objekt und Funktion) mit peer_connect_timeout → warn am Badge, connected+queryReady → ok und still",
+    "ok": true,
+    "detail": "{\"vObj\":{\"o\":\"warn\",\"z\":[\"warn|T.warn|Ausblenden\"],\"after\":{\"o\":\"ok\",\"z\":[]}},\"vFn\":{\"o\":\"warn\",\"z\":[\"warn|T.warn|Ausblenden\"],\"after\":{\"o\":\"ok\",\"z\":[]}}}"
+  },
+  {
+    "name": "Z45-8 keine Quelle (weder V4 noch V3) → unknown, nie ok",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "Z45-10 Netz weg (link.state): nach > 5 s genau EIN Eintrag je App-Badge (shell.sync, T.warn; kein metrics.link), bei 3 s noch still, wieder online → still",
+    "ok": true,
+    "detail": "{\"at3\":[],\"at56\":{\"z45\":[\"warn|shell.sync|T.warn\"],\"notes\":[\"warn|shell.sync|T.warn\"],\"overall\":\"warn\"},\"after\":{\"z45\":[],\"notes\":[]}}"
+  },
+  {
+    "name": "Z45-9 Shell-Tausch ohne Leck: Observer-Zahl ab dem ersten Tausch konstant, genau ein Sync-Zustand aktiv",
+    "ok": true,
+    "detail": "24 → 24 → 24 → 24"
+  },
+  {
+    "name": "Z45 ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "TOP-0 Kopfleiste wie Shell-V2: 48 px oben, Desk beginnt darunter, je offener App ein Reiter (vorderste markiert), Workspace-Name, rechts Punkt → Zahnrad → Avatar",
+    "ok": true,
+    "detail": "{\"top\":[0,48],\"deskTop\":48,\"tabs\":[{\"app\":\"tasks\",\"focused\":false},{\"app\":\"notes\",\"focused\":true}],\"ws\":\"Lokaler Workspace\",\"avatar\":\"O\",\"order\":[\"sync\",\"gear\",\"avatar\"]}"
+  },
+  {
+    "name": "TOP-0 Reiter-Klick fokussiert das Fenster der App",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "TOP-0 Launcher-Raster öffnet das Startmenü und schließt es beim zweiten Klick (Fenster unberührt)",
+    "ok": true,
+    "detail": "{\"m1\":true,\"m2\":false,\"w0\":2}"
+  },
+  {
+    "name": "TOP-1 G0 Kopfleiste = app.js-Pfad (ui-contract + app.css + base.css + mobile-host.css + shell-topbar.css) mit demselben DOM, hell/dunkel 1280 und 420 (≥ 98 % Pixel je Drittel)",
+    "ok": true,
+    "detail": "{\"light-1280\":{\"left\":1,\"mid\":1,\"right\":1},\"dark-1280\":{\"left\":1,\"mid\":1,\"right\":1},\"dark-420\":{\"left\":1,\"mid\":1,\"right\":1}}"
+  },
+  {
+    "name": "TOP-1 Mutationsprobe: verschobene Kopfleiste weicht ab (< 98 %)",
+    "ok": true,
+    "detail": "{\"left\":0.8428,\"mid\":0.9902,\"right\":1}"
+  },
+  {
+    "name": "TOP-2 Zahnrad links vom Avatar öffnet „Einstellungen“ (Blatt mit Sprache und Schema); Schema „Dunkel“ wirkt sofort und steht in shell_preferences.settings; Esc schließt, Fokus zurück",
+    "ok": true,
+    "detail": "{\"s1\":{\"open\":true,\"selects\":[\"lang\",\"theme\"],\"title\":\"Einstellungen\"},\"themeNow\":\"dark\",\"saved\":\"dark\",\"s2\":{\"open\":false,\"selects\":[\"lang\",\"theme\"],\"title\":\"Einstellungen\"},\"focusBack\":true}"
+  },
+  {
+    "name": "TOP-2 Mutationsprobe: Zahnrad ohne Verdrahtung öffnet nichts (Prüfung schlägt an)",
+    "ok": true,
+    "detail": "{\"open\":false,\"selects\":[\"lang\",\"theme\"],\"title\":\"Einstellungen\"}"
+  },
+  {
+    "name": "TOP-3 Avatar öffnet das Konto-Blatt; oberster Eintrag ist „Einstellungen“ und öffnet die Einstellungen",
+    "ok": true,
+    "detail": "{\"a1\":{\"open\":true,\"first\":\"Einstellungen\",\"sub\":\"owner\"},\"viaAcc\":{\"open\":true,\"selects\":[\"lang\",\"theme\"],\"title\":\"Einstellungen\"}}"
+  },
+  {
+    "name": "TOP-3 Mutationsprobe: ohne den Eintrag ist „Einstellungen“ nicht mehr oben (Prüfung schlägt an)",
+    "ok": true,
+    "detail": "{\"open\":true,\"first\":\"Konto\",\"sub\":\"owner\"}"
+  },
+  {
+    "name": "TOP-4 Zustandspunkt nie grün ohne Quelle: ohne Quelle und bei „unknown“ grau ohne Text, nur „ok“ grün; im Rahmen grün ⇔ getOverallState().level === \"ok\"",
+    "ok": true,
+    "detail": "{\"iso\":{\"none\":{\"state\":null,\"green\":false,\"label\":\"\"},\"unknown\":{\"state\":null,\"green\":false,\"label\":\"\"},\"ok\":{\"state\":\"healthy\",\"green\":true,\"label\":\"\"}},\"d0\":{\"state\":null,\"bg\":\"rgb(113, 113, 123)\",\"green\":\"rgb(3, 107, 79)\",\"label\":\"\"},\"lv0\":\"unknown\"}"
+  },
+  {
+    "name": "TOP-4 Mutationsprobe: erzwungenes Grün bei Quelle „unknown“ fällt auf (grün ⇔ ok verletzt)",
+    "ok": true,
+    "detail": "{\"green\":true,\"level\":\"unknown\"}"
+  },
+  {
+    "name": "TOP-5 (FR6c) 420 px: Kopfleiste ohne Überlauf, Bedienelemente sichtbar, Zahnrad ausgeblendet, Einstellungen über das Konto erreichbar und passen in die Breite",
+    "ok": true,
+    "detail": "{\"narrow\":{\"fits\":true,\"inside\":true},\"gear420\":\"none\",\"s420\":{\"open\":true,\"selects\":[\"lang\",\"theme\"],\"title\":\"Einstellungen\"}}"
+  },
+  {
+    "name": "TOP ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "ZONE2 App ohne Kit: Knöpfe oben links, oben rechts und absolut oben rechts liegen nach dem Mount frei (elementFromPoint am Mittelpunkt = Knopf) und reagieren auf die echte Maus",
+    "ok": true,
+    "detail": "{\"z1\":{\"guard\":\"top\",\"top\":\"74px\",\"btns\":{\"left\":{\"x\":272,\"y\":324,\"free\":true,\"by\":null},\"tick\":{\"x\":860,\"y\":324,\"free\":true,\"by\":null},\"right\":{\"x\":926,\"y\":324,\"free\":true,\"by\":null},\"abs\":{\"x\":944,\"y\":288,\"free\":true,\"by\":null}}},\"c1\":{\"left\":1,\"tick\":1,\"right\":1,\"abs\":1}}"
+  },
+  {
+    "name": "ZONE2 Kit-App unberührt (studio mit Kit-Kopf: kein Attribut, Optik bleibt); Apps ohne Kit mit Eingabe unter dem Icon (notes oben links, crm unter der v2-Kopfzeile bei y 53): Garantie greift",
+    "ok": true,
+    "detail": "{\"kitGuard\":{\"studio\":null,\"crm\":\"top\"},\"notesGuard\":\"top\"}"
+  },
+  {
+    "name": "ZONE2 Gegenprobe: ohne die Garantie liegen „Links“ (unter dem Icon) und der Knopf oben rechts (unter dem Knopfcluster) verdeckt",
+    "ok": true,
+    "detail": "{\"zm\":{\"guard\":\"top right\",\"top\":\"0px\",\"btns\":{\"left\":{\"x\":272,\"y\":250,\"free\":false,\"by\":\"div.shell-window-v2-icon\"},\"tick\":{\"x\":860,\"y\":250,\"free\":true,\"by\":null},\"right\":{\"x\":926,\"y\":250,\"free\":true,\"by\":null},\"abs\":{\"x\":944,\"y\":214,\"free\":false,\"by\":\"button.shell-window-control\"}}}}"
+  },
+  {
+    "name": "ZONE2 kein Flackern: genau ein sichtbarer Wechsel beim Mount (0 → Zonenhöhe), keiner bei Maximieren, Wiederherstellen und DOM-Änderung; Garantie bleibt",
+    "ok": true,
+    "detail": "{\"mountSamples\":[\"0px|0px\",\"74px|0px\"],\"samples\":[\"74px|0px\"],\"guard\":\"top\"}"
+  },
+  {
+    "name": "ZONE2 bei 900 px: Knöpfe der App ohne Kit frei und per Maus klickbar",
+    "ok": true,
+    "detail": "{\"z9\":{\"guard\":\"top\",\"top\":\"74px\",\"btns\":{\"left\":{\"x\":92,\"y\":324,\"free\":true,\"by\":null},\"tick\":{\"x\":680,\"y\":324,\"free\":true,\"by\":null},\"right\":{\"x\":746,\"y\":324,\"free\":true,\"by\":null},\"abs\":{\"x\":764,\"y\":288,\"free\":true,\"by\":null}}},\"c9\":{\"left\":1,\"tick\":1,\"right\":1,\"abs\":1}}"
+  },
+  {
+    "name": "ZONE2 ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "MOBILE 390: Hostbrücke im Labor eingehängt (workjetHostBridge, shell.ready + catalog.replace mit den Mobil-Apps aus layout.presentation.mobile)",
+    "ok": true,
+    "detail": "{\"bridge\":true,\"posts\":[\"shell.ready\",\"catalog.replace\"],\"apps\":[\"notes\",\"tasks\",\"ledger\",\"bare\",\"crm\",\"studio\"]}"
+  },
+  {
+    "name": "MOBILE 390 Schritt 1: Kopfleiste (mit Reitern), Startknopf, Startmenü und Crew-Leiste unsichtbar (Fläche 0 bzw. display none, checkVisibility false)",
+    "ok": true,
+    "detail": "{\"top\":{\"area\":0,\"hidden\":\"v4f-top:display\",\"shown\":false},\"topbar\":{\"area\":0,\"hidden\":\"topbar:display\",\"shown\":false},\"tabs\":{\"area\":0,\"hidden\":\"topbar:display\",\"shown\":false},\"start\":{\"area\":0,\"hidden\":\"topbar:display\",\"shown\":false},\"launcher\":{\"area\":0,\"hidden\":\"shell-start-menu-panel:visibility\",\"shown\":false},\"crew\":{\"area\":0,\"hidden\":\"v4f-crew:display\",\"shown\":false}}"
+  },
+  {
+    "name": "MOBILE 390 Schritt 1: Desk füllt den Viewport, Desktop-Raster mit 4 Spalten (Symbol-Rechtecke, Umbruch links bündig, alle im Viewport, per Treffertest erreichbar)",
+    "ok": true,
+    "detail": "{\"n\":9,\"cols\":4,\"wrapX\":true,\"inside\":true,\"top\":20,\"desk\":[0,0,390,844],\"hit\":true,\"minH\":124}"
+  },
+  {
+    "name": "MOBILE 390 Schritt 2: genau ein aktives Fenster (bare), Rechteck = Viewport ±1 px",
+    "ok": true,
+    "detail": "[{\"app\":\"notes\",\"active\":false,\"shown\":false,\"rect\":[0,0,0,0],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false},{\"app\":\"bare\",\"active\":true,\"shown\":true,\"rect\":[0,0,390,844],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}]"
+  },
+  {
+    "name": "MOBILE 390 Schritt 2: Fensterkopf (Icon-Header, Kopfzeile mit Knopfcluster), Größe-Griffe und Meldungs-Badge unsichtbar",
+    "ok": true,
+    "detail": "{\"app\":\"bare\",\"active\":true,\"shown\":true,\"rect\":[0,0,390,844],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}"
+  },
+  {
+    "name": "MOBILE 390 Schritt 2: andere Fenster (notes) verborgen",
+    "ok": true,
+    "detail": "[{\"app\":\"notes\",\"active\":false,\"shown\":false,\"rect\":[0,0,0,0],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}]"
+  },
+  {
+    "name": "MOBILE 390 Schritt 2: Chrome bleibt aus, solange eine App aktiv ist",
+    "ok": true,
+    "detail": "[]"
+  },
+  {
+    "name": "MOBILE 390 Schritt 2: Knöpfe der App frei (elementFromPoint am Mittelpunkt), per echter Maus getroffen, je ≥ 44 px hoch; body trägt App und Darstellung",
+    "ok": true,
+    "detail": "{\"btns\":[{\"k\":\"left\",\"x\":46,\"y\":62,\"h\":44,\"free\":true,\"by\":null},{\"k\":\"tick\",\"x\":347,\"y\":62,\"h\":44,\"free\":true,\"by\":null},{\"k\":\"right\",\"x\":48,\"y\":114,\"h\":44,\"free\":true,\"by\":null},{\"k\":\"abs\",\"x\":360,\"y\":28,\"h\":44,\"free\":true,\"by\":null}],\"clicks\":{\"left\":1,\"tick\":1,\"right\":1,\"abs\":1},\"pres\":{\"app\":\"bare\",\"pres\":\"form\"}}"
+  },
+  {
+    "name": "MOBILE 390 Schritt 3: Hostbefehl Desktop → alle Fenster verborgen, Raster wieder sichtbar (4 Spalten, Symbol per Treffertest erreichbar), Chrome bleibt aus",
+    "ok": true,
+    "detail": "{\"w3\":[{\"app\":\"notes\",\"active\":false,\"shown\":false,\"rect\":[0,0,0,0],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false},{\"app\":\"bare\",\"active\":false,\"shown\":false,\"rect\":[0,0,0,0],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}],\"g3\":{\"n\":9,\"cols\":4,\"wrapX\":true,\"inside\":true,\"top\":20,\"desk\":[0,0,390,844],\"hit\":true,\"minH\":124}}"
+  },
+  {
+    "name": "MOBILE 390 (WJB-M-1): nach Hostbefehl Desktop trägt kein Fenster mehr die Aktiv-Marke",
+    "ok": true,
+    "detail": "[]"
+  },
+  {
+    "name": "MOBILE 390 (WJB-M-2): Symbol antippen (echte Maus) → getippte App vollflächig aktiv, Workjet erhält ihren app.state",
+    "ok": true,
+    "detail": "{\"a4\":[{\"app\":\"crm\",\"active\":true,\"shown\":true,\"rect\":[0,0,390,844],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}],\"st\":[\"bare:active\",\"desktop:active\",\"crm:active\"]}"
+  },
+  {
+    "name": "MOBILE 390: Workjet erhält app.state für Öffnen (opening → active) und Desktop",
+    "ok": true,
+    "detail": "[\"desktop:active\",\"notes:opening\",\"notes:active\",\"bare:opening\",\"bare:active\",\"desktop:active\",\"crm:active\"]"
+  },
+  {
+    "name": "MOBILE 390 ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "MOBILE 600: Hostbrücke im Labor eingehängt (workjetHostBridge, shell.ready + catalog.replace mit den Mobil-Apps aus layout.presentation.mobile)",
+    "ok": true,
+    "detail": "{\"bridge\":true,\"posts\":[\"shell.ready\",\"catalog.replace\"],\"apps\":[\"notes\",\"tasks\",\"ledger\",\"bare\",\"crm\",\"studio\"]}"
+  },
+  {
+    "name": "MOBILE 600 Schritt 1: Kopfleiste (mit Reitern), Startknopf, Startmenü und Crew-Leiste unsichtbar (Fläche 0 bzw. display none, checkVisibility false)",
+    "ok": true,
+    "detail": "{\"top\":{\"area\":0,\"hidden\":\"v4f-top:display\",\"shown\":false},\"topbar\":{\"area\":0,\"hidden\":\"topbar:display\",\"shown\":false},\"tabs\":{\"area\":0,\"hidden\":\"topbar:display\",\"shown\":false},\"start\":{\"area\":0,\"hidden\":\"topbar:display\",\"shown\":false},\"launcher\":{\"area\":0,\"hidden\":\"shell-start-menu-panel:visibility\",\"shown\":false},\"crew\":{\"area\":0,\"hidden\":\"v4f-crew:display\",\"shown\":false}}"
+  },
+  {
+    "name": "MOBILE 600 Schritt 1: Desk füllt den Viewport, Desktop-Raster mit 5 Spalten (Symbol-Rechtecke, Umbruch links bündig, alle im Viewport, per Treffertest erreichbar)",
+    "ok": true,
+    "detail": "{\"n\":9,\"cols\":5,\"wrapX\":true,\"inside\":true,\"top\":20,\"desk\":[0,0,600,960],\"hit\":true,\"minH\":124}"
+  },
+  {
+    "name": "MOBILE 600 Schritt 2: genau ein aktives Fenster (bare), Rechteck = Viewport ±1 px",
+    "ok": true,
+    "detail": "[{\"app\":\"notes\",\"active\":false,\"shown\":false,\"rect\":[0,0,0,0],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false},{\"app\":\"bare\",\"active\":true,\"shown\":true,\"rect\":[0,0,600,960],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}]"
+  },
+  {
+    "name": "MOBILE 600 Schritt 2: Fensterkopf (Icon-Header, Kopfzeile mit Knopfcluster), Größe-Griffe und Meldungs-Badge unsichtbar",
+    "ok": true,
+    "detail": "{\"app\":\"bare\",\"active\":true,\"shown\":true,\"rect\":[0,0,600,960],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}"
+  },
+  {
+    "name": "MOBILE 600 Schritt 2: andere Fenster (notes) verborgen",
+    "ok": true,
+    "detail": "[{\"app\":\"notes\",\"active\":false,\"shown\":false,\"rect\":[0,0,0,0],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}]"
+  },
+  {
+    "name": "MOBILE 600 Schritt 2: Chrome bleibt aus, solange eine App aktiv ist",
+    "ok": true,
+    "detail": "[]"
+  },
+  {
+    "name": "MOBILE 600 Schritt 2: Knöpfe der App frei (elementFromPoint am Mittelpunkt), per echter Maus getroffen, je ≥ 44 px hoch; body trägt App und Darstellung",
+    "ok": true,
+    "detail": "{\"btns\":[{\"k\":\"left\",\"x\":46,\"y\":62,\"h\":44,\"free\":true,\"by\":null},{\"k\":\"tick\",\"x\":486,\"y\":62,\"h\":44,\"free\":true,\"by\":null},{\"k\":\"right\",\"x\":552,\"y\":62,\"h\":44,\"free\":true,\"by\":null},{\"k\":\"abs\",\"x\":570,\"y\":28,\"h\":44,\"free\":true,\"by\":null}],\"clicks\":{\"left\":1,\"tick\":1,\"right\":1,\"abs\":1},\"pres\":{\"app\":\"bare\",\"pres\":\"form\"}}"
+  },
+  {
+    "name": "MOBILE 600 Schritt 3: Hostbefehl Desktop → alle Fenster verborgen, Raster wieder sichtbar (5 Spalten, Symbol per Treffertest erreichbar), Chrome bleibt aus",
+    "ok": true,
+    "detail": "{\"w3\":[{\"app\":\"notes\",\"active\":false,\"shown\":false,\"rect\":[0,0,0,0],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false},{\"app\":\"bare\",\"active\":false,\"shown\":false,\"rect\":[0,0,0,0],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}],\"g3\":{\"n\":9,\"cols\":5,\"wrapX\":true,\"inside\":true,\"top\":20,\"desk\":[0,0,600,960],\"hit\":true,\"minH\":124}}"
+  },
+  {
+    "name": "MOBILE 600 (WJB-M-1): nach Hostbefehl Desktop trägt kein Fenster mehr die Aktiv-Marke",
+    "ok": true,
+    "detail": "[]"
+  },
+  {
+    "name": "MOBILE 600 (WJB-M-2): Symbol antippen (echte Maus) → getippte App vollflächig aktiv, Workjet erhält ihren app.state",
+    "ok": true,
+    "detail": "{\"a4\":[{\"app\":\"crm\",\"active\":true,\"shown\":true,\"rect\":[0,0,600,960],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}],\"st\":[\"bare:active\",\"desktop:active\",\"crm:active\"]}"
+  },
+  {
+    "name": "MOBILE 600: Workjet erhält app.state für Öffnen (opening → active) und Desktop",
+    "ok": true,
+    "detail": "[\"desktop:active\",\"notes:opening\",\"notes:active\",\"bare:opening\",\"bare:active\",\"desktop:active\",\"crm:active\"]"
+  },
+  {
+    "name": "MOBILE 600 ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "MOBILE 900: Hostbrücke im Labor eingehängt (workjetHostBridge, shell.ready + catalog.replace mit den Mobil-Apps aus layout.presentation.mobile)",
+    "ok": true,
+    "detail": "{\"bridge\":true,\"posts\":[\"shell.ready\",\"catalog.replace\"],\"apps\":[\"notes\",\"tasks\",\"ledger\",\"bare\",\"crm\",\"studio\"]}"
+  },
+  {
+    "name": "MOBILE 900 Schritt 1: Kopfleiste (mit Reitern), Startknopf, Startmenü und Crew-Leiste unsichtbar (Fläche 0 bzw. display none, checkVisibility false)",
+    "ok": true,
+    "detail": "{\"top\":{\"area\":0,\"hidden\":\"v4f-top:display\",\"shown\":false},\"topbar\":{\"area\":0,\"hidden\":\"topbar:display\",\"shown\":false},\"tabs\":{\"area\":0,\"hidden\":\"topbar:display\",\"shown\":false},\"start\":{\"area\":0,\"hidden\":\"topbar:display\",\"shown\":false},\"launcher\":{\"area\":0,\"hidden\":\"shell-start-menu-panel:visibility\",\"shown\":false},\"crew\":{\"area\":0,\"hidden\":\"v4f-crew:display\",\"shown\":false}}"
+  },
+  {
+    "name": "MOBILE 900 Schritt 1: Desk füllt den Viewport, Desktop-Raster mit 6 Spalten (Symbol-Rechtecke, Umbruch links bündig, alle im Viewport, per Treffertest erreichbar)",
+    "ok": true,
+    "detail": "{\"n\":9,\"cols\":6,\"wrapX\":true,\"inside\":true,\"top\":20,\"desk\":[0,0,900,1200],\"hit\":true,\"minH\":124}"
+  },
+  {
+    "name": "MOBILE 900 Schritt 2: genau ein aktives Fenster (bare), Rechteck = Viewport ±1 px",
+    "ok": true,
+    "detail": "[{\"app\":\"notes\",\"active\":false,\"shown\":false,\"rect\":[0,0,0,0],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false},{\"app\":\"bare\",\"active\":true,\"shown\":true,\"rect\":[0,0,900,1200],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}]"
+  },
+  {
+    "name": "MOBILE 900 Schritt 2: Fensterkopf (Icon-Header, Kopfzeile mit Knopfcluster), Größe-Griffe und Meldungs-Badge unsichtbar",
+    "ok": true,
+    "detail": "{\"app\":\"bare\",\"active\":true,\"shown\":true,\"rect\":[0,0,900,1200],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}"
+  },
+  {
+    "name": "MOBILE 900 Schritt 2: andere Fenster (notes) verborgen",
+    "ok": true,
+    "detail": "[{\"app\":\"notes\",\"active\":false,\"shown\":false,\"rect\":[0,0,0,0],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}]"
+  },
+  {
+    "name": "MOBILE 900 Schritt 2: Chrome bleibt aus, solange eine App aktiv ist",
+    "ok": true,
+    "detail": "[]"
+  },
+  {
+    "name": "MOBILE 900 Schritt 2: Knöpfe der App frei (elementFromPoint am Mittelpunkt), per echter Maus getroffen, je ≥ 44 px hoch; body trägt App und Darstellung",
+    "ok": true,
+    "detail": "{\"btns\":[{\"k\":\"left\",\"x\":46,\"y\":62,\"h\":44,\"free\":true,\"by\":null},{\"k\":\"tick\",\"x\":786,\"y\":62,\"h\":44,\"free\":true,\"by\":null},{\"k\":\"right\",\"x\":852,\"y\":62,\"h\":44,\"free\":true,\"by\":null},{\"k\":\"abs\",\"x\":870,\"y\":28,\"h\":44,\"free\":true,\"by\":null}],\"clicks\":{\"left\":1,\"tick\":1,\"right\":1,\"abs\":1},\"pres\":{\"app\":\"bare\",\"pres\":\"form\"}}"
+  },
+  {
+    "name": "MOBILE 900 Schritt 3: Hostbefehl Desktop → alle Fenster verborgen, Raster wieder sichtbar (6 Spalten, Symbol per Treffertest erreichbar), Chrome bleibt aus",
+    "ok": true,
+    "detail": "{\"w3\":[{\"app\":\"notes\",\"active\":false,\"shown\":false,\"rect\":[0,0,0,0],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false},{\"app\":\"bare\",\"active\":false,\"shown\":false,\"rect\":[0,0,0,0],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}],\"g3\":{\"n\":9,\"cols\":6,\"wrapX\":true,\"inside\":true,\"top\":20,\"desk\":[0,0,900,1200],\"hit\":true,\"minH\":124}}"
+  },
+  {
+    "name": "MOBILE 900 (WJB-M-1): nach Hostbefehl Desktop trägt kein Fenster mehr die Aktiv-Marke",
+    "ok": true,
+    "detail": "[]"
+  },
+  {
+    "name": "MOBILE 900 (WJB-M-2): Symbol antippen (echte Maus) → getippte App vollflächig aktiv, Workjet erhält ihren app.state",
+    "ok": true,
+    "detail": "{\"a4\":[{\"app\":\"crm\",\"active\":true,\"shown\":true,\"rect\":[0,0,900,1200],\"head\":false,\"icon\":false,\"resize\":false,\"zone\":false}],\"st\":[\"bare:active\",\"desktop:active\",\"crm:active\"]}"
+  },
+  {
+    "name": "MOBILE 900: Workjet erhält app.state für Öffnen (opening → active) und Desktop",
+    "ok": true,
+    "detail": "[\"desktop:active\",\"notes:opening\",\"notes:active\",\"bare:opening\",\"bare:active\",\"desktop:active\",\"crm:active\"]"
+  },
+  {
+    "name": "MOBILE 900 ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "MOBILE prefers-reduced-motion: Fenster, Desktop-Symbol und App-Knopf mit Übergangs-/Animationsdauer 0,01 ms",
+    "ok": true,
+    "detail": "{\"rm\":{\"win\":\"1e-05s|1e-05s\",\"icon\":\"1e-05s|1e-05s\",\"btn\":\"1e-05s|1e-05s\"},\"perr\":[]}"
+  },
+  {
+    "name": "MOBILE Gegenprobe 390 ohne Attribut: Kopfleiste, Reiter, Startknopf und Crew-Leiste sichtbar; Fenster mit Kopf; keine Hostbrücke",
+    "ok": true,
+    "detail": "{\"c\":{\"top\":{\"area\":18720,\"hidden\":null,\"shown\":true},\"topbar\":{\"area\":18720,\"hidden\":null,\"shown\":true},\"tabs\":{\"area\":4348,\"hidden\":null,\"shown\":true},\"start\":{\"area\":900,\"hidden\":null,\"shown\":true},\"launcher\":{\"area\":257539,\"hidden\":\"shell-start-menu-panel:visibility\",\"shown\":false},\"crew\":{\"area\":13610,\"hidden\":null,\"shown\":true}},\"w0\":[{\"app\":\"bare\",\"active\":false,\"shown\":true,\"rect\":[0,48,390,796],\"head\":true,\"icon\":true,\"resize\":false,\"zone\":false}],\"ready\":{\"bridge\":false,\"posts\":0,\"body\":null},\"perr\":[]}"
+  },
+  {
+    "name": "MOBILE Gegenprobe 900 ohne Attribut: Kopfleiste, Reiter, Startknopf und Crew-Leiste sichtbar; Fenster mit Kopf; keine Hostbrücke",
+    "ok": true,
+    "detail": "{\"c\":{\"top\":{\"area\":43200,\"hidden\":null,\"shown\":true},\"topbar\":{\"area\":43200,\"hidden\":null,\"shown\":true},\"tabs\":{\"area\":17974,\"hidden\":null,\"shown\":true},\"start\":{\"area\":900,\"hidden\":null,\"shown\":true},\"launcher\":{\"area\":247898,\"hidden\":\"shell-start-menu-panel:visibility\",\"shown\":false},\"crew\":{\"area\":13268,\"hidden\":null,\"shown\":true}},\"w0\":[{\"app\":\"bare\",\"active\":false,\"shown\":true,\"rect\":[40,88,600,400],\"head\":true,\"icon\":true,\"resize\":true,\"zone\":false}],\"ready\":{\"bridge\":false,\"posts\":0,\"body\":null},\"perr\":[]}"
+  },
+  {
+    "name": "ICON25 Fenster aus dem Startmenü (Eintrag 26 px) trägt die Launcher-Glyphengröße (80 px) wie V2, nicht die Größe des Eintrags",
+    "ok": true,
+    "detail": "{\"g0\":80,\"tile\":{\"app\":\"tasks\",\"w\":26,\"x\":54,\"y\":172},\"fromStart\":{\"var\":\"80px\",\"icon\":80}}"
+  },
+  {
+    "name": "ICON25 ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "FRX M-11 Layout-Menü: letzter Eintrag „Vollbild“ unter „Minimieren“, gleiche Klassen/Rolle/Maße wie die breiten Einträge",
+    "ok": true,
+    "detail": "{\"order\":[\"top-left\",\"top\",\"top-right\",\"left\",\"maximize\",\"right\",\"bottom-left\",\"bottom\",\"bottom-right\",\"free\",\"minimize\",\"fullscreen\"],\"label\":\"Vollbild\",\"aria\":\"Vollbild\",\"role\":\"menuitem\",\"wide\":true,\"sameStyle\":true,\"below\":true,\"state\":\"off\"}"
+  },
+  {
+    "name": "FRX M-11 Tastatur: Pfeil ab erreicht „Vollbild“ nach „Minimieren“ und bleibt dort, Pfeil auf zurück zu „Minimieren“, Esc schließt",
+    "ok": true,
+    "detail": "{\"k\":[\"minimize\",\"fullscreen\",\"fullscreen\",\"fullscreen\",\"fullscreen\",\"fullscreen\"],\"up\":\"minimize\",\"escHidden\":true}"
+  },
+  {
+    "name": "FRX M-11 Klick auf „Vollbild“ → Element-Vollbild im Fenster (Inhalt), Menü schließt, Eintrag heißt „Vollbild beenden“",
+    "ok": true,
+    "detail": "{\"c\":{\"ok\":true},\"s1\":{\"inWin\":true,\"el\":\"shell-window-content v4f-content\"},\"menuHidden1\":true,\"label\":\"Vollbild beenden\",\"spy\":[\"request:notes:content\"]}"
+  },
+  {
+    "name": "FRX M-11 Vollbild beenden (headless: Esc erreicht die Browser-UI nicht, exitFullscreen() wie der Browser bei Esc) → Eintrag heißt wieder „Vollbild“",
+    "ok": true,
+    "detail": "{\"viaEsc\":false,\"s2\":{\"inWin\":false,\"el\":null},\"label\":\"Vollbild\"}"
+  },
+  {
+    "name": "FRX M-11 Tastatur: Enter auf „Vollbild“ → genau ein requestFullscreen am Fensterinhalt, Vollbild im Fenster",
+    "ok": true,
+    "detail": "{\"s3\":{\"inWin\":true,\"el\":\"shell-window-content v4f-content\"},\"spy\":[\"request:notes:content\",\"exit\",\"request:notes:content\"]}"
+  },
+  {
+    "name": "FRX M-11 ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "FRX 420 px (TOP-5 erweitert): langer Reiter „Zugangsdaten“ allein, mit langem Workspace-Namen und mit zweitem Fenster – Reiter überlappen Punkt und Avatar nicht, kein waagrechter Überlauf, vorderer Reiter sichtbar (kürzt mit „…“, Workspace-Name kürzt mit „…“)",
+    "ok": true,
+    "detail": "{\"longTab\":{\"tabs\":[{\"l\":189.1,\"r\":328.6,\"w\":139}],\"tabsRight\":328.6,\"tabsLeft\":189.1,\"sync\":{\"l\":359,\"r\":378,\"w\":19},\"avatar\":{\"l\":382,\"r\":412,\"w\":30},\"nameBox\":{\"l\":67,\"r\":180.1,\"w\":113},\"nameClipped\":false,\"leftRight\":185.1,\"focusedVisible\":true,\"labelClipped\":false,\"labelText\":\"Zugangsdaten\",\"shrink\":false,\"topFits\":true,\"ok\":true},\"longBoth\":{\"tabs\":[{\"l\":196,\"r\":335.4,\"w\":139}],\"tabsRight\":335.4,\"tabsLeft\":196,\"sync\":{\"l\":359,\"r\":378,\"w\":19},\"avatar\":{\"l\":382,\"r\":412,\"w\":30},\"nameBox\":{\"l\":67,\"r\":187,\"w\":120},\"nameClipped\":true,\"leftRight\":192,\"focusedVisible\":true,\"labelClipped\":false,\"labelText\":\"Zugangsdaten\",\"shrink\":false,\"topFits\":true,\"ok\":true},\"twoWins\":{\"tabs\":[{\"l\":196,\"r\":313,\"w\":117},{\"l\":319,\"r\":355,\"w\":36}],\"tabsRight\":355,\"tabsLeft\":196,\"sync\":{\"l\":359,\"r\":378,\"w\":19},\"avatar\":{\"l\":382,\"r\":412,\"w\":30},\"nameBox\":{\"l\":67,\"r\":187,\"w\":120},\"nameClipped\":true,\"leftRight\":192,\"focusedVisible\":true,\"labelClipped\":true,\"labelText\":\"Zugangsdaten\",\"shrink\":true,\"topFits\":true,\"ok\":true},\"nowin\":{\"fits\":true,\"nameRight\":187,\"syncLeft\":359}}"
+  },
+  {
+    "name": "FRX 420 px Mutationsprobe: ohne Schrumpfen/Kürzen überlappen Reiter Punkt bzw. Avatar – die Prüfung findet es",
+    "ok": true,
+    "detail": "{\"tabsRight\":455.7,\"tabsLeft\":317,\"sync\":{\"l\":359,\"r\":378,\"w\":19},\"avatar\":{\"l\":382,\"r\":412,\"w\":30},\"leftRight\":313}"
+  },
+  {
+    "name": "FRX 420 px ohne Seitenfehler",
+    "ok": true,
+    "detail": ""
+  }
+]

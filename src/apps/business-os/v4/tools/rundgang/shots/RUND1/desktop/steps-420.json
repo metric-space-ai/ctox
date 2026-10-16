@@ -1,0 +1,2427 @@
+{
+ "app": "desktop",
+ "width": 420,
+ "steps": [
+  {
+   "label": "Launcher",
+   "role": "launcher",
+   "shot": "420-00.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "dialogs": null,
+   "navigations": null,
+   "openedFiles": null,
+   "probs": []
+  },
+  {
+   "label": "geöffnet",
+   "role": "open",
+   "shot": "420-01.jpg",
+   "effect": "",
+   "log": [
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_layout",
+     "id": "layout",
+     "data": "{\"id\":\"layout\",\"wallpaper_url\":\"\",\"wallpaper_mode\":\"cover\",\"taskbar_pins\":[\"ctox\",\"documents\",\"explorer\",\"knowledge\",\"research\"],\"grid_cell_w\":120,\"grid_cell_h\":140,\"grid_offset\":24,\"updated_at_ms\":1792085930029}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_app-store",
+     "data": "{\"id\":\"desk_icon_app-store\",\"target_type\":\"module\",\"target_module\":\"app-store\",\"target_record_id\":\"\",\"label\":\"App Store\",\"glyph\":\"◻︎\",\"x\":12,\"y\":12,\"pinned\":false,\"hidden\":false,\"sort_index\":0,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_appsec-pentest",
+     "data": "{\"id\":\"desk_icon_appsec-pentest\",\"target_type\":\"module\",\"target_module\":\"appsec-pentest\",\"target_record_id\":\"\",\"label\":\"Penetration Testing\",\"glyph\":\"◻︎\",\"x\":100,\"y\":12,\"pinned\":false,\"hidden\":false,\"sort_index\":1,\"updated_at_ms\":1792085930…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_browser",
+     "data": "{\"id\":\"desk_icon_browser\",\"target_type\":\"module\",\"target_module\":\"browser\",\"target_record_id\":\"\",\"label\":\"Browser\",\"glyph\":\"🌐\",\"x\":188,\"y\":12,\"pinned\":false,\"hidden\":false,\"sort_index\":2,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_buchhaltung",
+     "data": "{\"id\":\"desk_icon_buchhaltung\",\"target_type\":\"module\",\"target_module\":\"buchhaltung\",\"target_record_id\":\"\",\"label\":\"Buchhaltung\",\"glyph\":\"◻︎\",\"x\":276,\"y\":12,\"pinned\":false,\"hidden\":false,\"sort_index\":3,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_calendar",
+     "data": "{\"id\":\"desk_icon_calendar\",\"target_type\":\"module\",\"target_module\":\"calendar\",\"target_record_id\":\"\",\"label\":\"Kalender\",\"glyph\":\"◻︎\",\"x\":12,\"y\":144,\"pinned\":false,\"hidden\":false,\"sort_index\":4,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_coding-agents",
+     "data": "{\"id\":\"desk_icon_coding-agents\",\"target_type\":\"module\",\"target_module\":\"coding-agents\",\"target_record_id\":\"\",\"label\":\"Coding Agents\",\"glyph\":\"🤖\",\"x\":100,\"y\":144,\"pinned\":false,\"hidden\":false,\"sort_index\":5,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_consent",
+     "data": "{\"id\":\"desk_icon_consent\",\"target_type\":\"module\",\"target_module\":\"consent\",\"target_record_id\":\"\",\"label\":\"Einwilligungen\",\"glyph\":\"◻︎\",\"x\":188,\"y\":144,\"pinned\":false,\"hidden\":false,\"sort_index\":6,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_conversations",
+     "data": "{\"id\":\"desk_icon_conversations\",\"target_type\":\"module\",\"target_module\":\"conversations\",\"target_record_id\":\"\",\"label\":\"Conversations\",\"glyph\":\"◻︎\",\"x\":276,\"y\":144,\"pinned\":false,\"hidden\":false,\"sort_index\":7,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_creator",
+     "data": "{\"id\":\"desk_icon_creator\",\"target_type\":\"module\",\"target_module\":\"creator\",\"target_record_id\":\"\",\"label\":\"App Creator\",\"glyph\":\"◻︎\",\"x\":12,\"y\":276,\"pinned\":false,\"hidden\":false,\"sort_index\":8,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_credentials",
+     "data": "{\"id\":\"desk_icon_credentials\",\"target_type\":\"module\",\"target_module\":\"credentials\",\"target_record_id\":\"\",\"label\":\"Credentials\",\"glyph\":\"◻︎\",\"x\":100,\"y\":276,\"pinned\":false,\"hidden\":false,\"sort_index\":9,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_ctox",
+     "data": "{\"id\":\"desk_icon_ctox\",\"target_type\":\"module\",\"target_module\":\"ctox\",\"target_record_id\":\"\",\"label\":\"Crew\",\"glyph\":\"◆\",\"x\":188,\"y\":276,\"pinned\":false,\"hidden\":false,\"sort_index\":10,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_customers",
+     "data": "{\"id\":\"desk_icon_customers\",\"target_type\":\"module\",\"target_module\":\"customers\",\"target_record_id\":\"\",\"label\":\"Kunden\",\"glyph\":\"◻︎\",\"x\":276,\"y\":276,\"pinned\":false,\"hidden\":false,\"sort_index\":11,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_cv-print-builder",
+     "data": "{\"id\":\"desk_icon_cv-print-builder\",\"target_type\":\"module\",\"target_module\":\"cv-print-builder\",\"target_record_id\":\"\",\"label\":\"CV Print Builder\",\"glyph\":\"◻︎\",\"x\":12,\"y\":408,\"pinned\":false,\"hidden\":false,\"sort_index\":12,\"updated_at_ms\":17920859…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_documents",
+     "data": "{\"id\":\"desk_icon_documents\",\"target_type\":\"module\",\"target_module\":\"documents\",\"target_record_id\":\"\",\"label\":\"Dokumente\",\"glyph\":\"📄\",\"x\":100,\"y\":408,\"pinned\":false,\"hidden\":false,\"sort_index\":13,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_esign",
+     "data": "{\"id\":\"desk_icon_esign\",\"target_type\":\"module\",\"target_module\":\"esign\",\"target_record_id\":\"\",\"label\":\"E-Signatur\",\"glyph\":\"◻︎\",\"x\":188,\"y\":408,\"pinned\":false,\"hidden\":false,\"sort_index\":14,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_explorer",
+     "data": "{\"id\":\"desk_icon_explorer\",\"target_type\":\"module\",\"target_module\":\"explorer\",\"target_record_id\":\"\",\"label\":\"Explorer\",\"glyph\":\"◻︎\",\"x\":276,\"y\":408,\"pinned\":false,\"hidden\":false,\"sort_index\":15,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_file-viewer",
+     "data": "{\"id\":\"desk_icon_file-viewer\",\"target_type\":\"module\",\"target_module\":\"file-viewer\",\"target_record_id\":\"\",\"label\":\"Datei-Viewer\",\"glyph\":\"◻︎\",\"x\":12,\"y\":540,\"pinned\":false,\"hidden\":false,\"sort_index\":16,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_importer",
+     "data": "{\"id\":\"desk_icon_importer\",\"target_type\":\"module\",\"target_module\":\"importer\",\"target_record_id\":\"\",\"label\":\"App Importer\",\"glyph\":\"◻︎\",\"x\":100,\"y\":540,\"pinned\":false,\"hidden\":false,\"sort_index\":17,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_intake",
+     "data": "{\"id\":\"desk_icon_intake\",\"target_type\":\"module\",\"target_module\":\"intake\",\"target_record_id\":\"\",\"label\":\"Bewerbungseingang\",\"glyph\":\"◻︎\",\"x\":188,\"y\":540,\"pinned\":false,\"hidden\":false,\"sort_index\":18,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_interviews",
+     "data": "{\"id\":\"desk_icon_interviews\",\"target_type\":\"module\",\"target_module\":\"interviews\",\"target_record_id\":\"\",\"label\":\"Interviews\",\"glyph\":\"◻︎\",\"x\":276,\"y\":540,\"pinned\":false,\"hidden\":false,\"sort_index\":19,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_invoices",
+     "data": "{\"id\":\"desk_icon_invoices\",\"target_type\":\"module\",\"target_module\":\"invoices\",\"target_record_id\":\"\",\"label\":\"Rechnungen\",\"glyph\":\"◻︎\",\"x\":12,\"y\":672,\"pinned\":false,\"hidden\":false,\"sort_index\":20,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_iot",
+     "data": "{\"id\":\"desk_icon_iot\",\"target_type\":\"module\",\"target_module\":\"iot\",\"target_record_id\":\"\",\"label\":\"IoT\",\"glyph\":\"◻︎\",\"x\":100,\"y\":672,\"pinned\":false,\"hidden\":false,\"sort_index\":21,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_knowledge",
+     "data": "{\"id\":\"desk_icon_knowledge\",\"target_type\":\"module\",\"target_module\":\"knowledge\",\"target_record_id\":\"\",\"label\":\"Knowledge\",\"glyph\":\"📚\",\"x\":188,\"y\":672,\"pinned\":false,\"hidden\":false,\"sort_index\":22,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_kundenpipeline",
+     "data": "{\"id\":\"desk_icon_kundenpipeline\",\"target_type\":\"module\",\"target_module\":\"kundenpipeline\",\"target_record_id\":\"\",\"label\":\"Decision Hub\",\"glyph\":\"◻︎\",\"x\":276,\"y\":672,\"pinned\":false,\"hidden\":false,\"sort_index\":23,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_mail",
+     "data": "{\"id\":\"desk_icon_mail\",\"target_type\":\"module\",\"target_module\":\"mail\",\"target_record_id\":\"\",\"label\":\"Mail\",\"glyph\":\"◻︎\",\"x\":12,\"y\":804,\"pinned\":false,\"hidden\":false,\"sort_index\":24,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_matching",
+     "data": "{\"id\":\"desk_icon_matching\",\"target_type\":\"module\",\"target_module\":\"matching\",\"target_record_id\":\"\",\"label\":\"Matching\",\"glyph\":\"🔗\",\"x\":100,\"y\":804,\"pinned\":false,\"hidden\":false,\"sort_index\":25,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_nachweise",
+     "data": "{\"id\":\"desk_icon_nachweise\",\"target_type\":\"module\",\"target_module\":\"nachweise\",\"target_record_id\":\"\",\"label\":\"Nachweise\",\"glyph\":\"◻︎\",\"x\":188,\"y\":804,\"pinned\":false,\"hidden\":false,\"sort_index\":26,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_news",
+     "data": "{\"id\":\"desk_icon_news\",\"target_type\":\"module\",\"target_module\":\"news\",\"target_record_id\":\"\",\"label\":\"News\",\"glyph\":\"◻︎\",\"x\":276,\"y\":804,\"pinned\":false,\"hidden\":false,\"sort_index\":27,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_notes",
+     "data": "{\"id\":\"desk_icon_notes\",\"target_type\":\"module\",\"target_module\":\"notes\",\"target_record_id\":\"\",\"label\":\"Notes\",\"glyph\":\"◻︎\",\"x\":12,\"y\":936,\"pinned\":false,\"hidden\":false,\"sort_index\":28,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_outbound",
+     "data": "{\"id\":\"desk_icon_outbound\",\"target_type\":\"module\",\"target_module\":\"outbound\",\"target_record_id\":\"\",\"label\":\"Outbound\",\"glyph\":\"📣\",\"x\":100,\"y\":936,\"pinned\":false,\"hidden\":false,\"sort_index\":29,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_outbound-lead-generation",
+     "data": "{\"id\":\"desk_icon_outbound-lead-generation\",\"target_type\":\"module\",\"target_module\":\"outbound-lead-generation\",\"target_record_id\":\"\",\"label\":\"Outbound Lead Generation\",\"glyph\":\"◻︎\",\"x\":188,\"y\":936,\"pinned\":false,\"hidden\":false,\"sort_index\":30…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_placements",
+     "data": "{\"id\":\"desk_icon_placements\",\"target_type\":\"module\",\"target_module\":\"placements\",\"target_record_id\":\"\",\"label\":\"Vermittlungen\",\"glyph\":\"◻︎\",\"x\":276,\"y\":936,\"pinned\":false,\"hidden\":false,\"sort_index\":31,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_reports",
+     "data": "{\"id\":\"desk_icon_reports\",\"target_type\":\"module\",\"target_module\":\"reports\",\"target_record_id\":\"\",\"label\":\"Bugs & Features\",\"glyph\":\"◻︎\",\"x\":12,\"y\":1068,\"pinned\":false,\"hidden\":false,\"sort_index\":32,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_research",
+     "data": "{\"id\":\"desk_icon_research\",\"target_type\":\"module\",\"target_module\":\"research\",\"target_record_id\":\"\",\"label\":\"Web Research\",\"glyph\":\"🔬\",\"x\":100,\"y\":1068,\"pinned\":false,\"hidden\":false,\"sort_index\":33,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_shiftflow",
+     "data": "{\"id\":\"desk_icon_shiftflow\",\"target_type\":\"module\",\"target_module\":\"shiftflow\",\"target_record_id\":\"\",\"label\":\"Einsatzplanung\",\"glyph\":\"◻︎\",\"x\":188,\"y\":1068,\"pinned\":false,\"hidden\":false,\"sort_index\":34,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_spreadsheets",
+     "data": "{\"id\":\"desk_icon_spreadsheets\",\"target_type\":\"module\",\"target_module\":\"spreadsheets\",\"target_record_id\":\"\",\"label\":\"CTOX Spreadsheets\",\"glyph\":\"◻︎\",\"x\":276,\"y\":1068,\"pinned\":false,\"hidden\":false,\"sort_index\":35,\"updated_at_ms\":1792085930030…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_submissions",
+     "data": "{\"id\":\"desk_icon_submissions\",\"target_type\":\"module\",\"target_module\":\"submissions\",\"target_record_id\":\"\",\"label\":\"Vorstellungen\",\"glyph\":\"◻︎\",\"x\":12,\"y\":1200,\"pinned\":false,\"hidden\":false,\"sort_index\":36,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_support",
+     "data": "{\"id\":\"desk_icon_support\",\"target_type\":\"module\",\"target_module\":\"support\",\"target_record_id\":\"\",\"label\":\"Support\",\"glyph\":\"◻︎\",\"x\":100,\"y\":1200,\"pinned\":false,\"hidden\":false,\"sort_index\":37,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_threads",
+     "data": "{\"id\":\"desk_icon_threads\",\"target_type\":\"module\",\"target_module\":\"threads\",\"target_record_id\":\"\",\"label\":\"Threads\",\"glyph\":\"◻︎\",\"x\":188,\"y\":1200,\"pinned\":false,\"hidden\":false,\"sort_index\":38,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_icons",
+     "id": "desk_icon_tickets",
+     "data": "{\"id\":\"desk_icon_tickets\",\"target_type\":\"module\",\"target_module\":\"tickets\",\"target_record_id\":\"\",\"label\":\"Tickets\",\"glyph\":\"◻︎\",\"x\":276,\"y\":1200,\"pinned\":false,\"hidden\":false,\"sort_index\":39,\"updated_at_ms\":1792085930030}",
+     "result": "accepted"
+    }
+   ],
+   "errors": [],
+   "title": "Desktop",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "App Store",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-02.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"app-store\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "App Store",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "app-store"
+   ]
+  },
+  {
+   "label": "Penetration Testing",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-03.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"appsec-pentest\",{}]"
+    },
+    {
+     "kind": "command",
+     "type": "ctox.appsec.exploit.list",
+     "payload": "{\"state_dir\":\"runtime/appsec/default\",\"record_id\":\"runtime/appsec/default\",\"module\":\"appsec-pentest\",\"client_context\":{\"module\":\"appsec-pentest\",\"action\":\"ctox.appsec.exploit.list\",\"target\":\"runtime/appsec/default\"}}",
+     "status": "done"
+    }
+   ],
+   "errors": [],
+   "title": "Penetration Testing",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "appsec-pentest"
+   ]
+  },
+  {
+   "label": "Browser",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-04.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"browser\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Browser",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "browser"
+   ]
+  },
+  {
+   "label": "Buchhaltung",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-05.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"buchhaltung\",{}]"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0410",
+     "data": "{\"id\":\"SKR03_0410\",\"code\":\"0410\",\"name\":\"Geschäftsausstattung (Büromöbel, IT)\",\"root_type\":\"asset\",\"account_type\":\"fixed_asset\",\"parent_id\":\"SKR03_0400\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0400",
+     "data": "{\"id\":\"SKR03_0400\",\"code\":\"0400\",\"name\":\"Sachanlagen\",\"root_type\":\"asset\",\"account_type\":\"group\",\"parent_id\":\"SKR03_0100\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0100",
+     "data": "{\"id\":\"SKR03_0100\",\"code\":\"0100\",\"name\":\"Anlagevermögen\",\"root_type\":\"asset\",\"account_type\":\"group\",\"parent_id\":\"SKR03_AKTIVA\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1000",
+     "data": "{\"id\":\"SKR03_1000\",\"code\":\"1000\",\"name\":\"Kasse\",\"root_type\":\"asset\",\"account_type\":\"cash\",\"parent_id\":\"SKR03_1200\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1200",
+     "data": "{\"id\":\"SKR03_1200\",\"code\":\"1200\",\"name\":\"Bank (Girokonto)\",\"root_type\":\"asset\",\"account_type\":\"bank\",\"parent_id\":\"SKR03_1100\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1400",
+     "data": "{\"id\":\"SKR03_1400\",\"code\":\"1400\",\"name\":\"Forderungen aus Lieferungen und Leistungen (Debitoren)\",\"root_type\":\"asset\",\"account_type\":\"receivable\",\"parent_id\":\"SKR03_1100\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":179208…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1571",
+     "data": "{\"id\":\"SKR03_1571\",\"code\":\"1571\",\"name\":\"Abziehbare Vorsteuer 7%\",\"root_type\":\"asset\",\"account_type\":\"tax\",\"parent_id\":\"SKR03_1570\",\"is_group\":false,\"tax_rate_id\":\"DE_7\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1576",
+     "data": "{\"id\":\"SKR03_1576\",\"code\":\"1576\",\"name\":\"Abziehbare Vorsteuer 19%\",\"root_type\":\"asset\",\"account_type\":\"tax\",\"parent_id\":\"SKR03_1570\",\"is_group\":false,\"tax_rate_id\":\"DE_19\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1570",
+     "data": "{\"id\":\"SKR03_1570\",\"code\":\"1570\",\"name\":\"Vorsteuerkonten\",\"root_type\":\"asset\",\"account_type\":\"group\",\"parent_id\":\"SKR03_1100\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1100",
+     "data": "{\"id\":\"SKR03_1100\",\"code\":\"1100\",\"name\":\"Umlaufvermögen\",\"root_type\":\"asset\",\"account_type\":\"group\",\"parent_id\":\"SKR03_AKTIVA\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0800",
+     "data": "{\"id\":\"SKR03_0800\",\"code\":\"0800\",\"name\":\"Gezeichnetes Kapital / Eigenkapital\",\"root_type\":\"liability\",\"account_type\":\"equity\",\"parent_id\":\"SKR03_0800_G\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0800_G",
+     "data": "{\"id\":\"SKR03_0800_G\",\"code\":\"0800_G\",\"name\":\"Eigenkapital\",\"root_type\":\"liability\",\"account_type\":\"group\",\"parent_id\":\"SKR03_PASSIVA\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0950",
+     "data": "{\"id\":\"SKR03_0950\",\"code\":\"0950\",\"name\":\"Rückstellungen für Pensionen\",\"root_type\":\"liability\",\"account_type\":\"provisions\",\"parent_id\":\"SKR03_0900\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_0900",
+     "data": "{\"id\":\"SKR03_0900\",\"code\":\"0900\",\"name\":\"Rückstellungen\",\"root_type\":\"liability\",\"account_type\":\"group\",\"parent_id\":\"SKR03_PASSIVA\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1600",
+     "data": "{\"id\":\"SKR03_1600\",\"code\":\"1600\",\"name\":\"Verbindlichkeiten aus Lieferungen und Leistungen (Kreditoren)\",\"root_type\":\"liability\",\"account_type\":\"payable\",\"parent_id\":\"SKR03_1700\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1771",
+     "data": "{\"id\":\"SKR03_1771\",\"code\":\"1771\",\"name\":\"Umsatzsteuer 7%\",\"root_type\":\"liability\",\"account_type\":\"tax\",\"parent_id\":\"SKR03_1770\",\"is_group\":false,\"tax_rate_id\":\"DE_7\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1776",
+     "data": "{\"id\":\"SKR03_1776\",\"code\":\"1776\",\"name\":\"Umsatzsteuer 19%\",\"root_type\":\"liability\",\"account_type\":\"tax\",\"parent_id\":\"SKR03_1770\",\"is_group\":false,\"tax_rate_id\":\"DE_19\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1780",
+     "data": "{\"id\":\"SKR03_1780\",\"code\":\"1780\",\"name\":\"Umsatzsteuer-Vorauszahlungen\",\"root_type\":\"liability\",\"account_type\":\"tax\",\"parent_id\":\"SKR03_1770\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1770",
+     "data": "{\"id\":\"SKR03_1770\",\"code\":\"1770\",\"name\":\"Umsatzsteuerkonten\",\"root_type\":\"liability\",\"account_type\":\"group\",\"parent_id\":\"SKR03_1700\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1700",
+     "data": "{\"id\":\"SKR03_1700\",\"code\":\"1700\",\"name\":\"Verbindlichkeiten\",\"root_type\":\"liability\",\"account_type\":\"group\",\"parent_id\":\"SKR03_PASSIVA\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_8100",
+     "data": "{\"id\":\"SKR03_8100\",\"code\":\"8100\",\"name\":\"Steuerfreie Umsätze\",\"root_type\":\"revenue\",\"account_type\":\"revenue\",\"parent_id\":\"SKR03_8000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_8300",
+     "data": "{\"id\":\"SKR03_8300\",\"code\":\"8300\",\"name\":\"Erlöse 7% USt\",\"root_type\":\"revenue\",\"account_type\":\"revenue\",\"parent_id\":\"SKR03_8000\",\"is_group\":false,\"tax_rate_id\":\"DE_7\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_8400",
+     "data": "{\"id\":\"SKR03_8400\",\"code\":\"8400\",\"name\":\"Erlöse 19% USt\",\"root_type\":\"revenue\",\"account_type\":\"revenue\",\"parent_id\":\"SKR03_8000\",\"is_group\":false,\"tax_rate_id\":\"DE_19\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_8000",
+     "data": "{\"id\":\"SKR03_8000\",\"code\":\"8000\",\"name\":\"Umsatzerlöse\",\"root_type\":\"revenue\",\"account_type\":\"group\",\"parent_id\":\"SKR03_REVENUE\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_3400",
+     "data": "{\"id\":\"SKR03_3400\",\"code\":\"3400\",\"name\":\"Wareneinkauf 19% Vorsteuer\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_3000\",\"is_group\":false,\"tax_rate_id\":\"DE_19\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_3000",
+     "data": "{\"id\":\"SKR03_3000\",\"code\":\"3000\",\"name\":\"Wareneingang / Materialaufwand\",\"root_type\":\"expense\",\"account_type\":\"group\",\"parent_id\":\"SKR03_EXPENSE\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4210",
+     "data": "{\"id\":\"SKR03_4210\",\"code\":\"4210\",\"name\":\"Miete (Büroräume)\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4600",
+     "data": "{\"id\":\"SKR03_4600\",\"code\":\"4600\",\"name\":\"Werbekosten\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"DE_19\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4830",
+     "data": "{\"id\":\"SKR03_4830\",\"code\":\"4830\",\"name\":\"Abschreibungen auf Sachanlagen (AfA)\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4930",
+     "data": "{\"id\":\"SKR03_4930\",\"code\":\"4930\",\"name\":\"Bürobedarf / IT-Kosten / Software\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"DE_19\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4000",
+     "data": "{\"id\":\"SKR03_4000\",\"code\":\"4000\",\"name\":\"Betriebliche Aufwendungen\",\"root_type\":\"expense\",\"account_type\":\"group\",\"parent_id\":\"SKR03_EXPENSE\",\"is_group\":true,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935064}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1890",
+     "data": "{\"id\":\"SKR03_1890\",\"code\":\"1890\",\"name\":\"Privateinlage\",\"root_type\":\"equity\",\"account_type\":\"regular\",\"parent_id\":\"SKR03_0800_G\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935065}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1370",
+     "data": "{\"id\":\"SKR03_1370\",\"code\":\"1370\",\"name\":\"Gesellschafter-Verrechnungskonto\",\"root_type\":\"liability\",\"account_type\":\"payable\",\"parent_id\":\"SKR03_1700\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935065}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4650",
+     "data": "{\"id\":\"SKR03_4650\",\"code\":\"4650\",\"name\":\"Bewirtungskosten abzugsfähig\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935065}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4654",
+     "data": "{\"id\":\"SKR03_4654\",\"code\":\"4654\",\"name\":\"Bewirtungskosten nicht abzugsfähig\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935065}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4630",
+     "data": "{\"id\":\"SKR03_4630\",\"code\":\"4630\",\"name\":\"Geschenke abzugsfähig\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935065}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4635",
+     "data": "{\"id\":\"SKR03_4635\",\"code\":\"4635\",\"name\":\"Geschenke nicht abzugsfähig\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935065}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4660",
+     "data": "{\"id\":\"SKR03_4660\",\"code\":\"4660\",\"name\":\"Reisekosten Arbeitnehmer\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935065}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_4673",
+     "data": "{\"id\":\"SKR03_4673\",\"code\":\"4673\",\"name\":\"Reisekosten Arbeitnehmer (Fahrtkosten)\",\"root_type\":\"expense\",\"account_type\":\"expense\",\"parent_id\":\"SKR03_4000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935065}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1800",
+     "data": "{\"id\":\"SKR03_1800\",\"code\":\"1800\",\"name\":\"Privatentnahme\",\"root_type\":\"equity\",\"account_type\":\"regular\",\"parent_id\":\"SKR03_0800_G\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935065}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_1880",
+     "data": "{\"id\":\"SKR03_1880\",\"code\":\"1880\",\"name\":\"Unentgeltliche Wertabgaben (Telefon Privatanteil)\",\"root_type\":\"revenue\",\"account_type\":\"revenue\",\"parent_id\":\"SKR03_8000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":179208593506…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_accounts",
+     "id": "SKR03_8921",
+     "data": "{\"id\":\"SKR03_8921\",\"code\":\"8921\",\"name\":\"Verwendung von Gegenständen (Kfz-Privatanteil)\",\"root_type\":\"revenue\",\"account_type\":\"revenue\",\"parent_id\":\"SKR03_8000\",\"is_group\":false,\"tax_rate_id\":\"\",\"skr\":\"SKR03\",\"updated_at_ms\":1792085935065}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_journal_entries",
+     "id": "mock-j1",
+     "data": "{\"id\":\"mock-j1\",\"posting_date\":\"2026-01-01\",\"type\":\"journal\",\"number\":\"J-2026-0001\",\"narration\":\"Einzahlung Stammkapital (Gründung)\",\"posted_at\":1792085935066,\"updated_at_ms\":1792085935066}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_journal_entry_lines",
+     "id": "mock-j1-l1",
+     "data": "{\"id\":\"mock-j1-l1\",\"journal_entry_id\":\"mock-j1\",\"account_id\":\"SKR03_1200\",\"debit\":1000000,\"credit\":0,\"line_no\":1,\"updated_at_ms\":1792085935066}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_journal_entry_lines",
+     "id": "mock-j1-l2",
+     "data": "{\"id\":\"mock-j1-l2\",\"journal_entry_id\":\"mock-j1\",\"account_id\":\"SKR03_0800\",\"debit\":0,\"credit\":1000000,\"line_no\":2,\"updated_at_ms\":1792085935066}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_journal_entries",
+     "id": "mock-j2",
+     "data": "{\"id\":\"mock-j2\",\"posting_date\":\"2026-02-15\",\"type\":\"invoice\",\"number\":\"J-2026-0002\",\"narration\":\"Umsatzerlöse aus Beratung Dienstleistung\",\"posted_at\":1792085935066,\"updated_at_ms\":1792085935066}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_journal_entry_lines",
+     "id": "mock-j2-l1",
+     "data": "{\"id\":\"mock-j2-l1\",\"journal_entry_id\":\"mock-j2\",\"account_id\":\"SKR03_1200\",\"debit\":250000,\"credit\":0,\"line_no\":1,\"updated_at_ms\":1792085935066}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_journal_entry_lines",
+     "id": "mock-j2-l2",
+     "data": "{\"id\":\"mock-j2-l2\",\"journal_entry_id\":\"mock-j2\",\"account_id\":\"SKR03_8400\",\"debit\":0,\"credit\":210084,\"line_no\":2,\"updated_at_ms\":1792085935066}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_journal_entry_lines",
+     "id": "mock-j2-l3",
+     "data": "{\"id\":\"mock-j2-l3\",\"journal_entry_id\":\"mock-j2\",\"account_id\":\"SKR03_1776\",\"debit\":0,\"credit\":39916,\"line_no\":3,\"updated_at_ms\":1792085935066}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_receipts",
+     "id": "mock-rcpt1",
+     "data": "{\"id\":\"mock-rcpt1\",\"file_storage_url\":\"runtime/business-os/buchhaltung/storage/Hetzner_Cloud_Bill.pdf\",\"filename\":\"Hetzner_Cloud_Bill.pdf\",\"supplier_name\":\"Hetzner Online GmbH\",\"invoice_date\":\"2026-05-18\",\"invoice_number\":\"HET-981724\",\"net_…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_receipts",
+     "id": "mock-rcpt2",
+     "data": "{\"id\":\"mock-rcpt2\",\"file_storage_url\":\"runtime/business-os/buchhaltung/storage/Telekom_DSL_May.pdf\",\"filename\":\"Telekom_DSL_May.pdf\",\"supplier_name\":\"Deutsche Telekom AG\",\"invoice_date\":\"2026-05-20\",\"invoice_number\":\"TEL-87216-A\",\"net_amoun…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_bank_statements",
+     "id": "mock-stmt1",
+     "data": "{\"id\":\"mock-stmt1\",\"account_number\":\"DE90370400440532013000\",\"updated_at_ms\":1792085935066}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_bank_statement_lines",
+     "id": "mock-bankline1",
+     "data": "{\"id\":\"mock-bankline1\",\"statement_id\":\"mock-stmt1\",\"value_date\":\"2026-05-22\",\"narration\":\"SEPA UEBERWEISUNG HETZNER HET-981724\",\"amount\":-11900,\"counterparty_name\":\"Hetzner Online GmbH\",\"counterparty_iban\":\"DE81200505501234567890\",\"match_st…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_journal_entries",
+     "id": "mock-travel1",
+     "data": "{\"id\":\"mock-travel1\",\"posting_date\":\"2026-05-08\",\"type\":\"travel\",\"ref_type\":\"travel\",\"ref_id\":\"{\\\"startDate\\\":\\\"2026-05-06\\\",\\\"endDate\\\":\\\"2026-05-08\\\",\\\"totalAllowance\\\":5600,\\\"days\\\":[{\\\"date\\\":\\\"2026-05-06\\\",\\\"type\\\":\\\"arrival\\\"},{\\\"date…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_journal_entry_lines",
+     "id": "mock-travel1-l1",
+     "data": "{\"id\":\"mock-travel1-l1\",\"journal_entry_id\":\"mock-travel1\",\"account_id\":\"SKR03_4660\",\"debit\":5600,\"credit\":0,\"line_no\":1,\"updated_at_ms\":1792085935066}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_journal_entry_lines",
+     "id": "mock-travel1-l2",
+     "data": "{\"id\":\"mock-travel1-l2\",\"journal_entry_id\":\"mock-travel1\",\"account_id\":\"SKR03_1890\",\"debit\":0,\"credit\":5600,\"line_no\":2,\"updated_at_ms\":1792085935066}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_journal_entries",
+     "id": "mock-mileage1",
+     "data": "{\"id\":\"mock-mileage1\",\"posting_date\":\"2026-05-13\",\"type\":\"mileage\",\"ref_type\":\"mileage\",\"ref_id\":\"{\\\"date\\\":\\\"2026-05-13\\\",\\\"purpose\\\":\\\"business\\\",\\\"startKm\\\":12400,\\\"endKm\\\":12550,\\\"km\\\":150,\\\"destination\\\":\\\"Büro -> Kundentermin Potsdam …",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_journal_entry_lines",
+     "id": "mock-mileage1-l1",
+     "data": "{\"id\":\"mock-mileage1-l1\",\"journal_entry_id\":\"mock-mileage1\",\"account_id\":\"SKR03_4673\",\"debit\":4500,\"credit\":0,\"line_no\":1,\"updated_at_ms\":1792085935066}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "accounting_journal_entry_lines",
+     "id": "mock-mileage1-l2",
+     "data": "{\"id\":\"mock-mileage1-l2\",\"journal_entry_id\":\"mock-mileage1\",\"account_id\":\"SKR03_1890\",\"debit\":0,\"credit\":4500,\"line_no\":2,\"updated_at_ms\":1792085935066}",
+     "result": "accepted"
+    }
+   ],
+   "errors": [],
+   "title": "Buchhaltung",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "buchhaltung"
+   ]
+  },
+  {
+   "label": "Kalender",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-06.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"calendar\",{}]"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "calendar_sources",
+     "id": "source_local_fd943dbb-d11c-4024-8073-cbf6bf0ad5a9",
+     "data": "{\"id\":\"source_local_fd943dbb-d11c-4024-8073-cbf6bf0ad5a9\",\"kind\":\"local\",\"title\":\"Lokale Kalender\",\"color\":\"#1b4ed8\",\"sync_status\":\"synced\",\"created_at_ms\":1792085935987,\"updated_at_ms\":1792085935987}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "calendar_calendars",
+     "id": "cal_personal_0f00e805-411f-46a7-acae-3dc005f9a9e1",
+     "data": "{\"id\":\"cal_personal_0f00e805-411f-46a7-acae-3dc005f9a9e1\",\"source_id\":\"source_local_fd943dbb-d11c-4024-8073-cbf6bf0ad5a9\",\"title\":\"Persönlich\",\"color\":\"#1b4ed8\",\"visibility\":true,\"owner_user_id\":\"default_user\",\"timezone\":\"Europe/Berlin\",\"cr…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "calendar_calendars",
+     "id": "cal_work_becc18d4-82d1-44cc-9cb9-d64f88ca0b18",
+     "data": "{\"id\":\"cal_work_becc18d4-82d1-44cc-9cb9-d64f88ca0b18\",\"source_id\":\"source_local_fd943dbb-d11c-4024-8073-cbf6bf0ad5a9\",\"title\":\"Arbeit\",\"color\":\"#a855f7\",\"visibility\":true,\"owner_user_id\":\"default_user\",\"timezone\":\"Europe/Berlin\",\"created_at…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "calendar_events",
+     "id": "evt_standup_deb284f7-f124-4106-bf10-679ba3ceb2e1",
+     "data": "{\"id\":\"evt_standup_deb284f7-f124-4106-bf10-679ba3ceb2e1\",\"calendar_id\":\"cal_work_becc18d4-82d1-44cc-9cb9-d64f88ca0b18\",\"title\":\"Tägliches Standup\",\"description\":\"Sync mit dem CTOX Team\",\"location\":\"Meetingraum A / Jami Link\",\"start_time\":17…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "calendar_events",
+     "id": "evt_lunch_24581333-f4a7-4c78-a89d-68bfc38feeb7",
+     "data": "{\"id\":\"evt_lunch_24581333-f4a7-4c78-a89d-68bfc38feeb7\",\"calendar_id\":\"cal_personal_0f00e805-411f-46a7-acae-3dc005f9a9e1\",\"title\":\"Mittagessen mit Michael\",\"description\":\"Neues Projekt besprechen\",\"location\":\"Trattoria Bella\",\"start_time\":17…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "calendar_booking_pages",
+     "id": "bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a",
+     "data": "{\"id\":\"bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a\",\"slug\":\"beratungsgespraech\",\"title\":\"30 Min. Erstgespräch\",\"description\":\"Kennenlernen und Anforderungsklärung für Ihr CTOX Custom Module.\",\"duration_minutes\":30,\"buffer_before_minute…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "calendar_availability_rules",
+     "id": "rule_bp_bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a_day_1",
+     "data": "{\"id\":\"rule_bp_bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a_day_1\",\"booking_page_id\":\"bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a\",\"weekday\":1,\"start_minute\":540,\"end_minute\":1020,\"timezone\":\"Europe/Berlin\",\"status\":\"active\"}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "calendar_availability_rules",
+     "id": "rule_bp_bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a_day_2",
+     "data": "{\"id\":\"rule_bp_bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a_day_2\",\"booking_page_id\":\"bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a\",\"weekday\":2,\"start_minute\":540,\"end_minute\":1020,\"timezone\":\"Europe/Berlin\",\"status\":\"active\"}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "calendar_availability_rules",
+     "id": "rule_bp_bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a_day_3",
+     "data": "{\"id\":\"rule_bp_bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a_day_3\",\"booking_page_id\":\"bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a\",\"weekday\":3,\"start_minute\":540,\"end_minute\":1020,\"timezone\":\"Europe/Berlin\",\"status\":\"active\"}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "calendar_availability_rules",
+     "id": "rule_bp_bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a_day_4",
+     "data": "{\"id\":\"rule_bp_bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a_day_4\",\"booking_page_id\":\"bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a\",\"weekday\":4,\"start_minute\":540,\"end_minute\":1020,\"timezone\":\"Europe/Berlin\",\"status\":\"active\"}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "calendar_availability_rules",
+     "id": "rule_bp_bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a_day_5",
+     "data": "{\"id\":\"rule_bp_bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a_day_5\",\"booking_page_id\":\"bp_beratung_b226a90f-d3c6-4ca0-b85e-4234e239724a\",\"weekday\":5,\"start_minute\":540,\"end_minute\":1020,\"timezone\":\"Europe/Berlin\",\"status\":\"active\"}",
+     "result": "accepted"
+    }
+   ],
+   "errors": [],
+   "title": "Kalender",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "calendar"
+   ]
+  },
+  {
+   "label": "Coding Agents",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-07.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"coding-agents\",{}]"
+    },
+    {
+     "kind": "command",
+     "type": "ctox.coding.models",
+     "payload": "{\"record_id\":\"coding-agents:coding-models\",\"module\":\"coding-agents\",\"module_id\":\"coding-agents\",\"client_context\":{\"source\":\"business-os-coding-agents\",\"module\":\"coding-agents\"}}",
+     "status": "done"
+    }
+   ],
+   "errors": [],
+   "title": "pi Coding Agent",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "coding-agents"
+   ]
+  },
+  {
+   "label": "Einwilligungen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-08.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"consent\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Einwilligungen",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "consent"
+   ]
+  },
+  {
+   "label": "Conversations",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-09.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"conversations\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Conversations",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "conversations"
+   ]
+  },
+  {
+   "label": "App Creator",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-10.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"creator\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "App Creator",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "creator"
+   ]
+  },
+  {
+   "label": "Credentials",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-11.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"credentials\",{}]"
+    },
+    {
+     "kind": "command",
+     "type": "ctox.secret.list",
+     "payload": "{\"record_id\":\"credentials\",\"inbound_channel\":\"business_os.credentials\",\"client_context\":{\"source_module\":\"credentials\"}}",
+     "status": "done"
+    }
+   ],
+   "errors": [],
+   "title": "Zugangsdaten",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "credentials"
+   ]
+  },
+  {
+   "label": "Crew",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-12.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"ctox\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "ctox"
+   ]
+  },
+  {
+   "label": "Kunden",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-13.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"customers\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Kunden",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "customers"
+   ]
+  },
+  {
+   "label": "CV Print Builder",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-14.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"cv-print-builder\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "CV Print Builder",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "cv-print-builder"
+   ]
+  },
+  {
+   "label": "Dokumente",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-15.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"documents\",{}]"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.auto",
+     "data": "{\"id\":\"research.report.auto\",\"document_type\":\"word_document\",\"title\":\"Deep Research Word-Bericht\",\"description\":\"CTOX wählt den passenden Report-Typ und erstellt ein belastbares Word-Dokument.\",\"command_type\":\"research.systematic.report.cre…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.decision_brief",
+     "data": "{\"id\":\"research.report.decision_brief\",\"document_type\":\"word_document\",\"title\":\"Entscheidungsvorlage\",\"description\":\"Kurzes empfehlungsorientiertes Memo mit Optionen, Kriterien und Bewertung.\",\"command_type\":\"research.systematic.report.crea…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.feasibility_study",
+     "data": "{\"id\":\"research.report.feasibility_study\",\"document_type\":\"word_document\",\"title\":\"Machbarkeitsstudie\",\"description\":\"Decision-grade Machbarkeitsstudie mit Evidenz, Bewertung und DOCX-Render.\",\"command_type\":\"research.systematic.report.crea…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.market_research",
+     "data": "{\"id\":\"research.report.market_research\",\"document_type\":\"word_document\",\"title\":\"Marktanalyse\",\"description\":\"Marktgröße, Segmente, Treiber, Wettbewerb, Barrieren und Empfehlung.\",\"command_type\":\"research.systematic.report.create\",\"report_t…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.project_description",
+     "data": "{\"id\":\"research.report.project_description\",\"document_type\":\"word_document\",\"title\":\"Projektbeschreibung / Fördervorhaben\",\"description\":\"Unternehmens- und Projektbeschreibung für Innovations- und Fördervorhaben.\",\"command_type\":\"research.s…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.source_review",
+     "data": "{\"id\":\"research.report.source_review\",\"document_type\":\"word_document\",\"title\":\"Quellenreview\",\"description\":\"Systematische Quellen- und Datenquellenrecherche mit Taxonomie und Priorisierung.\",\"command_type\":\"research.systematic.report.creat…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.literature_review",
+     "data": "{\"id\":\"research.report.literature_review\",\"document_type\":\"word_document\",\"title\":\"Stand der Technik\",\"description\":\"Literature Review mit Themen, Synthese, Lücken und offenen Fragen.\",\"command_type\":\"research.systematic.report.create\",\"rep…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.technology_screening",
+     "data": "{\"id\":\"research.report.technology_screening\",\"document_type\":\"word_document\",\"title\":\"Technologie-Screening\",\"description\":\"Optioneninventar, Kriterien, Shortlist und nächste Schritte.\",\"command_type\":\"research.systematic.report.create\",\"re…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.competitive_analysis",
+     "data": "{\"id\":\"research.report.competitive_analysis\",\"document_type\":\"word_document\",\"title\":\"Wettbewerbsanalyse\",\"description\":\"Wettbewerber-Set, Bewertungsachsen, Matrix, Positionierung, Lücken und Empfehlung.\",\"command_type\":\"research.systematic…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.whitepaper",
+     "data": "{\"id\":\"research.report.whitepaper\",\"document_type\":\"word_document\",\"title\":\"Whitepaper\",\"description\":\"These, Kontext, Argumente, Gegenargumente, Implikationen und Position.\",\"command_type\":\"research.systematic.report.create\",\"report_type\":…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "document.extract-requirements",
+     "data": "{\"id\":\"document.extract-requirements\",\"document_type\":\"word_document\",\"title\":\"Requirements extrahieren\",\"command_type\":\"document.extract-requirements\",\"prompt_template\":\"prompts/document-extract-requirements.md\",\"description\":\"\",\"created_a…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "document.review-risks",
+     "data": "{\"id\":\"document.review-risks\",\"document_type\":\"word_document\",\"title\":\"Risiken prüfen\",\"command_type\":\"document.review-risks\",\"prompt_template\":\"prompts/document-review-risks.md\",\"description\":\"\",\"created_at_ms\":1792085944201,\"updated_at_ms…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "document.summarize",
+     "data": "{\"id\":\"document.summarize\",\"document_type\":\"word_document\",\"title\":\"Zusammenfassen\",\"command_type\":\"document.summarize\",\"prompt_template\":\"prompts/document-summarize.md\",\"description\":\"\",\"created_at_ms\":1792085944201,\"updated_at_ms\":1792085…",
+     "result": "accepted"
+    }
+   ],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "documents"
+   ]
+  },
+  {
+   "label": "E-Signatur",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-16.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"esign\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "E-Signatur",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "esign"
+   ]
+  },
+  {
+   "label": "Explorer",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-17.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"explorer\",{}]"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_files",
+     "id": "fs_root",
+     "data": "{\"id\":\"fs_root\",\"parent_id\":\"\",\"path\":\"/\",\"name\":\"Files\",\"kind\":\"folder\",\"sort_index\":0,\"mime_type\":\"\",\"extension\":\"\",\"size_bytes\":0,\"source\":\"system\",\"is_deleted\":false,\"created_at_ms\":1792085946018,\"updated_at_ms\":1792085946018}",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_files",
+     "id": "fs_desktop",
+     "data": "{\"id\":\"fs_desktop\",\"parent_id\":\"fs_root\",\"path\":\"/Desktop\",\"name\":\"Desktop\",\"kind\":\"folder\",\"sort_index\":10,\"mime_type\":\"\",\"extension\":\"\",\"size_bytes\":0,\"source\":\"system\",\"is_deleted\":false,\"created_at_ms\":1792085946018,\"updated_at_ms\":1792…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_files",
+     "id": "fs_documents",
+     "data": "{\"id\":\"fs_documents\",\"parent_id\":\"fs_root\",\"path\":\"/Documents\",\"name\":\"Documents\",\"kind\":\"folder\",\"sort_index\":20,\"mime_type\":\"\",\"extension\":\"\",\"size_bytes\":0,\"source\":\"system\",\"is_deleted\":false,\"created_at_ms\":1792085946018,\"updated_at_ms…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_files",
+     "id": "fs_spreadsheets",
+     "data": "{\"id\":\"fs_spreadsheets\",\"parent_id\":\"fs_root\",\"path\":\"/Spreadsheets\",\"name\":\"Spreadsheets\",\"kind\":\"folder\",\"sort_index\":25,\"mime_type\":\"\",\"extension\":\"\",\"size_bytes\":0,\"source\":\"system\",\"is_deleted\":false,\"created_at_ms\":1792085946018,\"upda…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_files",
+     "id": "fs_downloads",
+     "data": "{\"id\":\"fs_downloads\",\"parent_id\":\"fs_root\",\"path\":\"/Downloads\",\"name\":\"Downloads\",\"kind\":\"folder\",\"sort_index\":30,\"mime_type\":\"\",\"extension\":\"\",\"size_bytes\":0,\"source\":\"system\",\"is_deleted\":false,\"created_at_ms\":1792085946018,\"updated_at_ms…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "desktop_files",
+     "id": "fs_ctox",
+     "data": "{\"id\":\"fs_ctox\",\"parent_id\":\"fs_root\",\"path\":\"/CTOX\",\"name\":\"CTOX\",\"kind\":\"folder\",\"sort_index\":40,\"mime_type\":\"\",\"extension\":\"\",\"size_bytes\":0,\"source\":\"system\",\"is_deleted\":false,\"created_at_ms\":1792085946018,\"updated_at_ms\":1792085946018…",
+     "result": "accepted"
+    }
+   ],
+   "errors": [],
+   "title": "Explorer",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "explorer"
+   ]
+  },
+  {
+   "label": "Datei-Viewer",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-18.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"file-viewer\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Datei-Viewer",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "file-viewer"
+   ]
+  },
+  {
+   "label": "App Importer",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-19.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"importer\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "App Importer",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "importer"
+   ]
+  },
+  {
+   "label": "Bewerbungseingang",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-20.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"intake\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Bewerbungseingang",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "intake"
+   ]
+  },
+  {
+   "label": "Interviews",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-21.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"interviews\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Interviews",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "interviews"
+   ]
+  },
+  {
+   "label": "Rechnungen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-22.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"invoices\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Rechnungen",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "invoices"
+   ]
+  },
+  {
+   "label": "IoT",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-23.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"iot\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "IoT",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "iot"
+   ]
+  },
+  {
+   "label": "Knowledge",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-24.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"knowledge\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Knowledge",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "knowledge"
+   ]
+  },
+  {
+   "label": "Decision Hub",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-25.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"kundenpipeline\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Decision Hub",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "kundenpipeline"
+   ]
+  },
+  {
+   "label": "Mail",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-26.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"mail\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Mail",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "mail"
+   ]
+  },
+  {
+   "label": "Matching",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-27.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"matching\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Matching",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "matching"
+   ]
+  },
+  {
+   "label": "Nachweise",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-28.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"nachweise\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Nachweise",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "nachweise"
+   ]
+  },
+  {
+   "label": "News",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-29.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"news\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "News",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "news"
+   ]
+  },
+  {
+   "label": "Notes",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-30.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"notes\",{}]"
+    },
+    {
+     "kind": "write",
+     "op": "patch",
+     "collection": "notes",
+     "id": "note-001",
+     "data": "{\"title\":\"Lieferantenbewertung 2026\",\"notebook\":\"Vertrieb\",\"tags\":\"Vertrieb, Kunde\",\"is_favorite\":true,\"is_trashed\":false,\"is_locked\":false,\"lock_passcode\":\"\",\"content\":\"<h1 class=\\\"notes-h1\\\"><span style=\\\"white-space: pre-wrap;\\\">Lieferan…",
+     "result": "accepted"
+    }
+   ],
+   "errors": [],
+   "title": "Notizen",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "notes"
+   ]
+  },
+  {
+   "label": "Outbound",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-31.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"outbound\",{}]"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "outbound_campaigns",
+     "id": "outbound_default_campaign",
+     "data": "{\"id\":\"outbound_default_campaign\",\"name\":\"Outbound Firmenqualifizierung\",\"objective\":\"Unternehmen importieren, qualifizieren und erst danach in die Ansprechpartner-Pipeline übergeben.\",\"market\":\"DACH\",\"status\":\"active\",\"owner_id\":\"owner\",\"s…",
+     "result": "accepted"
+    },
+    {
+     "kind": "command",
+     "type": "knowledge.command",
+     "payload": "{\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archived\"],\"client_context\":{\"source_module\":\"outbound\",\"command_path\":\"knowledge\"}}",
+     "status": "done"
+    },
+    {
+     "kind": "command",
+     "type": "knowledge.command",
+     "payload": "{\"title\":\"Knowledge command\",\"args\":[\"data\",\"create\",\"--domain\",\"outbound\",\"--key\",\"campaign_outbound_default_campaign_companies\",\"--source-system\",\"business-os.outbound\",\"--title\",\"Outbound Firmenqualifizierung · Unternehmen\",\"--descriptio…",
+     "status": "done"
+    },
+    {
+     "kind": "command",
+     "type": "knowledge.command",
+     "payload": "{\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archived\"],\"client_context\":{\"source_module\":\"outbound\",\"command_path\":\"knowledge\"}}",
+     "status": "done"
+    },
+    {
+     "kind": "command",
+     "type": "knowledge.command",
+     "payload": "{\"title\":\"Knowledge command\",\"args\":[\"data\",\"create\",\"--domain\",\"outbound\",\"--key\",\"campaign_outbound_default_campaign_contacts\",\"--source-system\",\"business-os.outbound\",\"--title\",\"Outbound Firmenqualifizierung · Ansprechpartner\",\"--descrip…",
+     "status": "done"
+    },
+    {
+     "kind": "command",
+     "type": "knowledge.command",
+     "payload": "{\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archived\"],\"client_context\":{\"source_module\":\"outbound\",\"command_path\":\"knowledge\"}}",
+     "status": "done"
+    },
+    {
+     "kind": "command",
+     "type": "knowledge.command",
+     "payload": "{\"title\":\"Knowledge command\",\"args\":[\"data\",\"create\",\"--domain\",\"outbound\",\"--key\",\"campaign_outbound_default_campaign_research_runs\",\"--source-system\",\"business-os.outbound\",\"--title\",\"Outbound Firmenqualifizierung · Research Runs\",\"--desc…",
+     "status": "done"
+    },
+    {
+     "kind": "command",
+     "type": "knowledge.command",
+     "payload": "{\"title\":\"Knowledge command\",\"args\":[\"skill\",\"add-skillbook\",\"--id\",\"business-os.outbound.campaigns.v1\",\"--title\",\"Business OS Outbound Campaigns\",\"--version\",\"v1\",\"--mission\",\"Outbound Campaigns führen Firmenquellen über Unternehmensqualif…",
+     "status": "done"
+    },
+    {
+     "kind": "command",
+     "type": "knowledge.command",
+     "payload": "{\"title\":\"Knowledge command\",\"args\":[\"skill\",\"add-runbook\",\"--id\",\"business-os.outbound.outbound_default_campaign.runbook.v1\",\"--skillbook\",\"business-os.outbound.campaigns.v1\",\"--title\",\"Outbound Firmenqualifizierung Campaign Runbook\",\"--ve…",
+     "status": "done"
+    },
+    {
+     "kind": "command",
+     "type": "knowledge.command",
+     "payload": "{\"title\":\"Knowledge command\",\"args\":[\"skill\",\"add-item\",\"--id\",\"business-os.outbound.outbound_default_campaign.runbook.v1.scope\",\"--runbook\",\"business-os.outbound.outbound_default_campaign.runbook.v1\",\"--skillbook\",\"business-os.outbound.cam…",
+     "status": "done"
+    },
+    {
+     "kind": "write",
+     "op": "patch",
+     "collection": "outbound_campaigns",
+     "id": "outbound_default_campaign",
+     "data": "{\"payload\":{\"outbound_only\":true,\"briefing\":\"\",\"briefing_template_id\":\"\",\"briefing_language\":\"de\",\"knowledge\":{\"domain\":\"outbound\",\"skillbook_id\":\"business-os.outbound.campaigns.v1\",\"runbook_id\":\"business-os.outbound.outbound_default_campai…",
+     "result": "accepted"
+    }
+   ],
+   "errors": [],
+   "title": "Outbound",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "outbound"
+   ]
+  },
+  {
+   "label": "Outbound Lead Generation",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-32.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"outbound-lead-generation\",{}]"
+    }
+   ],
+   "errors": [
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/index.css",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "title": "Outbound",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Vermittlungen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-33.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"placements\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Vermittlungen",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "placements"
+   ]
+  },
+  {
+   "label": "Bugs & Features",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-34.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"reports\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Bugs & Features",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "reports"
+   ]
+  },
+  {
+   "label": "Web Research",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-35.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"research\",{}]"
+    }
+   ],
+   "errors": [],
+   "title": "Web Research",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [],
+   "foreignWindow": [
+    "research"
+   ]
+  },
+  {
+   "label": "6 weitere Elemente nicht bedient (Grenze --max 34)",
+   "role": "note",
+   "rest": [
+    "button|Einsatzplanung|1",
+    "button|CTOX Spreadsheets|1",
+    "button|Vorstellungen|1",
+    "button|Support|1",
+    "button|Threads|1",
+    "button|Tickets|1"
+   ]
+  }
+ ],
+ "flags": []
+}

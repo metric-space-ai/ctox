@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { __browserTestHooks } from './index.js';
+import { registerHooks } from 'node:module';
+// v4: index.js importiert 'ctox:shared/…' (loest sonst nur der Service Worker auf, PORTING §4 Falle 2).
+registerHooks({
+  resolve(specifier, context, next) {
+    if (specifier.startsWith('ctox:shared/')) {
+      return next(new URL(`../../shared/${specifier.slice('ctox:shared/'.length)}`, import.meta.url).href, context);
+    }
+    return next(specifier, context);
+  },
+});
+const { __browserTestHooks } = await import('./index.js');
 import { __ctoxSyncTestHooks } from '../../shared/sync.js';
 
 assert.deepEqual(
@@ -78,10 +88,9 @@ assert.equal(__browserTestHooks.browserStartErrorIsRetryable({ code: 'auth_requi
 assert.equal(__browserTestHooks.browserCommandRequiresController('browser.navigate', { id: 'browser_session_test' }), true);
 assert.equal(__browserTestHooks.browserCommandRequiresController('browser.controller.acquire', { id: 'browser_session_test' }), false);
 assert.equal(__browserTestHooks.browserCommandRequiresController('browser.session.start', null), false);
-assert.equal(__browserTestHooks.browserSurfaceIsFocused({ host: { closest: () => null } }), false);
-assert.equal(__browserTestHooks.browserSurfaceIsFocused({
-  host: { closest: () => ({ classList: { contains: (name) => name === 'is-focused' } }) },
-}), true);
+// v4: kein Shell-DOM-Vorfahr (.shell-window.is-focused); die App führt den Fensterfokus selbst (V4-PORT OFFEN-3).
+assert.equal(__browserTestHooks.browserSurfaceIsFocused({ surfaceFocused: false }), false);
+assert.equal(__browserTestHooks.browserSurfaceIsFocused({ surfaceFocused: true }), true);
 assert.equal(
   __browserTestHooks.shouldRenewControllerLease({
     id: 'browser_session_test',
@@ -157,10 +166,7 @@ assert.equal(
   false,
   'a replicated lease owned by another surface must stay passive',
 );
-const focusedCtx = {
-  session: { user: { id: 'user-1' } },
-  host: { closest: () => ({ classList: { contains: (name) => name === 'is-focused' } }) },
-};
+const focusedCtx = { actor: { id: 'user-1' }, surfaceFocused: true };
 const activeSession = {
   id: 'browser_session_test',
   controller_user_id: 'user-1',
@@ -176,8 +182,9 @@ assert.equal(
 );
 assert.equal(
   __browserTestHooks.browserSurfaceCanControl({
-    session: { user: { id: 'user-1', email: 'michael@example.com' } },
-    host: { closest: () => ({ classList: { contains: (name) => name === 'is-focused' } }) },
+    // v4-Akteur (api.actor.id) mit der weiterhin lesbaren v3-Form {user:{id,email}}.
+    actor: { id: 'user-1', user: { id: 'user-1', email: 'michael@example.com' } },
+    surfaceFocused: true,
   }, {
     latestSession: {
       ...activeSession,
@@ -305,28 +312,17 @@ assert.match(html, /data-browser-controller-release/);
 assert.match(html, /data-browser-clipboard-copy/);
 assert.match(html, /data-browser-clipboard-paste/);
 assert.match(html, /data-browser-downloads/);
-assert.match(js, /waitsForRuntime \? 'terminal' : 'accepted'/);
+// v4 (App-API 4.0): ein Befehlsweg – api.command, nie warten; Status über h.status in die Zustandszone.
 const dispatchBrowserCommandSource = js.match(/async function dispatchBrowserCommand[\s\S]*?\n\}/)?.[0] || '';
-assert.doesNotMatch(
-  dispatchBrowserCommandSource,
-  /startCommandSync\(ctx\)/,
-  'browser dispatch must not restart the command bridge already owned by the command bus',
-);
-assert.match(
-  dispatchBrowserCommandSource,
-  /dispatch\(command,[\s\S]*?waitsForRuntime \? 'terminal' : 'accepted'/,
-  'every browser command must use the confirmed command-bus path',
-);
-assert.match(
-  js.match(/async function dispatchBrowserCommand[\s\S]*?\n\}/)?.[0] || '',
-  /browser\.session\.start[\s\S]*?refreshBrowserProjections\(ctx\)/,
-  'session start must refresh its projections after native runtime completion',
-);
-assert.match(
-  js.match(/async function refreshBrowserProjections[\s\S]*?\n\}/)?.[0] || '',
-  /restartCollection\(collection, \{ forceDirect: true \}\)/,
-);
-assert.match(js, /state\.latestSession = requestedSessionPending\s*\? directOptimisticSession/);
+const submitCommandSource = js.match(/function submitCommand\(env[\s\S]*?\n\}/)?.[0] || '';
+assert.match(dispatchBrowserCommandSource, /submitCommand\(env, commandType,/, 'every browser command goes through submitCommand');
+assert.match(submitCommandSource, /env\.api\.command\(commandType, payload, payload\?\.record_id \? \{ record_id: payload\.record_id \} : undefined\)/, 'submitCommand uses api.command with record_id option');
+assert.match(submitCommandSource, /handle\.status\.subscribe[\s\S]*?'failed'[\s\S]*?env\.status\.report[\s\S]*?'done'[\s\S]*?env\.status\.clear/,
+  'failed goes to the status zone, done clears it');
+assert.doesNotMatch(submitCommandSource, /await|\.result\b|until:/, 'a browser command must never be awaited (R5)');
+assert.equal((js.match(/env\.api\.command\(/g) || []).length, 1, 'exactly one command path');
+assert.doesNotMatch(js.replace(/^\s*\/\/.*$/gm, ''), /requestNative|ctox\.browser\.live\.v1|commandBus|startCommandSync|restartCollection|refreshBrowserProjections|startBrowserRuntimeSync/,
+  'the v3 direct channel and sync coupling are gone in 4.0');
 assert.match(js, /browserSessionError\(session\)/, 'the Browser surface renders the persisted runtime reason');
 assert.doesNotMatch(
   js,
@@ -334,10 +330,9 @@ assert.doesNotMatch(
   'the Browser surface must not promise a rebuild that does not exist',
 );
 assert.match(js, /\[refs\.go, refs\.stop,/);
-assert.match(js, /templateUrl\.search = moduleUrl\.search/);
-assert.match(js, /templateUrl\.searchParams\.set\('fragment', STYLE_BUILD\)/);
-assert.match(js, /searchParams\.get\('v'\) \|\| 'browser-source'/);
-assert.match(js, /ctox\.browser\.live\.v1/);
+// v4: Markup relativ zum Modul, ohne Cache-Buster (R10).
+assert.match(js, /fetch\(new URL\('\.\/index\.html', import\.meta\.url\)\)/);
+assert.doesNotMatch(js, /STYLE_BUILD|searchParams\.get\('v'\)|[?]v=|cache: 'no-store'/);
 assert.match(js, /function renderAutomationOverlay[\s\S]*?capture_script[\s\S]*?Playwright-Scraper/);
 assert.match(css, /\.browser-automation-overlay[\s\S]*?position:\s*absolute/);
 assert.match(
@@ -345,37 +340,22 @@ assert.match(
   /refs\.address\?\.addEventListener\('keydown',[\s\S]*?event\.key !== 'Enter'[\s\S]*?submitAddress\(\)/,
   'Enter in the compact address bar must navigate without relying on implicit form submission',
 );
-assert.equal(
-  (js.match(/collection: 'business_commands'/g) || []).length,
-  8,
-  'browser live list, start, navigation, controller, input, frame, script and tab-state requests must use the already-warm command bridge',
-);
+// v4: Eingabe als Dokument der eigenen Collection (api.put), keine eigene Warteschlange, kein Abfragetakt;
+// das Live-Bild kommt nur als browser_frames-Projektion (V4-PORT OFFEN-1).
 assert.match(
-  js.match(/const flushInput = async \(\) => \{[\s\S]*?\n  \};/)?.[0] || '',
-  /op: 'input'[\s\S]*?events: pending[\s\S]*?timeoutMs: 3_000/,
-  'pointer and keyboard events must use the latency-sensitive input-only WebRTC lane',
+  js.match(/async function writeInputEvent[\s\S]*?\n\}/)?.[0] || '',
+  /env\.api\.put\('browser_input_events', event\)/,
+  'pointer and keyboard events are written through api.put',
 );
-assert.match(js, /dataset\.browserInputSentSeq = String\(seq\)/);
-assert.match(js, /dataset\.browserInputAckSeq = String\(acknowledgedSeq\)/);
-assert.match(
-  js.match(/const pump = async \(\) => \{[\s\S]*?\n  \};/)?.[0] || '',
-  /events: \[\]/,
-  'the JPEG polling lane must not hold browser input while waiting for a frame',
-);
-assert.match(
-  js.match(/const pump = async \(\) => \{[\s\S]*?\n  \};/)?.[0] || '',
-  /response && response\.ok === false[\s\S]*?renderNotice\(refs, state\.notice\)[\s\S]*?const screenshot = response\?\.screenshot/,
-  'an ok:false live response must surface its error before the screenshot check — am 31.08.2026 verschluckte der Pump "unknown op live" wortlos und die Buehne blieb fuer immer auf "Browser-Inhalt wird geladen"',
-);
+assert.doesNotMatch(js, /setInterval\(|const flushInput|const pump = async/, 'no input queue and no frame polling loop (R12)');
 assert.match(
   js.match(/async function requestBrowserControllerLease[\s\S]*?\n\}/)?.[0] || '',
-  /requestNative\('ctox\.browser\.live\.v1',[\s\S]*?op: operation/,
-  'controller acquire, renew and release must use the direct authenticated WebRTC control path',
+  /dispatchBrowserCommand\(env, state, commandType, \{ lease_id: leaseId \}\)/,
+  'controller acquire, renew and release use the browser.controller.* command (handler keeps the lease)',
 );
-assert.match(js, /fetch\(templateUrl, \{ cache: 'no-store' \}\)/);
 if (desktopWrapperJs) {
   assert.match(desktopWrapperJs, /browserModuleUrl\.search = new URL\(import\.meta\.url\)\.search/);
-  assert.doesNotMatch(desktopWrapperJs, /modules\/browser\/index\.js\?v=/);
+  assert.doesNotMatch(desktopWrapperJs, /modules\/browser\/index\.js[?]v=/);
 }
 assert.match(js, /lease_id: state\.controllerLeaseId/);
 assert.match(js, /if \(requiresController\) payload\.lease_id = state\.controllerLeaseId/);
@@ -394,17 +374,11 @@ assert.match(syncJs, /isReadOnlyProjectionCollection[\s\S]{0,500}browser_session
 assert.equal(__ctoxSyncTestHooks.isDemandOnlyPullCollection('browser_sessions'), true);
 assert.equal(__ctoxSyncTestHooks.isDemandOnlyPullCollection('browser_tabs'), true);
 assert.equal(__ctoxSyncTestHooks.isDemandOnlyPullCollection('unknown-browser-collection'), false);
-assert.doesNotMatch(js, /upsertDoc\(browserCollection\(ctx, 'browser_sessions'\)/);
-assert.match(js, /selector:\s*\{ owner_user_id:\s*\{ \$in: actorIds \} \}/);
-assert.match(js, /op: 'session\.list'/);
+assert.doesNotMatch(js, /api\.(?:put|patch)\('browser_sessions'/, 'browser_sessions is a core-owned projection');
+assert.match(js, /\{ owner_user_id: \{ \$in: actorIds \} \},\s*\{ 'payload\.purpose': 'web_stack_auth' \}/);
 assert.match(js, /if \(!browserSessionIdFromArgs\(args\)\) return;/);
 assert.doesNotMatch(html, /data-browser-(?:seed|clear|reset)/);
 assert.match(js, /addEventListener\?\.\('focus', handleFocusRefresh\)/);
-assert.doesNotMatch(
-  js.match(/async function startBrowserRuntimeSync[\s\S]*?\n\}/)?.[0] || '',
-  /catch\s*\([^)]*\)\s*\{[\s\S]*console\.warn/,
-  'browser sync startup errors must reach the visible command error state',
-);
 
 // --- IA: two-pane sessions selector + remote canvas (2026-07-21) ---
 
@@ -451,7 +425,7 @@ assert.match(js, /__ctoxPaneGrammar/);
 assert.match(js, /refs\.sessions\?\.addEventListener\('click'[\s\S]*?markActiveSession\(refs, sessionId\)/);
 assert.match(
   js,
-  /state\.selectedSessionId = sessionId;[\s\S]*?state\.latestSession = selectedSession;[\s\S]*?state\.latestDirectFrame = null;/,
+  /state\.selectedSessionId = sessionId;[\s\S]*?state\.latestSession = selectedSession;[\s\S]*?state\.latestFrame = null;/,
   'selecting a session must synchronously bind the work surface before async refreshes',
 );
 assert.match(
@@ -459,38 +433,14 @@ assert.match(
   /if \(refreshInFlight\) \{[\s\S]*?refreshQueued = true;[\s\S]*?refreshInFlight = loadAndRender\(\)/,
   'reactive collection updates must coalesce instead of exhausting query streams',
 );
-assert.match(
-  js,
-  /const replicatedInputs = state\.directLiveEnabled[\s\S]*?Promise\.resolve\(\[\]\)[\s\S]*?browser_input_events/,
-  'direct live must not read the replicated input collection',
-);
-assert.match(
-  js,
-  /const frames = !state\.directLiveEnabled && frameSessionId/,
-  'direct live must not read the replicated frame collection',
-);
-assert.doesNotMatch(
-  js,
-  /replicated live fallback|BROWSER_FALLBACK_SYNC_COLLECTIONS/,
-  'a direct-live outage must not re-enable persisted frame/input transport',
-);
-assert.match(js, /direct WebRTC live path reconnecting/);
-assert.match(js, /op: 'session\.start'/);
-assert.match(js, /direct session start unavailable; using durable command/);
-assert.doesNotMatch(
-  js.match(/for \(const collection of \[[\s\S]*?\]\) \{\n    const sub/)?.[0] || '',
-  /browser_frames|browser_input_events/,
-  'legacy live collections must not be subscribed during direct-live bootstrap',
-);
-assert.match(
-  js,
-  /const directSessionId = state\.latestSession\?\.id \|\| state\.requestedSessionId[\s\S]*?waitingForNewSession/,
-  'a newly requested session must be reachable directly before its projection arrives',
-);
-assert.match(
-  js,
-  /const directOptimisticSession[\s\S]*?requestedSessionPending[\s\S]*?directOptimisticSession/,
-  'an async collection refresh must not erase a working direct session while its projection is delayed',
+// v4: alle Lesezugriffe sind lokale Live-Abfragen; das Bild nur aus der browser_frames-Projektion der
+// gewählten Sitzung, solange die Echtzeit-Spur des Kerns fehlt (V4-PORT OFFEN-1).
+assert.doesNotMatch(js, /directLiveEnabled|latestDirectFrame|directOptimisticSession|startDirectBrowserLive/);
+assert.match(js, /readCollection\(env, 'browser_frames', \{[\s\S]*?selector: \{ session_id: frameSessionId \}/);
+assert.equal(
+  (js.match(/api\.query\(collectionName, \{\}\)\.subscribe/g) || []).length,
+  1,
+  'one live subscription loop over BROWSER_LIVE_COLLECTIONS',
 );
 assert.match(js, /function markActiveSession[\s\S]*?classList\.toggle\('is-selected'/);
 assert.doesNotMatch(
@@ -504,7 +454,7 @@ assert.match(js, /refs\.sessions\.dataset\.sig !== signature[\s\S]*?refs\.sessio
 // Import/export handlers wired to the header icons.
 assert.match(js, /\[data-action="import"\]/);
 assert.match(js, /\[data-action="export"\]/);
-assert.match(js, /importBrowserSessions\(ctx, state, refs\)/);
+assert.match(js, /importBrowserSessions\(env, state, refs\)/);
 assert.match(js, /exportBrowserSessions\(state, refs\)/);
 
 const hooks = __browserTestHooks;
@@ -540,8 +490,8 @@ assert.deepEqual(
 );
 assert.match(
   js.match(/async function fillWebStackCredential[\s\S]*?\n\}/)?.[0] || '',
-  /until: 'terminal'[\s\S]*?refreshBrowserProjections\(ctx\)/,
-  'credential fill must wait for native completion and refresh its projections',
+  /submitCommand\(env, 'browser\.credential\.fill'/,
+  'credential fill is sent as a command; its result arrives through the session projection (never awaited in 4.0)',
 );
 
 // Band counts: zeros included; the band ignores its own selection.
@@ -660,8 +610,7 @@ assert.equal(
 );
 
 // Der Sperrgrund muss im Klartext benannt werden, nicht geschwiegen.
-const fokussiert = { host: { closest: () => ({ classList: { contains: (n) => n === 'is-focused' } }) },
-  session: { user: { id: 'user-1' } } };
+const fokussiert = { surfaceFocused: true, actor: { id: 'user-1' } };
 assert.match(
   __browserTestHooks.eingabeSperrgrund(fokussiert, {
     latestSession: {
@@ -686,10 +635,10 @@ assert.equal(
 );
 
 // --- Eingabe-Nutzlast: Felder, die browser_runtime_input_event erwartet ---
-assert.match(js, /submitBrowserNav\(ctx, state, refs, 'navigate'/);
-assert.match(js, /submitBrowserNav\(ctx, state, refs, 'back'/);
-assert.match(js, /submitBrowserNav\(ctx, state, refs, 'forward'/);
-assert.match(js, /submitBrowserNav\(ctx, state, refs, 'reload'/);
+assert.match(js, /submitBrowserNav\(env, state, refs, 'navigate'/);
+assert.match(js, /submitBrowserNav\(env, state, refs, 'back'/);
+assert.match(js, /submitBrowserNav\(env, state, refs, 'forward'/);
+assert.match(js, /submitBrowserNav\(env, state, refs, 'reload'/);
 assert.match(js, /function installInputHandlers[\s\S]*pointerdown[\s\S]*pointerup[\s\S]*pointermove[\s\S]*wheel[\s\S]*keydown[\s\S]*keyup/);
 assert.doesNotMatch(
   js.match(/function installInputHandlers[\s\S]*?\n\}/)?.[0] || '',
@@ -711,20 +660,28 @@ function createInputCollection() {
   };
 }
 
+// v4-Montageumgebung (env): api.put/api.command wie App-API 4.0, Zustandszone, Fensterfokus app-lokal.
 function createInputCtx(collection) {
+  const dispatched = [];
+  const zone = [];
   return {
-    session: { user: { id: 'user-1', display_name: 'Test' } },
-    host: { closest: () => ({ classList: { contains: (name) => name === 'is-focused' } }) },
-    db: { collection: (name) => (name === 'browser_input_events' ? collection : null) },
-    commandBus: {
-      dispatched: [],
-      async dispatch(command) {
-        this.dispatched.push(command);
-        return command;
+    actor: { id: 'user-1', display_name: 'Test' },
+    surfaceFocused: true,
+    dispatched,
+    zone,
+    commandWatches: new Set(),
+    status: { report: (item) => zone.push(item), clear: () => {} },
+    api: {
+      put(name, doc) {
+        if (name === 'browser_input_events') collection.docs.push(doc);
+        return { local: Promise.resolve(), result: Promise.resolve({ ref: doc.id }) };
+      },
+      command(type, payload) {
+        const id = `cmd-${dispatched.length + 1}`;
+        dispatched.push({ id, type, payload });
+        return { id, local: Promise.resolve(), status: { subscribe: () => () => {} } };
       },
     },
-    sync: { startCollection: async () => {} },
-    config: { instance_id: 'tenant-1' },
   };
 }
 
@@ -800,33 +757,20 @@ function pointerEvent(overrides = {}) {
   );
 }
 
+// v4: directResponseBelongsToSurface/applyDirectNavigationState gehörten zum Direktkanal (Frame-Pump mit
+// Navigations-Epoche); der Kanal entfällt in 4.0 (V4-PORT OFFEN-1). Navigation kommt aus dem Befehlsergebnis.
 {
   const state = {
-    latestSession: { id: 'browser_session_new' },
-    requestedSessionId: '',
-    directNavigationEpoch: 4,
-  };
-  assert.equal(hooks.directResponseBelongsToSurface(state, 'browser_session_new', 4), true);
-  assert.equal(hooks.directResponseBelongsToSurface(state, 'browser_session_new', 3), false);
-  assert.equal(hooks.directResponseBelongsToSurface(state, 'browser_session_old', 4), false);
-}
-
-{
-  const state = {
-    latestSession: {
-      id: 'browser_session_new',
-      current_url: 'https://example.com/',
-      title: 'Example Domain',
-    },
+    latestSession: { id: 'browser_session_new', current_url: 'https://example.com/', title: 'Example Domain' },
     latestTab: { title: 'Example Domain' },
   };
-  hooks.applyDirectNavigationState(state, {
-    url: 'https://httpbingo.org/forms/post',
-    title: '',
-  });
+  hooks.applyLatestNavigationResult(state, [
+    { type: 'browser.navigate', status: 'completed', payload: { session_id: 'browser_session_old' }, result: { url: 'https://old.example/' }, updated_at_ms: 9 },
+    { type: 'browser.navigate', status: 'completed', payload: { session_id: 'browser_session_new' }, result: { url: 'https://httpbingo.org/forms/post', title: 'Form' }, updated_at_ms: 5 },
+  ]);
   assert.equal(state.latestSession.current_url, 'https://httpbingo.org/forms/post');
-  assert.equal(state.latestSession.title, 'httpbingo.org');
-  assert.equal(state.latestTab.title, 'httpbingo.org');
+  assert.equal(state.latestSession.title, 'Form');
+  assert.equal(state.latestTab.url, 'https://httpbingo.org/forms/post');
 }
 
 {
@@ -955,12 +899,12 @@ function pointerEvent(overrides = {}) {
   await hooks.submitBrowserNav(ctx, state, {}, 'forward');
   await hooks.submitBrowserNav(ctx, state, {}, 'reload');
   assert.deepEqual(
-    ctx.commandBus.dispatched.map((command) => command.command_type),
+    ctx.dispatched.map((command) => command.type),
     ['browser.navigate', 'browser.back', 'browser.forward', 'browser.reload'],
   );
-  assert.equal(ctx.commandBus.dispatched[0].payload.url, 'https://example.com/next');
-  for (const command of ctx.commandBus.dispatched) {
-    assert.equal(command.module, 'browser');
+  assert.equal(ctx.dispatched[0].payload.url, 'https://example.com/next');
+  for (const command of ctx.dispatched) {
+    assert.equal(command.payload.client_context.module_id, 'browser');
     assert.equal(command.payload.session_id, 'browser_session_test');
     assert.equal(command.payload.lease_id, 'lease-1');
   }
@@ -973,7 +917,7 @@ function pointerEvent(overrides = {}) {
 // wenn eine erfolgreich gestartete Sitzung spaeter wegbrach.
 {
   const quelle = await readFile(new URL('./index.js', import.meta.url), 'utf8');
-  const i = quelle.indexOf('async function ensureRequestedBrowserSession');
+  const i = quelle.indexOf('function ensureRequestedBrowserSession');
   assert.ok(i > 0, 'ensureRequestedBrowserSession existiert');
   const block = quelle.slice(i, i + 2200);
   const zustandGelesen = block.indexOf('browserSessionNeedsStart');
@@ -999,9 +943,9 @@ function pointerEvent(overrides = {}) {
 // Sitzungen sah niemand, ob eine Sitzung dem Nutzer gehoert, von der Recherche
 // gefahren wird, oder auf einen menschlichen Klick wartet.
 {
-  const ich = { user: { id: 'user-1' } };
+  const ich = { id: 'user-1' };
   const jetzt = 1_000_000;
-  const z = (s, ctx = { session: ich }) =>
+  const z = (s, ctx = { actor: ich }) =>
     __browserTestHooks.browserSitzungZustand(s, ctx, jetzt).text;
 
   // Eingriff schlaegt alles: eine laufende Sitzung, die auf einen Menschen wartet.
@@ -1118,7 +1062,7 @@ function pointerEvent(overrides = {}) {
   );
   assert.match(
     h.startSperrgrund({ requestedSessionId: 's1', latestSession: { id: 's1', runtime_status: 'active' } }, 1_000_000),
-    /läuft bereits/,
+    /bereits aktiv/,
   );
   // Eine TOTE angeforderte Sitzung bleibt startbar — sonst wieder eine Falle ohne Ausgang.
   assert.equal(
@@ -1150,7 +1094,9 @@ function pointerEvent(overrides = {}) {
   );
   // Die im Code nachgeschlagenen Schluessel zaehlen genauso, auch wenn sie nie
   // im HTML stehen.
-  for (const schluessel of ['viewLive', 'viewScript', 'scriptNoSession', 'scriptLoading', 'scriptFailed', 'scriptNeedsControl']) {
+  // v4: scriptNoSession/scriptLoading/scriptFailed/scriptNeedsControl waren Zustandstexte der Skriptansicht und
+  // sind entfallen (Zustandszone browser.script.unavailable, V4-PORT OFFEN-2).
+  for (const schluessel of ['viewLive', 'viewScript']) {
     assert.ok(schluessel in de, `${schluessel} fehlt in locales/de.json`);
     assert.ok(schluessel in en, `${schluessel} fehlt in locales/en.json`);
   }

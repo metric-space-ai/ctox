@@ -9,24 +9,18 @@
 //         actions as collected icons). There is NO third column — the customer
 //         snapshot is folded into the detail.
 //
-// The chrome behaviour (search / tray / reset / active-dot / view-toggle /
-// band) is SHELL-wired from the data-pg-* attributes (autoWirePaneGrammar in
-// app.js). This module writes NO chrome CSS and NO chrome JS: it re-renders on
-// the bubbling `ctox-pane-grammar-change` event and writes counts/footer via
-// `pane.__ctoxPaneGrammar` (null-guarded). The grammar markup is assembled with
-// createElement so the same code renders in the browser and in the header-less
-// node test shims; the shell still discovers the data-pg-* pane and wires it.
-//
-// Mount contract (v5, skill `business-os-app-module-development`):
-//   - mount(ctx) returns a cleanup function that detaches every collection.$
-//     subscription and DOM listener opened during the mount.
-//   - All reads go through `resolveCollection(name)` on the `ctx.db.collection(name)`
-//     facade. Mutations go through `ctx.commandBus.dispatch(...)`; native
-//     handlers in `src/core/business_os/invoices.rs` own GoBD-immutability. The
-//     command flows and collection schemas are unchanged from the prior IA.
-//   - Reactive sync: we subscribe to `collection.$` for every watched
-//     collection and coalesce emissions into one render via `scheduleRefresh`.
-//     No manual refresh button.
+// App-API 4.0 (Shell v4, Protokoll V4-PORT.md):
+//   - mount(root, api, {restored}) → {unmount, snapshot}. Every api.query
+//     subscription and DOM listener opened during the mount is released by unmount().
+//   - Reads: one api.query(...).subscribe per watched collection, coalesced into
+//     one render via scheduleRefresh. Mutations: api.command(type, payload,
+//     {record_id}) — never awaited; the handlers in handlers/ own GoBD-immutability.
+//     Failures go to the shell's status zone (api.status.report), success is silent.
+//   - The column grammar (data-pg-* markup) is wired by the app itself via
+//     autoWirePaneGrammar(root); the module re-renders on the bubbling
+//     `ctox-pane-grammar-change` event and writes counts/footer via
+//     `pane.__ctoxPaneGrammar` (null-guarded). The programmatic frame builders stay
+//     the fallback for header-less node test shims.
 
 import {
   buildCreateInvoiceCommand,
@@ -35,8 +29,8 @@ import {
   buildXRechnungXml,
 } from './commands/builders.js';
 import { validateInvoice } from './core/invoice-validate.js';
-import { renderListOrState } from '../../shared/list-state.js';
-import { renderHtmlIfChanged } from '../../shared/stable-dom.js';
+import { renderHtmlIfChanged } from 'ctox:shared/stable-dom.js';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
 
 const BUILD = '20260721-invoices-ia-two-pane';
 const MODULE_ID = 'invoices';
@@ -44,54 +38,48 @@ const SKILL_TAG = 'product_engineering/business-os-app-module-development';
 
 const COPY = {
   de: {
-    invoices: 'Rechnungen', kicker: 'CTOX', all: 'Alle', overdue: 'Überfällig', open: 'Offen', paid: 'Bezahlt',
+    invoices: 'Rechnungen', kicker: '', all: 'Alle', overdue: 'Überfällig', open: 'Offen', paid: 'Bezahlt',
     newInvoice: 'Neue Rechnung', import: 'Importieren', export: 'Exportieren', closeDetail: 'Details schließen',
-    unknown: 'unbekannt', newShort: 'NEU', entries: 'Einträge', search: 'Suchen...', view: 'Darstellung',
+    unknown: 'unbekannt', unknownCustomer: 'Unbekannt', more: 'Weitere Aktionen', emptyList: 'Noch keine Rechnungen.', newShort: 'NEU', entries: 'Einträge', search: 'Suchen...', view: 'Darstellung',
     cardsView: 'Kachelansicht', listView: 'Listenansicht', filter: 'Filter', allTypes: 'Alle Typen', filterType: 'Typ',
-    resetFilters: 'Filter zurücksetzen',
-    emptyHint: 'Wähle eine Rechnung aus der Liste oder erstelle einen neuen Entwurf.', invoice: 'Rechnung', draft: 'Entwurf',
-    listEmpty: 'Noch keine Rechnungen vorhanden.',
+    resetFilters: 'Filter zurücksetzen', noMatches: 'Keine Treffer', cancelNew: 'Abbrechen',
+    invoice: 'Rechnung', draft: 'Entwurf',
     customer: 'Kunde', chooseCustomer: '— bitte Kunde wählen —', invoiceDate: 'Rechnungsdatum', type: 'Typ',
     lines: 'Positionen', addLine: '+ Position', net: 'Netto', tax: 'USt', gross: 'Brutto',
-    saveDraft: 'Entwurf speichern', deleteDraft: 'Entwurf löschen', post: 'Buchen (GoBD-post)', missingBeforePost: 'Vor dem Buchen fehlt',
+    saveDraft: 'Entwurf speichern', deleteDraft: 'Entwurf löschen', post: 'Buchen', missingBeforePost: 'Vor dem Buchen fehlt',
     removeLine: 'Position entfernen', invoiceNumber: 'Rechnungsnummer', date: 'Datum', due: 'Fällig', journal: 'Journal',
     payments: 'Zahlungen', dunning: 'Mahnen', noJournal: 'Kein Journal-Eintrag verknüpft.', account: 'Konto', description: 'Beschreibung', debit: 'Soll', credit: 'Haben',
-    downloadXml: 'XRechnung-XML herunterladen', xmlFailed: 'XRechnung-Vorschau fehlgeschlagen', amountCents: 'Betrag (Cent)', discountCents: 'Skonto (Cent)',
-    paymentId: 'Zahlungs-ID', allocate: 'Zuordnen', discountHint: 'Skonto wird nur abgezogen, wenn das Zahlungsdatum vor dem Skonto-Deadline liegt. Das berechnet die lokale Zahlungslogik.',
-    dunningOnlyOverdue: 'Dunning ist nur für überfällige Rechnungen verfügbar.', dunningHint: 'Diese Rechnung ist überfällig. Starte einen Mahnlauf, um einen Brief zu erzeugen.',
+    downloadXml: 'XRechnung-XML herunterladen', xmlFailed: 'XRechnung-Vorschau fehlgeschlagen', amountCents: 'Betrag (€)', discountCents: 'Skonto (€)',
+    paymentId: 'Zahlungs-ID', allocate: 'Zuordnen', discountHint: 'Skonto wird nur abgezogen, wenn vor Ablauf der Skontofrist gezahlt wird.',
+    dunningOnlyOverdue: 'Mahnen ist nur bei überfälligen Rechnungen möglich.',
     dunningRun: 'Mahnlauf für diese Rechnung', address: 'Adresse', email: 'E-Mail', noAddress: 'Keine Adresse hinterlegt.',
-    dependencyTitle: 'Rechnungen benötigt weitere Module', dependencyNote: 'Bitte installiere „buchhaltung“ (FIBU/Journal) und „customers“ (Party-Stamm) im App Store, dann lade das Rechnungen-Modul neu.',
-    reload: 'Neu laden', missingDb: 'Invoices-Modul kann nicht starten: ctx.db fehlt.', noCustomer: 'Kein Kunde im CRM hinterlegt. Lege zuerst einen Kunden im „customers“-Modul an, dann erstelle die Rechnung hier.',
+    noCustomer: 'Zuerst einen Kunden in „Kunden“ anlegen.',
     deleteConfirm: 'Entwurf {id} löschen?', cannotPost: 'Rechnung kann nicht gebucht werden', resizeColumn: 'Spaltenbreite anpassen',
     stateDraft: 'Entwurf', statePosted: 'Gebucht', statePartiallyPaid: 'Teilweise bezahlt', statePaid: 'Bezahlt', stateOverdue: 'Überfällig', stateCancelled: 'Storniert', stateCredited: 'Gutgeschrieben',
-    pos: 'Pos', quantity: 'Menge (‰)', unit: 'Einheit', unitPrice: 'Einzelpreis (Cent)',
-    importInvalid: 'Ungültige JSON-Datei.', importEmpty: 'Keine gültigen Rechnungen (Kunde + Positionen) in der Datei.', imported: '{count} importiert',
-    syncingHint: 'Daten werden synchronisiert.',
+    pos: 'Pos', quantity: 'Menge', unit: 'Einheit', unitPrice: 'Einzelpreis (€)', lineAmount: 'Betrag',
+    importInvalid: 'Ungültige JSON-Datei.', importEmpty: 'Keine gültigen Rechnungen (Kunde + Positionen) in der Datei.',
   },
   en: {
-    invoices: 'Invoices', kicker: 'CTOX', all: 'All', overdue: 'Overdue', open: 'Open', paid: 'Paid',
+    invoices: 'Invoices', kicker: '', all: 'All', overdue: 'Overdue', open: 'Open', paid: 'Paid', // v4-allow: en
     newInvoice: 'New invoice', import: 'Import', export: 'Export', closeDetail: 'Close details',
-    unknown: 'unknown', newShort: 'NEW', entries: 'entries', search: 'Search...', view: 'View',
+    unknown: 'unknown', unknownCustomer: 'Unknown', more: 'More actions', emptyList: 'No invoices yet.', newShort: 'NEW', entries: 'entries', search: 'Search...', view: 'View', // v4-allow: en
     cardsView: 'Card view', listView: 'List view', filter: 'Filter', allTypes: 'All types', filterType: 'Type',
-    resetFilters: 'Reset filters',
-    emptyHint: 'Select an invoice from the list or create a new draft.', invoice: 'Invoice', draft: 'Draft',
-    listEmpty: 'No invoices yet.',
+    resetFilters: 'Reset filters', noMatches: 'No matches', cancelNew: 'Cancel', // v4-allow: en
+    invoice: 'Invoice', draft: 'Draft',
     customer: 'Customer', chooseCustomer: '— select customer —', invoiceDate: 'Invoice date', type: 'Type',
     lines: 'Line items', addLine: '+ Line item', net: 'Net', tax: 'VAT', gross: 'Gross',
-    saveDraft: 'Save draft', deleteDraft: 'Delete draft', post: 'Post (GoBD)', missingBeforePost: 'Required before posting',
+    saveDraft: 'Save draft', deleteDraft: 'Delete draft', post: 'Post', missingBeforePost: 'Required before posting',
     removeLine: 'Remove line item', invoiceNumber: 'Invoice number', date: 'Date', due: 'Due', journal: 'Journal',
     payments: 'Payments', dunning: 'Dunning', noJournal: 'No journal entry linked.', account: 'Account', description: 'Description', debit: 'Debit', credit: 'Credit',
-    downloadXml: 'Download XRechnung XML', xmlFailed: 'XRechnung preview failed', amountCents: 'Amount (cents)', discountCents: 'Discount (cents)',
-    paymentId: 'Payment ID', allocate: 'Allocate', discountHint: 'The payment logic applies the discount only when payment occurs before the discount deadline.',
-    dunningOnlyOverdue: 'Dunning is available only for overdue invoices.', dunningHint: 'This invoice is overdue. Start a dunning run to generate a letter.',
+    downloadXml: 'Download XRechnung XML', xmlFailed: 'XRechnung preview failed', amountCents: 'Amount (€)', discountCents: 'Discount (€)',
+    paymentId: 'Payment ID', allocate: 'Allocate', discountHint: 'Discount applies only when paid before the discount deadline.',
+    dunningOnlyOverdue: 'Dunning is available only for overdue invoices.',
     dunningRun: 'Run dunning for this invoice', address: 'Address', email: 'Email', noAddress: 'No address recorded.',
-    dependencyTitle: 'Invoices requires additional modules', dependencyNote: 'Install “buchhaltung” (ledger/journal) and “customers” (party master data) from the App Store, then reload Invoices.',
-    reload: 'Reload', missingDb: 'Invoices cannot start: ctx.db is missing.', noCustomer: 'No customer exists in CRM. Create a customer in “customers” before creating an invoice.',
+    noCustomer: 'Create a customer in “Customers” first.',
     deleteConfirm: 'Delete draft {id}?', cannotPost: 'Invoice cannot be posted', resizeColumn: 'Adjust column width',
     stateDraft: 'Draft', statePosted: 'Posted', statePartiallyPaid: 'Partially paid', statePaid: 'Paid', stateOverdue: 'Overdue', stateCancelled: 'Cancelled', stateCredited: 'Credited',
-    pos: 'Pos', quantity: 'Quantity (‰)', unit: 'Unit', unitPrice: 'Unit price (cents)',
-    importInvalid: 'Invalid JSON file.', importEmpty: 'No valid invoices (customer + line items) in the file.', imported: '{count} imported',
-    syncingHint: 'Syncing data.',
+    pos: 'Pos', quantity: 'Quantity', unit: 'Unit', unitPrice: 'Unit price (€)', lineAmount: 'Amount',
+    importInvalid: 'Invalid JSON file.', importEmpty: 'No valid invoices (customer + line items) in the file.',
   },
 };
 
@@ -108,15 +96,16 @@ const TYPE_LABELS = {
 const BAND_ORDER = Object.freeze(['alle', 'offen', 'bezahlt', 'ueberfaellig']);
 
 // Editor/detail line table columns; `num` columns render right-aligned.
+// col = Spaltenschlüssel (data-col) für die schmale Kartenansicht der Positionen (FIX10, index.css).
 const LINE_COLUMNS = Object.freeze([
-  { labelKey: 'pos' },
-  { labelKey: 'description' },
-  { labelKey: 'quantity', num: true },
-  { labelKey: 'unit' },
-  { labelKey: 'unitPrice', num: true },
-  { label: 'USt %', num: true },
-  { label: 'SKR' },
-  { label: '' },
+  { labelKey: 'pos', col: 'pos' },
+  { labelKey: 'description', col: 'desc' },
+  { labelKey: 'quantity', num: true, col: 'qty' },
+  { labelKey: 'unit', col: 'unit' },
+  { labelKey: 'unitPrice', num: true, col: 'price' },
+  { label: 'USt %', num: true, col: 'tax' },
+  { label: 'SKR', col: 'account' },
+  { label: '', col: 'action' },
 ]);
 
 // Kit-style monochrome action glyphs (viewBox 0 0 24 24, stroke 1.8, round caps).
@@ -131,6 +120,7 @@ const ICON = Object.freeze({
   close: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>',
   trash: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>',
   add: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>',
+  more: '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>',
 });
 
 // Collections whose mutations should re-render the invoices shell.
@@ -146,11 +136,13 @@ const WATCHED_COLLECTIONS = Object.freeze([
   'customer_accounts',
 ]);
 
-const REQUIRED_MODULES = ['buchhaltung', 'customers'];
 const STATE_LABEL_KEYS = { draft: 'stateDraft', posted: 'statePosted', partially_paid: 'statePartiallyPaid', paid: 'statePaid', overdue: 'stateOverdue', cancelled: 'stateCancelled', credited: 'stateCredited' };
 
+const SNAPSHOT_VERSION = 1;
+
 const STATE = {
-  ctx: null,
+  api: null,
+  root: null,
   cleanup: [],
   renderTimer: 0,
   invoices: [],
@@ -162,11 +154,11 @@ const STATE = {
   band: 'alle',
   filterType: 'all',
   lineDraft: null,
-  busy: false,
-  lastError: null,
+  // Open draft edit (clone of the selected draft invoice): survives live refreshes and remounts.
+  edit: null,
+  pendingRestore: null,
   locale: 'de',
   frame: null,
-  invoiceReadiness: null,
 };
 
 // ---------------------------------------------------------------------------
@@ -300,19 +292,12 @@ export function renderInvoiceRow(inv, opts = {}) {
     + '</div>';
 }
 
+// v4 (PORTING.md R11): an empty list renders nothing — no empty/syncing copy.
 export function renderInvoiceListMarkup(rows, opts = {}) {
   const selectedId = opts.selectedId ?? null;
-  // Data-driven empty: only when the caller passes a readiness snapshot (i.e.
-  // the unfiltered collection is empty) does an unready state show the
-  // syncing shell; filter/search empties keep the plain empty hint.
-  return renderListOrState(Array.isArray(rows) ? rows : [], opts.readiness ?? null, {
-    renderRows: (list) => list.map((inv) => renderInvoiceRow(inv, { view: opts.view, selected: inv.id === selectedId })).join(''),
-    // Die Liste bekommt ihren eigenen Leer-Text: der Auswahl-Hinweis
-    // (emptyHint) gehoert auf die Buehne, nicht in die Liste — sonst steht
-    // derselbe Satz in beiden Panes (UI-Review: Amateurhaeftigkeit).
-    empty: opts.emptyText || t('listEmpty'),
-    syncing: opts.syncingText || t('syncingHint'),
-  });
+  return (Array.isArray(rows) ? rows : [])
+    .map((inv) => renderInvoiceRow(inv, { view: opts.view, selected: inv.id === selectedId }))
+    .join('');
 }
 
 export function computeInvoiceTotals(inv) {
@@ -355,8 +340,12 @@ function computeLineNetCents(line) {
 // i18n + small formatting helpers
 // ---------------------------------------------------------------------------
 
+// api.shell.t('invoices.<key>') overrides when it returns more than the key itself (key space open,
+// app-api.d.ts OFFEN-B); the embedded COPY is the fallback.
 function t(key, replacements = {}) {
-  let value = COPY[STATE.locale]?.[key] ?? COPY.de[key] ?? key;
+  const scoped = `invoices.${key}`;
+  const shellValue = typeof STATE.api?.shell?.t === 'function' ? STATE.api.shell.t(scoped) : scoped;
+  let value = shellValue && shellValue !== scoped ? shellValue : (COPY[STATE.locale]?.[key] ?? COPY.de[key] ?? key);
   for (const [name, replacement] of Object.entries(replacements)) value = value.replace(`{${name}}`, String(replacement));
   return value;
 }
@@ -380,18 +369,54 @@ function stateBadgeClass(state) {
   return '';
 }
 
+// Kundenname aus customer_accounts; ohne Treffer „Unbekannt“ – nie die technische ID (Textdiät Regel 4).
 function partyName(partyId) {
-  return STATE.parties[partyId]?.name || partyId || '—';
+  const p = STATE.parties[partyId];
+  const name = p && (p.name || p.payload?.name || p.payload?.legal_name);
+  return name ? String(name) : t('unknownCustomer');
 }
 
+// Beträge deutsch: „119,00 €“. Gespeichert bleibt in Cent.
 function formatCents(cents) {
   if (!Number.isFinite(cents)) return '–';
-  return `${(cents / 100).toFixed(2)} EUR`;
+  return (cents / 100).toLocaleString('de-DE', { style: 'currency', currency: 'EUR' });
 }
 
+// Eingabe in Euro/Stück (deutsch oder mit Punkt), intern Cent bzw. Tausendstel.
+export function parseDecimalDe(value) {
+  let raw = String(value ?? '').trim().replace(/\s|€/g, '');
+  if (!raw) return 0;
+  if (raw.includes(',')) raw = raw.replace(/\./g, '').replace(',', '.');
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : 0;
+}
+export const euroToCents = (value) => Math.round(parseDecimalDe(value) * 100);
+export const unitsToMilli = (value) => Math.round(parseDecimalDe(value) * 1000);
+function formatDecimalDe(n, minDigits, maxDigits) {
+  return Number(n).toLocaleString('de-DE', { minimumFractionDigits: minDigits, maximumFractionDigits: maxDigits, useGrouping: false });
+}
+const centsToEuroInput = (cents) => (Number.isFinite(Number(cents)) ? formatDecimalDe(Number(cents) / 100, 2, 2) : '');
+const milliToUnitsInput = (milli) => (Number.isFinite(Number(milli)) ? formatDecimalDe(Number(milli) / 1000, 0, 3) : '');
+
+// Adresse als eine Zeile („Straße, PLZ Ort, Land“); Objekte aus customer_accounts nie als „[object Object]“.
+function formatAddress(a) {
+  if (!a) return '';
+  if (typeof a === 'string') return a;
+  if (typeof a !== 'object') return String(a);
+  const street = a.street || a.line1 || a.address_line1 || '';
+  const city = [a.postal_code || a.zip || a.postcode, a.city || a.locality].filter(Boolean).join(' ');
+  return [street, a.line2 || a.address_line2, city, a.country].filter(Boolean).join(', ');
+}
+
+function formatDateDe(ms) {
+  if (!Number.isFinite(ms)) return '';
+  return new Date(ms).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'UTC' });
+}
+
+// Menge in Stück, deutsch („1“, „1,5“) – nicht „1.000“, das im Deutschen tausend heißt.
 function formatMilli(quantity) {
   if (!Number.isFinite(quantity)) return '–';
-  return (quantity / 1000).toFixed(3);
+  return (quantity / 1000).toLocaleString('de-DE', { maximumFractionDigits: 3 });
 }
 
 function isoDateInput(ms) {
@@ -421,167 +446,236 @@ function escapeHtml(value) {
 // Mount / lifecycle
 // ---------------------------------------------------------------------------
 
-export async function mount(ctx) {
-  resetState(ctx);
-  ensureModuleStyles();
-  await ensureMountedMarkup(ctx);
-  if (!ctx?.db) {
-    renderError(t('missingDb'));
-    return () => {};
-  }
-  if (!isReady()) {
-    renderDependencyBlocker();
-    return () => {};
-  }
-  // Frame FIRST, data second. A denied or unavailable collection is a data
-  // condition, not a mount failure: the app must keep its own Shell-V2 frame
-  // and report the problem in its error strip instead of throwing out of
-  // mount() and letting the shell replace the window with a generic recovery
-  // card (which has no pane heads at all).
+export async function mount(root, api, { restored } = {}) {
+  resetState(root, api);
+  // Subscriptions + listeners belong to THIS mount (PORTING.md §4 Falle 1).
+  const cleanup = STATE.cleanup;
+  if (root?.dataset && !root.dataset.app) root.dataset.app = api.app?.id || MODULE_ID;
+  await ensureMountedMarkup(root);
+  api.shell?.setTitle?.(t('invoices'));
+  STATE.pendingRestore = restored && typeof restored === 'object' && restored.v === SNAPSHOT_VERSION ? restored : null;
+  // Frame FIRST, data second: the static frame stays on screen in every data state.
   render();
-  try {
-    await refresh();
-  } catch (error) {
-    console.error('invoices error:', error);
-    STATE.lastError = error?.message || String(error);
-  }
-  render();
-  STATE.cleanup.push(wireRealtime());
-  STATE.cleanup.push(wireInvoiceReadiness());
-  // Cross-module signal: a customer edit elsewhere must refresh the folded-in
-  // party snapshot. eventBus survives schema-drift recovery.
-  if (ctx.eventBus?.on) {
-    const off = ctx.eventBus.on('customers.account.updated', () => scheduleRefresh());
-    if (typeof off === 'function') STATE.cleanup.push(off);
-  }
-  return () => {
-    for (const cleanup of STATE.cleanup.splice(0)) {
-      try { cleanup?.(); } catch {}
+  applyRestoredView();
+  autoWirePaneGrammar(moduleRoot());
+  for (const name of WATCHED_COLLECTIONS) {
+    let off = null;
+    try {
+      off = api.query(name, {}).subscribe((rows) => {
+        STATE.data[name] = (Array.isArray(rows) ? rows : []).filter((doc) => doc && doc.is_deleted !== true);
+        if (name === 'accounting_invoices') STATE.invoicesLoaded = true;
+        scheduleRefresh();
+      });
+    } catch (error) {
+      // A collection the core does not grant this app is a data condition, not a mount failure.
+      api.status?.report?.({ level: 'error', code: `invoices.read.${name}`, text: `${name}: ${error?.code || ''} ${error?.message || error}`.trim() });
     }
-    if (STATE.renderTimer) window.clearTimeout(STATE.renderTimer);
+    if (typeof off === 'function') cleanup.push(off);
+  }
+  if (api.shell?.locale?.subscribe) {
+    cleanup.push(api.shell.locale.subscribe((locale) => {
+      const next = langFrom(locale);
+      if (next === STATE.locale) return;
+      STATE.locale = next;
+      api.shell?.setTitle?.(t('invoices'));
+      relabelStaticFrame();
+      render();
+    }));
+  }
+  return {
+    unmount() {
+      for (const fn of cleanup.splice(0)) {
+        try { fn?.(); } catch {}
+      }
+      if (STATE.renderTimer) window.clearTimeout(STATE.renderTimer);
+      STATE.renderTimer = 0;
+      if (STATE.root === root) {
+        root.replaceChildren?.();
+        if (root.replaceChildren === undefined) root.innerHTML = '';
+        STATE.api = null;
+        STATE.root = null;
+        STATE.frame = null;
+      }
+    },
+    snapshot: invoicesSnapshot,
   };
 }
 
-function resetState(ctx) {
-  STATE.ctx = ctx;
+function langFrom(locale) {
+  return String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+}
+
+function resetState(root, api) {
+  STATE.api = api;
+  STATE.root = root;
   STATE.cleanup = [];
   STATE.renderTimer = 0;
+  STATE.data = Object.fromEntries(WATCHED_COLLECTIONS.map((name) => [name, []]));
   STATE.invoices = [];
   STATE.parties = {};
   STATE.selectedInvoiceId = null;
   STATE.userCollapsed = false;
+  STATE.autoSelected = false;
+  STATE.invoicesLoaded = false;
   STATE.search = '';
   STATE.view = 'cards';
   STATE.band = 'alle';
   STATE.filterType = 'all';
   STATE.lineDraft = null;
-  STATE.busy = false;
-  STATE.lastError = null;
-  STATE.locale = String(ctx.locale || globalThis.document?.documentElement?.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
+  STATE.edit = null;
+  STATE.pendingRestore = null;
+  STATE.locale = langFrom(api?.shell?.locale?.get?.() || globalThis.document?.documentElement?.lang || 'de');
   STATE.frame = null;
-  STATE.invoiceReadiness = null;
 }
 
-function isReady() {
-  if (!STATE.ctx?.modules) return false;
-  for (const id of REQUIRED_MODULES) {
-    const mod = STATE.ctx.modules.find?.((m) => m?.id === id);
-    if (!mod || mod.installed === false) return false;
+// snapshot(): structured-clone values only; open inputs (draft editor, payment form) always included.
+function invoicesSnapshot() {
+  const root = moduleRoot();
+  const form = root?.querySelector?.('.invoices-payment-form');
+  const paymentForm = form ? {
+    invoice_id: STATE.selectedInvoiceId || '',
+    amount_eur: form.querySelector('[name="amount_eur"]')?.value ?? '',
+    skonto_eur: form.querySelector('[name="skonto_eur"]')?.value ?? '',
+    payment_id: form.querySelector('[name="payment_id"]')?.value ?? '',
+  } : null;
+  return {
+    v: SNAPSHOT_VERSION,
+    selectedInvoiceId: STATE.selectedInvoiceId || '',
+    userCollapsed: STATE.userCollapsed,
+    search: root?.querySelector?.('[data-pg-search]')?.value ?? STATE.search,
+    view: STATE.view,
+    band: STATE.band,
+    filterType: STATE.filterType,
+    tab: STATE.lineDraft || '',
+    edit: STATE.edit ? { id: STATE.edit.id, dirty: STATE.edit.dirty, isNew: Boolean(STATE.edit.isNew), inv: structuredClone(STATE.edit.inv) } : null,
+    paymentForm,
+    listScrollTop: STATE.frame?.listEl?.parentElement?.scrollTop || 0,
+  };
+}
+
+// View state goes into the markup BEFORE autoWirePaneGrammar reads it; selection/edit apply at once
+// (the main pane shows the record as soon as it is in the live data).
+function applyRestoredView() {
+  const r = STATE.pendingRestore;
+  if (!r) return;
+  const f = STATE.frame;
+  const pane = f?.leftPane;
+  if (pane?.querySelector) {
+    const search = pane.querySelector('[data-pg-search]');
+    if (search && typeof r.search === 'string') search.value = r.search;
+    if (r.view === 'cards' || r.view === 'list') {
+      pane.querySelectorAll('[data-pg-view]').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.pgView === r.view)));
+    }
+    if (BAND_ORDER.includes(r.band)) {
+      pane.querySelectorAll('[data-pg-band]').forEach((tab) => {
+        const on = tab.dataset.pgBand === r.band;
+        tab.setAttribute('aria-selected', String(on));
+        tab.classList.toggle('is-active', on);
+      });
+    }
+    const type = pane.querySelector('[data-pg-filter][data-pg-name="type"]');
+    if (type && typeof r.filterType === 'string' && [...type.options].some((o) => o.value === r.filterType)) type.value = r.filterType;
   }
-  return true;
-}
-
-function resolveCollection(name) {
-  if (!STATE.ctx?.db) return null;
-  // The shell-delivered facade throws BusinessOsPermissionError for a
-  // collection this instance has not granted the app. That is a data
-  // condition, not a crash: callers treat a missing handle as "no rows" and
-  // the error strip explains it, so the frame stays on screen.
-  try {
-    return STATE.ctx.db.collection?.(name) || null;
-  } catch (error) {
-    if (!STATE.lastError) STATE.lastError = error?.message || String(error);
-    return null;
+  if (typeof r.search === 'string') STATE.search = r.search;
+  if (r.view === 'cards' || r.view === 'list') STATE.view = r.view;
+  if (BAND_ORDER.includes(r.band)) STATE.band = r.band;
+  if (typeof r.filterType === 'string') STATE.filterType = r.filterType;
+  if (typeof r.selectedInvoiceId === 'string' && r.selectedInvoiceId) STATE.selectedInvoiceId = r.selectedInvoiceId;
+  if (typeof r.userCollapsed === 'boolean') STATE.userCollapsed = r.userCollapsed;
+  if (typeof r.tab === 'string' && r.tab) STATE.lineDraft = r.tab;
+  if (r.edit && typeof r.edit === 'object' && typeof r.edit.id === 'string' && r.edit.inv && typeof r.edit.inv === 'object') {
+    STATE.edit = { id: r.edit.id, dirty: Boolean(r.edit.dirty), isNew: Boolean(r.edit.isNew), inv: r.edit.inv };
   }
+  render();
 }
 
-function subscribeCollection(name) {
-  try {
-    return resolveCollection(name)?.$?.subscribe?.(() => scheduleRefresh()) || null;
-  } catch {
-    return null;
+// After the first live emission that carries the restored record: put back the payment form inputs and the scroll.
+function applyPendingFormRestore() {
+  const r = STATE.pendingRestore;
+  if (!r || !selectedInvoice()) return;
+  STATE.pendingRestore = null;
+  const form = moduleRoot()?.querySelector?.('.invoices-payment-form');
+  if (form && r.paymentForm && r.paymentForm.invoice_id === STATE.selectedInvoiceId) {
+    for (const name of ['amount_eur', 'skonto_eur', 'payment_id']) {
+      const input = form.querySelector(`[name="${name}"]`);
+      if (input && typeof r.paymentForm[name] === 'string') input.value = r.paymentForm[name];
+    }
   }
-}
-
-function wireRealtime() {
-  const subscriptions = WATCHED_COLLECTIONS
-    .map((name) => subscribeCollection(name))
-    .filter(Boolean);
-  return () => subscriptions.forEach((sub) => {
-    try { sub.unsubscribe?.(); } catch {}
-  });
-}
-
-// Canonical sync readiness for the list's backing collection: while
-// accounting_invoices has not completed its initial replication, an empty
-// list must render the syncing shell instead of "no data". The listener
-// re-renders only the list (readiness never affects the detail/editor).
-function wireInvoiceReadiness() {
-  const subscribe = STATE.ctx?.sync?.subscribeCollectionReadiness;
-  if (typeof subscribe !== 'function') return () => {};
-  const unsubscribe = subscribe.call(STATE.ctx.sync, 'accounting_invoices', (snapshot) => {
-    STATE.invoiceReadiness = snapshot || null;
-    renderList();
-  });
-  return typeof unsubscribe === 'function' ? unsubscribe : () => {};
+  const well = STATE.frame?.listEl?.parentElement;
+  if (well && Number.isFinite(r.listScrollTop) && r.listScrollTop > 0) {
+    window.requestAnimationFrame?.(() => { well.scrollTop = r.listScrollTop; });
+  }
 }
 
 function scheduleRefresh() {
-  if (STATE.renderTimer) return;
+  if (STATE.renderTimer || !STATE.api) return;
   STATE.renderTimer = window.setTimeout(() => {
     STATE.renderTimer = 0;
-    refresh().then(render).catch(reportError);
+    if (!STATE.api) return;
+    refresh();
+    render();
+    applyPendingFormRestore();
   }, 80);
 }
 
-async function refresh() {
-  const invoices = await readCollection('accounting_invoices');
-  const parties = await readCollection('customer_accounts');
+function refresh() {
+  const parties = STATE.data.customer_accounts || [];
   STATE.parties = Object.fromEntries(parties.map((p) => [p.id, p]));
-  STATE.invoices = (invoices || []).filter((inv) => !inv.is_deleted);
-  STATE.lastError = null;
+  STATE.invoices = (STATE.data.accounting_invoices || []).filter((inv) => !inv.is_deleted);
 }
 
-async function readCollection(name) {
-  const c = resolveCollection(name);
-  if (!c) return [];
-  if (typeof c.find === 'function' && typeof c.find().exec === 'function') {
-    const docs = await c.find().exec();
-    return docs.map((doc) => doc?.toJSON?.() || doc).filter((doc) => doc && doc._deleted !== true && doc.is_deleted !== true);
-  }
-  if (typeof c.all === 'function') return c.all();
-  return Array.isArray(c) ? c : [];
-}
-
-async function submitCommand(command) {
-  if (STATE.busy) throw new Error('invoices: another command is in flight');
-  STATE.busy = true;
+// Commands: api.command creates the command document locally and returns at once — the UI never waits.
+// The command carries exactly the handler payload (V4-HANDLERS.md) plus client_context; record_id goes
+// through opts (§16.19 Nr. 8). `module`/`command_type` are no longer part of the document.
+// `onDone` chains a follow-up command on the pushed status (e.g. update → post), without blocking the UI.
+function submitCommand(command, { onDone, onFailed } = {}) {
+  const api = STATE.api;
+  if (!api) return null;
+  const type = command.command_type;
+  const payload = { ...(command.payload || {}) };
+  if (command.client_context) payload.client_context = command.client_context;
+  const opts = command.record_id ? { record_id: command.record_id } : undefined;
+  const code = `invoices.command.${type}`;
+  let handle;
   try {
-    const outcome = await STATE.ctx.commandBus.dispatch(command);
-    STATE.lastError = null;
-    return outcome;
-  } catch (err) {
-    STATE.lastError = err?.message || String(err);
-    throw err;
-  } finally {
-    STATE.busy = false;
+    handle = api.command(type, payload, opts);
+  } catch (error) {
+    api.status.report({ level: 'error', code, text: `${type}: ${error?.code || 'local'} ${error?.message || error}` });
+    onFailed?.(error);
+    return null;
   }
+  let off = null;
+  let finished = false;
+  const stop = () => { finished = true; off?.(); off = null; };
+  off = handle.status.subscribe((value) => {
+    if (finished) return;
+    if (value?.status === 'failed') {
+      api.status.report({ level: 'error', code, text: `${type}: ${value.error || 'failed'}`, ref: handle.id });
+      stop();
+      onFailed?.(value);
+    } else if (value?.status === 'done') {
+      api.status.clear(code);
+      stop();
+      onDone?.(value);
+    }
+  });
+  if (finished) off?.();
+  handle.local.catch((error) => {
+    if (finished) return;
+    api.status.report({ level: 'error', code, text: `${type}: ${error?.code || 'local'} ${error?.message || error}`, ref: handle.id });
+    stop();
+    onFailed?.(error);
+  });
+  STATE.cleanup.push(stop);
+  return handle;
 }
 
-function reportError(err) {
-  console.error('invoices error:', err);
-  STATE.lastError = err?.message || String(err);
-  render();
+function reportStatus(level, code, text) {
+  STATE.api?.status?.report?.({ level, code, text });
+}
+
+function clearStatus(code) {
+  STATE.api?.status?.clear?.(code);
 }
 
 // ---------------------------------------------------------------------------
@@ -641,8 +735,7 @@ function buildLeftGrammar(leftPane) {
   const actions = createEl('div', 'ctox-pane-actions');
   add(actions,
     paneIcon(ICON.new, t('newInvoice'), { action: 'new', extraClass: 'is-primary' }),
-    paneIcon(ICON.import, t('import'), { action: 'import' }),
-    paneIcon(ICON.export, t('export'), { action: 'export' }));
+    paneIcon(ICON.more, t('more'), { action: 'more' }));
 
   const header = createEl('header', 'ctox-pane-header ctox-pane-band');
   const titleRow = buildTitleRow(t('kicker'), t('invoices'), actions);
@@ -725,13 +818,9 @@ function buildLeftGrammar(leftPane) {
   listEl.dataset.invoicesList = '';
   add(well, listEl);
 
-  const footer = createEl('footer', 'ctox-pane-footer');
-  const footerEl = createEl('span');
-  footerEl.setAttribute('data-pg-footer', '');
-  add(footer, footerEl);
-
-  add(leftPane, header, nav, well, footer);
-  return { listEl, countEls, footerEl };
+  // Keine Fußzeile „N Einträge · Band“: sie wiederholt nur den Reiterzähler (Textdiät Regel 5).
+  add(leftPane, header, nav, well);
+  return { listEl, countEls, footerEl: null };
 }
 
 // Adopt the STATIC Shell-V2 frame from index.html (reference: modules/tickets,
@@ -748,19 +837,7 @@ function adoptFrame(root) {
   const listEl = root.querySelector('[data-invoices-list]');
   if (!workspace || !leftPane || !mainPane || !listEl) return null;
 
-  // Static markup ships German defaults; t() re-labels it for the session locale.
-  for (const node of root.querySelectorAll('[data-copy]')) {
-    node.textContent = t(node.dataset.copy);
-  }
-  for (const node of root.querySelectorAll('[data-copy-label]')) {
-    const text = t(node.dataset.copyLabel);
-    node.setAttribute('aria-label', text);
-    if (node.title !== undefined && node.tagName === 'BUTTON') node.title = text;
-  }
-  for (const node of root.querySelectorAll('[data-copy-placeholder]')) {
-    node.setAttribute('placeholder', t(node.dataset.copyPlaceholder));
-    node.setAttribute('aria-label', t(node.dataset.copyPlaceholder));
-  }
+  relabelStaticFrame(root);
 
   // Option list and counted band come from the module constants so markup and
   // filter logic cannot drift apart.
@@ -802,7 +879,6 @@ function adoptFrame(root) {
     workspace,
     leftPane,
     mainPane,
-    banner: root.querySelector('[data-invoices-banner]'),
     listEl,
     countEls,
     footerEl: root.querySelector('[data-pg-footer]'),
@@ -812,6 +888,27 @@ function adoptFrame(root) {
     mainBody: root.querySelector('[data-invoices-main-body]'),
     staticHead: true,
   };
+}
+
+// Static markup ships German defaults; t() re-labels it for the session locale (also on live locale change).
+function relabelStaticFrame(root = moduleRoot()) {
+  if (!root?.querySelectorAll) return;
+  for (const node of root.querySelectorAll('[data-copy]')) {
+    node.textContent = t(node.dataset.copy);
+  }
+  for (const node of root.querySelectorAll('[data-copy-label]')) {
+    const text = t(node.dataset.copyLabel);
+    node.setAttribute('aria-label', text);
+    if (node.title !== undefined && node.tagName === 'BUTTON') node.title = text;
+  }
+  for (const node of root.querySelectorAll('[data-copy-placeholder]')) {
+    node.setAttribute('placeholder', t(node.dataset.copyPlaceholder));
+    node.setAttribute('aria-label', t(node.dataset.copyPlaceholder));
+  }
+  for (const tab of root.querySelectorAll('[data-pg-band]')) {
+    const label = tab.querySelector('span:not(.view-count)');
+    if (label) label.textContent = bandLabel(tab.dataset.pgBand);
+  }
 }
 
 function ensureFrame(root) {
@@ -843,15 +940,12 @@ function ensureFrame(root) {
 
   add(workspace, leftPane, resizer, mainPane);
 
-  const banner = createEl('div', 'invoices-error-banner');
-  banner.hidden = true;
-
   // innerHTML='' + appendChild (not replaceChildren) so the fake-DOM test shims
   // — whose replaceChildren drops its arguments — still see the frame.
   root.innerHTML = '';
-  add(root, workspace, banner);
+  add(root, workspace);
 
-  STATE.frame = { workspace, leftPane, mainPane, banner, listEl: grammar.listEl, countEls: grammar.countEls, footerEl: grammar.footerEl };
+  STATE.frame = { workspace, leftPane, mainPane, listEl: grammar.listEl, countEls: grammar.countEls, footerEl: grammar.footerEl };
   wireFrameEvents();
   return STATE.frame;
 }
@@ -879,9 +973,20 @@ function render() {
   root.dataset.contextSubmodule = 'shell';
   root.dataset.contextSkill = SKILL_TAG;
   ensureFrame(root);
+  autoSelectFirst();
   renderList();
   renderMain();
-  syncBanner();
+}
+
+// Wie Outlook/lexoffice: beim Öffnen den ersten Eintrag der Liste wählen (einmal je Mount; danach entscheidet
+// der Nutzer, auch über „Details schließen“).
+function autoSelectFirst() {
+  if (STATE.autoSelected || !STATE.invoicesLoaded) return;
+  if (STATE.selectedInvoiceId || STATE.userCollapsed) { STATE.autoSelected = true; return; }
+  const first = visibleInvoices()[0];
+  if (!first) return;
+  STATE.selectedInvoiceId = first.id;
+  STATE.autoSelected = true;
 }
 
 function visibleInvoices() {
@@ -894,7 +999,23 @@ function visibleInvoices() {
 }
 
 function selectedInvoice() {
-  return STATE.invoices.find((i) => i.id === STATE.selectedInvoiceId) || null;
+  const live = STATE.invoices.find((i) => i.id === STATE.selectedInvoiceId);
+  if (live) return live;
+  // Neue Rechnung (FIX9a): bis „Entwurf speichern“/„Buchen“ nur im Editor, nicht in der Datenbank.
+  return STATE.edit?.isNew && STATE.edit.id === STATE.selectedInvoiceId ? STATE.edit.inv : null;
+}
+
+// Noch nicht gespeicherte neue Rechnung (kein Datensatz in accounting_invoices).
+function isUnsavedNew(inv) {
+  return Boolean(inv && STATE.edit?.isNew && STATE.edit.id === inv.id && !STATE.invoices.some((i) => i.id === inv.id));
+}
+
+// Abbrechen einer neuen Rechnung: nichts bleibt zurück.
+function discardNewDraft() {
+  if (STATE.edit?.isNew) STATE.edit = null;
+  STATE.selectedInvoiceId = null;
+  STATE.userCollapsed = true;
+  render();
 }
 
 function renderList() {
@@ -908,13 +1029,9 @@ function renderList() {
   const html = renderInvoiceListMarkup(rows, {
     view: STATE.view,
     selectedId: null,
-    // Gate the syncing shell on the UNFILTERED source: a filter/search empty
-    // (rows empty while STATE.invoices has records) must keep the plain hint.
-    readiness: STATE.invoices.length === 0 ? STATE.invoiceReadiness : null,
   });
   const signature = JSON.stringify({
     view: STATE.view,
-    readiness: STATE.invoices.length === 0 ? STATE.invoiceReadiness : null,
     rows: rows.map((inv) => ([
       inv.id,
       inv.invoice_number || '',
@@ -924,7 +1041,12 @@ function renderList() {
       inv.updated_at_ms || 0,
     ])),
   });
-  renderHtmlIfChanged(f.listEl, html, { signature });
+  // Suche/Filter ohne Treffer (FIX9a): „Keine Treffer“ plus Filter zurücksetzen statt leerer Spalte.
+  const noMatch = !rows.length && STATE.invoices.length > 0 && Boolean(STATE.search || (STATE.filterType && STATE.filterType !== 'all'));
+  const listHtml = noMatch
+    ? `<div class="invoices-no-match" data-invoices-no-match><p>${escapeHtml(t('noMatches'))}</p><button type="button" class="ctox-button" data-action="reset-filters">${escapeHtml(t('resetFilters'))}</button></div>`
+    : html;
+  renderHtmlIfChanged(f.listEl, listHtml, { signature: noMatch ? `nomatch:${STATE.locale}` : signature });
   applyListSelection();
   writeCounts(countsFor(STATE.invoices));
   writeFooter(`${rows.length} ${t('entries')} · ${bandLabel(STATE.band)}`);
@@ -946,13 +1068,6 @@ function writeFooter(textValue) {
   const pg = f.leftPane?.__ctoxPaneGrammar;
   if (pg?.setFooter) { pg.setFooter(textValue); return; }
   if (f.footerEl) f.footerEl.textContent = textValue || '';
-}
-
-function syncBanner() {
-  const f = STATE.frame;
-  if (!f?.banner) return;
-  f.banner.hidden = !STATE.lastError;
-  f.banner.textContent = STATE.lastError || '';
 }
 
 // Selection is an in-place class flip across the existing rows — never a list
@@ -989,14 +1104,30 @@ function onListKey(event) {
   selectRecord(row.getAttribute('data-invoice-id'));
 }
 
+// Seltene Aktionen (Import/Export) im „…“-Menü, damit der Spaltenkopf in die Spaltenbreite passt (Regel 6).
+async function openMoreMenu(btn) {
+  const r = btn.getBoundingClientRect();
+  const choice = await STATE.api?.shell?.menu?.({
+    items: [{ id: 'import', label: t('import') }, { id: 'export', label: t('export') }],
+    at: { x: r.left, y: r.bottom },
+  });
+  if (choice === 'import') importRecords();
+  else if (choice === 'export') exportRecords();
+}
+
 function onAction(event) {
   const btn = event.target?.closest?.('[data-action]');
   if (!btn || !STATE.frame?.workspace?.contains?.(btn)) return;
   const action = btn.dataset.action;
-  if (action === 'new') createDraft();
+  if (action === 'new') openNewDraft();
+  else if (action === 'reset-filters') STATE.frame?.leftPane?.querySelector?.('[data-pg-reset]')?.click();
   else if (action === 'import') importRecords();
   else if (action === 'export') exportRecords();
-  else if (action === 'collapse-detail') { STATE.userCollapsed = true; renderMain(); }
+  else if (action === 'more') openMoreMenu(btn);
+  else if (action === 'collapse-detail') {
+    if (isUnsavedNew(selectedInvoice())) discardNewDraft();
+    else { STATE.userCollapsed = true; renderMain(); }
+  }
   else if (action === 'delete') { const inv = selectedInvoice(); if (inv) deleteDraft(inv); }
 }
 
@@ -1013,6 +1144,19 @@ function onGrammarChange(event) {
 // Main pane: detail / editor (auto-reveal)
 // ---------------------------------------------------------------------------
 
+function emptyStage() {
+  if (!STATE.invoicesLoaded || STATE.invoices.length) return [];
+  const wrap = createEl('div', 'invoices-empty-stage');
+  const line = createEl('p');
+  line.textContent = t('emptyList');
+  const btn = createEl('button', 'ctox-button is-primary');
+  btn.type = 'button';
+  btn.dataset.action = 'new';
+  btn.textContent = t('newInvoice');
+  add(wrap, line, btn);
+  return [wrap];
+}
+
 function renderMain() {
   const f = STATE.frame;
   const pane = f?.mainPane;
@@ -1026,13 +1170,14 @@ function renderMain() {
     badge.dataset.state = inv.state;
     badge.textContent = invoiceStateLabel(inv.state);
     actions.appendChild(badge);
-    if (inv.state === 'draft') actions.appendChild(paneIcon(ICON.trash, t('deleteDraft'), { action: 'delete', extraClass: 'is-danger' }));
+    if (inv.state === 'draft' && !isUnsavedNew(inv)) actions.appendChild(paneIcon(ICON.trash, t('deleteDraft'), { action: 'delete', extraClass: 'is-danger' }));
     actions.appendChild(paneIcon(ICON.close, t('closeDetail'), { action: 'collapse-detail' }));
   }
 
-  const kicker = inv && reveal ? (inv.state === 'draft' ? t('draft') : t('invoice')) : t('invoices');
+  // Kein Kicker, der den Titel wiederholt (Textdiät Regel 3): ohne Auswahl leer.
+  const kicker = inv && reveal ? (inv.state === 'draft' ? t('draft') : t('invoice')) : '';
   const title = inv && reveal
-    ? `${inv.invoice_number || t('draft')} · ${partyName(inv.party_id)}`
+    ? (isUnsavedNew(inv) && !inv.party_id ? t('newInvoice') : `${inv.invoice_number || t('draft')} · ${partyName(inv.party_id)}`)
     : t('invoice');
 
   // Static head (index.html): only texts, actions and the body are refreshed —
@@ -1045,15 +1190,14 @@ function renderMain() {
     const body = f.mainBody;
     if (body) {
       if (!inv || !reveal) {
+        // Ohne Auswahl bleibt die Bühne leer; nur bei geladener, leerer Liste ein Satz plus Aktion (Regel 2).
         body.className = 'ctox-pane-body';
-        const empty = createEl('div', 'ctox-empty');
-        empty.textContent = t('emptyHint');
-        body.replaceChildren(empty);
+        body.replaceChildren(...emptyStage());
         delete pane.dataset.contextRecordId;
         delete pane.dataset.contextLabel;
       } else {
         body.className = 'ctox-pane-scroll invoices-pane-scroll';
-        body.replaceChildren(inv.state === 'draft' ? renderEditor(inv) : renderDetail(inv));
+        body.replaceChildren(inv.state === 'draft' ? renderEditor(draftFor(inv)) : renderDetail(inv));
         pane.dataset.contextRecordId = inv.id;
         pane.dataset.contextLabel = inv.invoice_number || inv.id;
       }
@@ -1069,18 +1213,30 @@ function renderMain() {
   let body;
   if (!inv || !reveal) {
     body = createEl('div', 'ctox-pane-body');
-    const empty = createEl('div', 'ctox-empty');
-    empty.textContent = t('emptyHint');
-    add(body, empty);
     delete pane.dataset.contextRecordId;
     delete pane.dataset.contextLabel;
   } else {
     body = createEl('div', 'ctox-pane-scroll invoices-pane-scroll');
-    add(body, inv.state === 'draft' ? renderEditor(inv) : renderDetail(inv));
+    add(body, inv.state === 'draft' ? renderEditor(draftFor(inv)) : renderDetail(inv));
     pane.dataset.contextRecordId = inv.id;
     pane.dataset.contextLabel = inv.invoice_number || inv.id;
   }
   pane.replaceChildren(header, body);
+}
+
+// The editor works on a clone of the live draft (rows from api.query are plain snapshots). Unsaved
+// edits (dirty) survive live refreshes and remounts (snapshot); a clean clone follows the live row.
+function draftFor(inv) {
+  if (!STATE.edit || STATE.edit.id !== inv.id) {
+    STATE.edit = { id: inv.id, dirty: false, inv: structuredClone(inv) };
+  } else if (!STATE.edit.dirty) {
+    STATE.edit.inv = structuredClone(inv);
+  }
+  return STATE.edit.inv;
+}
+
+function markDirty() {
+  if (STATE.edit) STATE.edit.dirty = true;
 }
 
 function renderEditor(inv) {
@@ -1103,7 +1259,7 @@ function renderEditor(inv) {
     if (p.id === inv.party_id) opt.selected = true;
     partySelect.appendChild(opt);
   }
-  partySelect.addEventListener('change', () => { inv.party_id = partySelect.value; renderMain(); });
+  partySelect.addEventListener('change', () => { inv.party_id = partySelect.value; markDirty(); renderMain(); });
   partyLabel.appendChild(partySelect);
   meta.appendChild(partyLabel);
 
@@ -1115,6 +1271,7 @@ function renderEditor(inv) {
   dateInput.addEventListener('change', () => {
     const ms = Date.parse(dateInput.value);
     if (Number.isFinite(ms)) {
+      markDirty();
       inv.invoice_date_ms = ms;
       inv.due_date_ms = computeDueDateMs(ms, inv.payment_terms?.net_days || 14);
     }
@@ -1132,7 +1289,7 @@ function renderEditor(inv) {
     if (type === inv.invoice_type) opt.selected = true;
     typeSelect.appendChild(opt);
   }
-  typeSelect.addEventListener('change', () => { inv.invoice_type = typeSelect.value; });
+  typeSelect.addEventListener('change', () => { inv.invoice_type = typeSelect.value; markDirty(); });
   typeLabelEl.appendChild(typeSelect);
   meta.appendChild(typeLabelEl);
 
@@ -1143,7 +1300,7 @@ function renderEditor(inv) {
   wrap.appendChild(linesHeader);
 
   const tableWrap = createEl('div', 'ctox-table-wrap');
-  const linesTable = createEl('table', 'ctox-table invoices-lines-table');
+  const linesTable = createEl('table', 'ctox-table invoices-lines-table invoices-lines-view');
   linesTable.appendChild(renderLineHeader());
   const linesBody = createEl('tbody');
   for (const line of inv.lines || []) linesBody.appendChild(renderLineRow(inv, line));
@@ -1166,6 +1323,7 @@ function renderEditor(inv) {
       tax_rate: 0.19,
       account_code: inv.invoice_type === 'sale_in' ? '3400' : '8400',
     });
+    markDirty();
     renderMain();
   });
   wrap.appendChild(addLineBtn);
@@ -1174,11 +1332,25 @@ function renderEditor(inv) {
 
   const actions = createEl('div', 'invoices-actions');
 
+  const unsaved = isUnsavedNew(inv);
+  if (unsaved) {
+    // Neue Rechnung: Abbrechen verwirft den Editor, es bleibt nichts zurück (lexoffice/sevDesk).
+    const cancelBtn = createEl('button', 'ctox-button');
+    cancelBtn.type = 'button';
+    cancelBtn.dataset.action = 'cancel-new';
+    cancelBtn.textContent = t('cancelNew');
+    cancelBtn.addEventListener('click', () => discardNewDraft());
+    actions.appendChild(cancelBtn);
+  }
+
   const saveBtn = createEl('button', 'ctox-button');
   saveBtn.type = 'button';
   saveBtn.textContent = t('saveDraft');
-  saveBtn.disabled = STATE.busy;
-  saveBtn.addEventListener('click', () => updateDraft(inv));
+  if (unsaved && !inv.party_id) {
+    saveBtn.disabled = true;
+    saveBtn.title = t('chooseCustomer');
+  }
+  saveBtn.addEventListener('click', () => (isUnsavedNew(inv) ? saveNewDraft(inv) : updateDraft(inv)));
   actions.appendChild(saveBtn);
 
   // The one big text button is the composer's essential action (post).
@@ -1186,26 +1358,15 @@ function renderEditor(inv) {
   postBtn.type = 'button';
   postBtn.textContent = t('post');
   const issues = computeValidationIssues(inv);
-  const postDisabled = STATE.busy || !issues.canPost;
+  const postDisabled = !issues.canPost;
   postBtn.disabled = postDisabled;
-  postBtn.title = postDisabled && !STATE.busy
-    ? `${t('missingBeforePost')}: ${issues.errors.map((i) => i.field).join(', ') || t('unknown')}`
+  postBtn.title = postDisabled
+    ? `${t('missingBeforePost')}: ${issues.errors.map((i) => i.message || i.field).join('; ') || t('unknown')}`
     : '';
   postBtn.addEventListener('click', () => postInvoice(inv));
   actions.appendChild(postBtn);
 
-  if (issues.errors.length > 0) {
-    const issuesBox = createEl('div', 'ctox-callout is-danger');
-    const issuesList = createEl('ul', 'invoices-issues');
-    for (const issue of issues.errors) {
-      const li = createEl('li');
-      li.textContent = issue.message;
-      issuesList.appendChild(li);
-    }
-    issuesBox.appendChild(issuesList);
-    actions.appendChild(issuesBox);
-  }
-
+  // Fehlende Angaben stehen im Tooltip des gesperrten Buchen-Knopfs, kein roter Kasten im Editor (Textdiät Regel 1).
   wrap.appendChild(actions);
   return wrap;
 }
@@ -1221,17 +1382,43 @@ function renderTotals(inv) {
   return totalsDiv;
 }
 
+function lineColumnLabel(column) {
+  return column?.labelKey ? t(column.labelKey) : (column?.label || '');
+}
+
 function renderLineHeader() {
   const thead = createEl('thead');
   const row = createEl('tr');
   for (const column of LINE_COLUMNS) {
     const th = createEl('th');
     if (column.num) th.className = 'is-num';
-    th.textContent = column.labelKey ? t(column.labelKey) : (column.label || '');
+    th.textContent = lineColumnLabel(column);
     row.appendChild(th);
   }
   thead.appendChild(row);
   return thead;
+}
+
+// Positionszelle mit Spaltenschlüssel und Beschriftung. In der einspaltigen Stufe (Fenster ≤ 768 px) wird jede Zeile
+// zur Karte „Beschreibung / Menge Einheit × Einzelpreis = Betrag / USt · SKR“ ohne Seitwärts-Scroll (FIX10, Standard
+// lexoffice mobil); der Kopf entfällt dort, die Beschriftung trägt data-label.
+function lineCell(index) {
+  const column = LINE_COLUMNS[index];
+  const td = createEl('td');
+  if (column?.num) td.className = 'is-num';
+  if (column?.col) td.dataset.col = column.col;
+  const label = lineColumnLabel(column);
+  if (label) td.dataset.label = label;
+  return td;
+}
+
+// Zeilenbetrag (netto) – nur in der schmalen Kartenansicht sichtbar, breit bleibt die Tabelle wie sie ist.
+function lineAmountCell(line) {
+  const td = createEl('td', 'is-num invoices-line-amount');
+  td.dataset.col = 'amount';
+  td.dataset.label = t('lineAmount');
+  td.textContent = formatCents(computeLineNetCents(line));
+  return td;
 }
 
 function renderLineRow(inv, line) {
@@ -1239,23 +1426,30 @@ function renderLineRow(inv, line) {
   const cells = [
     { type: 'text', value: line.position ?? '', set: (v) => (line.position = Number(v) || line.position) },
     { type: 'text', value: line.description || '', set: (v) => (line.description = v) },
-    { type: 'number', value: line.quantity ?? '', set: (v) => (line.quantity = Math.round(Number(v) || 0)) },
+    { type: 'text', decimal: true, value: line.quantity == null ? '' : milliToUnitsInput(line.quantity), set: (v) => (line.quantity = unitsToMilli(v)) },
     { type: 'text', value: line.unit || 'Stk', set: (v) => (line.unit = v) },
-    { type: 'number', value: line.unit_price_cents ?? '', set: (v) => (line.unit_price_cents = Math.round(Number(v) || 0)) },
+    { type: 'text', decimal: true, value: line.unit_price_cents == null ? '' : centsToEuroInput(line.unit_price_cents), set: (v) => (line.unit_price_cents = euroToCents(v)) },
     { type: 'number', value: ((line.tax_rate || 0) * 100).toFixed(0), set: (v) => (line.tax_rate = Math.max(0, Math.min(1, Number(v) / 100))) },
     { type: 'text', value: line.account_code || '', set: (v) => (line.account_code = v) },
   ];
+  const amountTd = lineAmountCell(line);
+  const refreshAmount = () => { amountTd.textContent = formatCents(computeLineNetCents(line)); };
   for (const [index, c] of cells.entries()) {
-    const td = createEl('td');
-    if (LINE_COLUMNS[index]?.num) td.className = 'is-num';
+    const td = lineCell(index);
     const input = createEl('input', 'ctox-input');
     input.type = c.type;
+    if (c.decimal) input.inputMode = 'decimal';
     input.value = c.value;
+    if (td.dataset.label) input.setAttribute('aria-label', td.dataset.label);
+    // Typed values land in the draft clone at once, so snapshot() carries open input.
+    input.addEventListener('input', () => { c.set(input.value); markDirty(); refreshAmount(); });
     input.addEventListener('change', () => {
       c.set(input.value);
+      markDirty();
+      refreshAmount();
       // Recompute totals in place to keep the operator in flow.
       const totals = computeInvoiceTotals(inv);
-      const totalsEl = document.querySelector?.('.invoices-totals');
+      const totalsEl = moduleRoot()?.querySelector?.('.invoices-totals');
       if (totalsEl) {
         totalsEl.innerHTML = `
           <span>${escapeHtml(t('net'))}: <strong>${formatCents(totals.subtotal_cents)}</strong></span>
@@ -1267,7 +1461,8 @@ function renderLineRow(inv, line) {
     td.appendChild(input);
     tr.appendChild(td);
   }
-  const removeTd = createEl('td');
+  tr.appendChild(amountTd);
+  const removeTd = lineCell(LINE_COLUMNS.length - 1);
   const removeBtn = createEl('button', 'ctox-icon-button');
   removeBtn.type = 'button';
   removeBtn.innerHTML = ICON.close;
@@ -1275,6 +1470,7 @@ function renderLineRow(inv, line) {
   removeBtn.title = t('removeLine');
   removeBtn.addEventListener('click', () => {
     inv.lines = (inv.lines || []).filter((l) => l.id !== line.id);
+    markDirty();
     renderMain();
   });
   removeTd.appendChild(removeBtn);
@@ -1290,8 +1486,8 @@ function renderDetail(inv) {
   const rows = [
     [t('invoiceNumber'), escapeHtml(inv.invoice_number || '—')],
     [t('customer'), escapeHtml(partyName(inv.party_id))],
-    [t('date'), escapeHtml(isoDateInput(inv.invoice_date_ms))],
-    [t('due'), escapeHtml(isoDateInput(inv.due_date_ms))],
+    [t('date'), escapeHtml(formatDateDe(inv.invoice_date_ms))],
+    [t('due'), escapeHtml(formatDateDe(inv.due_date_ms))],
     [t('net'), formatCents(inv.subtotal_cents)],
     [t('tax'), formatCents(inv.tax_cents)],
     [t('gross'), formatCents(inv.total_cents)],
@@ -1299,7 +1495,8 @@ function renderDetail(inv) {
     [t('open'), formatCents(inv.open_cents)],
   ];
   // Fold the customer snapshot (formerly a third-pane inspector) into the detail.
-  if (party.address) rows.push([t('address'), escapeHtml(party.address)]);
+  const address = formatAddress(party.address);
+  if (address) rows.push([t('address'), escapeHtml(address)]);
   if (party.email) rows.push([t('email'), escapeHtml(party.email)]);
   summary.innerHTML = rows.map(([dt, dd]) => `<dt>${escapeHtml(dt)}</dt><dd>${dd}</dd>`).join('');
   wrap.appendChild(summary);
@@ -1308,7 +1505,7 @@ function renderDetail(inv) {
   linesHeader.textContent = t('lines');
   wrap.appendChild(linesHeader);
   const tableWrap = createEl('div', 'ctox-table-wrap');
-  const linesTable = createEl('table', 'ctox-table');
+  const linesTable = createEl('table', 'ctox-table invoices-lines-view');
   linesTable.appendChild(renderLineHeader());
   const linesBody = createEl('tbody');
   for (const line of inv.lines || []) {
@@ -1323,12 +1520,12 @@ function renderDetail(inv) {
       line.account_code,
     ];
     for (const [index, value] of values.entries()) {
-      const td = createEl('td');
-      if (LINE_COLUMNS[index]?.num) td.className = 'is-num';
+      const td = lineCell(index);
       td.textContent = String(value ?? '');
       tr.appendChild(td);
     }
-    tr.appendChild(createEl('td'));
+    tr.appendChild(lineAmountCell(line));
+    tr.appendChild(lineCell(LINE_COLUMNS.length - 1));
     linesBody.appendChild(tr);
   }
   linesTable.appendChild(linesBody);
@@ -1340,7 +1537,9 @@ function renderDetail(inv) {
     { id: 'journal', label: t('journal') },
     { id: 'xrechnung', label: 'XRechnung' },
     { id: 'payments', label: t('payments') },
-    { id: 'dunning', label: t('dunning') },
+    // Rundgang RUND2: „Mahnen“ nur für überfällige Rechnungen anbieten – vorher stand bei allen anderen
+    // ein Zustandstext („Dunning ist nur für überfällige Rechnungen verfügbar.“) im Inhalt.
+    ...(inv.state === 'overdue' ? [{ id: 'dunning', label: t('dunning') }] : []),
   ];
   for (const tab of tabButtons) {
     const btn = createEl('button', 'ctox-pane-tab');
@@ -1416,8 +1615,9 @@ function renderXRechnungTab(inv) {
       URL.revokeObjectURL(url);
     });
     wrap.appendChild(download);
+    clearStatus('invoices.xrechnung.failed');
   } catch (err) {
-    wrap.textContent = `${t('xmlFailed')}: ${err?.message || err}`;
+    reportStatus('error', 'invoices.xrechnung.failed', `${t('xmlFailed')}: ${err?.message || err}`);
   }
   return wrap;
 }
@@ -1428,57 +1628,60 @@ function renderPaymentsTab(inv) {
   wrap.innerHTML = `
     <p>${escapeHtml(t('open'))}: <strong>${formatCents(openCents)}</strong></p>
     <form class="invoices-payment-form">
-      <label class="ctox-compact-field">${escapeHtml(t('amountCents'))}<input class="ctox-input" type="number" name="amount_cents" value="${openCents}" min="0" required /></label>
-      <label class="ctox-compact-field">${escapeHtml(t('discountCents'))}<input class="ctox-input" type="number" name="skonto_cents" value="0" min="0" /></label>
+      <label class="ctox-compact-field">${escapeHtml(t('amountCents'))}<input class="ctox-input" type="text" inputmode="decimal" name="amount_eur" value="${escapeHtml(centsToEuroInput(openCents))}" required /></label>
+      <label class="ctox-compact-field" title="${escapeHtml(t('discountHint'))}">${escapeHtml(t('discountCents'))}<input class="ctox-input" type="text" inputmode="decimal" name="skonto_eur" value="0,00" title="${escapeHtml(t('discountHint'))}" /></label>
       <label class="ctox-compact-field">${escapeHtml(t('paymentId'))}<input class="ctox-input" type="text" name="payment_id" placeholder="pay_…" required /></label>
-      <button class="ctox-button is-primary" type="submit" ${STATE.busy ? 'disabled' : ''}>${escapeHtml(t('allocate'))}</button>
+      <button class="ctox-button is-primary" type="submit">${escapeHtml(t('allocate'))}</button>
     </form>
-    <p class="invoices-hint">${escapeHtml(t('discountHint'))}</p>
   `;
   const form = wrap.querySelector('form');
-  form.addEventListener('submit', async (event) => {
+  form.addEventListener('submit', (event) => {
     event.preventDefault();
     const data = new FormData(form);
-    await submitCommand({
-      module: 'invoices',
-      command_type: 'invoices.payment.allocate',
-      record_id: inv.id,
-      payload: {
-        invoice_id: inv.id,
-        payment_id: String(data.get('payment_id') || '').trim(),
-        amount_cents: Math.round(Number(data.get('amount_cents')) || 0),
-        skonto_cents: Math.round(Number(data.get('skonto_cents')) || 0),
-      },
-      client_context: { surface: 'invoices.payment.allocate' },
-    });
-    await refresh();
-    render();
+    submitCommand(buildAllocatePaymentCommand(inv.id, {
+      payment_id: data.get('payment_id'),
+      amount_cents: euroToCents(data.get('amount_eur')),
+      skonto_cents: euroToCents(data.get('skonto_eur')),
+    }));
   });
   return wrap;
 }
 
+// No empty payment id: an empty string would make the allocation id `alloc__<invoice>`, so a second
+// payment without id on the same invoice counted as an idempotent repeat and was dropped (V4-HANDLERS I8).
+// Without an id the field is left out and the handler derives a per-command allocation id.
+export function buildAllocatePaymentCommand(invoiceId, form = {}) {
+  const paymentId = String(form.payment_id ?? '').trim();
+  return {
+    command_type: 'invoices.payment.allocate',
+    record_id: invoiceId,
+    payload: {
+      invoice_id: invoiceId,
+      ...(paymentId ? { payment_id: paymentId } : {}),
+      amount_cents: Math.round(Number(form.amount_cents) || 0),
+      skonto_cents: Math.round(Number(form.skonto_cents) || 0),
+    },
+    client_context: { surface: 'invoices.payment.allocate' },
+  };
+}
+
 function renderDunningTab(inv) {
   const wrap = createEl('div', 'invoices-tab');
-  if (inv.state !== 'overdue') {
-    wrap.textContent = t('dunningOnlyOverdue');
-    return wrap;
-  }
+  if (inv.state !== 'overdue') return wrap;
   wrap.innerHTML = `
-    <p>${escapeHtml(t('dunningHint'))}</p>
-    <button type="button" class="ctox-button is-primary" ${STATE.busy ? 'disabled' : ''}>${escapeHtml(t('dunningRun'))}</button>
+    <button type="button" class="ctox-button is-primary">${escapeHtml(t('dunningRun'))}</button>
   `;
   const btn = wrap.querySelector('button');
-  btn.addEventListener('click', async () => {
+  btn.addEventListener('click', () => {
     const runId = `dunning_${Date.now().toString(36)}`;
-    await submitCommand({
-      module: 'invoices',
+    // OFFEN (V4-PORT.md OFFEN-1, V4-HANDLERS I7): the handler only reads filter.state and
+    // filter.min_open_cents; the invoice selection below is sent unchanged but has no effect yet.
+    submitCommand({
       command_type: 'invoices.dunning.run',
       record_id: runId,
       payload: { run_id: runId, filter: { invoice_id: inv.id } },
       client_context: { surface: 'invoices.dunning.run' },
     });
-    await refresh();
-    render();
   });
   return wrap;
 }
@@ -1487,90 +1690,115 @@ function renderDunningTab(inv) {
 // Commands (flows + payloads unchanged from the prior IA)
 // ---------------------------------------------------------------------------
 
-async function createDraft() {
-  const partyId = Object.keys(STATE.parties)[0] || '';
-  if (!partyId) {
-    STATE.lastError = t('noCustomer');
-    render();
-    return;
-  }
-  const invoiceId = `inv_${Date.now().toString(36)}`;
-  await submitCommand(
-    buildCreateInvoiceCommand(invoiceId, {
+// „Neue Rechnung“ (FIX9a, Standard lexoffice/sevDesk): öffnet einen leeren Editor ohne Persistenz. Erst
+// „Entwurf speichern“ bzw. „Buchen“ legt den Datensatz an (invoices.invoice.create); Abbrechen hinterlässt nichts.
+function openNewDraft() {
+  const now = Date.now();
+  const invoiceId = `inv_${now.toString(36)}`;
+  STATE.edit = {
+    id: invoiceId,
+    dirty: true,
+    isNew: true,
+    inv: {
+      id: invoiceId,
+      state: 'draft',
       invoice_type: 'sale_out',
-      party_id: partyId,
-      invoice_date_ms: Date.now(),
-      due_date_ms: computeDueDateMs(Date.now(), 14),
+      party_id: '',
+      invoice_number: '',
+      invoice_date_ms: now,
+      due_date_ms: computeDueDateMs(now, 14),
       currency: 'EUR',
       lines: [],
-    }),
-  );
+    },
+  };
   STATE.selectedInvoiceId = invoiceId;
   STATE.userCollapsed = false;
-  await refresh();
+  STATE.lineDraft = null;
   render();
 }
 
-async function updateDraft(inv) {
+// Erstes Speichern einer neuen Rechnung: EIN create mit dem vollständigen Editorstand; Buchen hängt post an done.
+function saveNewDraft(inv, { post = false } = {}) {
+  if (!inv.party_id) return;
+  const edit = STATE.edit;
+  submitCommand(buildCreateInvoiceCommand(inv.id, draftPatch(inv, { withBreakdown: post })), {
+    onDone: () => {
+      // isNew bleibt: sobald die Zeile live ist, gilt sie über isUnsavedNew() nicht mehr als neu.
+      if (STATE.edit === edit) edit.dirty = false;
+      if (post) {
+        submitCommand({
+          command_type: 'invoices.invoice.post',
+          record_id: inv.id,
+          payload: { invoice_id: inv.id },
+          client_context: { surface: 'invoices.invoice.post' },
+        });
+      }
+    },
+  });
+}
+
+function draftPatch(inv, { withBreakdown = false } = {}) {
   const totals = computeInvoiceTotals(inv);
-  await submitCommand(
-    buildUpdateInvoiceCommand(inv.id, {
-      invoice_type: inv.invoice_type,
-      party_id: inv.party_id,
-      invoice_date_ms: inv.invoice_date_ms,
-      due_date_ms: inv.due_date_ms,
-      currency: inv.currency || 'EUR',
-      lines: inv.lines || [],
-      subtotal_cents: totals.subtotal_cents,
-      tax_cents: totals.tax_cents,
-      total_cents: totals.total_cents,
-    }),
-  );
-  await refresh();
-  render();
+  return {
+    invoice_type: inv.invoice_type,
+    party_id: inv.party_id,
+    invoice_date_ms: inv.invoice_date_ms,
+    due_date_ms: inv.due_date_ms,
+    currency: inv.currency || 'EUR',
+    lines: inv.lines || [],
+    subtotal_cents: totals.subtotal_cents,
+    tax_cents: totals.tax_cents,
+    total_cents: totals.total_cents,
+    ...(withBreakdown ? { tax_breakdown: totals.tax_breakdown || [] } : {}),
+  };
+}
+
+function updateDraft(inv) {
+  const edit = STATE.edit;
+  submitCommand(buildUpdateInvoiceCommand(inv.id, draftPatch(inv)), {
+    // Saved: the clone follows the live row again; on failure the edits stay open.
+    onDone: () => { if (STATE.edit === edit) edit.dirty = false; },
+  });
 }
 
 async function deleteDraft(inv) {
-  if (typeof confirm === 'function' && !confirm(t('deleteConfirm', { id: inv.invoice_number || inv.id }))) return;
-  await submitCommand(buildDeleteInvoiceCommand(inv.id));
+  const confirmed = await STATE.api?.shell?.dialog?.({
+    kind: 'confirm',
+    title: t('deleteDraft'),
+    text: t('deleteConfirm', { id: inv.invoice_number || inv.id }),
+    confirm_label: t('deleteDraft'),
+    default: false,
+  });
+  if (confirmed !== true) return;
+  submitCommand(buildDeleteInvoiceCommand(inv.id));
   STATE.selectedInvoiceId = null;
-  await refresh();
+  STATE.edit = null;
   render();
 }
 
-async function postInvoice(inv) {
+function postInvoice(inv) {
   // The native validator must see the same draft the operator confirmed —
-  // including unsaved edits — so we send the full patch before posting.
-  const totals = computeInvoiceTotals(inv);
+  // including unsaved edits — so we send the full patch before posting. The post command is
+  // chained on the update's pushed `done` (no await, the UI keeps working).
   const issues = computeValidationIssues(inv);
   if (!issues.canPost) {
-    STATE.lastError = `${t('cannotPost')}: ${issues.errors.map((i) => i.message).join('; ')}`;
-    render();
+    reportStatus('warn', 'invoices.post.invalid', `${t('cannotPost')}: ${issues.errors.map((i) => i.message).join('; ')}`);
     return;
   }
-  await submitCommand(
-    buildUpdateInvoiceCommand(inv.id, {
-      invoice_type: inv.invoice_type,
-      party_id: inv.party_id,
-      invoice_date_ms: inv.invoice_date_ms,
-      due_date_ms: inv.due_date_ms,
-      currency: inv.currency || 'EUR',
-      lines: inv.lines || [],
-      subtotal_cents: totals.subtotal_cents,
-      tax_cents: totals.tax_cents,
-      total_cents: totals.total_cents,
-      tax_breakdown: totals.tax_breakdown || [],
-    }),
-  );
-  await submitCommand({
-    module: 'invoices',
-    command_type: 'invoices.invoice.post',
-    record_id: inv.id,
-    payload: { invoice_id: inv.id },
-    client_context: { surface: 'invoices.invoice.post' },
+  clearStatus('invoices.post.invalid');
+  if (isUnsavedNew(inv)) { saveNewDraft(inv, { post: true }); return; }
+  const edit = STATE.edit;
+  submitCommand(buildUpdateInvoiceCommand(inv.id, draftPatch(inv, { withBreakdown: true })), {
+    onDone: () => {
+      if (STATE.edit === edit) edit.dirty = false;
+      submitCommand({
+        command_type: 'invoices.invoice.post',
+        record_id: inv.id,
+        payload: { invoice_id: inv.id },
+        client_context: { surface: 'invoices.invoice.post' },
+      });
+    },
   });
-  await refresh();
-  render();
 }
 
 function computeValidationIssues(inv) {
@@ -1603,8 +1831,10 @@ function exportRecords() {
     (STATE.frame?.workspace || document.body)?.appendChild?.(a);
     a.click();
     a.remove?.();
+    clearStatus('invoices.export.failed');
   } catch (error) {
     console.error('[invoices] export failed:', error);
+    reportStatus('error', 'invoices.export.failed', `${t('export')}: ${error?.message || error}`);
   } finally {
     if (url) setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
   }
@@ -1617,71 +1847,31 @@ function importRecords() {
   input.addEventListener('change', async () => {
     const file = input.files && input.files[0];
     if (!file) return;
-    let parsed;
-    try { parsed = JSON.parse(await file.text()); } catch { STATE.lastError = t('importInvalid'); render(); return; }
-    const entries = parseInvoiceImport(parsed, Date.now());
-    if (!entries.length) { STATE.lastError = t('importEmpty'); render(); return; }
-    let count = 0;
-    const stamp = Date.now().toString(36);
-    for (const [index, entry] of entries.entries()) {
-      const invoiceId = `inv_imp_${stamp}_${index}`;
-      try {
-        await submitCommand(buildCreateInvoiceCommand(invoiceId, entry));
-        count += 1;
-      } catch (error) {
-        console.error('[invoices] import create failed:', error);
-      }
-    }
-    STATE.lastError = null;
-    STATE.ctx?.notifications?.show?.({ type: 'success', title: t('invoices'), message: t('imported', { count }) });
-    await refresh();
-    render();
+    importInvoicesText(await file.text());
   });
   input.click();
 }
 
-// ---------------------------------------------------------------------------
-// Blocking / error states
-// ---------------------------------------------------------------------------
-
-function renderDependencyBlocker() {
-  const root = moduleRoot();
-  if (!root) return;
-  root.innerHTML = '';
-  STATE.frame = null;
-  const card = createEl('div', 'ctox-empty');
-  const title = createEl('strong');
-  title.textContent = t('dependencyTitle');
-  card.appendChild(title);
-  const list = createEl('ul');
-  for (const id of REQUIRED_MODULES) {
-    const item = createEl('li');
-    item.textContent = id;
-    list.appendChild(item);
+// Import = one invoices.invoice.create per valid entry; problems go to the status zone, success is silent
+// (the created invoices appear in the list live).
+function importInvoicesText(text) {
+  let parsed;
+  try { parsed = JSON.parse(text); } catch {
+    clearStatus('invoices.import.empty');
+    reportStatus('warn', 'invoices.import.invalid', t('importInvalid'));
+    return 0;
   }
-  card.appendChild(list);
-  const note = createEl('p');
-  note.textContent = t('dependencyNote');
-  card.appendChild(note);
-  const retry = createEl('button', 'ctox-button');
-  retry.type = 'button';
-  retry.textContent = t('reload');
-  retry.addEventListener('click', () => {
-    if (isReady()) refresh().then(render).catch(reportError);
-    else renderDependencyBlocker();
-  });
-  card.appendChild(retry);
-  root.appendChild(card);
-}
-
-function renderError(message) {
-  const root = moduleRoot();
-  if (!root) return;
-  root.innerHTML = '';
-  STATE.frame = null;
-  const div = createEl('div', 'ctox-empty');
-  div.textContent = message;
-  root.appendChild(div);
+  clearStatus('invoices.import.invalid');
+  const entries = parseInvoiceImport(parsed, Date.now());
+  if (!entries.length) { reportStatus('warn', 'invoices.import.empty', t('importEmpty')); return 0; }
+  clearStatus('invoices.import.empty');
+  let count = 0;
+  const stamp = Date.now().toString(36);
+  for (const [index, entry] of entries.entries()) {
+    const invoiceId = `inv_imp_${stamp}_${index}`;
+    if (submitCommand(buildCreateInvoiceCommand(invoiceId, entry))) count += 1;
+  }
+  return count;
 }
 
 // ---------------------------------------------------------------------------
@@ -1690,13 +1880,11 @@ function renderError(message) {
 
 function invoicesDebugSnapshot() {
   return {
-    mounted: Boolean(STATE.ctx),
+    mounted: Boolean(STATE.api),
     invoice_count: Array.isArray(STATE.invoices) ? STATE.invoices.length : 0,
     selected_invoice_id: STATE.selectedInvoiceId || '',
     band: STATE.band || 'alle',
     view: STATE.view || 'cards',
-    busy: Boolean(STATE.busy),
-    last_error: STATE.lastError || '',
     watched_collections: [...WATCHED_COLLECTIONS],
   };
 }
@@ -1708,45 +1896,30 @@ if (typeof window !== 'undefined') {
   });
 }
 
-function ensureModuleStyles() {
-  if (typeof document === 'undefined' || String(import.meta.url).startsWith('data:') || (!document.head?.appendChild && !document.head?.append)) return;
-  const cssVersion = String(import.meta.url).split('?v=')[1] || '';
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  let link = document.querySelector?.('link[data-invoices-style]');
-  if (!link) {
-    link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.dataset.invoicesStyle = 'true';
-    if (document.head.appendChild) document.head.appendChild(link);
-    else document.head.append(link);
-  }
-  if (link.getAttribute?.('href') !== cssHref) link.href = cssHref;
-}
-
-async function ensureMountedMarkup(ctx) {
-  if (!ctx?.host?.querySelector) return moduleRoot();
-  if (ctx.host.querySelector('#invoices-root')) return moduleRoot();
+// CSS loads the shell from the manifest; index.html comes from the Service Worker, versioned (§16.15).
+// Without a markup file (header-less node test shims) the programmatic frame is the fallback.
+async function ensureMountedMarkup(root) {
+  if (!root) return null;
+  if (root.querySelector?.('#invoices-root')) return moduleRoot();
+  let html = '';
   try {
-    const markupVersion = String(import.meta.url).split('?v=')[1] || '';
-    const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-    const html = await fetch(markupHref).then((res) => {
+    html = await fetch(new URL('./index.html', import.meta.url)).then((res) => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.text();
     });
-    if (typeof DOMParser !== 'undefined') {
-      const doc = new DOMParser().parseFromString(html, 'text/html');
-      ctx.host.innerHTML = doc.body.innerHTML;
-    } else {
-      ctx.host.innerHTML = '<div id="invoices-root" class="invoices-shell"></div>';
-    }
   } catch (error) {
     console.warn('[invoices] markup load failed; falling back to inline root', error);
-    ctx.host.innerHTML = '<div id="invoices-root" class="invoices-shell"></div>';
   }
+  root.innerHTML = html || '<div id="invoices-root" class="invoices-shell"></div>';
   return moduleRoot();
 }
 
 function moduleRoot() {
-  return STATE.ctx?.host?.querySelector?.('#invoices-root')
-    || document.getElementById('invoices-root');
+  const root = STATE.root;
+  if (!root) return null;
+  if (typeof root.querySelector === 'function') return root.querySelector('#invoices-root');
+  // Header-less node test shims without querySelector.
+  return globalThis.document?.getElementById?.('invoices-root') || null;
 }
+
+export const __invoicesTestHooks = Object.freeze({ importInvoicesText, buildAllocatePaymentCommand });

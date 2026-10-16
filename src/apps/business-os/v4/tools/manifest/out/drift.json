@@ -1,0 +1,1059 @@
+{
+  "commands_in_without_handler": [],
+  "commands_out_unresolved": [],
+  "commands_unmatched": [],
+  "contract_only": [
+    {
+      "collection": "business_commands",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "collection": "business_module_catalog",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "collection": "ctox_queue_tasks",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "collection": "ctox_runtime_settings",
+      "proposed_owner": "ctox-platform"
+    }
+  ],
+  "copy_divergence": [],
+  "exports_beyond_declaration": [],
+  "foreign_without_export": [],
+  "handler_conflicts": [
+    {
+      "apps": [
+        "outbound",
+        "outbound-lead-generation"
+      ],
+      "command_type": "outbound.research_policy.publish"
+    },
+    {
+      "apps": [
+        "outbound",
+        "outbound-lead-generation"
+      ],
+      "command_type": "outbound.research_source.auth_assist"
+    },
+    {
+      "apps": [
+        "outbound",
+        "outbound-lead-generation"
+      ],
+      "command_type": "outbound.research_source.generate_adapter"
+    },
+    {
+      "apps": [
+        "outbound",
+        "outbound-lead-generation"
+      ],
+      "command_type": "outbound.research_source.reprobe"
+    },
+    {
+      "apps": [
+        "outbound",
+        "outbound-lead-generation"
+      ],
+      "command_type": "outbound.research_source.test"
+    },
+    {
+      "apps": [
+        "outbound",
+        "outbound-lead-generation"
+      ],
+      "command_type": "outbound.research_source.upsert"
+    },
+    {
+      "apps": [
+        "outbound",
+        "outbound-lead-generation"
+      ],
+      "command_type": "outbound.sellify.lookup"
+    },
+    {
+      "apps": [
+        "outbound",
+        "outbound-lead-generation"
+      ],
+      "command_type": "outbound.update_digest.send_now"
+    }
+  ],
+  "migration_steps": [
+    {
+      "app": "conversations",
+      "collection": "outbound_messages",
+      "json_steps": [],
+      "schema_js_steps": [
+        1
+      ]
+    },
+    {
+      "app": "ctox",
+      "collection": "business_commands",
+      "json_steps": [],
+      "schema_js_steps": [
+        1,
+        2
+      ]
+    },
+    {
+      "app": "ctox",
+      "collection": "ctox_queue_tasks",
+      "json_steps": [],
+      "schema_js_steps": [
+        1,
+        2,
+        3
+      ]
+    }
+  ],
+  "multiple_owners": [],
+  "no_owner_app": [
+    {
+      "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
+      "collection": "app_catalog",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
+      "collection": "coding_turns",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
+      "collection": "devices",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
+      "collection": "machine_enrollments",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
+      "collection": "mail_server_state",
+      "proposed_owner": "ctox-platform"
+    }
+  ],
+  "platform_clamps": [
+    {
+      "app": "app-store",
+      "collection": "app_drafts",
+      "granted": [],
+      "reason": "nicht in Plattform-exports",
+      "wanted": [
+        "read"
+      ]
+    }
+  ],
+  "prefix_mismatch": [
+    {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "collection": "ctox_task_approval_requests",
+      "owner": "threads",
+      "prefix_suggests": "ctox"
+    },
+    {
+      "basis": "Entscheidung: §16.21 Eigentum: OLG (einziger Schreiber outbound.research_policy.publish; heute nur nativ in business_records)",
+      "collection": "outbound_research_policies",
+      "owner": "outbound-lead-generation",
+      "prefix_suggests": "outbound"
+    }
+  ],
+  "schema_js_load_errors": [],
+  "schema_js_vs_json": [
+    {
+      "app": "conversations",
+      "collection": "communication_accounts",
+      "diffs": [
+        {
+          "a": 0,
+          "b": 1,
+          "field": "$.version"
+        },
+        {
+          "a": "account_key",
+          "b": "id",
+          "field": "$.primaryKey"
+        },
+        {
+          "field": "$.required",
+          "only_a": [],
+          "only_b": [
+            "id"
+          ]
+        },
+        {
+          "field": "$.indexes",
+          "only_a": [],
+          "only_b": [
+            "account_key"
+          ]
+        },
+        {
+          "b": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.id"
+        }
+      ],
+      "kind": "fields_differ"
+    },
+    {
+      "app": "conversations",
+      "collection": "communication_messages",
+      "diffs": [
+        {
+          "a": 0,
+          "b": 1,
+          "field": "$.version"
+        },
+        {
+          "a": "message_key",
+          "b": "id",
+          "field": "$.primaryKey"
+        },
+        {
+          "field": "$.required",
+          "only_a": [],
+          "only_b": [
+            "id"
+          ]
+        },
+        {
+          "field": "$.indexes",
+          "only_a": [],
+          "only_b": [
+            "message_key"
+          ]
+        },
+        {
+          "b": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.id"
+        }
+      ],
+      "kind": "fields_differ"
+    },
+    {
+      "app": "conversations",
+      "collection": "communication_threads",
+      "diffs": [
+        {
+          "a": 0,
+          "b": 1,
+          "field": "$.version"
+        },
+        {
+          "a": "thread_key",
+          "b": "id",
+          "field": "$.primaryKey"
+        },
+        {
+          "field": "$.required",
+          "only_a": [],
+          "only_b": [
+            "id"
+          ]
+        },
+        {
+          "field": "$.indexes",
+          "only_a": [],
+          "only_b": [
+            "thread_key"
+          ]
+        },
+        {
+          "b": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.id"
+        }
+      ],
+      "kind": "fields_differ"
+    },
+    {
+      "app": "conversations",
+      "collection": "outbound_approvals",
+      "kind": "only_in_schema.js"
+    },
+    {
+      "app": "conversations",
+      "collection": "outbound_campaigns",
+      "kind": "only_in_schema.js"
+    },
+    {
+      "app": "conversations",
+      "collection": "outbound_engagements",
+      "kind": "only_in_schema.js"
+    },
+    {
+      "app": "conversations",
+      "collection": "outbound_messages",
+      "kind": "only_in_schema.js"
+    },
+    {
+      "app": "conversations",
+      "collection": "outbound_pipeline_items",
+      "kind": "only_in_schema.js"
+    },
+    {
+      "app": "ctox",
+      "collection": "business_commands",
+      "kind": "only_in_schema.js"
+    },
+    {
+      "app": "ctox",
+      "collection": "business_module_catalog",
+      "kind": "only_in_schema.js"
+    },
+    {
+      "app": "ctox",
+      "collection": "communication_accounts",
+      "kind": "only_in_schema.js"
+    },
+    {
+      "app": "ctox",
+      "collection": "ctox_crew_assignments",
+      "kind": "only_in_collections.schema.json"
+    },
+    {
+      "app": "ctox",
+      "collection": "ctox_crew_continuity",
+      "kind": "only_in_collections.schema.json"
+    },
+    {
+      "app": "ctox",
+      "collection": "ctox_crew_continuity_commits",
+      "kind": "only_in_collections.schema.json"
+    },
+    {
+      "app": "ctox",
+      "collection": "ctox_crew_learnings",
+      "diffs": [
+        {
+          "a": 0,
+          "b": 1,
+          "field": "$.version"
+        },
+        {
+          "field": "$.required",
+          "only_a": [],
+          "only_b": [
+            "normalized_text"
+          ]
+        },
+        {
+          "field": "$.indexes",
+          "only_a": [],
+          "only_b": [
+            "member_id+normalized_text"
+          ]
+        },
+        {
+          "b": {
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.normalized_text"
+        }
+      ],
+      "kind": "fields_differ"
+    },
+    {
+      "app": "ctox",
+      "collection": "ctox_crew_members",
+      "diffs": [
+        {
+          "b": {
+            "default": "",
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.created_at"
+        },
+        {
+          "b": {
+            "default": 0,
+            "type": "number"
+          },
+          "change": "only_b",
+          "field": "properties.created_at_ms"
+        },
+        {
+          "b": {
+            "default": "",
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.updated_at"
+        }
+      ],
+      "kind": "fields_differ"
+    },
+    {
+      "app": "ctox",
+      "collection": "ctox_queue_tasks",
+      "kind": "only_in_schema.js"
+    },
+    {
+      "app": "ctox",
+      "collection": "ctox_runtime_settings",
+      "kind": "only_in_schema.js"
+    },
+    {
+      "app": "ctox",
+      "collection": "legacy_records",
+      "kind": "only_in_collections.schema.json"
+    },
+    {
+      "app": "ctox",
+      "collection": "workjet_jour_fixe_meetings",
+      "kind": "only_in_collections.schema.json"
+    },
+    {
+      "app": "ctox",
+      "collection": "workjet_provider_registry",
+      "diffs": [
+        {
+          "a": 0,
+          "b": 1,
+          "field": "$.version"
+        },
+        {
+          "a": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "credentialReady": {
+                  "type": "boolean"
+                },
+                "effectiveModels": {
+                  "items": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "excludedModels": {
+                  "items": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "holder": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maxLength": 256,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "ctox_instance"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "id": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "inferenceVerified": {
+                  "enum": [
+                    false
+                  ],
+                  "type": "boolean"
+                },
+                "modelCatalog": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "lastAttempt": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "checkedAtMs": {
+                          "type": "number"
+                        },
+                        "elapsedMs": {
+                          "type": "number"
+                        },
+                        "failure": {
+                          "maxLength": 128,
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "httpStatus": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "retryAfterSeconds": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "success": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "checkedAtMs",
+                        "httpStatus",
+                        "elapsedMs",
+                        "retryAfterSeconds",
+                        "failure",
+                        "success"
+                      ],
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    },
+                    "lastSuccessAtMs": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "models": {
+                      "items": {
+                        "maxLength": 256,
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "observed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "observed",
+                    "models",
+                    "lastSuccessAtMs",
+                    "lastAttempt"
+                  ],
+                  "type": "object"
+                },
+                "modelCatalogObserved": {
+                  "type": "boolean"
+                },
+                "observedAtMs": {
+                  "type": "number"
+                },
+                "provider": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "revision": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "holder",
+                "provider",
+                "enabled",
+                "credentialReady",
+                "revision",
+                "observedAtMs",
+                "modelCatalogObserved",
+                "inferenceVerified",
+                "modelCatalog",
+                "excludedModels",
+                "effectiveModels"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "b": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "credentialReady": {
+                  "type": "boolean"
+                },
+                "effectiveModels": {
+                  "items": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "excludedModels": {
+                  "items": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "holder": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "maxLength": 256,
+                      "type": "string"
+                    },
+                    "kind": {
+                      "enum": [
+                        "ctox_instance"
+                      ],
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ],
+                  "type": "object"
+                },
+                "id": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "inferenceVerified": {
+                  "enum": [
+                    false
+                  ],
+                  "type": "boolean"
+                },
+                "modelCatalog": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "lastAttempt": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "checkedAtMs": {
+                          "type": "number"
+                        },
+                        "elapsedMs": {
+                          "type": "number"
+                        },
+                        "failure": {
+                          "maxLength": 128,
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "httpStatus": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "retryAfterSeconds": {
+                          "type": [
+                            "number",
+                            "null"
+                          ]
+                        },
+                        "success": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "checkedAtMs",
+                        "httpStatus",
+                        "elapsedMs",
+                        "retryAfterSeconds",
+                        "failure",
+                        "success"
+                      ],
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    },
+                    "lastSuccessAtMs": {
+                      "type": [
+                        "number",
+                        "null"
+                      ]
+                    },
+                    "models": {
+                      "items": {
+                        "maxLength": 256,
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "observed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "observed",
+                    "models",
+                    "lastSuccessAtMs",
+                    "lastAttempt"
+                  ],
+                  "type": "object"
+                },
+                "modelCatalogObserved": {
+                  "type": "boolean"
+                },
+                "observedAtMs": {
+                  "type": "number"
+                },
+                "provider": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "reportedQuota": {
+                  "additionalProperties": false,
+                  "description": "Vom Anbieter gemeldetes Kontingent (Kern #872), drei Zustände laut Feld state. Feldregeln je Zustand und Zeitinvarianten (Beobachtung höchstens 15 min alt, Reset nach Beobachtung und höchstens 40 Tage) prüft der native Erzeuger; das Schema nutzt nur die vom Shell-Validator und RxDB unterstützten Schlüsselwörter.",
+                  "properties": {
+                    "errorClass": {
+                      "enum": [
+                        "quota_read_failed"
+                      ],
+                      "type": "string"
+                    },
+                    "observedAtMs": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "period": {
+                      "enum": [
+                        "weekly",
+                        "monthly"
+                      ],
+                      "type": "string"
+                    },
+                    "resetAtMs": {
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "state": {
+                      "enum": [
+                        "unknown",
+                        "unavailable",
+                        "reported"
+                      ],
+                      "type": "string"
+                    },
+                    "used_percent": {
+                      "maximum": 100,
+                      "minimum": 0,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "state"
+                  ],
+                  "type": "object"
+                },
+                "revision": {
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "holder",
+                "provider",
+                "enabled",
+                "credentialReady",
+                "revision",
+                "observedAtMs",
+                "modelCatalogObserved",
+                "inferenceVerified",
+                "modelCatalog",
+                "excludedModels",
+                "effectiveModels"
+              ],
+              "type": "object"
+            },
+            "maxItems": 256,
+            "type": "array"
+          },
+          "change": "differs",
+          "field": "properties.accounts"
+        }
+      ],
+      "kind": "fields_differ"
+    },
+    {
+      "app": "ctox",
+      "collection": "workjet_session_transfers",
+      "diffs": [
+        {
+          "a": 0,
+          "b": 1,
+          "field": "$.version"
+        },
+        {
+          "b": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "change": "only_b",
+          "field": "properties.applied_at_ms"
+        },
+        {
+          "b": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "change": "only_b",
+          "field": "properties.apply_mismatch_count"
+        },
+        {
+          "b": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.apply_mismatch_sha256"
+        },
+        {
+          "b": {
+            "maxLength": 160,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "change": "only_b",
+          "field": "properties.last_terminal_turn_id"
+        },
+        {
+          "b": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.observed_head"
+        },
+        {
+          "b": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.observed_manifest_sha256"
+        },
+        {
+          "b": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.observed_tree_sha256"
+        },
+        {
+          "b": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "change": "only_b",
+          "field": "properties.packed_at_ms"
+        },
+        {
+          "b": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "change": "only_b",
+          "field": "properties.pause_acked_at_ms"
+        },
+        {
+          "b": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "change": "only_b",
+          "field": "properties.recovery_aborting_at_ms"
+        },
+        {
+          "b": {
+            "type": "boolean"
+          },
+          "change": "only_b",
+          "field": "properties.source_git_repository"
+        },
+        {
+          "b": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "change": "only_b",
+          "field": "properties.switched_at_ms"
+        },
+        {
+          "b": {
+            "type": "boolean"
+          },
+          "change": "only_b",
+          "field": "properties.target_partial_cleanup_required"
+        },
+        {
+          "b": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.worker_instance_id"
+        }
+      ],
+      "kind": "fields_differ"
+    },
+    {
+      "app": "ctox",
+      "collection": "workjet_sessions",
+      "diffs": [
+        {
+          "a": 0,
+          "b": 1,
+          "field": "$.version"
+        },
+        {
+          "a": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "b": {
+            "maxLength": 160,
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "change": "differs",
+          "field": "properties.last_terminal_turn_id"
+        }
+      ],
+      "kind": "fields_differ"
+    },
+    {
+      "app": "outbound",
+      "collection": "outbound_sender_assignments",
+      "diffs": [
+        {
+          "a": 0,
+          "b": 1,
+          "field": "$.version"
+        },
+        {
+          "field": "$.required",
+          "only_a": [
+            "campaign_id"
+          ],
+          "only_b": []
+        }
+      ],
+      "kind": "fields_differ"
+    },
+    {
+      "app": "outbound",
+      "collection": "outbound_suppression_entries",
+      "diffs": [
+        {
+          "a": 0,
+          "b": 1,
+          "field": "$.version"
+        },
+        {
+          "field": "$.required",
+          "only_a": [
+            "active",
+            "scope",
+            "value"
+          ],
+          "only_b": []
+        },
+        {
+          "b": {
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.domain"
+        },
+        {
+          "b": {
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.email"
+        },
+        {
+          "b": {
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.engagement_id"
+        },
+        {
+          "b": {
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.recipient_email"
+        },
+        {
+          "b": {
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.status"
+        },
+        {
+          "b": {
+            "type": "string"
+          },
+          "change": "only_b",
+          "field": "properties.suppression_reason"
+        }
+      ],
+      "kind": "fields_differ"
+    },
+    {
+      "app": "outbound",
+      "collection": "outbound_tracking_endpoints",
+      "kind": "only_in_collections.schema.json"
+    },
+    {
+      "app": "outbound",
+      "collection": "outbound_tracking_events",
+      "kind": "only_in_collections.schema.json"
+    },
+    {
+      "app": "outbound",
+      "collection": "outbound_tracking_tokens",
+      "kind": "only_in_collections.schema.json"
+    }
+  ],
+  "schema_missing": []
+}

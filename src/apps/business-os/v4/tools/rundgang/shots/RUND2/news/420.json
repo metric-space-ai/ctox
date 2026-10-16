@@ -1,0 +1,409 @@
+{
+ "app": "news",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "News",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Thema anlegen",
+    "button:Themen importieren",
+    "button:Themen exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Aktiv (6)",
+    "nav:Pausiert (0)",
+    "button:ON Onboarding neue Mitarbeiten",
+    "button:Gestern",
+    "button:RÜ Rahmenvertrag über Wartung ",
+    "button:KV Kundentermin Vorbereitung M",
+    "button:BV Budgetplanung Vertrieb Süd ",
+    "button:QQ Quartalsbericht Q3 2026 Man",
+    "button:AW Angebot Wartungsvertrag Hal"
+   ],
+   "shot": "news/420-01-open.png"
+  },
+  {
+   "step": "nav Aktiv (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/420-02-nav_Aktiv_6_.png"
+  },
+  {
+   "step": "nav Pausiert (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/420-03-nav_Pausiert_0_.png"
+  },
+  {
+   "step": "zurück zu Reiter Aktiv (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/420-04-zur_ck_zu_Reiter_Aktiv_6_.png"
+  },
+  {
+   "step": "button Thema anlegen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/420-05-button_Thema_anlegen.png"
+  },
+  {
+   "step": "formular 2 Felder → Speichern",
+   "changed": true,
+   "ops": [
+    "put news_topics/topic_f2452c9a-9a8c-484d-b717-25623d0f5685 local=ok result=accepted {\"id\":\"topic_f2452c9a-9a8c-484d-b717-25623d0f5685\",\"title\":\"Rundgang Test\",\"prompt\":\"Rundgang Test\",\"cadence\":\"daily\",\"run_time\":\"07:00\",\"we"
+   ],
+   "zone": [
+    "clear news.topic.invalid",
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "news/420-06-formular_2_Felder_Speichern.png"
+  },
+  {
+   "step": "nav Aktiv (7)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "button Themen importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Themen exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/420-07-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/420-08-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/420-09-button_Filter.png"
+  },
+  {
+   "step": "button RT Rundgang Test Täglich 07:00",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/420-10-button_RT_Rundgang_Test_T_glich_07_00.png"
+  },
+  {
+   "step": "nav Alle (0)",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/420-11-nav_Alle_0_.png"
+  },
+  {
+   "step": "nav Modelle (0)",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/420-12-nav_Modelle_0_.png"
+  },
+  {
+   "step": "nav Tools (0)",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/420-13-nav_Tools_0_.png"
+  },
+  {
+   "step": "nav Forschung (0)",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/420-14-nav_Forschung_0_.png"
+  },
+  {
+   "step": "nav Debatten (0)",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/420-15-nav_Debatten_0_.png"
+  },
+  {
+   "step": "button Zurück zu den Themen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/420-16-button_Zur_ck_zu_den_Themen.png"
+  },
+  {
+   "step": "button ON Onboarding neue Mitarbeitende Manuell",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/420-17-button_ON_Onboarding_neue_Mitarbeitende_.png"
+  },
+  {
+   "step": "nav Alle (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/420-18-nav_Alle_1_.png"
+  },
+  {
+   "step": "button Ausgabe jetzt erzeugen",
+   "changed": true,
+   "ops": [
+    "put news_issues/issue_480be2de-1646-42c4-a4a2-270880f69cd1 local=ok result=accepted {\"id\":\"issue_480be2de-1646-42c4-a4a2-270880f69cd1\",\"topic_id\":\"topic-001\",\"title\":\"Onboarding neue Mitarbeitende\",\"issue_date\":\"2026-10-15\",",
+    "command news.issue.generate local=ok result=accepted {\"topic_id\":\"topic-001\",\"issue_id\":\"issue_480be2de-1646-42c4-a4a2-270880f69cd1\",\"issue_date\":\"2026-10-15\",\"thread_key\":\"business-os/news/top",
+    "patch news_issues/issue_480be2de-1646-42c4-a4a2-270880f69cd1 local=ok result=accepted {\"command_id\":\"01a140c0-2b0f-7001-947b-e51771f7e23d\",\"updated_at_ms\":1792087698191}"
+   ],
+   "zone": [
+    "clear news.command.news.issue.generate",
+    "{\"level\":\"info\",\"code\":\"news.issue.running\",\"text\":\"Ausgabe wird erstellt\",\"ref\":\"issue_480be2de-1646-42c4-a4a2-270880f69cd1\"}",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/420-19-button_Ausgabe_jetzt_erzeugen.png"
+  },
+  {
+   "step": "button Auftrag in CTOX öffnen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Thema konfigurieren",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/420-20-button_Thema_konfigurieren.png"
+  },
+  {
+   "step": "formular 1 Felder → Speichern",
+   "changed": true,
+   "ops": [
+    "put news_topics/topic-001 local=ok result=accepted {\"id\":\"topic-001\",\"title\":\"Onboarding neue Mitarbeitende\",\"prompt\":\"Zusammenfassung der Ergebnisse aus dem Workshop mit dem Fachbereich und ",
+    "put news_sources/source-001 local=ok result=accepted {\"account_handle\":\"Angebot\",\"adapter_kind\":\"scrape_target\",\"auth_mode\":\"none\",\"created_at_ms\":1791959400000,\"enabled\":true,\"id\":\"source-001\""
+   ],
+   "zone": [
+    "clear news.topic.invalid",
+    "{\"level\":\"info\",\"code\":\"news.issue.running\",\"text\":\"Ausgabe wird erstellt\",\"ref\":\"issue_480be2de-1646-42c4-a4a2-270880f69cd1\"}",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "news/420-21-formular_1_Felder_Speichern.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "news_topics",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "news_issues",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "news.issue.generate",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "news_issues",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "news_topics",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "news_sources",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "news",
+  "News"
+ ]
+}

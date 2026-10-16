@@ -5,8 +5,7 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-i18n="listKicker">Recruiting</span>
-          <h2 class="ctox-pane-title" data-ats-title>Interviews</h2>
+          <h2 class="ctox-pane-title" data-ats-title data-i18n="title">Interviews</h2>
         </div>
         <div class="ctox-pane-actions">
           <button type="button" class="ctox-pane-icon is-primary" data-action="new" data-i18n-title="newMeeting" title="Neuer Termin" aria-label="Neuer Termin">
@@ -41,7 +40,7 @@
             <option value="confirmed" data-i18n="stateConfirmed">Bestätigt</option>
             <option value="rescheduled" data-i18n="stateRescheduled">Verschoben</option>
             <option value="completed" data-i18n="stateCompleted">Stattgefunden</option>
-            <option value="no_show" data-i18n="stateNoShow">No-Show</option>
+            <option value="no_show" data-i18n="stateNoShow">Nicht erschienen</option>
             <option value="cancelled" data-i18n="stateCancelled">Abgesagt</option>
           </select>
           <button type="button" class="ctox-sort-dir" data-pg-reset data-i18n-title="resetLabel" title="Filter zurücksetzen" aria-label="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
@@ -61,7 +60,6 @@
       <div class="ctox-list" data-ats-list data-ats-view="cards"></div>
     </div>
     <!-- Row 5: one-line footer. -->
-    <footer class="ctox-pane-footer"><span data-pg-footer data-ats-footer></span></footer>
   </aside>
 
   <button class="ctox-column-resizer ats-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="280" data-resizer-max="480" aria-label="Spaltenbreite anpassen"></button>
@@ -103,7 +101,6 @@
           </div>
           <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-ats-submit data-i18n="createMeeting">Termin anlegen</button></div>
         </form>
-        <div class="ctox-callout" data-ats-gate hidden></div>
         <div class="ats-meeting-actions" data-ats-meeting-actions hidden></div>
         <div class="ats-scorecards" data-ats-scorecards hidden></div>
       </div>

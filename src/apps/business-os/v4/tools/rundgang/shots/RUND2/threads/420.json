@@ -1,0 +1,371 @@
+{
+ "app": "threads",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Threads",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neue Notiz anlegen",
+    "button:Gefilterte Threads als JSON ex",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Handeln (0)",
+    "nav:Wartet (0)",
+    "nav:AI (0)",
+    "nav:Erledigt (1)"
+   ],
+   "shot": "threads/420-01-open.png"
+  },
+  {
+   "step": "nav Handeln (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "threads/420-02-nav_Handeln_0_.png"
+  },
+  {
+   "step": "nav Wartet (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "threads/420-03-nav_Wartet_0_.png"
+  },
+  {
+   "step": "nav AI (0)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Erledigt (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear threads.render"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "threads/420-04-nav_Erledigt_1_.png"
+  },
+  {
+   "step": "zurück zu Reiter Handeln (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "threads/420-05-zur_ck_zu_Reiter_Handeln_0_.png"
+  },
+  {
+   "step": "button Neue Notiz anlegen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/420-06-button_Neue_Notiz_anlegen.png"
+  },
+  {
+   "step": "formular 1 Felder → Notiz hinterlassen",
+   "changed": 1,
+   "ops": [
+    "command threads.note.create local=ok result=accepted {\"body\":\"Rundgang Test\",\"kind\":\"note\",\"target_user_ids\":[],\"thread_id\":\"\",\"title\":\"Rundgang Test\",\"source_context\":{\"module\":\"threads\",\"labe"
+   ],
+   "zone": [
+    "clear threads.command.threads.note.create"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "threads/420-07-formular_1_Felder_Notiz_hinterlassen.png"
+  },
+  {
+   "step": "button Gefilterte Threads als JSON exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/420-08-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/420-09-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/420-10-button_Filter.png"
+  },
+  {
+   "step": "button AUFMERKSAMKEIT",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "formular 2 Felder → Speichern",
+   "changed": 1,
+   "ops": [
+    "command threads.notification.preferences.update local=ok result=accepted {\"priority_threshold\":20,\"quiet_start\":\"10:00\",\"quiet_end\":\"10:00\",\"notification_types\":[\"approval\",\"mention\",\"escalation\"]}"
+   ],
+   "zone": [
+    "clear threads.command.threads.notification.preferences.update"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "threads/420-11-formular_2_Felder_Speichern.png"
+  },
+  {
+   "step": "button ÜBERGABE",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Übergeben",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button NEUE CTOX-AUFGABE",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/420-12-button_NEUE_CTOX-AUFGABE.png"
+  },
+  {
+   "step": "button Neue Aufgabe starten",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button NEUE NOTIZ",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/420-13-button_NEUE_NOTIZ.png"
+  },
+  {
+   "step": "button CTOX FREIGABE",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Freigabe anfragen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "auswahl Sekundäre Ansicht → delegated",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear threads.render"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "threads/420-14-auswahl_Sekund_re_Ansicht_delegated.png"
+  },
+  {
+   "step": "button J Angebot Wartungsvertrag Halle 4 · Angebot vor 6 d unread ·",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/420-15-button_J_Angebot_Wartungsvertrag_Halle_4.png"
+  },
+  {
+   "step": "button Gelesen",
+   "changed": 1,
+   "ops": [
+    "command threads.notification.mark_read local=ok result=accepted {\"notification_id\":\"notification-005\"}"
+   ],
+   "zone": [
+    "clear threads.command.threads.notification.mark_read"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/420-16-button_Gelesen.png"
+  },
+  {
+   "step": "button Ausblenden",
+   "changed": 1,
+   "ops": [
+    "command threads.notification.dismiss local=ok result=accepted {\"notification_id\":\"notification-005\"}"
+   ],
+   "zone": [
+    "clear threads.command.threads.notification.dismiss"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "threads/420-17-button_Ausblenden.png"
+  },
+  {
+   "step": "auswahl — Person wählen — Anna Schmidt Lukas Weber Sophie Meyer Jona → user-001",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "threads.note.create",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "threads.notification.preferences.update",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "threads.notification.mark_read",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "threads.notification.dismiss",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "threads",
+  "Threads"
+ ]
+}

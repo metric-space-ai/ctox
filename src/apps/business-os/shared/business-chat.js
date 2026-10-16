@@ -1,5 +1,22 @@
 import { normalizeCrewAppearance, renderCrewCreature, renderCrewReference, crewModeForTaskState, CREW_CREATURE_BASE_CSS } from './crew-renderer.js?v=20260928-crew-truth-v7';
 import { syncCrewMotion } from './crew-motion.js?v=20260928-crew-truth-v7';
+import {
+  CREW_READING_WINDOW_MS,
+  CREW_LEARNING_WINDOW_MS,
+  crewMemberExpression,
+  crewMemberExpressionTtlMs,
+  canonicalTrackingStatus,
+  isBlockedTrackingStatus,
+  trackingIdFromMessage,
+  latestTrackingMessage,
+  normalizeExecutionProgress,
+  executionProgressForChat,
+  getTaskState,
+  crewIdentityKey,
+  crewCreatureMode,
+  executionActivityTelemetry,
+  crewCreatureHtml,
+} from './crew-presence.js';
 import { showBusinessConfirm } from './dialogs.js?v=20260831-ctox-desktopapp-ports-v328';
 import {
   FILE_CHUNK_HASH_SCHEME,
@@ -13,6 +30,10 @@ import {
   normalizeWorkjetCategory,
   workjetCategoryStyle,
 } from './workjet-theme.js?v=20260903-entertainment-import-v336';
+
+// Kept for old-shell callers and tests that import these from business-chat.js;
+// the definitions live in crew-presence.js (generic, no app data).
+export { CREW_READING_WINDOW_MS, CREW_LEARNING_WINDOW_MS, crewMemberExpression, crewMemberExpressionTtlMs, crewCreatureHtml };
 
 const CREW_RELOAD_MIN_INTERVAL_MS = 3000;
 
@@ -75,31 +96,6 @@ async function loadCrewMembers({ state, db }) {
     console.warn?.('[business-chat] crew pool load failed', error);
     return false;
   }
-}
-
-// How long a member visibly reads its memory (attempt start) or learns
-// (after the learning tick). Both are stamps from the projection, not guesses.
-export const CREW_READING_WINDOW_MS = 20 * 1000;
-export const CREW_LEARNING_WINDOW_MS = 90 * 1000;
-
-// The one expression a member wears right now: reading (on duty, memory just
-// read), learning (at home, just learned), running, failed or idle.
-export function crewMemberExpression(member, nowMs = Date.now()) {
-  const readAt = Number(member?.last_memory_read_at_ms) || 0;
-  const learnedAt = Number(member?.last_learning_at_ms) || 0;
-  if (member?.state === 'on_duty') {
-    return readAt && nowMs - readAt >= 0 && nowMs - readAt < CREW_READING_WINDOW_MS ? 'reading' : 'running';
-  }
-  if (member?.state === 'resting_after_failure') return 'failed';
-  return learnedAt && nowMs - learnedAt >= 0 && nowMs - learnedAt < CREW_LEARNING_WINDOW_MS ? 'learning' : 'idle';
-}
-
-// When the current expression ends (ms from now), or 0 when it does not decay.
-export function crewMemberExpressionTtlMs(member, nowMs = Date.now()) {
-  const expression = crewMemberExpression(member, nowMs);
-  if (expression === 'reading') return Math.max(1, Number(member.last_memory_read_at_ms) + CREW_READING_WINDOW_MS - nowMs);
-  if (expression === 'learning') return Math.max(1, Number(member.last_learning_at_ms) + CREW_LEARNING_WINDOW_MS - nowMs);
-  return 0;
 }
 
 // What the rendered pool depends on: who is in it and how each one looks.
@@ -2638,28 +2634,6 @@ async function collapseChatWindow({ root, state, commandBus, db, getActiveModule
   await persistChatState({ state, db });
 }
 
-function getTaskState(chat) {
-  const isFuture = chat.createdAt > Date.now();
-  const hasScheduledMessage = Array.isArray(chat.messages) && chat.messages.some(m => m.status === 'scheduled');
-  if (isFuture && hasScheduledMessage) return 'scheduled';
-
-  if (!chat.lastTrackingId) return 'idle';
-  const trackingMsg = [...chat.messages].reverse().find(m => 
-    (m.commandId && m.commandId === chat.lastTrackingId) || 
-    (m.taskId && m.taskId === chat.lastTrackingId)
-  );
-  if (!trackingMsg) return 'idle';
-  const status = canonicalTrackingStatus(trackingMsg.status);
-  if (status === 'scheduled') return 'scheduled';
-  if (!status) return 'idle';
-  if (status === 'success' || status === 'completed' || status === 'handled' || status === 'done' || status === 'erledigt') return 'success';
-  if (isBlockedTrackingStatus(status)) return 'blocked';
-  if (['failed', 'error'].includes(status)) return 'failed';
-  if (['queued', 'pending', 'pending_sync', 'waiting', 'terminal'].includes(status)) return 'queued';
-  if (['running', 'processing', 'executing', 'active'].includes(status)) return 'running';
-  return 'idle';
-}
-
 function chatTrackingSummary(chat) {
   const messages = Array.isArray(chat?.messages) ? chat.messages : [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -2891,24 +2865,6 @@ export function renderChatAgentScopeHtml(contextMeta = {}) {
   return renderGlobalCtoxAgentScopeHtml({ view });
 }
 
-function crewIdentityKey(subject = {}) {
-  const tracking = Array.isArray(subject.messages) ? latestTrackingMessage(subject) : null;
-  return subject.crewKey
-    || subject.commandId
-    || subject.command_id
-    || tracking?.commandId
-    || tracking?.command_id
-    || subject.taskId
-    || subject.task_id
-    || tracking?.taskId
-    || tracking?.task_id
-    || subject.lastTrackingId
-    || subject.id
-    || subject.createdAt
-    || subject.title
-    || 'ctox-crew';
-}
-
 // Identity comes from the crew, never from a hash: a member of
 // `ctox_crew_members` brings its own name, colour and shape. Until the router
 // has decided who takes a task, the owner talks to the crew as a whole — one
@@ -2958,29 +2914,9 @@ function takeoverText(name, reasonTitle) {
   return reason ? `${name} takes over: ${reason}` : `${name} takes over.`;
 }
 
-function crewCreatureMode(chat, taskState = getTaskState(chat)) {
-  const phase = taskState === 'running'
-    ? executionProgressForChat(chat)?.phase || chat?.executionPhase || chat?.execution_phase || chat?.routeStatus || chat?.status || ''
-    : '';
-  return crewModeForTaskState(taskState, phase);
-}
-
 // Motion is owned by the page-wide engine in crew-motion.js; a chat root has
 // nothing of its own to stop.
 function stopCrewProceduralMotion() {}
-
-function executionActivityTelemetry(chat) {
-  const progress = executionProgressForChat(chat);
-  return {
-    total: Math.max(0, Number(progress?.activity_turns?.total) || 0),
-    thinking: Math.max(0, Number(progress?.activity_turns?.thinking) || 0),
-    tools: Math.max(0, Number(progress?.activity_turns?.tools) || 0),
-    lastKind: ['thinking', 'tool'].includes(progress?.activity_turns?.last_kind)
-      ? progress.activity_turns.last_kind
-      : '',
-    updatedAt: Math.max(0, Number(progress?.updated_at_ms) || 0),
-  };
-}
 
 function syncCrewTelemetryNode(node, chat) {
   if (!node) return false;
@@ -3017,87 +2953,6 @@ function crewReferenceKey(chat) {
   const name = String(identity?.name || '').trim();
   if (!name) return '';
   return String(identity?.id || '').trim() || name;
-}
-
-export function crewCreatureHtml(chat, taskState = getTaskState(chat), placement = 'dock') {
-  return renderCrewCreature({
-    // The raw identity: the renderer decides member vs. neutral ghost. The
-    // normalized one already carries the neutral name "Crew" and would turn
-    // every unassigned task into a grey member called Crew.
-    appearance: chat?.crewIdentity || null,
-    animationKey: crewIdentityKey(chat),
-    taskState,
-    mode: crewCreatureMode(chat, taskState),
-    placement,
-    progressPercent: executionProgressForChat(chat)?.percent || 0,
-    activity: executionActivityTelemetry(chat),
-  });
-}
-
-function normalizeExecutionProgress(value) {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
-  const steps = Array.isArray(value.steps)
-    ? value.steps.map((step, index) => ({
-        position: Number(step?.position) || index + 1,
-        label: String(step?.label || `Schritt ${index + 1}`),
-        status: String(step?.status || 'pending').toLowerCase(),
-        activity_turns: Math.max(0, Number(step?.activity_turns ?? step?.activityTurns) || 0),
-      }))
-    : [];
-  if (!steps.length) return null;
-  const rawActivity = value.activity_turns || value.activityTurns;
-  const activity = rawActivity && typeof rawActivity === 'object'
-    ? rawActivity
-    : {};
-  return {
-    version: Number(value.version) || 1,
-    revision: Math.max(1, Number(value.revision) || 1),
-    phase: String(value.phase || 'work'),
-    percent: Math.max(0, Math.min(100, Number(value.percent) || 0)),
-    current_step: Number(value.current_step ?? value.currentStep) || null,
-    completed_steps: Math.max(0, Number(value.completed_steps ?? value.completedSteps) || 0),
-    total_steps: Math.max(steps.length, Number(value.total_steps ?? value.totalSteps) || 0),
-    steps,
-    review: value.review && typeof value.review === 'object'
-      ? { status: String(value.review.status || 'pending').toLowerCase() }
-      : { status: 'pending' },
-    activity_turns: {
-      total: Math.max(0, Number(activity.total) || 0),
-      thinking: Math.max(0, Number(activity.thinking) || 0),
-      tools: Math.max(0, Number(activity.tools) || 0),
-      last_kind: String(activity.last_kind || activity.lastKind || value.lastActivityKind || '').toLowerCase(),
-    },
-    updated_at_ms: Math.max(0, Number(value.updated_at_ms ?? value.updatedAtMs) || 0),
-  };
-}
-
-function latestTrackingMessage(chat) {
-  const messages = Array.isArray(chat?.messages) ? chat.messages : [];
-  return [...messages].reverse().find((message) => (
-    message?.executionProgress
-    || message?.taskId
-    || message?.commandId
-  )) || null;
-}
-
-function executionProgressForChat(chat) {
-  const latest = latestTrackingMessage(chat);
-  const taskId = trackingIdFromMessage(latest, 'task');
-  const commandId = trackingIdFromMessage(latest, 'command');
-  // Status and plan projections arrive independently. A new status without a
-  // plan must not hide the last plan for this task, nor inherit another task's
-  // plan when the conversation receives a follow-up command.
-  const previousPlan = [...(chat?.messages || [])].reverse().find(message => (
-    message.executionProgress && (taskId
-      ? trackingIdFromMessage(message, 'task') === taskId
-      : commandId && trackingIdFromMessage(message, 'command') === commandId)
-  ));
-  return normalizeExecutionProgress(
-    chat?.executionProgress
-    || chat?.execution_progress
-    || latest?.executionProgress
-    || previousPlan?.executionProgress,
-  );
 }
 
 
@@ -4738,14 +4593,6 @@ function collectTrackedMessages(state) {
   return tracked;
 }
 
-function trackingIdFromMessage(message, kind) {
-  if (!message || typeof message !== 'object') return '';
-  const value = kind === 'command'
-    ? message.commandId || message.command_id
-    : message.taskId || message.task_id;
-  return String(value || '').trim();
-}
-
 async function findDocsByIds(collection, ids) {
   const uniqueIds = Array.from(ids || [])
     .map((id) => String(id || '').trim())
@@ -4844,14 +4691,6 @@ function firstStatusValue(doc, fields) {
   return '';
 }
 
-function canonicalTrackingStatus(status) {
-  const value = String(status || '').trim().toLowerCase();
-  if (value === 'handled' || value === 'success' || value === 'done' || value === 'passed') return 'completed';
-  if (value === 'leased' || value === 'processing' || value === 'executing' || value === 'active') return 'running';
-  if (['waiting', 'pending_sync', 'pending', 'retry_wait', 'retry-wait', 'review_rework', 'review-rework'].includes(value)) return 'queued';
-  return value;
-}
-
 // `blocked` and `stale_missing_native` are deliberately NOT terminal: a
 // blocked command is waiting (approval, a missing native peer), and it
 // resumes on its own once the block clears. Treating them as terminal made
@@ -4933,13 +4772,6 @@ function isFailureStatus(status) {
 function isCancelledTrackingStatus(status) {
   const value = canonicalTrackingStatus(status);
   return value === 'cancelled' || value === 'canceled';
-}
-
-// Every other Business OS surface (ctox, conversations, outbound) reports
-// these as their own "blocked" state. The chat used to fold them into
-// failure, which is how a waiting command came to read as a dead one.
-function isBlockedTrackingStatus(status) {
-  return ['blocked', 'stale_missing_native'].includes(String(status || '').toLowerCase());
 }
 
 function isActiveTrackingStatus(status) {
