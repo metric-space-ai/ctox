@@ -14,7 +14,7 @@ installServiceEntry(Native);
 const native=new Native(config),contexts=[],bindings=new WeakMap();
 const scenario=(await import(pathToFileURL(join(config.scenarioRoot,config.scenario.toLowerCase(),'scenario.mjs')))).default;
 const row={id:scenario.id,criterion:scenario.criterion,status:'not_run',pass:false,acceptanceComplete:false};
-const report={bootstrapResponses:[],owner:config.owner,revision:config.revision,binarySha256:config.binarySha256,netem:config.netem,
+const report={bootstrapResponses:[],browserErrors:[],owner:config.owner,revision:config.revision,binarySha256:config.binarySha256,netem:config.netem,
   startedAt:new Date().toISOString(),processLimits:fs.readFileSync('/proc/self/limits','utf8').split('\n').filter(line=>line.startsWith('Max processes')),
   scenarios:[row],terminal:false,pass:false,browserEntries:[]};
 const save=()=>fs.writeFileSync(join(config.output,'result.json'),JSON.stringify(report,null,2));
@@ -86,7 +86,12 @@ try {
     await context.addCookies([{name:'ctox_business_os_auth',value:enrolled.cookie,url:origin,httpOnly:true,sameSite:'Strict'}]);
     const connect=await installBrowserEntry(context,origin);
     const p=await context.newPage();
-    p.on('response',response=>{const url=new URL(response.url());if(url.origin===origin && ['/api/business-os/launch-context','/kernel/boot.mjs','/business-os/v4/boot.js','/sw.js'].includes(url.pathname)){report.bootstrapResponses.push({userId:enrolled.id,path:url.pathname,status:response.status()});save();}});
+    const bootstrapPath=path=>path==='/api/business-os/launch-context' || path==='/sw.js' || path.startsWith('/kernel/') || path.startsWith('/business-os/');
+    p.on('response',response=>{const url=new URL(response.url());if(url.origin===origin && bootstrapPath(url.pathname) && report.bootstrapResponses.length<250){report.bootstrapResponses.push({userId:enrolled.id,path:url.pathname,status:response.status()});save();}});
+    p.on('requestfailed',request=>{const url=new URL(request.url());if(url.origin===origin && bootstrapPath(url.pathname) && report.bootstrapResponses.length<250){report.bootstrapResponses.push({userId:enrolled.id,path:url.pathname,failed:request.failure()?.errorText});save();}});
+    const browserError=(kind,message)=>{if(report.browserErrors.length<50){report.browserErrors.push({userId:enrolled.id,kind,message:String(message).replace(/(?:https?|wss?):\/\/\S+/g,'[endpoint]').replace(/[A-Za-z0-9_-]{32,}/g,'[long-value]').slice(0,500)});save();}};
+    p.on('pageerror',error=>browserError(error.name,error.message));
+    p.on('console',message=>{if(message.type()==='error')browserError('console',message.text());});
     await p.exposeBinding('__p6NativeControl',(_source,{operation,args})=>call(enrolled,operation,args));
     bindings.set(p,()=>connect(p,enrolled,native.fixture));
     const response=await p.goto(origin+'/',{waitUntil:'domcontentloaded',timeout:20000});
