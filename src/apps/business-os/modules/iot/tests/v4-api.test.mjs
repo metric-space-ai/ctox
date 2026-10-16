@@ -12,9 +12,11 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'iot';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+// Pin 8265bd7: E48 – der Stub veröffentlicht ctox-platform selbst; Fremdlesen braucht die eigene Deklaration (echtes Manifest).
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -55,12 +57,21 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes(APP));
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { id: 'michael', role: 'admin' } });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'iot', title: 'IoT' }]);
+    // E48: echtes Manifest (foreign_collections business_commands) nach der business_apps-Zeile veröffentlichen.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    // Der Stub lädt das Handler-Artefakt der veröffentlichten Route auch dann, wenn sim.onCommand den Befehl übernimmt
+    // (ctox-app-api-stub.mjs runCommand: readArtifactContent vor dem sim-Handler). Für den per sim.onCommand simulierten
+    // Webhook-Befehl daher ein Platzhalter-Artefakt; es wirft, falls der Simulator einmal fehlt.
+    const SIMULATED = ['ctox.iot.webhook.register'];
+    const files = Object.fromEntries(SIMULATED.map((t) => [window.__routes.handlers[t], `export default () => { throw new Error('Platzhalter ${t}: sim.onCommand fehlt'); };`]));
+    await kernel.sim.publishAppVersion(APP, '1', { title: 'IoT', files, manifestExtra: window.__routes });
     await kernel.sim.push('iot_realms', [{ id: 'master', realm: 'master', name: 'Werk Nord', data: {}, updated_at_ms: 1 }]);
     await kernel.sim.push('iot_assets', [
       { id: 'ast_halle', realm: 'master', asset_type: 'Building', name: 'Halle 3', parent_id: '', data: {}, updated_at_ms: 3 },
