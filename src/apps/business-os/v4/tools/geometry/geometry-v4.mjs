@@ -2,7 +2,7 @@
 // Shell v4 – Geometrie-Labor (Strang GEO).
 //
 // Rendert jede portierte App im echten v4-Rahmen (v4/frame/index.js + v4/shell/app-host.js) gegen den Kern-Stub
-// (Pin cff5ba5, abweichend per CTOX_APP_API_STUB) mit Fixture-Daten aus collections.schema.json (fixtures.mjs),
+// (Pin 8265bd7, abweichend per CTOX_APP_API_STUB) mit Fixture-Daten aus collections.schema.json (fixtures.mjs),
 // misst je Breite G1–G6 und legt Screenshots ab.
 //
 //   node v4/tools/geometry/geometry-v4.mjs [--app <id>[,<id>…]] [--widths 1280,900,420] [--out <dir>]
@@ -55,12 +55,13 @@ import { ZONE_CASES, judgeZoneCase } from './zone-cases.mjs';
 import vm from 'node:vm';
 import { pathToFileURL } from 'node:url';
 import { scanApp } from '../port/scan.mjs';
+import { realManifestRoutes } from '../port/real-manifest.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '..', '..', '..'));
 const MODULES = join(BOS, 'modules');
 const MANIFESTS = join(BOS, 'v4', 'manifests');
-const STUB = normalize(process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3'));
+const STUB = normalize(process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7'));
 const VOCAB = JSON.parse(readFileSync(join(BOS, 'v4', 'tools', 'guards', 'vocabulary.json'), 'utf8')).entries;
 
 const args = process.argv.slice(2);
@@ -146,7 +147,12 @@ export function appConfig(id) {
   if (!layout.icon_svg && !layout.icon_asset && existsSync(join(MODULES, id, 'icon.svg'))) layout.icon_asset = 'icon.svg';
   const styles = Array.isArray(manifest.styles) ? manifest.styles : (existsSync(join(MODULES, id, 'index.css')) ? ['index.css'] : []);
   const { seed, skipped } = buildFixtures(id);
-  return { id, entry: manifest.entry || 'index.js', layout, styles, seed, skippedCollections: skipped, allow: allowedLabels(id) };
+  // E48 (Stub 8265bd7): eigene und Fremd-Collections lesen nur mit veröffentlichtem echtem Manifest (Routen, Rechte,
+  // collections, foreign_collections) und aktiven Eigentümern (_fixture_owners, inkl. ctox-platform).
+  const routes = existsSync(join(MANIFESTS, `${id}.manifest.json`)) ? realManifestRoutes(id) : {};
+  // Die Shell liest shell_preferences (ctox-platform) über appApi('shell', …): ebenfalls echtes Shell-Manifest.
+  const shellRoutes = realManifestRoutes('shell');
+  return { id, entry: manifest.entry || 'index.js', layout, styles, seed, routes, shellRoutes, skippedCollections: skipped, allow: allowedLabels(id) };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -261,8 +267,19 @@ const layout = { ...cfg.layout };
 if (q.get('nomin') === '1') { delete layout.min_width; delete layout.min_height; }
 // K-1d: Shell und Bibliotheken wie der Kernel veröffentlichen; artifacts.bind bindet daraus ~shell@lab~lib:… je Mount.
 for (const [lib, ver] of Object.entries(LAB_LIBS)) await kernel.sim.publishAppVersion('lib:' + lib.split('@')[0], ver, { title: 'lib:' + lib, styles: [] });
-await kernel.sim.publishAppVersion('shell', LAB_SHELL, { title: 'Shell', styles: [], manifestExtra: { libs: Object.fromEntries(Object.keys(LAB_LIBS).map((k) => k.split('@'))) } });
-await kernel.sim.publishAppVersion(app, '1.0.0', { entry: cfg.entry, layout, styles: cfg.styles });
+// Eigentümer der Shell-Fremdlesungen nicht veröffentlichen: shell_preferences gehört ctox-platform (vom Stub selbst
+// veröffentlicht, E48); eine aktive ctox-App montierte zusätzlich die Chatleiste der Shell (v4/frame/index.js syncBusinessChat).
+const { _fixture_owners: _shellOwners, ...shellRoutes } = cfg.shellRoutes || {};
+const { _fixture_owners: owners = [], ...routes } = cfg.routes || {};
+// Ist ctox Eigentümer (aktiv), montiert der Rahmen die Chatleiste der Shell an document.body (CHAT4, v4/frame/index.js
+// syncBusinessChat); G1/G5 lasten sie der gemessenen App an (wie bisher bei der ctox-App selbst).
+for (const o of owners) if (o.app !== app && !(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+// Die Laborseite lädt den Rahmen direkt unter /v4/frame/ (nicht /~a/shell@…/): seine Shell-Version ist dort 'dev'
+// (v4/frame/index.js startShell), kernel.preferences liest also über appApi('shell', 'dev'). E48 prüft das Lesen gegen das
+// Manifest genau dieser Version; deshalb auch shell@dev mit dem echten Shell-Manifest, danach die aktive LAB_SHELL.
+await kernel.sim.publishAppVersion('shell', 'dev', { title: 'Shell', styles: [], manifestExtra: shellRoutes });
+await kernel.sim.publishAppVersion('shell', LAB_SHELL, { title: 'Shell', styles: [], manifestExtra: { ...shellRoutes, libs: Object.fromEntries(Object.keys(LAB_LIBS).map((k) => k.split('@'))) } });
+await kernel.sim.publishAppVersion(app, '1.0.0', { entry: cfg.entry, layout, styles: cfg.styles, manifestExtra: routes });
 await kernel.sim.settle();
 const wrapHost = (o) => {
   const sh = o.api.shell;
