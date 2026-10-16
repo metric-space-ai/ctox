@@ -221,6 +221,12 @@ export interface ModelApi {
   run(req: { model?: string; input?: string | Array<{ role: string; content: string | Array<{ type: string; text?: string }> }>; prompt?: string; [k: string]: unknown }): Promise<ModelResponse>;
 }
 
+/** E51: identity is bound to the caller. Limits: 64 keys, 16 KiB JSON, key [a-z0-9._-]{1,64}. */
+export interface PreferencesApi {
+  get<T = unknown>(key: string): T | null;
+  set(key: string, value: unknown): WriteHandle;
+  delete(key: string): WriteHandle;
+}
 export interface CtoxAppApi {
   version: '4.0';
   app: { id: string; ver: string };
@@ -250,6 +256,7 @@ export interface CtoxAppApi {
   metrics: CommandMetrics;
   shell: ShellApi;
   actor: Actor;
+  prefs: PreferencesApi;
   files: FilesApi;
   model: ModelApi;
 }
