@@ -20,10 +20,9 @@ use std::{
     path::Path,
 };
 
-#[path = "../../../store/harness_adapter.rs"]
-mod owner_adapter;
-#[path = "../../../store/authority_adapter.rs"]
-mod owner_factory;
+use ctox_store::authority_adapter as owner_factory;
+#[cfg(test)]
+use ctox_store::harness_adapter as owner_adapter;
 
 #[derive(Clone)]
 pub struct SqliteStore {
