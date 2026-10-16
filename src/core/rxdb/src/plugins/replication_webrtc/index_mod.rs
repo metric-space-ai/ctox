@@ -149,6 +149,10 @@ async fn finish_guarded_auxiliary_send(
     publication.after_send()
 }
 
+#[path = "v4_native_commands.rs"]
+mod v4_native_commands;
+pub use v4_native_commands::{NativeCommandAuthority, PendingNativeCompletion};
+
 pub struct GuardedAuxiliaryResponse {
     pub result: Value,
     pub publication: Arc<dyn super::webrtc_types::WebRTCPublicationGuard>,
@@ -4438,6 +4442,10 @@ mod tests {
         fn connection_identity(&self, peer: &MockPeer) -> String {
             format!("{}@{}", peer.0, peer.1)
         }
+    }
+
+    mod v4_native_command_tests {
+        include!("v4_native_commands_tests.rs");
     }
 
     mod collection_authority_tests {
