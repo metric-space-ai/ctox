@@ -9,6 +9,7 @@ pub(super) fn core_route(kind: &str) -> bool {
         || matches!(kind,"business_os.chat.task"|"business_os.context.ask"|"business_os.data.modify")
         || ["exact_control_types","predicate_control_types","browser_runtime_types","browser_literal_types"].iter().any(|key| inventory[key].as_array().is_some_and(|types| types.iter().any(|v| v == kind)))
         || inventory["control_prefixes"].as_array().is_some_and(|prefixes| prefixes.iter().filter_map(Value::as_str).any(|prefix| kind.starts_with(prefix)))
+        || ctox_store::change_log::subscription::write_contract::routes::owns_type(kind)
         || ctox_store::change_log::subscription::write_contract::routes::resolve(kind).is_ok()
 }
 
@@ -19,19 +20,16 @@ pub(super) fn known_target(db: &Connection, doc: &Value) -> Result<(), StoreErro
     let kind = text(doc, "type").map_err(sql_error)?;
     if core_route(kind) { return Ok(()); }
     let source = text(doc, "app_id").map_err(sql_error)?;
-    let requested = if let Some(target) = doc.get("target_app") {
-        Some(target.as_str().filter(|s| !s.is_empty()).ok_or_else(|| invalid("invalid: target_app"))?.to_owned())
-    } else {
-        let active = document(db, "business_apps", source)?;
-        if let Some(version) = active.as_ref().and_then(|v| v["active_ver"].as_str()) {
-            let release = document(db, "business_app_versions", &format!("{source}@{version}"))?;
-            release.as_ref().map(|v| ctox_app_runtime::declared_target(&v["manifest"], kind, None)).transpose().map_err(sql_error)?.map(str::to_owned)
-        } else { None }
-    };
-    if let Some(target) = requested {
-        if target != source && document(db, "business_apps", &target)?.is_none() {
-            return Err(invalid("not_found: unknown_command target app"));
-        }
+    let sender = document(db,"business_apps",source)?.ok_or_else(|| invalid("unknown_command: sender app missing"))?;
+    let version = sender["active_ver"].as_str().ok_or_else(|| invalid("unknown_command: sender version missing"))?;
+    let release = document(db,"business_app_versions",&format!("{source}@{version}"))?.ok_or_else(|| invalid("unknown_command: sender version missing"))?;
+    let requested = doc.get("target_app").map(|v|v.as_str().filter(|s|!s.is_empty()).ok_or_else(||invalid("invalid: target_app"))).transpose()?;
+    let target = ctox_app_runtime::declared_target(&release["manifest"],kind,requested).map_err(sql_error)?;
+    if document(db,"business_apps",target)?.is_none() {
+        return Err(invalid("unknown_command: target app missing"));
+    }
+    if target == source && release["manifest"]["handlers"].get(kind).is_none() {
+        return Err(invalid("unknown_command: own command handler missing"));
     }
     Ok(())
 }
@@ -56,6 +54,11 @@ impl RuntimeCodec {
             origin::delivery_permit(db, doc, &a)?;
             return Ok(manifest);
         }
+        if origin::native_event(db, doc)? {
+            let manifest = self.manifest(db, source)?;
+            origin::delivery_permit(db, doc, &a)?;
+            return Ok(manifest);
+        }
         known_target(db, doc)?;
         let sender = self.manifest(db, source)?;
         let requested = doc.get("target_app").map(|v| v.as_str().ok_or_else(|| invalid("invalid: target_app"))).transpose()?;
@@ -66,8 +69,7 @@ impl RuntimeCodec {
                 return Err(invalid("forbidden: target handler missing"));
             }
             let exported = receiver["commands_in"].as_array().is_some_and(|rules| rules.iter().any(|r| r["type"] == kind && (r["from"] == "*" || r["from"].as_array().is_some_and(|apps| apps.iter().any(|v| v == source)))));
-            let explicit = receiver["command_rights"].as_object().is_some_and(|rules| rules.keys().any(|p| p == kind || p.strip_suffix('*').is_some_and(|prefix| kind.starts_with(prefix))));
-            if !exported && !explicit { return Err(invalid("forbidden: target command not exported")); }
+            if !exported { return Err(invalid("forbidden: receiver commands_in missing")); }
         }
         origin::delivery_permit_for(db, doc, &a, &rights(db)?, target)?;
         Ok(receiver)

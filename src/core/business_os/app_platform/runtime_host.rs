@@ -314,6 +314,7 @@ fn error_code(message: &str) -> &str {
         "invalid" => "invalid",
         "forbidden" => "forbidden",
         "not_found" => "not_found",
+        "unknown_command" => "unknown_command",
         "conflict" => "conflict",
         "revoked" => "revoked",
         "expired" => "expired",
@@ -349,6 +350,12 @@ impl RuntimeOwners {
 pub(super) fn store_command(tx: &rusqlite::Transaction<'_>, doc: &Value) -> Result<(), StoreError> {
     let id = text(doc, "id").map_err(sql_error)?;
     if document(tx, "business_commands", id)?.is_none() { routing::known_target(tx, doc)?; }
+    store_runtime_event(tx, doc)
+}
+// Only the in-process native event owner enters here before stamping its private
+// receipt. No serialized runtime_event flag can bypass write-time type validation.
+fn store_runtime_event(tx: &rusqlite::Transaction<'_>, doc: &Value) -> Result<(), StoreError> {
+    let id = text(doc, "id").map_err(sql_error)?;
     let provenance = origin::before_native_write(tx, doc)?;
     super::commands::put(tx, "business_commands", id, doc)?;
     origin::after_native_write(tx, doc, provenance)?;

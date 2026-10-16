@@ -584,7 +584,7 @@ impl RuntimeAuthority {
             let payload=if event["kind"]=="trigger"{event["event"].clone()}else{event.clone()};
             let doc=json!({"id":command_id,"app_id":app,"type":kind,"actor_id":a.id,"status":"queued","payload":payload,"client_context":{"trigger_id":event["trigger_id"]},"created_at":chrono::Utc::now().to_rfc3339(),"runtime_event":true,"runtime_completion":expected_callback.is_some(),"native_version":version});
             if document(tx,"business_commands",&command_id)?.is_some(){return Err(invalid("conflict: native event already admitted; reconcile"));}
-            store_command(tx,&doc)?;origin::stamp(tx,"runtime_event",&doc)?;Ok(doc)
+            store_runtime_event(tx,&doc)?;origin::stamp(tx,"runtime_event",&doc)?;Ok(doc)
         }))?;
         let doc = wait(&self.runtime, async move { job.await })?;
         let myself = self

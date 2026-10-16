@@ -153,11 +153,10 @@ pub fn command_declarations(sender: &Value, receiver: &Value, kind: &str, option
     let to = string(receiver, "app_id")?;
     ensure!(declared_target(sender, kind, options.get("module").and_then(Value::as_str))? == to, "forbidden: command target differs");
     if !core_command(kind) {
-        ensure!(receiver["handlers"].get(kind).is_some(), "forbidden: target handler missing");
+        ensure!(receiver["handlers"].get(kind).is_some(), "{}: target handler missing", if from==to { "unknown_command" } else { "forbidden" });
         if from != to {
             let exported = receiver["commands_in"].as_array().is_some_and(|rules| rules.iter().any(|r| r["type"] == kind && (r["from"] == "*" || r["from"].as_array().is_some_and(|apps| apps.iter().any(|a| a == from)))));
-            let explicit = receiver["command_rights"].as_object().is_some_and(|rules| rules.keys().any(|p| p == kind || p.strip_suffix('*').is_some_and(|s| kind.starts_with(s))));
-            ensure!(exported || explicit, "forbidden: target command not exported");
+            ensure!(exported, "forbidden: receiver commands_in missing");
         }
     }
     for key in ["on_complete", "on_failed"] {
@@ -171,7 +170,7 @@ pub fn declared_target<'a>(manifest: &'a Value, kind: &str, requested: Option<&'
     let sender = string(manifest, "app_id")?;
     if core_command(kind) { return Ok(sender); }
     let targets: BTreeSet<&str> = manifest["commands_out"].as_array().into_iter().flatten()
-        .filter(|r| r["type"] == kind).filter_map(|r| r["target_app"].as_str().or_else(|| r["app"].as_str())).collect();
+        .filter(|r| r["type"] == kind).filter_map(|r| r["app"].as_str()).collect();
     if targets.is_empty() {
         ensure!(requested.is_none_or(|app| app == sender), "forbidden: sender commands_out missing");
         return Ok(sender);
@@ -954,7 +953,7 @@ fn maintenance(weak: Weak<Inner>) {
 }
 fn error_code(message: &str) -> &str {
     match message.split(':').next().unwrap_or("").trim() {
-        code @ ("invalid" | "forbidden" | "not_found" | "conflict" | "revoked" | "expired"
+        code @ ("invalid" | "forbidden" | "not_found" | "unknown_command" | "conflict" | "revoked" | "expired"
         | "quota" | "unavailable") => code,
         _ => "unavailable",
     }

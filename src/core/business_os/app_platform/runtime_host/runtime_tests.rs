@@ -442,12 +442,12 @@ fn e39_target_selection_precedes_local_handler() {
     assert_eq!(f.codec.route(&f.db,&doc).unwrap()["app_id"],"receiver","E39 must select commands_out target before own handler");
 }
 #[test]
-fn e39_unexported_cross_app_is_forbidden_before_execution() {
+fn e39_missing_inbound_is_forbidden_even_with_target_right() {
     let mut f=routing_fixture();
-    route_release(&mut f,"receiver",json!({"handlers":{"run":"handlers/run.js"}}), &["receiver_rows"]);
+    route_release(&mut f,"receiver",json!({"handlers":{"run":"handlers/run.js"},"command_rights":{"run":{"roles":["admin"]}}}), &["receiver_rows"]);
     let doc=document(&f.db,"business_commands","cmd").unwrap().unwrap();
     let err=f.codec.route(&f.db,&doc).unwrap_err();
-    assert!(err.to_string().contains("target command not exported"),"E39 admission must reject unexported command: {err}");
+    assert!(err.to_string().contains("receiver commands_in missing"),"E39 inbound consent is mandatory despite target right: {err}");
 }
 #[test]
 fn e39_target_user_right_cannot_be_borrowed_from_sender() {
@@ -459,6 +459,7 @@ fn e39_target_user_right_cannot_be_borrowed_from_sender() {
 #[test]
 fn e39_unknown_target_rejected_by_command_writer() {
     let mut f=routing_fixture();let mut doc=document(&f.db,"business_commands","cmd").unwrap().unwrap();
+    route_release(&mut f,"app",json!({"handlers":{"run":"handlers/run.js"},"commands_out":[{"app":"ghost","type":"run"}],"command_rights":{"run":{"roles":["admin"]}}}), &["rows"]);
     doc["id"]=json!("unknown");doc["target_app"]=json!("ghost");
     let tx=f.db.transaction().unwrap();
     assert!(store_command(&tx,&doc).unwrap_err().to_string().contains("unknown_command"),"E27 unknown target must reject before persistence");
@@ -475,6 +476,10 @@ fn e39_target_scope_writes_and_sender_identity_are_independent() {
     let b=json!({"command":command,"manifest":f.codec.manifest(&tx,"receiver").unwrap(),"fence":{"run_id":"app-runtime:cmd","participant":"native","fence":lease.fence.0,"rights_ver":rights(&tx).unwrap().rights_ver}});
     assert_eq!(b["command"]["app_id"],"app");
     f.codec.write(&tx,&b,None,&[StoreWrite{collection:"receiver_rows".into(),op:json!({"type":"put","doc":{"id":"legal","n":1}})}]).expect("E39 target own write must succeed");
+    ctox_app_runtime::state::initialize(&tx).unwrap();
+    ctox_app_runtime::state::apply(&tx,&b,"completion.register",&json!({"task_id":"command:target-child","callbacks":{"on_complete":"run"}})).unwrap();
+    let callback_app:String=tx.query_row("SELECT app_id FROM _app_runtime_completions WHERE task_id='command:target-child'",[],|r|r.get(0)).unwrap();
+    assert_eq!(callback_app,"receiver","E39 callback scope must belong to executing target");
     assert!(f.codec.write(&tx,&b,None,&[StoreWrite{collection:"rows".into(),op:json!({"type":"put","doc":{"id":"illegal","n":1}})}]).is_err(),"E39 target cannot borrow sender write scope");
 }
 

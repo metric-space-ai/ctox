@@ -539,6 +539,14 @@ async fn drive(
     Ok(())
 }
 
+#[cfg(test)]
+pub(super) mod core_route_probe {
+    use std::{collections::BTreeSet, sync::{Mutex, OnceLock}};
+    static CALLS: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+    pub(super) fn record(id: &str) { CALLS.get_or_init(Default::default).lock().unwrap().insert(id.to_owned()); }
+    pub(crate) fn observed(id: &str) -> bool { CALLS.get_or_init(Default::default).lock().unwrap().contains(id) }
+}
+
 async fn dispatch_committed(
     native_root: &std::path::Path,
     database: &Database,
@@ -558,7 +566,7 @@ async fn dispatch_committed(
                 Some(StoreError::Invalid(reason))
                     if matches!(
                         error_code(reason),
-                        "forbidden" | "revoked" | "not_found" | "invalid"
+                        "forbidden" | "revoked" | "not_found" | "unknown_command" | "invalid"
                     ) =>
                 {
                     reason.clone()
@@ -609,11 +617,14 @@ async fn dispatch_committed(
     let call = async {
         if e25_core {
             tokio::task::spawn_blocking(move || {
-                crate::business_os::command_plane::execute_v4_core_registered_command(
+                let result = crate::business_os::command_plane::execute_v4_core_registered_command(
                     &native_root,
                     &native_binding,
                     &*retained,
-                )
+                );
+                #[cfg(test)]
+                core_route_probe::record(text(&native_binding["command"], "id").unwrap());
+                result
             })
             .await?
         } else {
