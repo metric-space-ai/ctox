@@ -51,6 +51,10 @@ hold while `fullM7Accepted` remains false. Read the decision matrix.
 A fresh-state foreground startup control is explicitly separate from an
 installed upgrade, persistent signing-key verification, populated-profile
 migration, rights binding, app hot-plug and Workjet bridge acceptance. A
+public-key control calls the official `ctox sync identity` after each real
+foreground shutdown; it neither opens encrypted files nor provisions a key.
+It compares that fresh-state public identity, not an installed profile's
+migration/signature witness. A
 SQLite-only profile copy is not booted as a complete sealed-state restoration.
 An authorized frozen profile, productive import/coverage path, ordered V4
 transport and signed V4 slot must be supplied before the full rehearsal can

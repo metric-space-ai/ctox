@@ -115,11 +115,13 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
    if(rolled.phase!=='rolled_back'||oldCurrent!==initial||hash(fs.readFileSync(join(oldCurrent,'bin/ctox')))!==before.binarySha256)throw Error('Supported rollback did not activate the verified old binary');
    record.rollback={startedAtMs,durationMs:Date.now()-startedAtMs,currentRelease:oldCurrent,binarySha256:before.binarySha256,phase:rolled.phase,stateBackupPath:snapshot,stateRestoreSemantics:'Official update rollback restores the recorded pre-update state; not binary-only'};
    quiesce();record.rollback.dataReadback=readback('rollback');
+   record.rollback.verifiedDurationMs=Date.now()-startedAtMs;
    const forwardAt=Date.now();quiesce();await cli(['update','apply','--version',release,'--force']);
    const finalCurrent=fs.realpathSync(join(installRoot,'current')),final=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json')));
    if(final.phase!=='completed'||finalCurrent!==join(releases,release)||hash(fs.readFileSync(join(finalCurrent,'bin/ctox')))!==after.binarySha256)throw Error('Forward re-install did not restore the verified candidate');
    record.forward={startedAtMs:forwardAt,durationMs:Date.now()-forwardAt,binarySha256:after.binarySha256,phase:final.phase};
    quiesce();record.forward.dataReadback=readback('forward');
+   record.forward.verifiedDurationMs=Date.now()-forwardAt;
    record.roundtripExecuted=true;record.finalUpdateState=final;
   }
   return record;
