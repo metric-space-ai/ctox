@@ -181,10 +181,7 @@ impl BrowserIngress {
     }
     pub async fn shutdown(&self) -> Result<(), StoreError> {
         if let Some((mut session, database)) = self.session.lock().await.take() {
-            session
-                .shutdown()
-                .await
-                .map_err(|_| StoreError::Invalid("browser session shutdown".into()))?;
+            session.shutdown().await;
             database
                 .close()
                 .await
@@ -413,7 +410,7 @@ impl V4StreamSource for Source {
             // an unvalidated document or invent an in-memory success receipt.
             let writer = OrderedWriter::new(inputs.sync.writer.clone(), Arc::new(UnboundWrite));
             let batch = writer
-                .submit(binding.user.clone(), write, now())
+                .submit(binding.device.clone(), write, now())
                 .await
                 .map_err(|_| invalid())?;
             for result in batch.results {

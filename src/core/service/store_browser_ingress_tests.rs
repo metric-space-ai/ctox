@@ -33,7 +33,8 @@ async fn browser_ingress_reads_the_real_owner_and_fences_revoked_pages() -> anyh
         .await?
         .ok_or_else(|| anyhow::anyhow!("subscription ended"))?
         .map_err(|_| anyhow::anyhow!("owner read failed"))?;
-    let packet: subscription::protocol::StreamPacket = serde_json::from_value(page.clone())?;
+    let packet: ctox_store::change_log::subscription::protocol::StreamPacket =
+        serde_json::from_value(page.clone())?;
     packet
         .verify(&*foreground.inputs.instance_verifier()?)
         .map_err(anyhow::Error::msg)?;
