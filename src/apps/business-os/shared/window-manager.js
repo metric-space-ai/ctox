@@ -74,15 +74,25 @@ const CONTROL_GLYPHS = {
   close: '×',
 };
 
+// Andock-Raster (Bedienkonzept Shell v4 §Andock-Layouts, M-01): räumlich 3×3 – jedes Feld sitzt dort, wo das Fenster
+// danach steht (Ecken = Viertel, Kanten = Hälften, Mitte = maximieren); darunter „Freie Größe“ und „Minimieren“.
 const V2_LAYOUT_OPTIONS = Object.freeze([
-  { id: 'free', icon: 'free', labelKey: 'windowFree', fallback: 'Freies Fenster' },
-  { id: 'maximize', icon: 'maximize', labelKey: 'windowMaximize', fallback: 'Maximieren' },
-  { id: 'minimize', icon: 'minimize', labelKey: 'windowMinimize', fallback: 'Minimieren' },
-  { id: 'left', icon: 'left', labelKey: 'windowSnapLeft', fallback: 'Links anheften' },
-  { id: 'right', icon: 'right', labelKey: 'windowSnapRight', fallback: 'Rechts anheften' },
-  { id: 'top', icon: 'top', labelKey: 'windowSnapTop', fallback: 'Oben anheften' },
-  { id: 'bottom', icon: 'bottom', labelKey: 'windowSnapBottom', fallback: 'Unten anheften' },
+  { id: 'top-left', icon: 'top-left', labelKey: 'windowSnapTopLeft', fallback: 'Oben links anordnen', row: 1, col: 1 },
+  { id: 'top', icon: 'top', labelKey: 'windowSnapTop', fallback: 'Obere Hälfte', row: 1, col: 2 },
+  { id: 'top-right', icon: 'top-right', labelKey: 'windowSnapTopRight', fallback: 'Oben rechts anordnen', row: 1, col: 3 },
+  { id: 'left', icon: 'left', labelKey: 'windowSnapLeft', fallback: 'Linke Hälfte', row: 2, col: 1 },
+  { id: 'maximize', icon: 'maximize', labelKey: 'windowMaximize', fallback: 'Maximieren', row: 2, col: 2 },
+  { id: 'right', icon: 'right', labelKey: 'windowSnapRight', fallback: 'Rechte Hälfte', row: 2, col: 3 },
+  { id: 'bottom-left', icon: 'bottom-left', labelKey: 'windowSnapBottomLeft', fallback: 'Unten links anordnen', row: 3, col: 1 },
+  { id: 'bottom', icon: 'bottom', labelKey: 'windowSnapBottom', fallback: 'Untere Hälfte', row: 3, col: 2 },
+  { id: 'bottom-right', icon: 'bottom-right', labelKey: 'windowSnapBottomRight', fallback: 'Unten rechts anordnen', row: 3, col: 3 },
+  { id: 'free', icon: 'free', labelKey: 'windowFree', fallback: 'Freie Größe', row: 4, col: 1, wide: true },
+  { id: 'minimize', icon: 'minimize', labelKey: 'windowMinimize', fallback: 'Minimieren', row: 5, col: 1, wide: true },
 ]);
+export const LAYOUT_GRID_ORDER = Object.freeze(V2_LAYOUT_OPTIONS.map((o) => o.id));
+
+// Palette je Icon-URL (data-URL = Inhalt): zweites Öffnen ohne erneutes Rastern und ohne Flackern (M-17).
+const FRAME_PALETTE_CACHE = new Map();
 
 const RESIZE_HANDLES = ['n', 's', 'e', 'w', 'nw', 'ne', 'sw', 'se'];
 const V2_RESIZE_HANDLES = ['nw', 'ne', 'sw', 'se'];
@@ -263,6 +273,68 @@ export function shellV2FramePaletteFromRgba(rgba, width = 0, height = 0) {
     accent: rgbToHex(topJoint),
     content_accent: rgbToHex(contentAccent),
     content_foreground: rgbToHex(contentForeground),
+  };
+}
+
+// Randfarben des Logos (M-17): oben = rechter Rand der obersten Logozeilen (dort setzt die obere Kante an), links =
+// unterer Rand der linken Logospalten (dort setzt die linke Kante an). Je Zeile (oben) bzw. Spalte (links) eines
+// schmalen Streifens (12 % lang) zählen nur DECKENDE Logopixel (Alpha ≥ 0,9): der äußerste deckende Pixel und die
+// `depth` Pixel dahinter (bis 34 % Tiefe). Bei vollflächigen Icons ist das genau der Randstreifen (3 px tief), bei
+// Kachel-Logos mit runden, durchsichtigen Ecken sind es die Pixel direkt hinter der Rundung – die Kante setzt das Logo
+// fort, nicht den Hintergrund des Icon-Halters. Kanalweiser Median, einzelne Glyphenpixel verschieben ihn nicht.
+// Kachel = die vier Randmitten des Logos sind deckend. Hat eine Kachel durchsichtige Ecken, liefert `surface` die
+// Füllfarbe für den Icon-Halter (Mittel der beiden Randfarben), damit die Ecken nicht als dunkle Keile zwischen Logo
+// und Kante stehen. Keine Kachel (freigestellte Glyphe) oder kein deckender Randpixel: bisherige Rechnung –
+// Streifenpixel über der Icon-Hintergrundfarbe (bg, wie gerendert) verrechnet, denn dort grenzt der Halter an die Kante.
+export function shellV2EdgeJointsFromRgba(rgba, width, height, bg = null) {
+  const depth = Math.max(1, Math.round(Math.min(width, height) / 16));
+  const span = Math.max(2, Math.round(Math.min(width, height) * 0.12));
+  const reach = Math.max(depth, Math.round(Math.min(width, height) * 0.34));
+  const OPAQUE = 230;
+  const alphaAt = (x, y) => rgba[((y * width) + x) * 4 + 3];
+  const median = (values) => { const v = values.slice().sort((a, b) => a - b); return v[Math.floor(v.length / 2)]; };
+  const pick = (r, g, b) => (r.length ? [median(r), median(g), median(b)] : null);
+  // at(line, step) → Pixelindex; step 0 = äußerster Pixel der Zeile/Spalte an der Kante.
+  const opaqueRim = (at) => {
+    const r = []; const g = []; const b = [];
+    for (let line = 0; line < span; line += 1) {
+      let s = 0;
+      while (s < reach && rgba[at(line, s) + 3] < OPAQUE) s += 1;
+      if (s >= reach) continue;
+      for (let k = s; k < s + depth; k += 1) {
+        const i = at(line, k);
+        if (rgba[i + 3] < OPAQUE) continue;
+        r.push(rgba[i]); g.push(rgba[i + 1]); b.push(rgba[i + 2]);
+      }
+    }
+    return pick(r, g, b);
+  };
+  const sample = (x0, x1, y0, y1) => {
+    const r = []; const g = []; const b = [];
+    for (let y = y0; y <= y1; y += 1) {
+      for (let x = x0; x <= x1; x += 1) {
+        const i = (y * width + x) * 4;
+        const a = rgba[i + 3] / 255;
+        if (!bg && a < 0.5) continue;
+        const over = (v, k) => (bg ? v * a + bg[k] * (1 - a) : v);
+        r.push(over(rgba[i], 0)); g.push(over(rgba[i + 1], 1)); b.push(over(rgba[i + 2], 2));
+      }
+    }
+    return pick(r, g, b);
+  };
+  const midX = Math.floor(width / 2);
+  const midY = Math.floor(height / 2);
+  const tile = [[midX, 0], [width - 1, midY], [midX, height - 1], [0, midY]].every(([x, y]) => alphaAt(x, y) >= OPAQUE);
+  const rimTop = tile ? opaqueRim((line, step) => (line * width + (width - 1 - step)) * 4) : null;
+  const rimLeft = tile ? opaqueRim((line, step) => ((height - 1 - step) * width + line) * 4) : null;
+  const top = rimTop || sample(width - depth, width - 1, 0, span - 1);
+  const left = rimLeft || sample(0, span - 1, height - depth, height - 1);
+  const hollowCorners = alphaAt(width - 1, 0) < OPAQUE || alphaAt(0, height - 1) < OPAQUE;
+  const surface = rimTop && rimLeft && hollowCorners ? rimTop.map((value, channel) => (value + rimLeft[channel]) / 2) : null;
+  return {
+    top: top ? rgbToHex(top) : null,
+    left: left ? rgbToHex(left) : null,
+    ...(surface ? { surface: rgbToHex(surface) } : {}),
   };
 }
 
@@ -689,8 +761,24 @@ export function createWindowManager({
     if (shellContract === 'v2') {
       const iconEl = winEl.querySelector('[data-window-app-icon]');
       const iconHost = iconEl?.closest('.shell-window-v2-icon');
-      if (iconEl && options.iconAsset) {
-        iconEl.crossOrigin = 'anonymous';
+      // iconAsset darf eine Promise<string> sein (Shell v4: dieselbe aufgelöste Icon-URL wie Launcher und Taskleiste).
+      // Bis sie aufgelöst ist, bleibt das Bild unsichtbar (kein Monogramm-Zwischenstand, kein Wechsel).
+      const pendingAsset = options.iconAsset && typeof options.iconAsset.then === 'function' ? options.iconAsset : null;
+      if (iconEl && pendingAsset) {
+        iconEl.style.visibility = 'hidden';
+        pendingAsset.then((url) => {
+          if (!url) return;
+          if (!String(url).startsWith('data:')) iconEl.crossOrigin = 'anonymous';
+          iconEl.addEventListener('load', () => { iconEl.style.visibility = ''; }, { once: true });
+          const cached = FRAME_PALETTE_CACHE.get(String(url));
+          if (cached) { applyFramePalette(winEl, cached); winEl.dataset.shellV2PaletteSource = typeof options.iconSource === 'function' ? (options.iconSource() || 'icon') : 'icon'; }
+          // MAN3/FR6d: srcset auch im Promise-Zweig (Funktion → zur aufgelösten URL passendes srcset, sonst Zeichenkette).
+          const srcset = typeof options.iconSrcSet === 'function' ? options.iconSrcSet(url) : options.iconSrcSet;
+          if (srcset) iconEl.srcset = String(srcset);
+          iconEl.src = String(url);
+        }, () => {});
+      } else if (iconEl && options.iconAsset) {
+        if (!String(options.iconAsset).startsWith('data:')) iconEl.crossOrigin = 'anonymous';
         iconEl.src = String(options.iconAsset);
         if (options.iconSrcSet) iconEl.srcset = String(options.iconSrcSet);
       } else {
@@ -705,16 +793,27 @@ export function createWindowManager({
       }
       applyFramePalette(winEl, options.framePalette);
       if (iconEl) {
-        const applyIconPalette = () => {
-          const palette = framePaletteFromIcon(iconEl);
+        // M-17: Palette immer aus den gerenderten Icon-Pixeln (nach decode(), fest 48×48 gerastert – auch SVG ohne
+        // intrinsische Größe). options.framePalette bleibt nur Rückfall, solange das Bild lädt.
+        const applyIconPalette = async () => {
+          const key = iconEl.currentSrc || iconEl.src;
+          let palette = FRAME_PALETTE_CACHE.get(key) || null;
+          if (!palette) {
+            try { await iconEl.decode?.(); } catch { /* Pixel unten prüfen */ }
+            palette = framePaletteFromIcon(iconEl);
+            if (palette && key) {
+              if (FRAME_PALETTE_CACHE.size > 256) FRAME_PALETTE_CACHE.delete(FRAME_PALETTE_CACHE.keys().next().value);
+              FRAME_PALETTE_CACHE.set(key, palette);
+            }
+          }
           if (!palette) return;
           applyFramePalette(winEl, palette);
-          winEl.dataset.shellV2PaletteSource = 'icon';
+          winEl.dataset.shellV2PaletteSource = typeof options.iconSource === 'function' ? (options.iconSource() || 'icon') : 'icon';
           const record = windows.find((entry) => entry.element === winEl);
           if (record) refreshV2Chrome(record);
         };
-        iconEl.addEventListener('load', applyIconPalette, { once: true });
-        if (iconEl.complete && iconEl.naturalWidth > 0) queueMicrotask(applyIconPalette);
+        iconEl.addEventListener('load', applyIconPalette, { once: !pendingAsset });
+        if (!pendingAsset && iconEl.complete && iconEl.src) queueMicrotask(applyIconPalette);
       }
     }
     renderHeaderItems(winEl.querySelector('[data-window-meta]'), options.headerBadges, 'meta');
@@ -1328,8 +1427,11 @@ export function createWindowManager({
         if (layoutBtn.dataset.windowLayoutControl === 'toggle') {
           const menu = win.element.querySelector('[data-window-layout-menu]');
           if (menu) {
-            menu.hidden = !menu.hidden;
+            // Per Hover geöffnet: der Klick hält das Raster offen (statt es gleich wieder zu schließen).
+            menu.hidden = win._layoutHoverOpen ? false : !menu.hidden;
+            win._layoutHoverOpen = false;
             layoutBtn.setAttribute('aria-expanded', String(!menu.hidden));
+            if (!menu.hidden) updateLayoutControlState(win);
           }
           return;
         }
@@ -1345,6 +1447,7 @@ export function createWindowManager({
     if (!layoutMenu) return;
     const trigger = win.element.querySelector('[data-window-layout-trigger]');
     const closeLayoutMenu = () => {
+      win._layoutHoverOpen = false;
       layoutMenu.hidden = true;
       trigger?.setAttribute('aria-expanded', 'false');
     };
@@ -1353,6 +1456,37 @@ export function createWindowManager({
     };
     document.addEventListener('click', onDocumentClick);
     win._layoutMenuClickCleanup = () => document.removeEventListener('click', onDocumentClick);
+    // Hover über dem Layout-Knopf zeigt das Raster (Windows 11 Snap-Layouts); Verlassen schließt es wieder, solange
+    // es nicht per Klick oder Tastatur geöffnet wurde.
+    const wrapper = trigger?.closest('.shell-window-layout-control');
+    let hoverTimer = null;
+    const openLayoutMenu = ({ focus = false, hover = false } = {}) => {
+      win._layoutHoverOpen = hover;
+      updateLayoutControlState(win);
+      layoutMenu.hidden = false;
+      trigger?.setAttribute('aria-expanded', 'true');
+      if (focus) (layoutMenu.querySelector('[aria-current="true"]') || layoutMenu.querySelector('[data-window-layout-control]'))?.focus();
+    };
+    wrapper?.addEventListener('mouseenter', () => { clearTimeout(hoverTimer); if (layoutMenu.hidden) hoverTimer = setTimeout(() => openLayoutMenu({ hover: true }), 250); });
+    wrapper?.addEventListener('mouseleave', () => { clearTimeout(hoverTimer); if (win._layoutHoverOpen && !layoutMenu.contains(document.activeElement)) hoverTimer = setTimeout(() => { if (win._layoutHoverOpen) closeLayoutMenu(); }, 300); });
+    trigger?.addEventListener('click', () => clearTimeout(hoverTimer));
+    trigger?.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openLayoutMenu({ focus: true }); }
+    });
+    layoutMenu.addEventListener('keydown', (event) => {
+      const cur = event.target.closest('[data-window-layout-control]');
+      if (!cur) return;
+      const opts = [...layoutMenu.querySelectorAll('[data-window-layout-control]')];
+      const r = Number(cur.dataset.row); const c = Number(cur.dataset.col);
+      const at = (row, col) => opts.find((o) => Number(o.dataset.row) === row && Number(o.dataset.col) === col);
+      let next = null;
+      if (event.key === 'ArrowRight') next = at(r, Math.min(3, c + 1)) || cur;
+      else if (event.key === 'ArrowLeft') next = at(r, Math.max(1, c - 1)) || cur;
+      else if (event.key === 'ArrowDown') next = at(r + 1, r + 1 >= 4 ? 1 : c) || cur;
+      else if (event.key === 'ArrowUp') next = r === 4 ? at(3, 2) : (at(r - 1, r - 1 >= 4 ? 1 : c) || cur);
+      else if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); applyLayoutControl(win, cur.dataset.windowLayoutControl); trigger?.focus(); return; }
+      if (next) { event.preventDefault(); next.focus(); }
+    });
     win.element.addEventListener('keydown', (event) => {
       if (event.key === 'Escape' && !layoutMenu.hidden) {
         closeLayoutMenu();
@@ -1388,6 +1522,11 @@ export function createWindowManager({
       : (win.element.dataset.snapZone || 'free');
     trigger.dataset.state = state;
     trigger.setAttribute('aria-expanded', String(!win.element.querySelector('[data-window-layout-menu]')?.hidden));
+    // Aktuelle Lage im Raster markieren (aria-current), damit Pfeiltasten dort beginnen.
+    for (const option of win.element.querySelectorAll('[data-window-layout-menu] [data-window-layout-control]')) {
+      if (option.dataset.windowLayoutControl === state) option.setAttribute('aria-current', 'true');
+      else option.removeAttribute('aria-current');
+    }
   }
 
   function bindHeaderActions(win) {
@@ -2177,8 +2316,31 @@ export function createWindowManager({
     };
   }
 
+  // Releases every listener and observer this manager registered (viewport
+  // resize, surface ResizeObserver, per-window chrome observers, layout-menu
+  // document clicks, pending layout timers). The window DOM is left in place so
+  // a caller can keep it visible while a successor takes over (Shell v4 live
+  // swap); afterwards the manager must not be used again.
+  let disposed = false;
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    globalThis.removeEventListener?.('resize', onViewportResize, { passive: true });
+    globalThis.visualViewport?.removeEventListener?.('resize', onViewportResize, { passive: true });
+    surfaceResizeObserver?.disconnect?.();
+    for (const win of windows) {
+      clearTimeout(win._layoutSwitchTimer);
+      win._layoutSwitchTimer = null;
+      win._v2ResizeObserver?.disconnect?.();
+      win._v2MutationObserver?.disconnect?.();
+      win._layoutMenuClickCleanup?.();
+      win._layoutMenuClickCleanup = null;
+    }
+  }
+
   return {
     create,
+    dispose,
     focus,
     minimize,
     minimizeAll,
@@ -2249,6 +2411,8 @@ function renderControls(controlsEl, layout, translate, shellContract = 'v1') {
       menu.dataset.windowLayoutMenu = 'true';
       menu.hidden = true;
       menu.setAttribute('role', 'menu');
+      menu.setAttribute('aria-label', translate('windowLayout', 'Fensteranordnung'));
+      menu.dataset.layoutGrid = '3x3';
       for (const option of V2_LAYOUT_OPTIONS) {
         const optionButton = document.createElement('button');
         optionButton.type = 'button';
@@ -2256,7 +2420,13 @@ function renderControls(controlsEl, layout, translate, shellContract = 'v1') {
         optionButton.setAttribute('role', 'menuitem');
         optionButton.setAttribute('aria-label', translate(option.labelKey, option.fallback));
         optionButton.title = translate(option.labelKey, option.fallback);
-        optionButton.innerHTML = `<span class="shell-window-layout-glyph shell-window-layout-glyph--${option.icon}" aria-hidden="true"></span>`;
+        optionButton.dataset.row = String(option.row);
+        optionButton.dataset.col = String(option.col);
+        optionButton.style.gridRow = String(option.row);
+        optionButton.style.gridColumn = option.wide ? '1 / -1' : String(option.col);
+        optionButton.tabIndex = -1;
+        if (option.wide) optionButton.classList.add('is-wide');
+        optionButton.innerHTML = `<span class="shell-window-layout-glyph shell-window-layout-glyph--${option.icon}" aria-hidden="true"></span>${option.wide ? `<span class="shell-window-layout-label">${escapeAttribute(translate(option.labelKey, option.fallback))}</span>` : ''}`;
         menu.appendChild(optionButton);
       }
       wrapper.append(trigger, menu);
@@ -2360,18 +2530,31 @@ function applyFramePalette(element, palette = {}) {
 
 function framePaletteFromIcon(image) {
   try {
-    if (!image?.naturalWidth || !image?.naturalHeight) return null;
+    if (!image?.complete || !image?.currentSrc && !image?.src) return null;
     const canvas = document.createElement('canvas');
     canvas.width = 48;
     canvas.height = 48;
     const context = canvas.getContext('2d', { willReadFrequently: true });
     if (!context) return null;
     context.drawImage(image, 0, 0, canvas.width, canvas.height);
-    return shellV2FramePaletteFromRgba(
-      context.getImageData(0, 0, canvas.width, canvas.height).data,
-      canvas.width,
-      canvas.height,
-    );
+    const rgba = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    const palette = shellV2FramePaletteFromRgba(rgba, canvas.width, canvas.height);
+    if (!palette) return null;
+    // M-17: jede Kante beginnt exakt mit der Farbe des angrenzenden Logorands (nicht mit einer Rangfolge-Farbe).
+    let bg = null;
+    try {
+      const host = image.closest?.('.shell-window-v2-icon') || image.parentElement;
+      const m = host ? /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(getComputedStyle(host).backgroundColor) : null;
+      bg = m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+    } catch { bg = null; }
+    const edges = shellV2EdgeJointsFromRgba(rgba, canvas.width, canvas.height, bg);
+    return {
+      ...palette,
+      ...(edges.top ? { top_joint: edges.top } : {}),
+      ...(edges.left ? { left_joint: edges.left } : {}),
+      // Kachel-Logo mit durchsichtigen Ecken: Halter in Logofarbe statt dunkler Keile zwischen Logo und Kante.
+      ...(edges.surface ? { surface_alt: edges.surface } : {}),
+    };
   } catch {
     // Cross-origin/runtime-installed artwork may be unreadable. The manifest
     // palette already applied above remains the explicit fail-closed fallback.

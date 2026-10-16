@@ -15,6 +15,21 @@ function hexColorToken(value) {
   return /^#[0-9a-f]{6}$/.test(raw) ? raw : '';
 }
 
+// Lesbare Schrift auf der Terminfarbe: dunkel auf hellen, weiß auf satten Farben (WCAG-Leuchtdichte).
+// Vorher erbte der Termin die Fließtextfarbe (--ec-event-text-color zeigte auf das nirgends definierte
+// --accent-contrast) – dunkle Schrift auf blauem/grünem Grund war kaum lesbar.
+export function eventTextColor(color) {
+  const hex = hexColorToken(color);
+  if (!hex) return undefined;
+  const channel = (i) => {
+    const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = 0.2126 * channel(1) + 0.7152 * channel(3) + 0.0722 * channel(5);
+  // Kontrast gegen Weiß vs. gegen #111827 (L≈0.0136): der höhere gewinnt.
+  return (1.05 / (luminance + 0.05)) >= ((luminance + 0.05) / 0.0636) ? '#ffffff' : '#111827';
+}
+
 function paletteAccentColor(element) {
   if (!element || typeof globalThis.getComputedStyle !== 'function') return NEUTRAL_ITEM_COLOR;
   try {
@@ -73,7 +88,8 @@ export function createCalendarView({
     headerToolbar: {
       start: '',
       center: '',
-      end: 'dayGridMonth,timeGridWeek,timeGridDay,listWeek'
+      // Ansichtswechsel nur über die Reiter Monat/Woche/Tag der App (Textdiät Regel 3: keine Doppelbedienung).
+      end: ''
     },
     locale: 'de',
     firstDay: 1, // Monday
@@ -84,7 +100,14 @@ export function createCalendarView({
       for (const [name, value] of Object.entries(calendarEventContext(info))) {
         info.el.setAttribute(name, value);
       }
+      // Monatsraster: ein Termin = eine Zeile, Abschneiden ist dort fachlich gewollt (feste Tageszelle); der volle
+      // Titel steht im Tooltip. Woche/Tag/Liste brechen den Titel um (index.css).
+      if (info.view?.type === 'dayGridMonth') {
+        info.el.setAttribute('data-v4-allow-ellipsis', '');
+        if (info.event?.title) info.el.setAttribute('title', String(info.event.title));
+      }
     },
+    moreLinkContent: (arg) => `+${arg?.num ?? ''} weitere`,
     editable: true,
     selectable: true,
     slotMinTime: '00:00:00',
@@ -241,6 +264,7 @@ function prepareEventsForCalendar(
             end: new Date(occEnd),
             allDay: !!ev.all_day,
             color: color,
+            textColor: eventTextColor(color),
             description: ev.description || '',
             location: ev.location || '',
             sourceEventId: ev.id,
@@ -271,6 +295,7 @@ function mapSingleEvent(ev, color) {
     end: new Date(ev.end_time),
     allDay: !!ev.all_day,
     color: color,
+    textColor: eventTextColor(color),
     description: ev.description || '',
     location: ev.location || '',
     sourceEventId: ev.id,

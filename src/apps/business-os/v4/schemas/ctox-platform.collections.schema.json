@@ -1,0 +1,773 @@
+{
+  "_app_id": "ctox-platform",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {
+    "app_activations": {
+      "source": "~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json",
+      "basis": "ownership.json: Entscheidung: Plattform-Collection (§16.17, ctox-platform.manifest.json)"
+    },
+    "app_drafts": {
+      "source": "~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json",
+      "basis": "ownership.json: Entscheidung: Plattform-Collection (§16.22: Entwürfe je (App, Nutzer), Eigentum ctox-platform)"
+    },
+    "business_app_versions": {
+      "source": "~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json",
+      "basis": "ownership.json: Entscheidung: Plattform-Collection (§9.2, §16.17)"
+    },
+    "business_apps": {
+      "source": "~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json",
+      "basis": "ownership.json: Entscheidung: Plattform-Collection (§9.2, §16.14, §16.17)"
+    },
+    "business_commands": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Entscheidung: Plattform-Collection (§16.17; Shell-registriert app.js:211-216)"
+    },
+    "business_module_catalog": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Entscheidung: Plattform-Collection (§16.17: entfällt, ersetzt durch business_apps/business_app_versions)"
+    },
+    "ctox_queue_tasks": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Entscheidung: Plattform-Collection (§16.17; CTOX-Queue gehört dem Core)"
+    },
+    "ctox_runtime_settings": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Entscheidung: Plattform-Collection (§16.17)"
+    },
+    "files": {
+      "source": "~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json",
+      "basis": "ownership.json: Entscheidung: Plattform-Collection (§10.2a api.files, ctox-platform.manifest.json)"
+    },
+    "mail_server_state": {
+      "source": "~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json",
+      "basis": "ownership.json: keine App definiert die Collection; keine Präfixregel → Plattform"
+    },
+    "shell_preferences": {
+      "source": "~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json",
+      "basis": "ownership.json: Entscheidung: Plattform-Collection (§16.19 Nr. 3)"
+    }
+  },
+  "collections": {
+    "app_activations": {
+      "schema": {
+        "primaryKey": "id",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "app_id": {
+            "type": "string"
+          },
+          "app_ver": {
+            "type": "string"
+          },
+          "device_id": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "received",
+              "fetched",
+              "data-ready",
+              "activated",
+              "failed"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "at_seq": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "indexes": [
+          "app_id",
+          "device_id"
+        ]
+      },
+      "byte_budget": 2048,
+      "class": "window",
+      "client_limit": null,
+      "rights": {
+        "read": "own|admin",
+        "write": "own"
+      }
+    },
+    "app_drafts": {
+      "schema": {
+        "primaryKey": "id",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "app_id",
+          "user_id"
+        ],
+        "indexes": [
+          "app_id",
+          "user_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "app_id": {
+            "type": "string"
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "base_app_ver": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "manifest_fields": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "files": {
+            "type": "object",
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "description": "Pfad → sha256 des Inhalts; null = im Entwurf gelöschte Datei (K-1c)."
+          },
+          "collections_schema": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        }
+      },
+      "byte_budget": 1048576,
+      "class": "full",
+      "client_limit": null,
+      "rights": {
+        "read": "own+apps.source.view",
+        "write": "own+apps.source.edit"
+      }
+    },
+    "business_app_versions": {
+      "schema": {
+        "primaryKey": "id",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "app_id": {
+            "type": "string"
+          },
+          "app_ver": {
+            "type": "string"
+          },
+          "manifest": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "manifest_sha256": {
+            "type": "string"
+          },
+          "signature": {
+            "type": "string"
+          },
+          "base_app_ver": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "indexes": [
+          "app_id",
+          "state"
+        ]
+      },
+      "byte_budget": 262144,
+      "class": "window",
+      "client_limit": null,
+      "rights": {
+        "read": "visible_roles",
+        "write": "core"
+      }
+    },
+    "business_apps": {
+      "schema": {
+        "primaryKey": "id",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "app_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "active_ver": {
+            "type": "string"
+          },
+          "migrated_at_seq": {
+            "type": "string"
+          },
+          "visible_roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "layout": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "provenance": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "locally_modified": {
+            "type": "boolean"
+          },
+          "state": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "indexes": [
+          "app_id",
+          "state"
+        ]
+      },
+      "byte_budget": 16384,
+      "class": "full",
+      "client_limit": null,
+      "rights": {
+        "read": "visible_roles",
+        "write": "core"
+      }
+    },
+    "business_commands": {
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "status",
+          "command_id",
+          [
+            "status",
+            "updated_at_ms"
+          ],
+          [
+            "module",
+            "command_type",
+            "status",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "client_context": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "command_type": {
+            "type": "string"
+          },
+          "execution_progress": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "inbound_channel": {
+            "type": "string"
+          },
+          "module": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "record_id": {
+            "type": "string"
+          },
+          "result": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "task_status": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "command_id",
+          "module",
+          "command_type",
+          "status",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 2
+      },
+      "byte_budget": 8192,
+      "class": "window",
+      "client_limit": null,
+      "rights": {
+        "read": "own|admin",
+        "write": "own"
+      }
+    },
+    "business_module_catalog": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "governance": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "modules": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "templates": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "modules",
+        "templates",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_queue_tasks": {
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "status",
+          "command_id",
+          "updated_at_ms",
+          [
+            "status",
+            "updated_at_ms"
+          ],
+          [
+            "command_id",
+            "status"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "attempt": {
+            "type": "number"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "command_type": {
+            "type": "string"
+          },
+          "crew_assigned_member_id": {
+            "type": "string"
+          },
+          "crew_member_id": {
+            "type": "string"
+          },
+          "execution_progress": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "failure_attempt_count": {
+            "type": "number"
+          },
+          "failure_class": {
+            "type": "string"
+          },
+          "first_pending_at": {
+            "type": "string"
+          },
+          "hold_reason": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "inbound_channel": {
+            "type": "string"
+          },
+          "lease_expires_at": {
+            "type": "string"
+          },
+          "lease_owner": {
+            "type": "string"
+          },
+          "lease_worker_id": {
+            "type": "string"
+          },
+          "module": {
+            "type": "string"
+          },
+          "priority_time_credit_hours": {
+            "type": "number"
+          },
+          "retry_not_before": {
+            "type": "string"
+          },
+          "source_module": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "ticket_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "wait_entity_id": {
+            "type": "string"
+          },
+          "wait_entity_type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "module"
+        ],
+        "type": "object",
+        "version": 3
+      },
+      "byte_budget": 16384,
+      "class": "window",
+      "client_limit": null,
+      "rights": {
+        "read": "role:admin|chef",
+        "write": "core"
+      }
+    },
+    "ctox_runtime_settings": {
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "auth": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "can_manage": {
+            "type": "boolean"
+          },
+          "diagnostics": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "ok": {
+            "type": "boolean"
+          },
+          "runtime": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "service": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "runtime",
+          "auth",
+          "diagnostics",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      },
+      "byte_budget": 4096,
+      "class": "full",
+      "client_limit": null,
+      "rights": {
+        "read": "all",
+        "write": "role:admin"
+      }
+    },
+    "files": {
+      "schema": {
+        "primaryKey": "id",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "name": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string"
+          },
+          "size": {
+            "type": "number"
+          },
+          "ref": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "owner_app": {
+            "type": "string"
+          },
+          "owner_user": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "indexes": [
+          "owner_app",
+          "ref"
+        ]
+      },
+      "byte_budget": 4096,
+      "class": "full",
+      "client_limit": null,
+      "rights": {
+        "read": "owner_app_rights",
+        "write": "owner_app_rights"
+      }
+    },
+    "mail_server_state": {
+      "schema": {
+        "primaryKey": "id",
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "kind"
+        ],
+        "indexes": [
+          "kind"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "runtime",
+              "domain",
+              "user"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "data": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        }
+      },
+      "byte_budget": 16384,
+      "class": "full",
+      "client_limit": null,
+      "rights": {
+        "read": "app:mail+role:mailserver.manage",
+        "write": "core"
+      }
+    },
+    "shell_preferences": {
+      "schema": {
+        "primaryKey": "id",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 180
+          },
+          "user_id": {
+            "type": "string"
+          },
+          "pins": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "launcher_order": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "indexes": [
+          "user_id"
+        ]
+      },
+      "byte_budget": 65536,
+      "class": "full",
+      "client_limit": 1,
+      "rights": {
+        "read": "own",
+        "write": "own"
+      }
+    }
+  },
+  "migrations": {},
+  "migration_strategies": {
+    "business_commands": {
+      "1": {
+        "operations": [
+          {
+            "default": "",
+            "field": "inbound_channel",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "inbound_channel",
+              "module"
+            ]
+          }
+        ]
+      },
+      "2": {
+        "operations": []
+      }
+    },
+    "ctox_queue_tasks": {
+      "1": {
+        "operations": []
+      },
+      "2": {
+        "operations": []
+      },
+      "3": {
+        "operations": []
+      }
+    }
+  }
+}

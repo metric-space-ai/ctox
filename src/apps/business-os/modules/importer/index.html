@@ -2,7 +2,6 @@
   <header class="ctox-pane-header imp-head" data-shell-v2-header-row="1">
     <div class="ctox-pane-title-row">
       <div class="ctox-pane-titles">
-        <span class="ctox-pane-kicker">CTOX</span>
         <h2 class="ctox-pane-title" data-imp-title>App Importer</h2>
       </div>
       <div class="ctox-pane-actions">
@@ -11,25 +10,21 @@
         </button>
       </div>
     </div>
-    <p class="imp-head-note" data-imp-subtitle>Source in. Durable CTOX app job out.</p>
   </header>
 
   <aside class="imp-rail">
     <ol class="imp-steps" aria-label="Import progress" data-shell-v2-header-row="2">
-      <li data-imp-step="source"><span>1</span><span><strong data-imp-copy="sourceStep">Source</strong><small data-imp-copy="sourceStepNote">Choose an app</small></span></li>
-      <li data-imp-step="progress"><span>2</span><span><strong data-imp-copy="progressStep">Porting</strong><small data-imp-copy="progressStepNote">Harness job</small></span></li>
-      <li data-imp-step="done"><span>3</span><span><strong data-imp-copy="liveStep">Live</strong><small data-imp-copy="liveStepNote">Validated app</small></span></li>
+      <li data-imp-step="source"><span>1</span><span><strong data-imp-copy="sourceStep">Source</strong></span></li>
+      <li data-imp-step="progress"><span>2</span><span><strong data-imp-copy="progressStep">Porting</strong></span></li>
+      <li data-imp-step="done"><span>3</span><span><strong data-imp-copy="liveStep">Live</strong></span></li>
     </ol>
   </aside>
 
   <section class="imp-workspace">
-    <div class="imp-notice" data-imp-notice hidden role="status"></div>
 
     <section class="imp-stage imp-source-stage" data-imp-source-section>
       <header class="imp-stage-header">
-        <span class="imp-eyebrow" data-imp-copy="sourceEyebrow">Import source</span>
-        <h2 data-imp-copy="sourceHeading">Port an existing app into Shell V2.</h2>
-        <p data-imp-copy="sourceIntro">A public GitHub repository starts immediately. Local files or a folder are first secured through CTOX DB.</p>
+        <h2 data-imp-copy="sourceHeading">Import an app</h2>
       </header>
       <div class="imp-import-options">
         <label>
@@ -58,14 +53,14 @@
       <div class="imp-divider"><span data-imp-copy="or">or</span></div>
       <div class="imp-local-sources">
         <input type="file" data-imp-pick-files-input hidden />
-        <button type="button" class="imp-folder" data-imp-pick-files>
+        <button type="button" class="imp-folder" data-imp-pick-files data-imp-tip="sourceHint" title="Files go to CTOX as a snapshot.">
           <span class="imp-folder-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M7 3.5h7l4 4V20H7z" /><path d="M14 3.5V8h4" /></svg></span>
-          <span><strong data-imp-copy="fileHeading">Choose source file</strong><small data-imp-source-hint data-imp-copy="sourceHint">Files are synced securely with CTOX.</small></span>
+          <span><strong data-imp-copy="fileHeading">Choose source file</strong></span>
           <span class="imp-folder-arrow" aria-hidden="true">→</span>
         </button>
-        <button type="button" class="imp-folder" data-imp-pick-folder>
+        <button type="button" class="imp-folder" data-imp-pick-folder data-imp-tip="folderHint" title="For multi-file projects, read access only.">
           <span class="imp-folder-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H10l2 2h6.5A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5v-9Z" /></svg></span>
-          <span><strong data-imp-copy="folderHeading">Choose project folder</strong><small data-imp-copy="folderHint">Read-only selection for multi-file projects.</small></span>
+          <span><strong data-imp-copy="folderHeading">Choose project folder</strong></span>
           <span class="imp-folder-arrow" aria-hidden="true">→</span>
         </button>
       </div>
@@ -73,13 +68,11 @@
 
     <section class="imp-stage imp-review-stage" data-imp-progress-section hidden>
       <header class="imp-stage-header">
-        <span class="imp-eyebrow" data-imp-copy="progressEyebrow">Durable app job</span>
         <h2 data-imp-progress-title>CTOX is porting the app.</h2>
         <p data-imp-progress-note>Securing source…</p>
       </header>
       <div class="imp-report">
         <dl class="ctox-fields imp-fields">
-          <dt data-imp-copy="commandLabel">Command</dt><dd><code data-imp-command-id></code></dd>
           <dt data-imp-copy="moduleLabel">Module</dt><dd data-imp-module-id></dd>
         </dl>
       </div>
@@ -94,7 +87,6 @@
 
     <section class="imp-stage imp-done-stage" data-imp-done-section hidden>
       <div class="imp-done-mark" aria-hidden="true">✓</div>
-      <span class="imp-eyebrow" data-imp-copy="doneEyebrow">Import result</span>
       <h2 data-imp-done-heading>The ported app is live.</h2>
       <div class="imp-done-copy" data-imp-done></div>
       <button type="button" class="ctox-button imp-back" data-imp-reset data-imp-copy="reset">Import another source</button>

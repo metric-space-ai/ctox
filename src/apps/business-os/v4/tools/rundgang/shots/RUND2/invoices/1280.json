@@ -1,0 +1,370 @@
+{
+ "app": "invoices",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Rechnungen",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neue Rechnung",
+    "button:Importieren",
+    "button:Exportieren",
+    "button:Kachelansicht",
+    "button:Listenansicht",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Offen (2)",
+    "nav:Bezahlt (1)",
+    "nav:Überfällig (1)",
+    "button:2026-01040 Gebucht party-001 ·",
+    "button:2026-01041 Überfällig party-00",
+    "button:2026-01042 Bezahlt party-003 ·",
+    "button:2026-01043 Teilweise bezahlt p",
+    "button:2026-01044 Entwurf party-002 ·",
+    "button:2026-01045 Storniert party-003",
+    "button:Spaltenbreite anpassen",
+    "row:2026-01040 Gebucht party-001 ·",
+    "row:2026-01041 Überfällig party-00",
+    "row:2026-01042 Bezahlt party-003 ·",
+    "row:2026-01043 Teilweise bezahlt p",
+    "row:2026-01044 Entwurf party-002 ·",
+    "row:2026-01045 Storniert party-003"
+   ],
+   "shot": "invoices/1280-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "invoices/1280-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Offen (2)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "invoices/1280-03-nav_Offen_2_.png"
+  },
+  {
+   "step": "nav Bezahlt (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "invoices/1280-04-nav_Bezahlt_1_.png"
+  },
+  {
+   "step": "nav Überfällig (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "invoices/1280-05-nav_berf_llig_1_.png"
+  },
+  {
+   "step": "zurück zu Reiter Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "invoices/1280-06-zur_ck_zu_Reiter_Alle_6_.png"
+  },
+  {
+   "step": "row 2026-01040 Gebucht party-001 · 12.73 EUR",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "invoices/1280-07-row_2026-01040_Gebucht_party-001_12.73_E.png"
+  },
+  {
+   "step": "nav Journal",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "invoices/1280-08-nav_Journal.png"
+  },
+  {
+   "step": "nav XRechnung",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear invoices.xrechnung.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "invoices/1280-09-nav_XRechnung.png"
+  },
+  {
+   "step": "nav Zahlungen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "invoices/1280-10-nav_Zahlungen.png"
+  },
+  {
+   "step": "formular 1 Felder → Zuordnen",
+   "changed": 1,
+   "ops": [
+    "command invoices.payment.allocate local=ok result=accepted {\"invoice_id\":\"invoice-001\",\"payment_id\":\"Rundgang Test\",\"amount_cents\":1,\"skonto_cents\":0,\"client_context\":{\"surface\":\"invoices.payment.all"
+   ],
+   "zone": [
+    "clear invoices.command.invoices.payment.allocate"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "invoices/1280-11-formular_1_Felder_Zuordnen.png"
+  },
+  {
+   "step": "row 2026-01041 Überfällig party-002 · 21.47 EUR",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "invoices/1280-12-row_2026-01041_berf_llig_party-002_21.47.png"
+  },
+  {
+   "step": "nav Mahnen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "invoices/1280-13-nav_Mahnen.png"
+  },
+  {
+   "step": "button Neue Rechnung",
+   "changed": true,
+   "ops": [
+    "command invoices.invoice.create local=ok result=accepted {\"invoice_id\":\"inv_mv9u8lm0\",\"invoice_type\":\"sale_out\",\"party_id\":\"account-001\",\"invoice_date_ms\":1792086847848,\"due_date_ms\":1793296447848,"
+   ],
+   "zone": [
+    "clear invoices.create.no_customer",
+    "clear invoices.command.invoices.invoice.create"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "invoices/1280-14-button_Neue_Rechnung.png"
+  },
+  {
+   "step": "button Importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Exportieren",
+   "changed": 1,
+   "ops": [],
+   "zone": [
+    "clear invoices.export.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "invoices/1280-15-button_Exportieren.png"
+  },
+  {
+   "step": "button Kachelansicht",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Listenansicht",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "invoices/1280-16-button_Listenansicht.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "invoices/1280-17-button_Filter.png"
+  },
+  {
+   "step": "button 2026-01040 Gebucht: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button 2026-01041 Überfällig: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button 2026-01042 Bezahlt: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button 2026-01043 Teilweise bezahlt: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button 2026-01044 Entwurf: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Spaltenbreite anpassen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "auswahl Typ → sale_out",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "invoices/1280-18-auswahl_Typ_sale_out.png"
+  },
+  {
+   "step": "button Filter zurücksetzen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "invoices/1280-19-button_Filter_zur_cksetzen.png"
+  },
+  {
+   "step": "button 2026-01045 Storniert: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 314,
+   "shot": "invoices/1280-20-suche_ohne_Treffer.png",
+   "textAfter": 185
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "invoices/1280-21-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "invoices.payment.allocate",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "invoices.invoice.create",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "invoices",
+  "Rechnungen"
+ ]
+}

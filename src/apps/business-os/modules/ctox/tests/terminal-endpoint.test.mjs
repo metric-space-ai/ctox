@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { __ctoxTestHooks as hooks } from '../index.js';
+import { importCtoxBundle } from './bundle.mjs';
+
+const { __ctoxTestHooks: hooks } = await importCtoxBundle();
 
 const state = { lang: 'de', model: { timeline: [] } };
 const reviewed = {

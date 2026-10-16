@@ -1,0 +1,143 @@
+{
+ "app": "kundenpipeline",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Decision Hub",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "nav:Offen 2",
+    "nav:Alle 6",
+    "button:KUNDENTERMIN OFFEN +49 821 461",
+    "button:LIEFERANTENBEWERTUNG OFFEN +49",
+    "button:Aktionen einblenden"
+   ],
+   "shot": "kundenpipeline/420-01-open.png"
+  },
+  {
+   "step": "nav Offen 2",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "kundenpipeline/420-02-nav_Offen_2.png"
+  },
+  {
+   "step": "nav Alle 6",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "kundenpipeline/420-03-nav_Alle_6.png"
+  },
+  {
+   "step": "zurück zu Reiter Offen 2",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "kundenpipeline/420-04-zur_ck_zu_Reiter_Offen_2.png"
+  },
+  {
+   "step": "button KUNDENTERMIN OFFEN +49 821 4611 13 vorgang-001 10.10.2026, 2",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button LIEFERANTENBEWERTUNG OFFEN +49 821 4500 10 vorgang-001 14.10",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "kundenpipeline/420-05-button_LIEFERANTENBEWERTUNG_OFFEN_49_821.png"
+  },
+  {
+   "step": "button Aktionen einblenden",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "kundenpipeline/420-06-button_Aktionen_einblenden.png"
+  },
+  {
+   "step": "button Aktionen ausblenden",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "kundenpipeline/420-07-button_Aktionen_ausblenden.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 317,
+   "shot": "kundenpipeline/420-08-suche_ohne_Treffer.png",
+   "textAfter": 179
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "kundenpipeline/420-09-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "kundenpipeline",
+  "Decision Hub"
+ ]
+}

@@ -15,8 +15,8 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-conv-sub>Posteingang</span>
-          <h2 class="ctox-pane-title" data-conv-title>Conversations</h2>
+          <span class="ctox-pane-kicker" data-conv-sub hidden>Posteingang</span>
+          <h2 class="ctox-pane-title" data-conv-title title="Konversationen">Konversationen</h2>
         </div>
         <div class="ctox-pane-actions">
           <button type="button" class="ctox-pane-icon" data-action="import" aria-label="Importieren" title="Importieren">
@@ -57,7 +57,6 @@
             <option value="30d" data-date-label="30d">30 Tage</option>
           </select>
         </div>
-        <div class="conv-filter-status" data-conv-account-filter-status role="status" aria-live="polite"></div>
       </div>
     </header>
     <nav class="ctox-view-switch" data-conv-channel-band aria-label="Channels">
@@ -79,10 +78,6 @@
     </nav>
     <div class="ctox-pane-body ctox-well conv-left-body">
       <div class="ctox-list conv-thread-list" data-conv-thread-list role="listbox" aria-label="Konversationen"></div>
-      <div class="ctox-empty conv-empty" data-conv-empty-list hidden>
-        <strong data-empty-list-title>Keine Konversationen</strong>
-        <span data-empty-list-body>Hier erscheinen Kommunikationen, die CTOX über WhatsApp, E-Mail, Jami oder MS Teams führt.</span>
-      </div>
     </div>
     <footer class="ctox-pane-footer"><span data-pg-footer data-conv-footer></span></footer>
   </aside>
@@ -96,7 +91,7 @@
     <header class="ctox-pane-header ctox-pane-band conv-center-header">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">Timeline</span>
+          
           <h2 class="ctox-pane-title">Konversation</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -108,7 +103,7 @@
       <div class="conv-detail-identity" data-conv-detail-header hidden>
         <span class="ctox-avatar" data-conv-detail-avatar></span>
         <div class="conv-detail-title">
-          <strong data-conv-detail-name></strong>
+          <strong data-conv-detail-name data-v4-allow-ellipsis></strong>
           <span data-conv-detail-handle></span>
         </div>
       </div>
@@ -116,10 +111,6 @@
     <nav class="conv-channel-tabs" data-conv-channel-tabs role="tablist" hidden></nav>
     <div class="ctox-pane-body conv-center-body">
       <div class="conv-timeline" data-conv-timeline role="log" aria-live="polite"></div>
-      <div class="ctox-empty conv-empty conv-empty--detail" data-conv-empty-detail>
-        <strong data-empty-detail-title>Keine Konversation ausgewählt</strong>
-        <span data-empty-detail-body>Wähle links eine Konversation, um die Timeline aus CTOX-Sicht zu sehen.</span>
-      </div>
     </div>
   </section>
 
@@ -131,16 +122,12 @@
     <header class="ctox-pane-header ctox-pane-band conv-right-header">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">Kontext</span>
+          
           <h2 class="ctox-pane-title">Kontakt</h2>
         </div>
       </div>
     </header>
     <div class="ctox-pane-body conv-right-body">
-      <div class="ctox-empty conv-right-empty" data-conv-right-empty>
-        <strong data-right-empty-title></strong>
-        <span data-right-empty-body>Kontaktdaten und verknüpfte Datensätze erscheinen hier.</span>
-      </div>
       <div class="conv-right-detail" data-conv-right-detail hidden>
         <section class="ctox-card conv-card conv-outbound-card" data-conv-outbound-card hidden>
           <header>
@@ -150,13 +137,13 @@
         </section>
         <section class="ctox-card conv-card" data-conv-channels-card>
           <header>
-            <span data-conv-card-label-channels>Aktive Channels</span>
+            <span data-conv-card-label-channels>Aktive Kanäle</span>
           </header>
           <div class="ctox-card-body conv-card-body" data-conv-channels-card-body></div>
         </section>
         <section class="ctox-card conv-card" data-conv-accounts-card>
           <header>
-            <span data-conv-card-label-accounts>CTOX-Accounts</span>
+            <span data-conv-card-label-accounts>Konten</span>
           </header>
           <div class="ctox-card-body conv-card-body" data-conv-accounts-card-body></div>
         </section>

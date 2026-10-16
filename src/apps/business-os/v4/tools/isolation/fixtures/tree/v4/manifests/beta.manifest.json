@@ -1,0 +1,6 @@
+{
+  "app_id": "beta",
+  "collections": { "beta_items": {}, "beta_log": {} },
+  "exports": { "beta_items": ["read"], "beta_log": ["read"] },
+  "foreign_collections": {}
+}

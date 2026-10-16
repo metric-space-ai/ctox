@@ -1,0 +1,71 @@
+{
+ "app": "importer",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "App Importer",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "select:Unterhaltung Produktivität Ent",
+    "button:Portierung starten",
+    "button:Quelldatei auswählen Nur Lesez",
+    "button:Projektordner auswählen Nur le"
+   ],
+   "shot": "importer/420-01-open.png"
+  },
+  {
+   "step": "button Portierung starten",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "importer/420-02-button_Portierung_starten.png"
+  },
+  {
+   "step": "button Quelldatei auswählen Nur Lesezugriff; die Dateien gehen als ",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Projektordner auswählen Nur lesende Auswahl für Projekte mit",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear importer.folder",
+    "clear importer.snapshot.progress"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "importer/420-03-button_Projektordner_ausw_hlen_Nur_lesen.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "importer",
+  "App Importer"
+ ]
+}

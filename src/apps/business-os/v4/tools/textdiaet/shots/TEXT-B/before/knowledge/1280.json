@@ -1,0 +1,95 @@
+{
+ "app": "knowledge",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Knowledge",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Knowledge Book erstellen",
+    "button:Knowledge Book importieren",
+    "button:Knowledge Books exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "button:DataFrames · Skillbooks (0) · ",
+    "button:Rahmenvertrag über Wartung und",
+    "button:Budgetplanung Vertrieb Süd · S",
+    "button:Quartalsbericht Q3 2026 · Skil",
+    "button:Spaltenbreite anpassen",
+    "nav:Skill (1)",
+    "nav:Runbooks (0)",
+    "nav:Quellen (1)",
+    "nav:Tabellen (0)",
+    "button:Bearbeiten",
+    "button:Löschen"
+   ],
+   "shot": "knowledge/1280-01-open.png"
+  },
+  {
+   "step": "nav Skill (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/1280-02-nav_Skill_1_.png"
+  },
+  {
+   "step": "nav Runbooks (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "knowledge/1280-03-nav_Runbooks_0_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 701,
+   "shot": "knowledge/1280-04-suche_ohne_Treffer.png",
+   "textAfter": 141
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "knowledge/1280-05-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "knowledge",
+  "Knowledge"
+ ]
+}

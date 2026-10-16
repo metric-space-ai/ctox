@@ -1,0 +1,203 @@
+{
+  "_app_id": "research",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {
+    "research_notes": {
+      "source": "modules/research/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "research_runs": {
+      "source": "modules/research/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "research_tasks": {
+      "source": "modules/research/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    }
+  },
+  "_foreign_copies_not_taken": [
+    {
+      "name": "business_chats",
+      "owner": "ctox"
+    },
+    {
+      "name": "document_blob_chunks",
+      "owner": "documents"
+    },
+    {
+      "name": "document_versions",
+      "owner": "documents"
+    },
+    {
+      "name": "documents",
+      "owner": "documents"
+    },
+    {
+      "name": "knowledge_tables",
+      "owner": "knowledge"
+    }
+  ],
+  "collections": {
+    "research_notes": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "task_id",
+        "kind",
+        "title",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "research_runs": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "accepted_count": {
+          "type": "number"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "identified_count": {
+          "type": "number"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "task_queue_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "used_count": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "task_id",
+        "status",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "research_tasks": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "criteria": {
+          "type": "string"
+        },
+        "curated_table_key": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "knowledge_domain": {
+          "type": "string"
+        },
+        "measurements_table_key": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "source_catalog_key": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "x_axis": {
+          "type": "string"
+        },
+        "y_axis": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "status",
+        "knowledge_domain",
+        "payload",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "migrations": {}
+}

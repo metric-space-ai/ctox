@@ -1,0 +1,1608 @@
+{
+ "documents@1280": {
+  "app": "documents",
+  "width": 1280,
+  "steps": 35,
+  "clicks": 31,
+  "flags": [
+   {
+    "step": 4,
+    "label": "Leeres Word-Dokument erstellen",
+    "probs": [
+     "Seitenfehler",
+     "Zone sichtbar"
+    ],
+    "shot": "1280-04.jpg"
+   },
+   {
+    "step": 5,
+    "label": "neues-dokument.docx",
+    "probs": [
+     "Seitenfehler",
+     "Zone sichtbar"
+    ],
+    "shot": "1280-05.jpg"
+   },
+   {
+    "step": 6,
+    "label": "Neues Dokument verwalten",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-06.jpg"
+   },
+   {
+    "step": 8,
+    "label": "Imported Created CreatedWithWarnings Draft Review Final → Auswahl nicht möglich (locator.selectOption: Timeout 3000ms exceeded.)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-07.jpg"
+   },
+   {
+    "step": 9,
+    "label": "Dokument importieren",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-08.jpg"
+   },
+   {
+    "step": 10,
+    "label": "Pflichtfelder gefüllt (Speichern war gesperrt)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-09.jpg"
+   },
+   {
+    "step": 11,
+    "label": "CTOX Knowledge öffnen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-10.jpg"
+   },
+   {
+    "step": 12,
+    "label": "1:1 übernehmen Runbook direkt anwenden → Auswahl nicht möglich (locator.selectOption: Timeout 3000ms exceeded.)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-11.jpg"
+   },
+   {
+    "step": 13,
+    "label": "Ausgewähltes Dokument exportieren",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-12.jpg"
+   },
+   {
+    "step": 14,
+    "label": "DOCX Export starten → Auswahl nicht möglich (locator.selectOption: Timeout 3000ms exceeded.)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-13.jpg"
+   },
+   {
+    "step": 15,
+    "label": "Als Karten anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-14.jpg"
+   },
+   {
+    "step": 16,
+    "label": "Zur Listenansicht wechseln",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-15.jpg"
+   },
+   {
+    "step": 17,
+    "label": "Zur Kachelansicht wechseln",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-16.jpg"
+   },
+   {
+    "step": 18,
+    "label": "Filter",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-17.jpg"
+   },
+   {
+    "step": 19,
+    "label": "Dokumente sortieren → Option 1",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-18.jpg"
+   },
+   {
+    "step": 20,
+    "label": "Dokumenttyp filtern → Option 1",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-19.jpg"
+   },
+   {
+    "step": 21,
+    "label": "Dokumentstatus filtern → Option 2",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-20.jpg"
+   },
+   {
+    "step": 22,
+    "label": "Ersteller-App filtern → Option 1",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-21.jpg"
+   },
+   {
+    "step": 23,
+    "label": "Quelle filtern → Option 1",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-22.jpg"
+   },
+   {
+    "step": 24,
+    "label": "Dokument-Tags filtern → Option 1",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-23.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:35:31.810Z"
+ },
+ "documents@420": {
+  "app": "documents",
+  "width": 420,
+  "steps": 7,
+  "clicks": 5,
+  "flags": [],
+  "at": "2026-10-15T17:35:40.455Z"
+ },
+ "esign@1280": {
+  "app": "esign",
+  "width": 1280,
+  "steps": 20,
+  "clicks": 17,
+  "flags": [
+   {
+    "step": 6,
+    "label": "Exportieren",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-06.jpg"
+   },
+   {
+    "step": 7,
+    "label": "Als Liste anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-07.jpg"
+   },
+   {
+    "step": 8,
+    "label": "Als Karten anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-08.jpg"
+   },
+   {
+    "step": 9,
+    "label": "Filter",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-09.jpg"
+   },
+   {
+    "step": 10,
+    "label": "Vertragstyp filtern → Option 1",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-10.jpg"
+   },
+   {
+    "step": 12,
+    "label": "Alle (3)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-11.jpg"
+   },
+   {
+    "step": 13,
+    "label": "Offen (2)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-12.jpg"
+   },
+   {
+    "step": 14,
+    "label": "Abgeschlossen (1)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-13.jpg"
+   },
+   {
+    "step": 15,
+    "label": "document-002 abgeschlossen Arbeitsvertrag Aktualisiert 13.10",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-14.jpg"
+   },
+   {
+    "step": 16,
+    "label": "Detail einklappen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-15.jpg"
+   },
+   {
+    "step": 17,
+    "label": "Spaltenbreite anpassen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-16.jpg"
+   },
+   {
+    "step": 18,
+    "label": "Arbeitsvertrag Vermittlungsvertrag Überlassungsvertrag → Option 1",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-17.jpg"
+   },
+   {
+    "step": 19,
+    "label": "Anlegen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-18.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:35:53.519Z"
+ },
+ "esign@420": {
+  "app": "esign",
+  "width": 420,
+  "steps": 19,
+  "clicks": 16,
+  "flags": [
+   {
+    "step": 6,
+    "label": "Exportieren",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-06.jpg"
+   },
+   {
+    "step": 7,
+    "label": "Als Liste anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-07.jpg"
+   },
+   {
+    "step": 8,
+    "label": "Als Karten anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-08.jpg"
+   },
+   {
+    "step": 9,
+    "label": "Filter",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-09.jpg"
+   },
+   {
+    "step": 10,
+    "label": "Vertragstyp filtern → Option 1",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-10.jpg"
+   },
+   {
+    "step": 12,
+    "label": "Alle (3)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-11.jpg"
+   },
+   {
+    "step": 13,
+    "label": "Offen (2)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-12.jpg"
+   },
+   {
+    "step": 14,
+    "label": "Abgeschlossen (1)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-13.jpg"
+   },
+   {
+    "step": 15,
+    "label": "document-002 abgeschlossen Arbeitsvertrag Aktualisiert 13.10",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-14.jpg"
+   },
+   {
+    "step": 16,
+    "label": "Detail einklappen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-15.jpg"
+   },
+   {
+    "step": 17,
+    "label": "Arbeitsvertrag Vermittlungsvertrag Überlassungsvertrag → Option 1",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-16.jpg"
+   },
+   {
+    "step": 18,
+    "label": "Anlegen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-17.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:36:05.604Z"
+ },
+ "explorer@1280": {
+  "app": "explorer",
+  "width": 1280,
+  "steps": 41,
+  "clicks": 38,
+  "flags": [],
+  "at": "2026-10-15T17:36:29.539Z"
+ },
+ "explorer@420": {
+  "app": "explorer",
+  "width": 420,
+  "steps": 41,
+  "clicks": 38,
+  "flags": [],
+  "at": "2026-10-15T17:36:51.799Z"
+ },
+ "file-viewer@1280": {
+  "app": "file-viewer",
+  "width": 1280,
+  "steps": 2,
+  "clicks": 0,
+  "flags": [],
+  "at": "2026-10-15T17:36:54.653Z"
+ },
+ "file-viewer@420": {
+  "app": "file-viewer",
+  "width": 420,
+  "steps": 2,
+  "clicks": 0,
+  "flags": [],
+  "at": "2026-10-15T17:36:57.490Z"
+ },
+ "importer@1280": {
+  "app": "importer",
+  "width": 1280,
+  "steps": 6,
+  "clicks": 4,
+  "flags": [
+   {
+    "step": 3,
+    "label": "Portierung starten",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-03.jpg"
+   },
+   {
+    "step": 4,
+    "label": "Quelldatei auswählen Nur Lesezugriff; die Dateien gehen als ",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-04.jpg"
+   },
+   {
+    "step": 5,
+    "label": "Projektordner auswählen Nur lesende Auswahl für Projekte mit",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-05.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:37:02.556Z"
+ },
+ "importer@420": {
+  "app": "importer",
+  "width": 420,
+  "steps": 6,
+  "clicks": 4,
+  "flags": [
+   {
+    "step": 3,
+    "label": "Portierung starten",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-03.jpg"
+   },
+   {
+    "step": 4,
+    "label": "Quelldatei auswählen Nur Lesezugriff; die Dateien gehen als ",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-04.jpg"
+   },
+   {
+    "step": 5,
+    "label": "Projektordner auswählen Nur lesende Auswahl für Projekte mit",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-05.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:37:07.585Z"
+ },
+ "intake@1280": {
+  "app": "intake",
+  "width": 1280,
+  "steps": 19,
+  "clicks": 16,
+  "flags": [],
+  "at": "2026-10-15T17:37:19.437Z"
+ },
+ "intake@420": {
+  "app": "intake",
+  "width": 420,
+  "steps": 18,
+  "clicks": 15,
+  "flags": [],
+  "at": "2026-10-15T17:37:30.476Z"
+ },
+ "conversations@1280": {
+  "app": "conversations",
+  "width": 1280,
+  "steps": 15,
+  "clicks": 12,
+  "flags": [],
+  "at": "2026-10-15T17:35:12.521Z"
+ },
+ "conversations@420": {
+  "app": "conversations",
+  "width": 420,
+  "steps": 14,
+  "clicks": 11,
+  "flags": [],
+  "at": "2026-10-15T17:35:21.191Z"
+ },
+ "creator@1280": {
+  "app": "creator",
+  "width": 1280,
+  "steps": 36,
+  "clicks": 27,
+  "flags": [],
+  "at": "2026-10-15T17:35:38.956Z"
+ },
+ "creator@420": {
+  "app": "creator",
+  "width": 420,
+  "steps": 32,
+  "clicks": 28,
+  "flags": [
+   {
+    "step": 29,
+    "label": "Hinzufügen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-28.jpg"
+   },
+   {
+    "step": 30,
+    "label": "Datentabelle hinzufügen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-29.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:35:59.533Z"
+ },
+ "credentials@1280": {
+  "app": "credentials",
+  "width": 1280,
+  "steps": 17,
+  "clicks": 14,
+  "flags": [
+   {
+    "step": 16,
+    "label": "Hinzufügen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-15.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:36:09.502Z"
+ },
+ "credentials@420": {
+  "app": "credentials",
+  "width": 420,
+  "steps": 16,
+  "clicks": 13,
+  "flags": [
+   {
+    "step": 1,
+    "label": "geöffnet",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-01.jpg"
+   },
+   {
+    "step": 2,
+    "label": "Suche „Gesetzt“ in Suchen...",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-02.jpg"
+   },
+   {
+    "step": 3,
+    "label": "Suche geleert",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-03.jpg"
+   },
+   {
+    "step": 4,
+    "label": "Neue Zugangsdaten",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-04.jpg"
+   },
+   {
+    "step": 5,
+    "label": "Importieren",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-05.jpg"
+   },
+   {
+    "step": 6,
+    "label": "Exportieren",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-06.jpg"
+   },
+   {
+    "step": 7,
+    "label": "Als Liste anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-07.jpg"
+   },
+   {
+    "step": 8,
+    "label": "Als Karten anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-08.jpg"
+   },
+   {
+    "step": 9,
+    "label": "Filter",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-09.jpg"
+   },
+   {
+    "step": 10,
+    "label": "Quelle filtern → Option 1",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-10.jpg"
+   },
+   {
+    "step": 12,
+    "label": "Alle (0)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-11.jpg"
+   },
+   {
+    "step": 13,
+    "label": "Gesetzt (0)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-12.jpg"
+   },
+   {
+    "step": 14,
+    "label": "Offen (0)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-13.jpg"
+   },
+   {
+    "step": 15,
+    "label": "Hinzufügen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-14.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:36:19.508Z"
+ },
+ "ctox@1280": {
+  "app": "ctox",
+  "width": 1280,
+  "steps": 40,
+  "clicks": 36,
+  "flags": [
+   {
+    "step": 29,
+    "label": "Speichern",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-28.jpg"
+   },
+   {
+    "step": 30,
+    "label": "Archivieren",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-29.jpg"
+   },
+   {
+    "step": 31,
+    "label": "Dringend Hoch Normal Niedrig → Option 3",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-30.jpg"
+   },
+   {
+    "step": 32,
+    "label": "Abbrechen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-31.jpg"
+   },
+   {
+    "step": 33,
+    "label": "Crew verwalten",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-32.jpg"
+   },
+   {
+    "step": 34,
+    "label": "Kanäle verwalten",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-33.jpg"
+   },
+   {
+    "step": 35,
+    "label": "Wartet auf den Start",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-34.jpg"
+   },
+   {
+    "step": 36,
+    "label": "Bereit zum Start",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-35.jpg"
+   },
+   {
+    "step": 37,
+    "label": "Arbeitet",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-36.jpg"
+   },
+   {
+    "step": 38,
+    "label": "Bereit zur Prüfung",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-37.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:36:43.122Z"
+ },
+ "ctox@420": {
+  "app": "ctox",
+  "width": 420,
+  "steps": 44,
+  "clicks": 37,
+  "flags": [
+   {
+    "step": 33,
+    "label": "Kanäle verwalten",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-32.jpg"
+   },
+   {
+    "step": 34,
+    "label": "Wartet auf den Start",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-33.jpg"
+   },
+   {
+    "step": 35,
+    "label": "Escape (Überlagerung schließen)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-34.jpg"
+   },
+   {
+    "step": 39,
+    "label": "Prüfung bestanden",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-35.jpg"
+   },
+   {
+    "step": 40,
+    "label": "Prüfung nicht bestanden",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-36.jpg"
+   },
+   {
+    "step": 41,
+    "label": "Prüfung nicht verfügbar",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-37.jpg"
+   },
+   {
+    "step": 42,
+    "label": "Prüfung wiederholen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-38.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:37:07.304Z"
+ },
+ "customers@1280": {
+  "app": "customers",
+  "width": 1280,
+  "steps": 40,
+  "clicks": 36,
+  "flags": [],
+  "at": "2026-10-15T17:37:29.276Z"
+ },
+ "customers@420": {
+  "app": "customers",
+  "width": 420,
+  "steps": 40,
+  "clicks": 36,
+  "flags": [],
+  "at": "2026-10-15T17:37:50.744Z"
+ },
+ "cv-print-builder@1280": {
+  "app": "cv-print-builder",
+  "width": 1280,
+  "steps": 22,
+  "clicks": 19,
+  "flags": [
+   {
+    "step": 18,
+    "label": "Parsing starten",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-17.jpg"
+   },
+   {
+    "step": 19,
+    "label": "Bühne ausblenden",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-18.jpg"
+   },
+   {
+    "step": 20,
+    "label": "Anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-19.jpg"
+   },
+   {
+    "step": 21,
+    "label": "Original",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-20.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:38:03.015Z"
+ },
+ "cv-print-builder@420": {
+  "app": "cv-print-builder",
+  "width": 420,
+  "steps": 21,
+  "clicks": 18,
+  "flags": [
+   {
+    "step": 17,
+    "label": "Parsing starten",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-16.jpg"
+   },
+   {
+    "step": 18,
+    "label": "Bühne ausblenden",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-17.jpg"
+   },
+   {
+    "step": 19,
+    "label": "Anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-18.jpg"
+   },
+   {
+    "step": 20,
+    "label": "Original",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-19.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:38:14.702Z"
+ },
+ "desktop@1280": {
+  "app": "desktop",
+  "width": 1280,
+  "steps": 37,
+  "clicks": 34,
+  "flags": [],
+  "at": "2026-10-15T17:38:49.443Z"
+ },
+ "desktop@420": {
+  "app": "desktop",
+  "width": 420,
+  "steps": 37,
+  "clicks": 34,
+  "flags": [],
+  "at": "2026-10-15T17:39:23.710Z"
+ },
+ "app-store@1280": {
+  "app": "app-store",
+  "width": 1280,
+  "steps": 26,
+  "clicks": 22,
+  "flags": [],
+  "at": "2026-10-15T17:35:34.237Z"
+ },
+ "app-store@420": {
+  "app": "app-store",
+  "width": 420,
+  "steps": 25,
+  "clicks": 21,
+  "flags": [],
+  "at": "2026-10-15T17:35:57.317Z"
+ },
+ "appsec-pentest@1280": {
+  "app": "appsec-pentest",
+  "width": 1280,
+  "steps": 40,
+  "clicks": 36,
+  "flags": [
+   {
+    "step": 33,
+    "label": "Berechtigungsnachweis",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-32.jpg"
+   },
+   {
+    "step": 34,
+    "label": "Status",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-33.jpg"
+   },
+   {
+    "step": 35,
+    "label": "Vorprüfung",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-34.jpg"
+   },
+   {
+    "step": 36,
+    "label": "Planen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-35.jpg"
+   },
+   {
+    "step": 37,
+    "label": "on",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-36.jpg"
+   },
+   {
+    "step": 38,
+    "label": "Ausführen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-37.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:36:23.470Z"
+ },
+ "appsec-pentest@420": {
+  "app": "appsec-pentest",
+  "width": 420,
+  "steps": 21,
+  "clicks": 18,
+  "flags": [
+   {
+    "step": 1,
+    "label": "geöffnet",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-01.jpg"
+   },
+   {
+    "step": 2,
+    "label": "Suche „Lieferantenbewertung“ in Tests suchen...",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-02.jpg"
+   },
+   {
+    "step": 3,
+    "label": "Suche geleert",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-03.jpg"
+   },
+   {
+    "step": 4,
+    "label": "Test anlegen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-04.jpg"
+   },
+   {
+    "step": 5,
+    "label": "black-box",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-05.jpg"
+   },
+   {
+    "step": 6,
+    "label": "source-assisted",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-06.jpg"
+   },
+   {
+    "step": 7,
+    "label": "Full Deep Standard Quick → Auswahl nicht möglich (locator.selectOption: Timeout 3000ms exceeded.)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-07.jpg"
+   },
+   {
+    "step": 8,
+    "label": "Tests importieren",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-08.jpg"
+   },
+   {
+    "step": 9,
+    "label": "Tests exportieren",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-09.jpg"
+   },
+   {
+    "step": 10,
+    "label": "Als Liste anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-10.jpg"
+   },
+   {
+    "step": 11,
+    "label": "Als Karten anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-11.jpg"
+   },
+   {
+    "step": 12,
+    "label": "Filter",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-12.jpg"
+   },
+   {
+    "step": 13,
+    "label": "Umfang filtern → Option 1",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-13.jpg"
+   },
+   {
+    "step": 14,
+    "label": "Aktiv (0)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-14.jpg"
+   },
+   {
+    "step": 15,
+    "label": "Archiviert (0)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-15.jpg"
+   },
+   {
+    "step": 16,
+    "label": "Alle (0)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-16.jpg"
+   },
+   {
+    "step": 18,
+    "label": "Einfach",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-17.jpg"
+   },
+   {
+    "step": 19,
+    "label": "Workbench",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-18.jpg"
+   },
+   {
+    "step": 20,
+    "label": "Commands",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-19.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:36:39.090Z"
+ },
+ "browser@1280": {
+  "app": "browser",
+  "width": 1280,
+  "steps": 27,
+  "clicks": 23,
+  "flags": [
+   {
+    "step": 4,
+    "label": "Neue Sitzung",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-04.jpg"
+   },
+   {
+    "step": 5,
+    "label": "Sitzungen importieren",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-05.jpg"
+   },
+   {
+    "step": 6,
+    "label": "Sitzungen exportieren",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-06.jpg"
+   },
+   {
+    "step": 7,
+    "label": "Als Liste anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-07.jpg"
+   },
+   {
+    "step": 8,
+    "label": "Als Karten anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-08.jpg"
+   },
+   {
+    "step": 9,
+    "label": "Filter",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-09.jpg"
+   },
+   {
+    "step": 10,
+    "label": "Profil filtern → Option 1",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-10.jpg"
+   },
+   {
+    "step": 12,
+    "label": "Alle (6)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-11.jpg"
+   },
+   {
+    "step": 13,
+    "label": "Aktiv (1)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-12.jpg"
+   },
+   {
+    "step": 14,
+    "label": "Beendet (5)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-13.jpg"
+   },
+   {
+    "step": 15,
+    "label": "Scraping",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-14.jpg"
+   },
+   {
+    "step": 16,
+    "label": "Scraping 12",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-15.jpg"
+   },
+   {
+    "step": 17,
+    "label": "Spaltenbreite anpassen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-16.jpg"
+   },
+   {
+    "step": 18,
+    "label": "Sitzungsliste ein-/ausblenden",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-17.jpg"
+   },
+   {
+    "step": 19,
+    "label": "Präzise Eingabe",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-18.jpg"
+   },
+   {
+    "step": 20,
+    "label": "Erweiterte Aktionen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-19.jpg"
+   },
+   {
+    "step": 21,
+    "label": "on",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-20.jpg"
+   },
+   {
+    "step": 22,
+    "label": "Desktop 1280×720 Mobil 390×844 → Option 1",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-21.jpg"
+   },
+   {
+    "step": 23,
+    "label": "Ansicht",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-22.jpg"
+   },
+   {
+    "step": 24,
+    "label": "Skript",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-23.jpg"
+   },
+   {
+    "step": 26,
+    "label": "Adresse öffnen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-24.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:36:55.224Z"
+ },
+ "browser@420": {
+  "app": "browser",
+  "width": 420,
+  "steps": 27,
+  "clicks": 22,
+  "flags": [],
+  "at": "2026-10-15T17:37:11.021Z"
+ },
+ "buchhaltung@1280": {
+  "app": "buchhaltung",
+  "width": 1280,
+  "steps": 45,
+  "clicks": 41,
+  "flags": [
+   {
+    "step": 40,
+    "label": "Archivpfad kopieren",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-39.jpg"
+   },
+   {
+    "step": 41,
+    "label": "Belege hier ablegen (PDF/Image) oder zum Auswählen klicken",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-40.jpg"
+   },
+   {
+    "step": 42,
+    "label": "Escape (Überlagerung schließen)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-41.jpg"
+   },
+   {
+    "step": 43,
+    "label": "Preisliste_Q4.xlsx Beleg · Offen · 2026-10-12 Becker & Söhne",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-42.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:37:34.843Z"
+ },
+ "buchhaltung@420": {
+  "app": "buchhaltung",
+  "width": 420,
+  "steps": 58,
+  "clicks": 42,
+  "flags": [
+   {
+    "step": 40,
+    "label": "✔️ Vorkontierung freigeben & Buchen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-35.jpg"
+   },
+   {
+    "step": 41,
+    "label": "Offen (3)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-36.jpg"
+   },
+   {
+    "step": 42,
+    "label": "Gebucht (3)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-37.jpg"
+   },
+   {
+    "step": 43,
+    "label": "Angebot_Wartung_2026.pdf Beleg · Gebucht · 2026-10-14 Müller",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-38.jpg"
+   },
+   {
+    "step": 44,
+    "label": "Escape (Überlagerung schließen)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-39.jpg"
+   },
+   {
+    "step": 45,
+    "label": "1600 Verbindlichkeiten aus Lieferungen und Leistungen (Kredi",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-40.jpg"
+   },
+   {
+    "step": 46,
+    "label": "Escape (Überlagerung schließen)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-41.jpg"
+   },
+   {
+    "step": 51,
+    "label": "1576 Abziehbare Vorsteuer 19% 12,41 € —",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-42.jpg"
+   },
+   {
+    "step": 52,
+    "label": "Escape (Überlagerung schließen)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-43.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:37:58.941Z"
+ },
+ "calendar@1280": {
+  "app": "calendar",
+  "width": 1280,
+  "steps": 45,
+  "clicks": 40,
+  "flags": [],
+  "at": "2026-10-15T17:38:29.627Z"
+ },
+ "calendar@420": {
+  "app": "calendar",
+  "width": 420,
+  "steps": 45,
+  "clicks": 39,
+  "flags": [],
+  "at": "2026-10-15T17:39:00.623Z"
+ },
+ "coding-agents@1280": {
+  "app": "coding-agents",
+  "width": 1280,
+  "steps": 1,
+  "clicks": 0,
+  "flags": [
+   {
+    "step": 0,
+    "label": "Lauf abgebrochen",
+    "probs": [
+     "page.waitForFunction: Timeout 30000ms exceeded."
+    ]
+   }
+  ],
+  "at": "2026-10-15T17:39:30.815Z"
+ },
+ "coding-agents@420": {
+  "app": "coding-agents",
+  "width": 420,
+  "steps": 50,
+  "clicks": 46,
+  "flags": [
+   {
+    "step": 47,
+    "label": "Im Source-Editor öffnen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-46.jpg"
+   },
+   {
+    "step": 48,
+    "label": "Als Liste anzeigen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-47.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:40:00.368Z"
+ },
+ "consent@1280": {
+  "app": "consent",
+  "width": 1280,
+  "steps": 21,
+  "clicks": 17,
+  "flags": [
+   {
+    "step": 18,
+    "label": "Recht auf Auskunft (DSGVO Art. 15)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "1280-17.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:40:12.003Z"
+ },
+ "consent@420": {
+  "app": "consent",
+  "width": 420,
+  "steps": 20,
+  "clicks": 16,
+  "flags": [
+   {
+    "step": 17,
+    "label": "Recht auf Auskunft (DSGVO Art. 15)",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-16.jpg"
+   },
+   {
+    "step": 19,
+    "label": "Einwilligung prüfen",
+    "probs": [
+     "Zone sichtbar"
+    ],
+    "shot": "420-17.jpg"
+   }
+  ],
+  "at": "2026-10-15T17:40:23.132Z"
+ }
+}

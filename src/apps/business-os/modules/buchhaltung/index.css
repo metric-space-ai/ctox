@@ -1,23 +1,28 @@
 /* --- CTOX Business OS: Buchhaltung (Double-Entry German Accounting) Styling ---
    Frame, panes, headers, toolbars, tables, buttons, badges, chips, inputs,
    empty states and callouts come from the shared kit (app.css + shared/base.css).
-   This file keeps only what is genuinely module-specific (marked /* custom */). */
+   This file keeps only what is genuinely module-specific (marked "custom"). */
+
+/* v4: das App-root ist der Größencontainer (früher das Shell-Fenster außerhalb von root). */
+[data-app="buchhaltung"] { container: business-app-window / inline-size; }
 
 /* Shell V2 keeps accounting pane headers compact and action rows single-line;
    overflow is local to the pane instead of wrapping the header. */
-.shell-window[data-shell-contract="v2"] .fibu-module { position: relative; padding: 0; overflow: hidden; background: var(--shell-v2-surface, var(--bg)); }
-.shell-window[data-shell-contract="v2"] .fibu-module .ctox-pane { border: 0; border-radius: 0; background: var(--shell-v2-surface, var(--surface)); box-shadow: none; }
-.shell-window[data-shell-contract="v2"] .fibu-module > .ctox-context-menu { max-width: calc(100% - 16px); }
-.shell-window[data-shell-contract="v2"] .fibu-module .ctox-pane-header { box-sizing: border-box; min-height: var(--shell-v2-header-row-size, 37px); padding: 0 8px; background: var(--shell-v2-surface-alt, var(--surface-2)); border-bottom: 1px solid var(--shell-v2-line, var(--line)); display: grid; grid-template-rows: var(--shell-v2-header-row-size, 37px) auto; align-content: start; }
-.shell-window[data-shell-contract="v2"] .fibu-module .ctox-pane-title-row { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); }
-.shell-window[data-shell-contract="v2"] .fibu-module .ctox-pane-titles { flex-direction: row; align-items: baseline; gap: 8px; padding-top: 0; overflow: hidden; }
-.shell-window[data-shell-contract="v2"] .fibu-module .ctox-pane-kicker { flex: 0 1 auto; min-width: 0; line-height: 1; }
-.shell-window[data-shell-contract="v2"] .fibu-module .ctox-pane-title { margin-top: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.1; }
-.shell-window[data-shell-contract="v2"] .fibu-module .ctox-filterbar,
-.shell-window[data-shell-contract="v2"] .fibu-module .fibu-workbench-tools { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); box-sizing: border-box; padding: 0; flex-wrap: nowrap; overflow-x: auto; }
-.shell-window[data-shell-contract="v2"] .fibu-module .fibu-panel-toolbar { flex-wrap: nowrap; overflow-x: auto; }
+[data-app="buchhaltung"] .fibu-module { position: relative; padding: 0; overflow: hidden; background: var(--bg); }
+[data-app="buchhaltung"] .fibu-module .ctox-pane { border: 0; border-radius: 0; background: var(--surface); box-shadow: none; }
+[data-app="buchhaltung"] .fibu-module > .ctox-context-menu { max-width: calc(100% - 16px); }
+/* VIS3: Titel kuerzen nicht per Ellipse, sie brechen an Wortgrenzen um wie das Rahmen-Kit;
+   die Titelzeile ist mindestens ein Band hoch und waechst mit, der Kicker bleibt ganz. */
+[data-app="buchhaltung"] .fibu-module .ctox-pane-header { box-sizing: border-box; min-height: var(--shell-v2-header-row-size, 37px); padding: 0 8px; background: var(--surface-2); border-bottom: 1px solid var(--shell-v2-line, var(--line)); display: grid; grid-template-rows: minmax(var(--shell-v2-header-row-size, 37px), auto) auto; align-content: start; }
+[data-app="buchhaltung"] .fibu-module .ctox-pane-title-row { min-height: var(--shell-v2-header-row-size, 37px); }
+[data-app="buchhaltung"] .fibu-module .ctox-pane-titles { flex-direction: row; align-items: baseline; gap: 8px; padding-top: 0; }
+[data-app="buchhaltung"] .fibu-module .ctox-pane-kicker { flex: 0 0 auto; line-height: 1; }
+[data-app="buchhaltung"] .fibu-module .ctox-pane-title { margin-top: 0; line-height: 1.1; }
+[data-app="buchhaltung"] .fibu-module .ctox-filterbar,
+[data-app="buchhaltung"] .fibu-module .fibu-workbench-tools { min-height: var(--shell-v2-header-row-size, 37px); height: var(--shell-v2-header-row-size, 37px); box-sizing: border-box; padding: 0; flex-wrap: nowrap; overflow-x: auto; }
+[data-app="buchhaltung"] .fibu-module .fibu-panel-toolbar { flex-wrap: nowrap; overflow-x: auto; }
 
-.fibu-module {
+[data-app="buchhaltung"] .fibu-module {
   /* Bezugsrahmen fuer modul-eigene Overlays (Dialogebene, inset:0). Ohne diese
      Positionierung verankert sich die Ebene am naechsten Vorfahren ausserhalb
      der App. */
@@ -27,42 +32,39 @@
   --ctox-left-width: var(--fibu-left-width, 366px);
   --ctox-right-width: var(--fibu-right-width, 340px);
   --fibu-info: var(--accent);
-  --fibu-terminal-bg: var(--surface-2);
-  --fibu-terminal-line: var(--line);
-  --fibu-terminal-ink: var(--text);
   grid-template-columns: var(--ctox-left-width) 12px minmax(360px, 1fr) 12px var(--ctox-right-width);
 }
 
 /* Explicit pane tracks keep the workbench off shell-resizer columns. */
-.fibu-left {
+[data-app="buchhaltung"] .fibu-left {
   grid-column: 1;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   min-width: 240px;
 }
 
-.fibu-module > [data-resizer="left"] { grid-column: 2; }
+[data-app="buchhaltung"] .fibu-module > [data-resizer="left"] { grid-column: 2; }
 
-.fibu-center {
+[data-app="buchhaltung"] .fibu-center {
   grid-column: 3;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 360px;
   position: relative;
 }
 
-.fibu-module > [data-resizer="right"] { grid-column: 4; }
+[data-app="buchhaltung"] .fibu-module > [data-resizer="right"] { grid-column: 4; }
 
-.fibu-right {
+[data-app="buchhaltung"] .fibu-right {
   grid-column: 5;
   grid-template-rows: auto auto minmax(0, 1fr);
   min-width: 280px;
 }
 
-.fibu-module.is-evidence-hidden {
+[data-app="buchhaltung"] .fibu-module.is-evidence-hidden {
   grid-template-columns: var(--ctox-left-width) 12px minmax(360px, 1fr);
 }
 
-.fibu-module.is-evidence-hidden .fibu-right,
-.fibu-module.is-evidence-hidden > [data-resizer="right"] {
+[data-app="buchhaltung"] .fibu-module.is-evidence-hidden .fibu-right,
+[data-app="buchhaltung"] .fibu-module.is-evidence-hidden > [data-resizer="right"] {
   display: none;
 }
 
@@ -75,12 +77,12 @@
    -------------------------------------------------------------------------- */
 
 /* Erste Kopfzeile jeder Spalte exakt auf die Bandhoehe der Shell. */
-.shell-window[data-shell-contract="v2"] .fibu-module .ctox-pane-header {
+[data-app="buchhaltung"] .fibu-module .ctox-pane-header {
   padding-top: 0;
   padding-bottom: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .fibu-module .ctox-pane-header > .ctox-pane-title-row {
+[data-app="buchhaltung"] .fibu-module .ctox-pane-header > .ctox-pane-title-row {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
@@ -88,8 +90,8 @@
 
 /* Zweite Kopfzeile innerhalb des Kopfes; zusammen mit der ersten deckt sie
    die 74px hohe Icon- und Steuerungszone ab. */
-.shell-window[data-shell-contract="v2"] .fibu-module .fibu-left > .ctox-pane-header > .ctox-filterbar,
-.shell-window[data-shell-contract="v2"] .fibu-module .fibu-center > .ctox-pane-header > .fibu-workbench-tools {
+[data-app="buchhaltung"] .fibu-module .fibu-left > .ctox-pane-header > .ctox-filterbar,
+[data-app="buchhaltung"] .fibu-module .fibu-center > .ctox-pane-header > .fibu-workbench-tools {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
@@ -99,52 +101,41 @@
   padding-inline: 0;
 }
 
-/* Zweite Kopfzeile der Evidenzspalte ist ein eigenes Band. */
-.shell-window[data-shell-contract="v2"] .fibu-module .fibu-right > .fibu-evidence-tabs {
-  box-sizing: border-box;
-  display: flex;
-  min-height: var(--shell-v2-header-row-size, 37px);
-  height: var(--shell-v2-header-row-size, 37px);
-  align-items: center;
-  padding-block: 0;
-  padding-right: 70px;
-}
-
 /* Icon-Zone freihalten: erster Kopf der obersten Zeile. */
-.shell-window[data-shell-contract="v2"] .fibu-module .fibu-left > .ctox-pane-header {
+[data-app="buchhaltung"] .fibu-module .fibu-left > .ctox-pane-header {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
 }
 
 /* Der ausklappbare Filterschacht liegt unterhalb der Icon-Zone und nimmt die
    Einrueckung wieder zurueck, damit die Selects nutzbar breit bleiben. */
-.shell-window[data-shell-contract="v2"] .fibu-module .fibu-left > .ctox-pane-header > .ctox-filter-tray {
+[data-app="buchhaltung"] .fibu-module .fibu-left > .ctox-pane-header > .ctox-filter-tray {
   margin-left: calc(-1 * var(--shell-v2-icon-size, 80px));
 }
 
 /* Fenstersteuerung freihalten: letzter Kopf der obersten Zeile. Ohne
    Evidenzspalte ist das die Mitte, mit ihr die rechte Spalte. */
-.shell-window[data-shell-contract="v2"] .fibu-module.is-evidence-hidden .fibu-center > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .fibu-module .fibu-right > .ctox-pane-header {
-  padding-right: 70px;
+[data-app="buchhaltung"] .fibu-module.is-evidence-hidden .fibu-center > .ctox-pane-header,
+[data-app="buchhaltung"] .fibu-module .fibu-right > .ctox-pane-header {
+  padding-right: var(--shell-v2-control-inset, 70px);
 }
 
 /* Ein-Knopf-Umschalter Karten/Liste: sichtbar ist immer nur das Icon der
    Ansicht, zu der gewechselt wird. Kein Zustandspaar, kein aria-pressed. */
-.fibu-view-toggle .fibu-view-icon {
+[data-app="buchhaltung"] .fibu-view-toggle .fibu-view-icon {
   display: none;
 }
 
-.fibu-view-toggle[data-fibu-view="cards"] .fibu-view-icon[data-fibu-view-icon="list"],
-.fibu-view-toggle[data-fibu-view="list"] .fibu-view-icon[data-fibu-view-icon="cards"] {
+[data-app="buchhaltung"] .fibu-view-toggle[data-fibu-view="cards"] .fibu-view-icon[data-fibu-view-icon="list"],
+[data-app="buchhaltung"] .fibu-view-toggle[data-fibu-view="list"] .fibu-view-icon[data-fibu-view-icon="cards"] {
   display: block;
 }
 
-.fibu-toggle-evidence[aria-pressed="true"] {
+[data-app="buchhaltung"] .fibu-toggle-evidence[aria-pressed="true"] {
   background: var(--accent-soft);
   color: var(--accent);
 }
 
-.fibu-workbench-tools {
+[data-app="buchhaltung"] .fibu-workbench-tools {
   display: grid;
   grid-template-columns: minmax(180px, 1fr) minmax(92px, auto);
   gap: 6px;
@@ -157,7 +148,7 @@
    Status und Datum, zweite Zeile Beschreibung links und Betrag rechts.
    Grosszuegiges Polster, damit der Eintrag als Karte liest.
    -------------------------------------------------------------------------- */
-.fibu-booking-row {
+[data-app="buchhaltung"] .fibu-booking-row {
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -166,27 +157,27 @@
   line-height: 1.35;
 }
 
-.fibu-booking-row strong,
-.fibu-booking-row span {
+[data-app="buchhaltung"] .fibu-booking-row strong,
+[data-app="buchhaltung"] .fibu-booking-row span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.fibu-booking-row span {
+[data-app="buchhaltung"] .fibu-booking-row span {
   color: var(--muted);
   font-size: var(--fs-meta);
 }
 
 /* Zweite Meta-Zeile: Beschreibung faellt weg, der Betrag bleibt stehen. */
-.fibu-booking-row .fibu-booking-meta-split {
+[data-app="buchhaltung"] .fibu-booking-row .fibu-booking-meta-split {
   display: flex;
   align-items: baseline;
   gap: 10px;
   overflow: visible;
 }
 
-.fibu-booking-desc {
+[data-app="buchhaltung"] .fibu-booking-desc {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -194,17 +185,17 @@
   white-space: nowrap;
 }
 
-.fibu-booking-amount {
+[data-app="buchhaltung"] .fibu-booking-amount {
   flex: 0 0 auto;
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
-.fibu-booking-status {
+[data-app="buchhaltung"] .fibu-booking-status {
   font-style: normal;
 }
 
-.fibu-booking-status.is-posted {
+[data-app="buchhaltung"] .fibu-booking-status.is-posted {
   color: var(--accent);
 }
 
@@ -212,7 +203,7 @@
    LISTE: genau eine Zeile je Eintrag -- Titel und ein Kurz-Meta rechts,
    enge Zeilenhoehe, maximale Dichte.
    -------------------------------------------------------------------------- */
-.fibu-booking-row.is-compact {
+[data-app="buchhaltung"] .fibu-booking-row.is-compact {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
@@ -220,26 +211,17 @@
   line-height: 1.3;
 }
 
-.fibu-booking-row.is-compact .fibu-booking-lead {
+[data-app="buchhaltung"] .fibu-booking-row.is-compact .fibu-booking-lead {
   color: var(--text);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
 
-.fibu-evidence-tabs {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.fibu-evidence-tabs .ctox-pane-tabs {
-  width: 100%;
-}
-
-.fibu-action-icon::before {
+[data-app="buchhaltung"] .fibu-action-icon::before {
   content: attr(data-icon);
 }
 
-.fibu-action-icon {
+[data-app="buchhaltung"] .fibu-action-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -260,7 +242,7 @@
 /* --------------------------------------------------------------------------
    Center workbench — view panels inside the standard .ctox-pane-body.
    -------------------------------------------------------------------------- */
-.fibu-view-panel {
+[data-app="buchhaltung"] .fibu-view-panel {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -269,12 +251,12 @@
 }
 
 /* Layout-Modifikator auf der Kit-Toolbar: Aktionsgruppe rechtsbündig. */
-.fibu-panel-toolbar {
+[data-app="buchhaltung"] .fibu-panel-toolbar {
   justify-content: space-between;
   flex-shrink: 0;
 }
 
-.fibu-search-wrapper {
+[data-app="buchhaltung"] .fibu-search-wrapper {
   flex: 1;
   max-width: 320px;
   min-width: 0;
@@ -283,7 +265,7 @@
   gap: 5px;
 }
 
-.fibu-result-count {
+[data-app="buchhaltung"] .fibu-result-count {
   color: var(--muted);
   font-size: var(--fs-meta);
   font-weight: 650;
@@ -294,7 +276,7 @@
    custom: Datei-Dropzones (Beleg-Upload, Bankimport) — gestrichelte
    Drop-Fläche mit Drag-Feedback, kein Kit-Element.
    -------------------------------------------------------------------------- */
-.fibu-file-dropzone {
+[data-app="buchhaltung"] .fibu-file-dropzone {
   width: 100%;
   border: 1px dashed var(--line);
   border-radius: var(--panel-radius);
@@ -310,12 +292,12 @@
   text-align: center;
 }
 
-.fibu-file-dropzone:hover {
+[data-app="buchhaltung"] .fibu-file-dropzone:hover {
   border-color: var(--accent);
   background: var(--accent-soft);
 }
 
-.fibu-file-dropzone.compact {
+[data-app="buchhaltung"] .fibu-file-dropzone.compact {
   flex: 1;
   min-width: 250px;
   padding: 10px 18px;
@@ -324,7 +306,7 @@
   font-size: var(--fs-sm);
 }
 
-.dropzone-icon {
+[data-app="buchhaltung"] .dropzone-icon {
   min-width: 34px;
   height: 28px;
   padding: 0 8px;
@@ -341,11 +323,11 @@
   letter-spacing: 0;
 }
 
-.dropzone-icon::before {
+[data-app="buchhaltung"] .dropzone-icon::before {
   content: attr(data-icon);
 }
 
-.dropzone-text {
+[data-app="buchhaltung"] .dropzone-text {
   font-size: var(--fs-base);
   color: var(--muted);
 }
@@ -355,54 +337,90 @@
    Numerik via .is-num/.is-center, Selektion via .is-selected, Badges,
    Buttons inkl. Kompaktvariante .ctox-button--sm) kommen vom Kit.
    -------------------------------------------------------------------------- */
-.fibu-scrollable-container {
+[data-app="buchhaltung"] .fibu-scrollable-container {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
 }
 
-.fibu-tests-body {
-  padding: 10px;
+/* Detailtabellen (Inspektor, Vorschau) passen sich ihrer Spalte an, Zellen brechen um. */
+[data-app="buchhaltung"] .fibu-module .ctox-table {
+  min-width: 0;
 }
 
-.fibu-module .ctox-table {
-  min-width: 760px;
+[data-app="buchhaltung"] .fibu-module .ctox-table :is(th, td) {
+  overflow-wrap: anywhere;
 }
 
-.fibu-module .ctox-table td {
+/* Die Datentabellen der Hauptansichten (Kontenrahmen, Journal, Belege, Bank …) behalten ihre Spalten und
+   scrollen bei schmalem Fenster in ihrem eigenen Container ([data-scroll-x]); Kontonummern und Beträge
+   brechen nicht mitten im Wort. Fenster und App-Fläche scrollen nie seitlich. */
+[data-app="buchhaltung"] .fibu-scrollable-container[data-scroll-x] > .ctox-table {
+  min-width: 680px;
+}
+
+[data-app="buchhaltung"] .fibu-scrollable-container[data-scroll-x] > .ctox-table :is(th, td) {
+  overflow-wrap: normal;
+}
+
+@container business-app-window (max-width: 900px) {
+  [data-app="buchhaltung"] .fibu-module .ctox-table th {
+    white-space: normal;
+    letter-spacing: 0;
+    padding: 6px;
+  }
+
+  [data-app="buchhaltung"] .fibu-module .ctox-table td {
+    padding: 6px;
+  }
+
+  [data-app="buchhaltung"] .fibu-module .ctox-table .ctox-badge {
+    white-space: normal;
+  }
+}
+
+/* Sehr schmal: im Kontenrahmen tritt die USt-Spalte zurück (Konto, Bezeichnung, Typ und
+   Salden bleiben), damit die Tabelle ohne seitliches Scrollen passt. */
+@container business-app-window (max-width: 520px) {
+  [data-app="buchhaltung"] .fibu-module .ctox-table:has(> tbody[data-accounts-list]) :is(th, td):nth-child(4) {
+    display: none;
+  }
+}
+
+[data-app="buchhaltung"] .fibu-module .ctox-table td {
   vertical-align: middle;
 }
 
-.fibu-module .ctox-table tbody tr {
+[data-app="buchhaltung"] .fibu-module .ctox-table tbody tr {
   cursor: pointer;
 }
 
 /* custom: Kontengruppen-Zeilen im SKR-Explorer und Leer-Zellen in Tabellen. */
-.fibu-module .ctox-table tr.group-row td {
+[data-app="buchhaltung"] .fibu-module .ctox-table tr.group-row td {
   font-weight: 700;
   color: var(--text-strong);
   background: color-mix(in srgb, var(--surface-2) 30%, transparent);
 }
 
-.fibu-module .ctox-table td.fibu-empty-state {
+[data-app="buchhaltung"] .fibu-module .ctox-table td.fibu-empty-state {
   padding: 36px 20px;
   color: var(--muted);
   text-align: center;
 }
 
 /* custom: Mono-Schrift für Kontonummern/Belegnummern (Fachlichkeit). */
-.fibu-mono {
+[data-app="buchhaltung"] .fibu-mono {
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
   color: var(--accent);
 }
 
-.fibu-storno-indicator {
+[data-app="buchhaltung"] .fibu-storno-indicator {
   text-decoration: line-through;
   opacity: 0.65;
 }
 
-.fibu-posted-lock {
+[data-app="buchhaltung"] .fibu-posted-lock {
   font-size: var(--fs-meta);
 }
 
@@ -410,7 +428,7 @@
    Reports — die Tab-Leiste selbst ist die Kit-Segmented-Control; diese
    Wrapper positionieren sie und die Unteransichten im Reports-Panel.
    -------------------------------------------------------------------------- */
-.fibu-report-tabs {
+[data-app="buchhaltung"] .fibu-report-tabs {
   padding: 8px 10px;
   display: flex;
   overflow-x: auto;
@@ -418,14 +436,14 @@
   flex-shrink: 0;
 }
 
-.fibu-report-workspace-content {
+[data-app="buchhaltung"] .fibu-report-workspace-content {
   flex: 1 1 auto;
   overflow: auto;
   padding: 10px;
   min-height: 0;
 }
 
-.fibu-report-header {
+[data-app="buchhaltung"] .fibu-report-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -439,19 +457,19 @@
    custom: HGB-Bilanz (Aktiva | Passiva) und GuV als rekursive Kontenbäume —
    eine Fachansicht ohne Kit-Pendant.
    -------------------------------------------------------------------------- */
-.fibu-bilanz-tree-wrapper {
+[data-app="buchhaltung"] .fibu-bilanz-tree-wrapper {
   display: grid;
   grid-template-columns: 1fr 1px 1fr;
   gap: 24px;
   min-height: 400px;
 }
 
-.fibu-bilanz-column {
+[data-app="buchhaltung"] .fibu-bilanz-column {
   display: flex;
   flex-direction: column;
 }
 
-.fibu-bilanz-side-title {
+[data-app="buchhaltung"] .fibu-bilanz-side-title {
   font-size: var(--fs-meta);
   font-weight: 700;
   color: var(--muted);
@@ -460,17 +478,17 @@
   padding: 5px 0;
 }
 
-.fibu-bilanz-divider {
+[data-app="buchhaltung"] .fibu-bilanz-divider {
   background: var(--line);
 }
 
-.fibu-tree-item {
+[data-app="buchhaltung"] .fibu-tree-item {
   display: flex;
   flex-direction: column;
   margin-bottom: 2px;
 }
 
-.fibu-tree-row {
+[data-app="buchhaltung"] .fibu-tree-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -480,38 +498,38 @@
   transition: background 0.15s;
 }
 
-.fibu-tree-row:hover {
+[data-app="buchhaltung"] .fibu-tree-row:hover {
   background: var(--surface-2);
 }
 
-.fibu-tree-label-wrap {
+[data-app="buchhaltung"] .fibu-tree-label-wrap {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.fibu-tree-toggle {
+[data-app="buchhaltung"] .fibu-tree-toggle {
   font-size: var(--fs-micro);
   width: 12px;
   display: inline-block;
   color: var(--muted);
 }
 
-.fibu-tree-label {
+[data-app="buchhaltung"] .fibu-tree-label {
   font-size: var(--fs-base);
   font-weight: 500;
 }
 
-.fibu-tree-item.level-0 > .fibu-tree-row .fibu-tree-label { font-weight: 700; font-size: var(--fs-base); }
-.fibu-tree-item.level-1 > .fibu-tree-row .fibu-tree-label { font-weight: 600; }
+[data-app="buchhaltung"] .fibu-tree-item.level-0 > .fibu-tree-row .fibu-tree-label { font-weight: 700; font-size: var(--fs-base); }
+[data-app="buchhaltung"] .fibu-tree-item.level-1 > .fibu-tree-row .fibu-tree-label { font-weight: 600; }
 
-.fibu-tree-val {
+[data-app="buchhaltung"] .fibu-tree-val {
   font-family: var(--font-mono);
   font-size: var(--fs-sm);
   font-weight: 600;
 }
 
-.fibu-tree-children {
+[data-app="buchhaltung"] .fibu-tree-children {
   padding-left: 18px;
   border-left: 1px dashed var(--line);
   margin-left: 18px;
@@ -519,16 +537,17 @@
   flex-direction: column;
 }
 
-.fibu-guv-wrapper {
+[data-app="buchhaltung"] .fibu-guv-wrapper {
   max-width: 700px;
   margin: 0 auto;
+  padding: 10px 12px;
 }
 
 /* --------------------------------------------------------------------------
    custom: UStVA-Kennziffern-Raster — statische Steuerformular-Kacheln
-   (Kennziffer 81/86/66 + Zahllast) auf Kit-Callouts.
+   (Kennziffer 81/86/66 + Zahllast) auf Kit-Karten (.ctox-card).
    -------------------------------------------------------------------------- */
-.fibu-ustva-grid {
+[data-app="buchhaltung"] .fibu-ustva-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);
   gap: 8px;
@@ -536,48 +555,49 @@
   margin: 0 auto;
 }
 
-.fibu-ustva-card {
+[data-app="buchhaltung"] .fibu-ustva-card {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding: 10px 12px;
 }
 
-.ustva-card-label {
+[data-app="buchhaltung"] .ustva-card-label {
   font-size: var(--fs-sm);
   color: var(--muted);
   line-height: 1.4;
 }
 
-.ustva-card-value {
+[data-app="buchhaltung"] .ustva-card-value {
   font-family: var(--font-mono);
   font-size: var(--fs-hero);
   font-weight: 700;
   color: var(--text-strong);
 }
 
-.fibu-ustva-card.highlighted {
+[data-app="buchhaltung"] .fibu-ustva-card.highlighted {
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
   background: var(--accent-soft);
 }
 
-.fibu-ustva-card.total {
+[data-app="buchhaltung"] .fibu-ustva-card.total {
   grid-column: span 2;
   border-color: color-mix(in srgb, var(--accent) 50%, transparent);
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
-.fibu-ustva-card.total .ustva-card-value {
+[data-app="buchhaltung"] .fibu-ustva-card.total .ustva-card-value {
   color: var(--accent);
 }
 
-/* DATEV-Export: zentrierte Aktionsbox auf Kit-Callout. */
-.fibu-datev-exporter-box {
+/* DATEV-Export: zentrierte Aktionsfläche ohne Box. */
+[data-app="buchhaltung"] .fibu-datev-exporter-box {
   max-width: 600px;
   margin: 0 auto;
   text-align: center;
 }
 
-.fibu-datev-exporter-box p {
+[data-app="buchhaltung"] .fibu-datev-exporter-box p {
   color: var(--muted);
   line-height: 1.6;
   margin-bottom: 20px;
@@ -587,19 +607,19 @@
    Drawer-Formulare: Zeilen/Gruppen-Layout; Labels (.ctox-field-label),
    Inputs (.ctox-input/.ctox-select) und Buttons (.ctox-button) sind Kit.
    -------------------------------------------------------------------------- */
-.fibu-form-row {
+[data-app="buchhaltung"] .fibu-form-row {
   display: flex;
   gap: 16px;
   margin-bottom: 14px;
   min-width: 0;
 }
 
-.fibu-form-row.inline {
+[data-app="buchhaltung"] .fibu-form-row.inline {
   justify-content: center;
   align-items: center;
 }
 
-.fibu-form-group {
+[data-app="buchhaltung"] .fibu-form-group {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -612,8 +632,8 @@
    custom: Slide-up Buchungseditor-Drawer — das Kit hat kein Bottom-Drawer-
    Element; Optik lehnt an die Pane-Sprache an (Tokens, Panel-Radius).
    -------------------------------------------------------------------------- */
-.fibu-module .ctox-bottom-drawer,
-.fibu-bottom-drawer {
+[data-app="buchhaltung"] .fibu-module .ctox-bottom-drawer,
+[data-app="buchhaltung"] .fibu-bottom-drawer {
   position: absolute;
   bottom: 0;
   left: 0;
@@ -637,14 +657,14 @@
   box-sizing: border-box;
 }
 
-.fibu-module .ctox-bottom-drawer.is-open,
-.fibu-bottom-drawer.open {
+[data-app="buchhaltung"] .fibu-module .ctox-bottom-drawer.is-open,
+[data-app="buchhaltung"] .fibu-bottom-drawer.open {
   transform: translateY(0);
   visibility: visible;
   pointer-events: auto;
 }
 
-.fibu-drawer-handle {
+[data-app="buchhaltung"] .fibu-drawer-handle {
   padding: 10px 14px;
   display: flex;
   align-items: center;
@@ -655,7 +675,7 @@
   position: relative;
 }
 
-.fibu-drawer-handle-bar {
+[data-app="buchhaltung"] .fibu-drawer-handle-bar {
   position: absolute;
   top: 6px;
   left: 50%;
@@ -666,7 +686,7 @@
   border-radius: 2px;
 }
 
-.fibu-drawer-title {
+[data-app="buchhaltung"] .fibu-drawer-title {
   font-size: var(--fs-base);
   font-weight: 700;
   color: var(--text-strong);
@@ -674,14 +694,14 @@
   letter-spacing: 0.05em;
 }
 
-.fibu-drawer-content {
+[data-app="buchhaltung"] .fibu-drawer-content {
   flex: 1;
   overflow-y: auto;
   padding: 14px;
   min-height: 0;
 }
 
-.fibu-drawer-actions {
+[data-app="buchhaltung"] .fibu-drawer-actions {
   position: sticky;
   bottom: 0;
   z-index: 1;
@@ -695,7 +715,7 @@
 }
 
 /* custom: Live-Validierungszeile im Buchungsformular (JS-Hook .is-valid). */
-.fibu-validation-summary {
+[data-app="buchhaltung"] .fibu-validation-summary {
   min-height: 20px;
   margin-top: 8px;
   color: var(--danger);
@@ -704,28 +724,28 @@
   line-height: 1.4;
 }
 
-.fibu-validation-summary.is-valid {
+[data-app="buchhaltung"] .fibu-validation-summary.is-valid {
   color: var(--success);
 }
 
 /* custom: GoBD-Sperrvermerk — Icon neben zweizeiligem Hinweis in einer
    Kit-Callout (.ctox-callout.is-success). */
-.fibu-security-note {
+[data-app="buchhaltung"] .fibu-security-note {
   display: flex;
   align-items: flex-start;
   gap: 10px;
   margin-top: 16px;
 }
 
-.fibu-security-note strong {
+[data-app="buchhaltung"] .fibu-security-note strong {
   display: block;
   color: var(--success);
 }
 
 /* --------------------------------------------------------------------------
-   Right pane: OCR document, extraction evidence and the existing agent trail.
+   Right pane: stored receipt data and journal evidence (no document recognition).
    -------------------------------------------------------------------------- */
-.fibu-right-subpanel {
+[data-app="buchhaltung"] .fibu-right-subpanel {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -733,7 +753,7 @@
   overflow: hidden;
 }
 
-.fibu-document-preview-container {
+[data-app="buchhaltung"] .fibu-document-preview-container {
   flex: 1 1 auto;
   min-height: 0;
   padding: 20px;
@@ -742,78 +762,17 @@
 }
 
 /* Leerzustände sind Kit (.ctox-empty); nur das dekorative Icon ist lokal. */
-.empty-icon {
+[data-app="buchhaltung"] .empty-icon {
   font-size: 40px;
   opacity: 0.35;
 }
 
-/* --------------------------------------------------------------------------
-   custom: simulierte OCR-Rechnungsvorschau — bildet ein echtes
-   Rechnungsdokument nach, keine App-UI; daher eigene Dokument-Optik.
-   -------------------------------------------------------------------------- */
-.fibu-simulated-ocr {
-  background: color-mix(in srgb, var(--surface) 94%, var(--text) 6%);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: var(--panel-radius);
-  padding: 14px;
-  box-shadow: none;
-  font-size: var(--fs-sm);
-  line-height: 1.4;
-  margin-bottom: 20px;
-  font-family: 'Helvetica Neue', Arial, sans-serif;
-}
-
-.ocr-invoice-header {
-  display: flex;
-  justify-content: space-between;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 12px;
-  margin-bottom: 16px;
-}
-
-.ocr-invoice-title {
-  font-size: var(--fs-title);
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.ocr-invoice-meta {
-  text-align: right;
-}
-
-.ocr-invoice-details {
-  margin-bottom: 16px;
-}
-
-.ocr-invoice-details table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.ocr-invoice-details th {
-  border-bottom: 1px solid var(--line);
-  padding: 4px;
-  text-align: left;
-  font-weight: 700;
-}
-
-.ocr-invoice-details td {
-  padding: 6px 4px;
-  border-bottom: 1px solid var(--line);
-}
-
-.ocr-invoice-total-row {
-  font-weight: 700;
-  background: var(--surface-2);
-}
-
-/* OCR-Metadaten: Kit-Card (.ctox-card); lokal nur die Mono-Pfadbox. */
-.ocr-raw-meta-badge {
+/* Beleg-Metadaten: Kit-Card (.ctox-card); lokal nur die Mono-Pfadbox. */
+[data-app="buchhaltung"] .ocr-raw-meta-badge {
   margin-top: 20px;
 }
 
-.ocr-archive-path-wrapper {
+[data-app="buchhaltung"] .ocr-archive-path-wrapper {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -823,7 +782,7 @@
   border-radius: var(--control-radius);
 }
 
-.ocr-archive-path {
+[data-app="buchhaltung"] .ocr-archive-path {
   font-family: var(--font-mono);
   font-size: var(--fs-micro);
   color: var(--text);
@@ -834,137 +793,18 @@
 }
 
 /* --------------------------------------------------------------------------
-   custom: AI-Agent-Chat (Bubbles) — Chat-Verlauf ist kein Kit-Element;
-   Avatare sind Kit (.ctox-avatar).
-   -------------------------------------------------------------------------- */
-.fibu-agent-chat-container {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.fibu-agent-chat-messages {
-  flex: 1;
-  overflow-y: auto;
-  padding: 20px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.chat-message {
-  display: flex;
-  gap: 10px;
-}
-
-.chat-message.user {
-  flex-direction: row-reverse;
-}
-
-.message-bubble {
-  background: var(--surface-2);
-  border: 1px solid var(--hairline, var(--line));
-  border-radius: var(--panel-radius);
-  padding: 8px 10px;
-  font-size: var(--fs-sm);
-  line-height: 1.45;
-  color: var(--text);
-  max-width: 80%;
-}
-
-.chat-message.user .message-bubble {
-  background: var(--accent-soft);
-  border-color: var(--accent);
-  color: var(--text);
-}
-
-.chat-message.system .message-bubble {
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
-}
-
-.chat-message ul {
-  margin: 6px 0 0 16px;
-  padding: 0;
-}
-
-.chat-message li {
-  margin-bottom: 3px;
-}
-
-.fibu-agent-chat-input-wrap {
-  padding: 10px;
-  border-top: 1px solid var(--hairline, var(--line));
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-/* --------------------------------------------------------------------------
    custom: buchhalterische Soll/Haben/Warn-Färbung (Fachsemantik der
    doppelten Buchführung, kein Kit-Status). !important, damit die Färbung
    auch in Tabellenzellen gegen das Kit-td gewinnt.
    -------------------------------------------------------------------------- */
-.fibu-text-debit {
+[data-app="buchhaltung"] .fibu-text-debit {
   color: var(--success) !important;
   font-weight: 600 !important;
 }
 
-.fibu-text-credit {
+[data-app="buchhaltung"] .fibu-text-credit {
   color: var(--danger) !important;
   font-weight: 600 !important;
-}
-
-.fibu-text-warning {
-  color: var(--warning) !important;
-  font-weight: 600 !important;
-}
-
-/* --------------------------------------------------------------------------
-   custom: E2E-Testsuite-Ansicht — Intro, Zählerleiste (auf Kit-Callout)
-   und das Phosphor-Terminal für das Live-Log.
-   -------------------------------------------------------------------------- */
-.fibu-tests-intro {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-}
-
-.fibu-tests-intro p {
-  margin: 0;
-  font-size: var(--fs-sm);
-  color: var(--muted);
-}
-
-.e2e-summary-bar {
-  display: flex;
-  gap: 16px;
-  align-items: center;
-  margin-bottom: 16px;
-  font-size: var(--fs-base);
-}
-
-.fibu-e2e-log-section {
-  margin-top: 24px;
-}
-
-.fibu-e2e-log-section .ctox-field-label {
-  margin-bottom: 10px;
-}
-
-.fibu-e2e-terminal {
-  background: var(--fibu-terminal-bg);
-  border: 1px solid var(--fibu-terminal-line);
-  border-radius: var(--control-radius);
-  padding: 10px;
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  height: 180px;
-  overflow-y: auto;
-  color: var(--fibu-terminal-ink);
-  line-height: 1.6;
 }
 
 /* --------------------------------------------------------------------------
@@ -972,32 +812,32 @@
    Anteile mit Farbpunkten) in der Mileage-Toolbar. Collapsed by default
    until JS populates it with real data.
    -------------------------------------------------------------------------- */
-#mileage-dashboard-summary {
+[data-app="buchhaltung"] #mileage-dashboard-summary {
   display: flex;
   gap: 16px;
   align-items: center;
   font-size: var(--fs-sm);
 }
 
-#mileage-dashboard-summary:empty {
+[data-app="buchhaltung"] #mileage-dashboard-summary:empty {
   display: none;
 }
 
-.mileage-dash-wrapper {
+[data-app="buchhaltung"] .mileage-dash-wrapper {
   display: flex;
   align-items: center;
   gap: 14px;
   width: 100%;
 }
 
-.mileage-dash-metric.main-metric {
+[data-app="buchhaltung"] .mileage-dash-metric.main-metric {
   display: flex;
   flex-direction: column;
   gap: 2px;
   flex-shrink: 0;
 }
 
-.mileage-metric-label {
+[data-app="buchhaltung"] .mileage-metric-label {
   font-size: var(--fs-micro);
   font-weight: 700;
   text-transform: uppercase;
@@ -1005,39 +845,39 @@
   color: var(--muted);
 }
 
-.mileage-metric-value {
+[data-app="buchhaltung"] .mileage-metric-value {
   font-size: var(--fs-hero);
   font-weight: 800;
   color: var(--text-strong);
   font-family: var(--font-mono);
 }
 
-.mileage-metric-value .unit {
+[data-app="buchhaltung"] .mileage-metric-value .unit {
   font-size: var(--fs-sm);
   color: var(--muted);
   font-weight: 500;
 }
 
-.mileage-dash-divider {
+[data-app="buchhaltung"] .mileage-dash-divider {
   width: 1px;
   height: 28px;
   background: var(--line);
   flex-shrink: 0;
 }
 
-.mileage-dash-shares {
+[data-app="buchhaltung"] .mileage-dash-shares {
   display: flex;
   gap: 12px;
   flex: 1;
 }
 
-.mileage-share-item {
+[data-app="buchhaltung"] .mileage-share-item {
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
 
-.share-label {
+[data-app="buchhaltung"] .share-label {
   font-size: var(--fs-micro);
   font-weight: 600;
   color: var(--muted);
@@ -1046,25 +886,25 @@
   gap: 6px;
 }
 
-.share-color-dot {
+[data-app="buchhaltung"] .share-color-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   display: inline-block;
 }
 
-.mileage-share-item.business .share-color-dot { background: var(--success); }
-.mileage-share-item.private .share-color-dot { background: var(--warning); }
-.mileage-share-item.commute .share-color-dot { background: var(--fibu-info); }
+[data-app="buchhaltung"] .mileage-share-item.business .share-color-dot { background: var(--success); }
+[data-app="buchhaltung"] .mileage-share-item.private .share-color-dot { background: var(--warning); }
+[data-app="buchhaltung"] .mileage-share-item.commute .share-color-dot { background: var(--fibu-info); }
 
-.share-val {
+[data-app="buchhaltung"] .share-val {
   font-size: var(--fs-base);
   font-weight: 700;
   color: var(--text-strong);
   font-family: var(--font-mono);
 }
 
-.share-sub {
+[data-app="buchhaltung"] .share-sub {
   font-size: var(--fs-meta);
   font-weight: 500;
   color: var(--muted);
@@ -1076,22 +916,22 @@
    Arbeitsbereich), 768px stapelt auf eine Spalte.
    -------------------------------------------------------------------------- */
 @container business-app-window (max-width: 1024px) {
-  .fibu-module[data-fibu-root] {
+  [data-app="buchhaltung"] .fibu-module[data-fibu-root] {
     grid-template-columns: var(--ctox-left-width) 12px minmax(0, 1fr);
   }
 
-  .fibu-module > [data-resizer="right"] {
+  [data-app="buchhaltung"] .fibu-module > [data-resizer="right"] {
     display: none;
   }
 
-  .fibu-right {
+  [data-app="buchhaltung"] .fibu-right {
     grid-column: 1 / -1;
     min-height: 260px;
   }
 }
 
 @container business-app-window (max-width: 768px) {
-  .fibu-module[data-fibu-root] {
+  [data-app="buchhaltung"] .fibu-module[data-fibu-root] {
     grid-template-columns: minmax(0, 1fr);
     grid-auto-rows: auto;
     gap: 6px;
@@ -1100,150 +940,151 @@
     align-content: start;
   }
 
-  .fibu-left,
-  .fibu-center,
-  .fibu-right,
-  .fibu-module > [data-resizer] {
+  [data-app="buchhaltung"] .fibu-left,
+  [data-app="buchhaltung"] .fibu-center,
+  [data-app="buchhaltung"] .fibu-right,
+  [data-app="buchhaltung"] .fibu-module > [data-resizer] {
     grid-column: 1;
   }
 
-  .fibu-col-resizer {
+  [data-app="buchhaltung"] .fibu-col-resizer {
     display: none !important;
   }
 
-  .fibu-module .ctox-pane {
+  [data-app="buchhaltung"] .fibu-module .ctox-pane {
     height: auto;
     min-width: 0;
     min-height: 220px;
   }
 
-  .fibu-left {
+  [data-app="buchhaltung"] .fibu-left {
     max-height: 300px;
   }
 
-  .fibu-center {
+  [data-app="buchhaltung"] .fibu-center {
     min-height: 420px;
   }
 
-  .fibu-right {
+  [data-app="buchhaltung"] .fibu-right {
     min-height: 280px;
   }
 
-  .fibu-bilanz-tree-wrapper {
+  [data-app="buchhaltung"] .fibu-bilanz-tree-wrapper {
     grid-template-columns: minmax(0, 1fr);
     gap: 18px;
   }
 
-  .fibu-bilanz-divider {
+  [data-app="buchhaltung"] .fibu-bilanz-divider {
     display: none;
   }
 
   /* Gestapelt steht nur noch die linke Spalte in der obersten Zeile: sie
      haelt jetzt die Fenstersteuerung frei, die Mitte nicht mehr. */
-  .shell-window[data-shell-contract="v2"] .fibu-module .fibu-left > .ctox-pane-header {
-    padding-right: 70px;
+  [data-app="buchhaltung"] .fibu-module .fibu-left > .ctox-pane-header {
+    padding-right: var(--shell-v2-control-inset, 70px);
   }
 
-  .shell-window[data-shell-contract="v2"] .fibu-module.is-evidence-hidden .fibu-center > .ctox-pane-header {
+  [data-app="buchhaltung"] .fibu-module.is-evidence-hidden .fibu-center > .ctox-pane-header {
     padding-right: 14px;
   }
 }
 
 @container business-app-window (max-width: 768px) {
-  .fibu-module[data-fibu-root] {
+  [data-app="buchhaltung"] .fibu-module[data-fibu-root] {
     padding: 4px;
     gap: 6px;
   }
 
-  .fibu-module .ctox-pane {
+  [data-app="buchhaltung"] .fibu-module .ctox-pane {
     min-height: 190px;
   }
 
-  .fibu-left {
+  [data-app="buchhaltung"] .fibu-left {
     max-height: 280px;
   }
 
-  .fibu-center {
+  [data-app="buchhaltung"] .fibu-center {
     min-height: 360px;
   }
 
-  .fibu-panel-toolbar {
+  [data-app="buchhaltung"] .fibu-panel-toolbar {
     align-items: stretch;
   }
 
-  .fibu-search-wrapper,
-  .fibu-toolbar-actions {
+  [data-app="buchhaltung"] .fibu-search-wrapper,
+  [data-app="buchhaltung"] .fibu-toolbar-actions {
     width: 100%;
     max-width: none;
   }
 
-  .fibu-toolbar-actions {
+  [data-app="buchhaltung"] .fibu-toolbar-actions {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
   }
 
-  .fibu-toolbar-actions .ctox-button {
+  [data-app="buchhaltung"] .fibu-toolbar-actions .ctox-button {
     flex: 0 1 auto;
     width: auto;
     min-height: 30px;
   }
 
-  .fibu-tests-body,
-  .fibu-report-workspace-content {
+  [data-app="buchhaltung"] .fibu-report-workspace-content {
     padding: 8px;
   }
 
-  .fibu-module .ctox-table {
-    min-width: 680px;
-  }
-
-  .fibu-report-tabs {
+  [data-app="buchhaltung"] .fibu-report-tabs {
     padding: 10px 12px;
   }
 
-  .fibu-ustva-grid {
+  [data-app="buchhaltung"] .fibu-ustva-grid {
     grid-template-columns: 1fr;
   }
 
-  .fibu-ustva-card.total {
+  [data-app="buchhaltung"] .fibu-ustva-card.total {
     grid-column: auto;
   }
 
-  .fibu-form-row,
-  .fibu-form-row.inline {
+  [data-app="buchhaltung"] .fibu-form-row,
+  [data-app="buchhaltung"] .fibu-form-row.inline {
     flex-direction: column;
     align-items: stretch;
   }
 
-  #mileage-dashboard-summary,
-  .mileage-dash-wrapper,
-  .mileage-dash-shares {
+  [data-app="buchhaltung"] #mileage-dashboard-summary,
+  [data-app="buchhaltung"] .mileage-dash-wrapper,
+  [data-app="buchhaltung"] .mileage-dash-shares {
     width: 100%;
     flex-wrap: wrap;
   }
 
-  .fibu-workbench-tools {
+  [data-app="buchhaltung"] .fibu-workbench-tools {
     grid-template-columns: minmax(0, 1fr);
   }
 
   /* Einspaltig gestapelte Werkzeuge sprengen die feste Shell-Zeilenhoehe. */
-  .shell-window[data-shell-contract="v2"] .fibu-module .fibu-center > .ctox-pane-header > .fibu-workbench-tools {
+  [data-app="buchhaltung"] .fibu-module .fibu-center > .ctox-pane-header > .fibu-workbench-tools {
     height: auto;
   }
 
   /* Die Liste bleibt auch gestapelt einzeilig: Titel links, Kurz-Meta rechts. */
-  .fibu-booking-row.is-compact {
+  [data-app="buchhaltung"] .fibu-booking-row.is-compact {
     grid-template-columns: minmax(0, 1fr) auto;
     gap: 10px;
   }
 
-  .fibu-module .ctox-bottom-drawer,
-  .fibu-bottom-drawer {
+  [data-app="buchhaltung"] .fibu-module .ctox-bottom-drawer,
+  [data-app="buchhaltung"] .fibu-bottom-drawer {
     height: min(460px, calc(100% - 18px));
   }
 
-  .fibu-drawer-content {
+  [data-app="buchhaltung"] .fibu-drawer-content {
+    padding: 10px;
+  }
+
+  /* Aktionsleiste gleicht genau das Innenpolster aus (sonst 4 px Seitenscrollen im Editor, Rundgang RUND1 @420). */
+  [data-app="buchhaltung"] .fibu-drawer-actions {
+    margin: 10px -10px -10px;
     padding: 10px;
   }
 }
@@ -1256,32 +1097,32 @@
    Desktop (fine pointer) unveraendert.
    -------------------------------------------------------------------------- */
 @media (pointer: coarse) {
-  .fibu-module button,
-  .fibu-module input,
-  .fibu-module select,
-  .fibu-module textarea {
+  [data-app="buchhaltung"] .fibu-module button,
+  [data-app="buchhaltung"] .fibu-module input,
+  [data-app="buchhaltung"] .fibu-module select,
+  [data-app="buchhaltung"] .fibu-module textarea {
     min-height: 44px;
   }
 
-  .fibu-module .ctox-pane-icon {
+  [data-app="buchhaltung"] .fibu-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .fibu-module .ctox-pane-tab,
-  .fibu-module .fibu-toolbar-actions .ctox-button {
+  [data-app="buchhaltung"] .fibu-module .ctox-pane-tab,
+  [data-app="buchhaltung"] .fibu-module .fibu-toolbar-actions .ctox-button {
     min-height: 44px;
   }
 
-  .fibu-module .ctox-sort-dir,
-  .fibu-module .dropzone-icon {
+  [data-app="buchhaltung"] .fibu-module .ctox-sort-dir,
+  [data-app="buchhaltung"] .fibu-module .dropzone-icon {
     min-width: 44px;
     min-height: 44px;
   }
 
-  .fibu-module .fibu-booking-row,
-  .fibu-module .fibu-tree-row,
-  .fibu-module .ctox-list-item {
+  [data-app="buchhaltung"] .fibu-module .fibu-booking-row,
+  [data-app="buchhaltung"] .fibu-module .fibu-tree-row,
+  [data-app="buchhaltung"] .fibu-module .ctox-list-item {
     min-height: 44px;
   }
 }

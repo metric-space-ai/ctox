@@ -1,0 +1,1326 @@
+{
+ "app": "documents",
+ "width": 1280,
+ "steps": [
+  {
+   "label": "Launcher",
+   "role": "launcher",
+   "shot": "1280-00.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "dialogs": null,
+   "navigations": null,
+   "openedFiles": null,
+   "probs": []
+  },
+  {
+   "label": "geöffnet",
+   "role": "open",
+   "shot": "1280-01.jpg",
+   "effect": "",
+   "log": [
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.auto",
+     "data": "{\"id\":\"research.report.auto\",\"document_type\":\"word_document\",\"title\":\"Deep Research Word-Bericht\",\"description\":\"CTOX wählt den passenden Report-Typ und erstellt ein belastbares Word-Dokument.\",\"command_type\":\"research.systematic.report.cre…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.decision_brief",
+     "data": "{\"id\":\"research.report.decision_brief\",\"document_type\":\"word_document\",\"title\":\"Entscheidungsvorlage\",\"description\":\"Kurzes empfehlungsorientiertes Memo mit Optionen, Kriterien und Bewertung.\",\"command_type\":\"research.systematic.report.crea…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.feasibility_study",
+     "data": "{\"id\":\"research.report.feasibility_study\",\"document_type\":\"word_document\",\"title\":\"Machbarkeitsstudie\",\"description\":\"Decision-grade Machbarkeitsstudie mit Evidenz, Bewertung und DOCX-Render.\",\"command_type\":\"research.systematic.report.crea…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.market_research",
+     "data": "{\"id\":\"research.report.market_research\",\"document_type\":\"word_document\",\"title\":\"Marktanalyse\",\"description\":\"Marktgröße, Segmente, Treiber, Wettbewerb, Barrieren und Empfehlung.\",\"command_type\":\"research.systematic.report.create\",\"report_t…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.project_description",
+     "data": "{\"id\":\"research.report.project_description\",\"document_type\":\"word_document\",\"title\":\"Projektbeschreibung / Fördervorhaben\",\"description\":\"Unternehmens- und Projektbeschreibung für Innovations- und Fördervorhaben.\",\"command_type\":\"research.s…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.source_review",
+     "data": "{\"id\":\"research.report.source_review\",\"document_type\":\"word_document\",\"title\":\"Quellenreview\",\"description\":\"Systematische Quellen- und Datenquellenrecherche mit Taxonomie und Priorisierung.\",\"command_type\":\"research.systematic.report.creat…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.literature_review",
+     "data": "{\"id\":\"research.report.literature_review\",\"document_type\":\"word_document\",\"title\":\"Stand der Technik\",\"description\":\"Literature Review mit Themen, Synthese, Lücken und offenen Fragen.\",\"command_type\":\"research.systematic.report.create\",\"rep…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.technology_screening",
+     "data": "{\"id\":\"research.report.technology_screening\",\"document_type\":\"word_document\",\"title\":\"Technologie-Screening\",\"description\":\"Optioneninventar, Kriterien, Shortlist und nächste Schritte.\",\"command_type\":\"research.systematic.report.create\",\"re…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.competitive_analysis",
+     "data": "{\"id\":\"research.report.competitive_analysis\",\"document_type\":\"word_document\",\"title\":\"Wettbewerbsanalyse\",\"description\":\"Wettbewerber-Set, Bewertungsachsen, Matrix, Positionierung, Lücken und Empfehlung.\",\"command_type\":\"research.systematic…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.whitepaper",
+     "data": "{\"id\":\"research.report.whitepaper\",\"document_type\":\"word_document\",\"title\":\"Whitepaper\",\"description\":\"These, Kontext, Argumente, Gegenargumente, Implikationen und Position.\",\"command_type\":\"research.systematic.report.create\",\"report_type\":…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "document.extract-requirements",
+     "data": "{\"id\":\"document.extract-requirements\",\"document_type\":\"word_document\",\"title\":\"Requirements extrahieren\",\"command_type\":\"document.extract-requirements\",\"prompt_template\":\"prompts/document-extract-requirements.md\",\"description\":\"\",\"created_a…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "document.review-risks",
+     "data": "{\"id\":\"document.review-risks\",\"document_type\":\"word_document\",\"title\":\"Risiken prüfen\",\"command_type\":\"document.review-risks\",\"prompt_template\":\"prompts/document-review-risks.md\",\"description\":\"\",\"created_at_ms\":1792085703914,\"updated_at_ms…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "document.summarize",
+     "data": "{\"id\":\"document.summarize\",\"document_type\":\"word_document\",\"title\":\"Zusammenfassen\",\"command_type\":\"document.summarize\",\"prompt_template\":\"prompts/document-summarize.md\",\"description\":\"\",\"created_at_ms\":1792085703914,\"updated_at_ms\":1792085…",
+     "result": "accepted"
+    }
+   ],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche „Lieferantenbewertung“ in Dokument suchen...",
+   "role": "search",
+   "shot": "1280-02.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche geleert",
+   "role": "search",
+   "shot": "1280-03.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Leeres Word-Dokument erstellen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-04.jpg",
+   "effect": "Inhalt geändert",
+   "log": [
+    {
+     "kind": "files.put",
+     "meta": "{\"id\":\"doc_aa74fc4b-bc5e-4d16-8e61-5180a51403ac_v1_blob\",\"name\":\"neues-dokument.docx\",\"mime\":\"application/vnd.openxmlformats-officedocument.wordprocessingml.document\"}"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_versions",
+     "id": "doc_aa74fc4b-bc5e-4d16-8e61-5180a51403ac_v1",
+     "data": "{\"id\":\"doc_aa74fc4b-bc5e-4d16-8e61-5180a51403ac_v1\",\"document_id\":\"doc_aa74fc4b-bc5e-4d16-8e61-5180a51403ac\",\"version\":1,\"source_kind\":\"created_blank\",\"blob_id\":\"doc_aa74fc4b-bc5e-4d16-8e61-5180a51403ac_v1_blob\",\"source_sha256\":\"a53ff538d35…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "documents",
+     "id": "doc_aa74fc4b-bc5e-4d16-8e61-5180a51403ac",
+     "data": "{\"id\":\"doc_aa74fc4b-bc5e-4d16-8e61-5180a51403ac\",\"title\":\"Neues Dokument\",\"filename\":\"neues-dokument.docx\",\"description\":\"\",\"mime_type\":\"application/vnd.openxmlformats-officedocument.wordprocessingml.document\",\"status\":\"Draft\",\"document_typ…",
+     "result": "accepted"
+    },
+    {
+     "kind": "command",
+     "type": "office.document.prepare",
+     "payload": "{\"document_id\":\"doc_aa74fc4b-bc5e-4d16-8e61-5180a51403ac\",\"version_id\":\"doc_aa74fc4b-bc5e-4d16-8e61-5180a51403ac_v1\",\"record_id\":\"doc_aa74fc4b-bc5e-4d16-8e61-5180a51403ac\",\"module\":\"documents\",\"client_context\":{\"source\":\"ctox-office-esm\",\"s…",
+     "status": "done"
+    }
+   ],
+   "errors": [
+    "console: [documents] CTOX Documents mount failed OfficeRpcError: CTOX Rust prepare did not return a Euro-Office DOCY editor payload\n    at deserializeError (http://127.0.0.1:54671/~a/lib:ctox-office@1.0~lib:monaco@0.0/ctox-office-document.mjs:131:17)\n    at #receive (http://127.0.0.1:54671/~a/lib:ctox-office@1.0~lib:monaco@0.0/ctox-office-document.mjs:78:27)\n    at MessagePort.<anonymous> (http://127.0.0.1:54671/~a/lib:ctox-office@1.0~lib:monaco@0.0/ctox-office-document.mjs:22:70)"
+   ],
+   "title": "Dokumente",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Seitenfehler",
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "neues-dokument.docx",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-05.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "command",
+     "type": "office.document.prepare",
+     "payload": "{\"document_id\":\"doc_aa74fc4b-bc5e-4d16-8e61-5180a51403ac\",\"version_id\":\"doc_aa74fc4b-bc5e-4d16-8e61-5180a51403ac_v1\",\"record_id\":\"doc_aa74fc4b-bc5e-4d16-8e61-5180a51403ac\",\"module\":\"documents\",\"client_context\":{\"source\":\"ctox-office-esm\",\"s…",
+     "status": "done"
+    }
+   ],
+   "errors": [
+    "console: [documents] CTOX Documents mount failed OfficeRpcError: CTOX Rust prepare did not return a Euro-Office DOCY editor payload\n    at deserializeError (http://127.0.0.1:54671/~a/lib:ctox-office@1.0~lib:monaco@0.0/ctox-office-document.mjs:131:17)\n    at #receive (http://127.0.0.1:54671/~a/lib:ctox-office@1.0~lib:monaco@0.0/ctox-office-document.mjs:78:27)\n    at MessagePort.<anonymous> (http://127.0.0.1:54671/~a/lib:ctox-office@1.0~lib:monaco@0.0/ctox-office-document.mjs:22:70)"
+   ],
+   "title": "Dokumente",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Seitenfehler",
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Neues Dokument verwalten",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-06.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Dokument löschen",
+   "role": "button",
+   "skipped": "destruktiv – nicht geklickt"
+  },
+  {
+   "label": "Imported Created CreatedWithWarnings Draft Review Final → Auswahl nicht möglich (locator.selectOption: Timeout 3000ms exceeded.)",
+   "role": "select",
+   "covered": false,
+   "filled": [
+    "description",
+    "tags"
+   ],
+   "shot": "1280-07.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Dokument importieren",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-08.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Pflichtfelder gefüllt (Speichern war gesperrt)",
+   "role": "fill",
+   "filled": [
+    "tags"
+   ],
+   "shot": "1280-09.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "CTOX Knowledge öffnen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-10.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "command",
+     "type": "ctox.knowledge.runbooks.manage",
+     "payload": "{\"title\":\"Document runbooks verwalten\",\"instruction\":\"Öffne das CTOX Knowledge-System für die Verwaltung von dokumentbezogenen Skillbooks, Runbooks und Runbook-Items. Fokus: document/docx/markdown Runbooks, die vom Business-OS Documents-Mod…",
+     "status": "done"
+    },
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"ctox\",{\"focus\":\"knowledge-runbooks\",\"command_id\":\"01a140a1-e202-7000-90ca-063f31b6f124\"}]"
+    }
+   ],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "foreignWindow": [
+    "ctox"
+   ]
+  },
+  {
+   "label": "1:1 übernehmen Runbook direkt anwenden → Auswahl nicht möglich (locator.selectOption: Timeout 3000ms exceeded.)",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-11.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Ausgewähltes Dokument exportieren",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-12.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "DOCX Export starten → Auswahl nicht möglich (locator.selectOption: Timeout 3000ms exceeded.)",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-13.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Als Karten anzeigen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-14.jpg",
+   "effect": "DOM geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Zur Listenansicht wechseln",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-15.jpg",
+   "effect": "DOM geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Zur Kachelansicht wechseln",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-16.jpg",
+   "effect": "DOM geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Filter",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-17.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Dokumente sortieren → Option 1",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-18.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Dokumenttyp filtern → Option 1",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-19.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Dokumentstatus filtern → Option 2",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-20.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Ersteller-App filtern → Option 1",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-21.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Quelle filtern → Option 1",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-22.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Dokument-Tags filtern → Option 1",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-23.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [
+    "app:documents.editor DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro"
+   ],
+   "zoneVisible": true,
+   "zoneText": "DOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Filter zurücksetzen",
+   "role": "button",
+   "skipped": "destruktiv – nicht geklickt"
+  },
+  {
+   "label": "Preisliste_Q4.md",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-24.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Projektplan Relaunch Kundenportal verwalten",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-25.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Escape (Überlagerung schließen)",
+   "role": "key",
+   "shot": "1280-26.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Angebot_Wartung_2026.md",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-27.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Kundentermin Vorbereitung verwalten",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-28.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Escape (Überlagerung schließen)",
+   "role": "key",
+   "shot": "1280-29.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Breite der Dokumentliste ändern",
+   "role": "separator",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-30.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Bearbeiten",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-31.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Vorschau",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-32.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  }
+ ],
+ "flags": [
+  {
+   "step": 4,
+   "label": "Leeres Word-Dokument erstellen",
+   "probs": [
+    "Seitenfehler",
+    "Zone sichtbar"
+   ],
+   "shot": "1280-04.jpg"
+  },
+  {
+   "step": 5,
+   "label": "neues-dokument.docx",
+   "probs": [
+    "Seitenfehler",
+    "Zone sichtbar"
+   ],
+   "shot": "1280-05.jpg"
+  },
+  {
+   "step": 6,
+   "label": "Neues Dokument verwalten",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-06.jpg"
+  },
+  {
+   "step": 8,
+   "label": "Imported Created CreatedWithWarnings Draft Review Final → Auswahl nicht möglich (locator.selectOption: Timeout 3000ms exceeded.)",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-07.jpg"
+  },
+  {
+   "step": 9,
+   "label": "Dokument importieren",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-08.jpg"
+  },
+  {
+   "step": 10,
+   "label": "Pflichtfelder gefüllt (Speichern war gesperrt)",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-09.jpg"
+  },
+  {
+   "step": 11,
+   "label": "CTOX Knowledge öffnen",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-10.jpg"
+  },
+  {
+   "step": 12,
+   "label": "1:1 übernehmen Runbook direkt anwenden → Auswahl nicht möglich (locator.selectOption: Timeout 3000ms exceeded.)",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-11.jpg"
+  },
+  {
+   "step": 13,
+   "label": "Ausgewähltes Dokument exportieren",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-12.jpg"
+  },
+  {
+   "step": 14,
+   "label": "DOCX Export starten → Auswahl nicht möglich (locator.selectOption: Timeout 3000ms exceeded.)",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-13.jpg"
+  },
+  {
+   "step": 15,
+   "label": "Als Karten anzeigen",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-14.jpg"
+  },
+  {
+   "step": 16,
+   "label": "Zur Listenansicht wechseln",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-15.jpg"
+  },
+  {
+   "step": 17,
+   "label": "Zur Kachelansicht wechseln",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-16.jpg"
+  },
+  {
+   "step": 18,
+   "label": "Filter",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-17.jpg"
+  },
+  {
+   "step": 19,
+   "label": "Dokumente sortieren → Option 1",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-18.jpg"
+  },
+  {
+   "step": 20,
+   "label": "Dokumenttyp filtern → Option 1",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-19.jpg"
+  },
+  {
+   "step": 21,
+   "label": "Dokumentstatus filtern → Option 2",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-20.jpg"
+  },
+  {
+   "step": 22,
+   "label": "Ersteller-App filtern → Option 1",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-21.jpg"
+  },
+  {
+   "step": 23,
+   "label": "Quelle filtern → Option 1",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-22.jpg"
+  },
+  {
+   "step": 24,
+   "label": "Dokument-Tags filtern → Option 1",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "1280-23.jpg"
+  }
+ ]
+}

@@ -1,36 +1,21 @@
-import { loadModuleMessages } from '../../shared/i18n.js';
+// app-store – App-API 4.0 (Shell v4, Strang UD6). Port-Protokoll: V4-PORT.md.
+// Katalog = Plattform-Collections business_apps/business_app_versions/app_catalog/app_drafts (ctox-platform, fremd
+// gelesen, §16.29); Installieren/Aktualisieren/Zurückrollen/Freigeben/Veröffentlichen/Entfernen = Plattform-Befehle
+// ctox.app.* des Kerns mit Vergleich-und-Setzen auf base_app_ver (= vom Client gesehene aktive Version).
 import {
   appLifecycleBadge,
   appReleaseProjection,
   businessDataAreaLabel,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
-} from '../../shared/app-lifecycle.js?v=20260816-browser-sync-guards-v141';
-import {
-  BusinessOsPermissions,
-  canInstallBusinessApps,
-  canModifyBusinessModule,
-  canUninstallBusinessApp,
-  canUseBusinessPermission,
-} from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
-import {
-  buildGlobalCtoxAgentScopeView,
-  renderGlobalCtoxAgentScopeHtml,
-} from '../../shared/shell-permissions-ui.js?v=20260816-browser-sync-guards-v141';
-import {
-  base64ToBytes,
-  sha256Hex,
-  FILE_CONTENT_HASH_SCHEME,
-  FILE_CHUNK_HASH_SCHEME,
-} from '../../shared/file-integrity.js?v=20260816-browser-sync-guards-v141';
+} from 'ctox:shared/app-lifecycle.js';
+import { BusinessOsPermissions } from 'ctox:shared/business-permissions.js';
+import { roleCanManage } from 'ctox:shared/roles.js';
+import { buildGlobalCtoxAgentScopeView } from 'ctox:shared/shell-permissions-ui.js';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
+import LOCALE_DE from './locales/de.json' with { type: 'json' };
+import LOCALE_EN from './locales/en.json' with { type: 'json' };
 
-const CTOX_REPO = 'metric-space-ai/ctox';
-const CTOX_BRANCH = 'main';
-const STORE_COMMAND_TIMEOUT_MS = 3 * 60 * 1000;
-const DEMAND_ONLY_SYNC_COLLECTIONS = new Set([
-  'desktop_file_chunks',
-  'document_blob_chunks',
-  'spreadsheet_blob_chunks',
-]);
+const LOCALES = Object.freeze({ de: LOCALE_DE, en: LOCALE_EN });
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)';
 
 function prefersReducedMotion() {
@@ -42,7 +27,16 @@ function shouldUseShelf(cardsMode, shelfUnavailable, reducedMotion) {
 }
 
 const state = {
-  ctx: null,
+  root: null,
+  api: null,
+  lang: 'de',
+  actor: { id: '', role: '', permissions: [] },
+  platformApps: [],
+  platformVersions: [],
+  platformCatalog: [],
+  platformDrafts: [],
+  zone: new Set(),
+  renderTimer: 0,
   t: (key, fallback) => fallback ?? key,
   catalog: null,
   marketplace: [],
@@ -54,7 +48,6 @@ const state = {
   busy: false,
   status: null,
   operations: {},
-  unsubscribe: null,
   // Two renderings, one toggle: 'cards' is the shard view (the WebGL retail
   // shelf, or DOM shard cards when the shelf is unavailable or motion is
   // reduced), 'list' is the dense one-row-per-app list. The shelf is a
@@ -79,69 +72,202 @@ const state = {
 const PREVIEW_IDS = new Set(['app-store', 'browser', 'buchhaltung', 'calendar', 'coding-agents',
   'conversations', 'creator', 'ctox', 'customers', 'documents', 'files', 'knowledge', 'matching',
   'notes', 'outbound', 'reports', 'research', 'shiftflow', 'spreadsheets', 'tickets']);
+// Artefakt-Dateien der App, relativ zu index.js (der SW liefert sie versioniert, §16.15); kein ?v=, kein HTTP-Abruf.
 function previewUrlFor(id) {
-  return PREVIEW_IDS.has(id) ? new URL(`./assets/previews/${id}.png`, import.meta.url).pathname : '';
+  return PREVIEW_IDS.has(id) ? new URL(`./assets/previews/${id}.png`, import.meta.url).href : '';
 }
 
 const els = {};
 
-export async function mount(ctx) {
+// Fensterzustand für Live-Remount (PORTING.md §2).
+const SNAPSHOT_KEYS = Object.freeze(['selectedId', 'scope', 'query', 'viewMode', 'drawerOpen', 'centerBand', 'categoryFilter', 'sortKey']);
+
+export async function mount(root, api, { restored } = {}) {
   const owner = { active: true };
   if (state.mountOwner) state.mountOwner.active = false;
-  try { state.unsubscribe?.unsubscribe?.(); } catch {}
-  state.unsubscribe = null;
   retireShelf();
   state.mountOwner = owner;
-  state.ctx = ctx;
-  const messages = await loadModuleMessages(import.meta.url, ctx.locale).catch(() => ({}));
-  if (!owner.active || state.mountOwner !== owner) return () => {};
-  state.t = (key, fallback) => messages[key] ?? fallback ?? key;
-  const markup = await loadModuleMarkup();
-  if (!owner.active || state.mountOwner !== owner) return () => {};
-  ctx.host.innerHTML = markup;
-  applyTranslations(ctx.host, state.t);
-  ensureStylesheet();
-  bindElements(ctx.host);
+  state.root = root;
+  state.api = api;
+  state.zone = new Set();
+  // Befehlsstatus-Abos einer abgelösten Montage enden mit ihr (R5: Abo bei unmount lösen).
+  for (const off of state.commandOffs || []) {
+    try { off(); } catch {}
+  }
+  state.commandOffs = new Set();
+  state.operations = {};
+  state.platformApps = [];
+  state.platformVersions = [];
+  state.platformCatalog = [];
+  state.platformDrafts = [];
+  state.catalog = { modules: [], templates: [], marketplace: [], version_states: {} };
+  state.marketplace = [];
+  state.actor = { id: api.actor?.id || '', role: api.actor?.role || '', permissions: [] };
+  // Abos je Montage lokal (PORTING §4 Falle 1).
+  const cleanup = [];
+  const isCurrent = () => owner.active && state.mountOwner === owner;
+  if (!root.dataset.app) root.dataset.app = 'app-store';
+  applyLocale(readLocale(api));
+  applyRestored(restored);
+  root.innerHTML = await loadModuleMarkup();
+  if (!isCurrent()) return { unmount() { root.replaceChildren(); }, snapshot() { return { v: 1 }; } };
+  applyTranslations(root, state.t);
+  bindElements(root);
   applyHeaderActionIcons();
   wireEvents();
-  // The shell owns the module's sync lease. Starting these bridges is
-  // warmup, not permission to read or a prerequisite for cached rendering.
-  // Catalog queries and commands retain their existing authority checks.
-  void Promise.all([
-    Promise.resolve().then(() => ctx.sync?.startCollection?.('business_module_catalog')),
-    Promise.resolve().then(() => ctx.sync?.startCollection?.('business_commands')),
-  ]).catch((error) => {
-    console.warn('[app-store] Sync warmup failed:', error);
+  autoWirePaneGrammar(root);
+  api.shell.setTitle(state.t('title', 'App Store'));
+
+  const offLocale = api.shell.locale?.subscribe?.((value) => {
+    if (!isCurrent()) return;
+    const lang = String(value || '').startsWith('en') ? 'en' : 'de';
+    if (lang === state.lang) return;
+    applyLocale(lang);
+    applyTranslations(root, state.t);
+    api.shell.setTitle(state.t('title', 'App Store'));
+    render();
   });
-  await loadCatalog();
-  if (!owner.active || state.mountOwner !== owner) return () => {};
-  applyCatalogMarketplaceState();
-  state.unsubscribe = ctx.db?.collection?.('business_module_catalog')
-    ?.findOne('module-catalog')
-    ?.$
-    ?.subscribe?.((doc) => {
-      if (!owner.active || state.mountOwner !== owner) return;
-      const data = doc?.toJSON?.();
-      if (data) {
-        state.catalog = mergeShellModulesIntoCatalog(data);
-        state.marketplace = normalizeMarketplace(state.catalog.marketplace || state.catalog.apps || []);
-        applyCatalogMarketplaceState();
-        render();
-      }
-    }) || null;
-  render();
+  if (typeof offLocale === 'function') cleanup.push(offLocale);
+  const offPermissions = api.actor?.permissions?.subscribe?.((list) => {
+    if (!isCurrent()) return;
+    state.actor = { ...state.actor, permissions: Array.isArray(list) ? [...list] : [] };
+    scheduleRender();
+  });
+  if (typeof offPermissions === 'function') cleanup.push(offPermissions);
 
-  // Column resizing is owned by the shell-global resizer (setupModuleResizers
-  // in app.js), wired declaratively from the `.ctox-column-resizer[data-resizer-var]`
-  // handle inside the `[data-resize-frame]` root — including width persistence.
-
-  return () => {
-    if (!owner.active || state.mountOwner !== owner) return;
-    owner.active = false;
-    try { state.unsubscribe?.unsubscribe?.(); } catch {}
-    state.unsubscribe = null;
-    retireShelf();
+  // Katalog = Plattform-Collections von ctox-platform (§9.2/§16.14/§16.17), live und lokal.
+  let wiring = true;
+  const live = (collection, key) => {
+    try {
+      cleanup.push(api.query(collection, { sort: [{ id: 'asc' }] }).subscribe((rows) => {
+        if (!isCurrent()) return;
+        state[key] = rows;
+        if (!wiring) scheduleRender();
+      }));
+    } catch (error) {
+      reportStatus('error', `app-store.data.${collection}`, error?.message || String(error));
+    }
   };
+  live('business_apps', 'platformApps');
+  live('business_app_versions', 'platformVersions');
+  // §16.29: Release-Katalog (main = CTOX-Release, instance = auf dieser Instanz veröffentlicht) und eigene Entwürfe.
+  live('app_catalog', 'platformCatalog');
+  live('app_drafts', 'platformDrafts');
+  wiring = false;
+  rebuildCatalog();
+  render();
+  restoreGrammarControls(root);
+  if (Number(restored?.wellScrollTop) > 0 && els.well) els.well.scrollTop = Number(restored.wellScrollTop);
+
+  return {
+    unmount() {
+      for (const off of cleanup.splice(0)) {
+        try { off?.(); } catch {}
+      }
+      if (state.mountOwner === owner) {
+        owner.active = false;
+        retireShelf();
+        clearTimeout(state.renderTimer);
+        state.renderTimer = 0;
+        for (const off of state.commandOffs || []) {
+          try { off(); } catch {}
+        }
+        state.commandOffs = new Set();
+        for (const code of state.zone) {
+          try { api.status.clear(code); } catch {}
+        }
+        state.zone.clear();
+        state.api = null;
+        state.root = null;
+      }
+      owner.active = false;
+      root.replaceChildren();
+    },
+    snapshot() {
+      if (state.mountOwner !== owner) return { v: 1 };
+      const snap = { v: 1 };
+      for (const key of SNAPSHOT_KEYS) snap[key] = state[key];
+      snap.wellScrollTop = els.well?.scrollTop || 0;
+      return snap;
+    },
+  };
+}
+
+// Nach dem Remount stehen Suche, Band und Filter wieder sichtbar in den Bedienelementen, nicht nur im Zustand
+// (sonst filtert die Liste nach einem unsichtbaren Suchbegriff).
+function restoreGrammarControls(root) {
+  const pane = root.querySelector('.store-center');
+  if (!pane) return;
+  const search = pane.querySelector('[data-pg-search]');
+  if (search && state.query) search.value = state.query;
+  for (const tab of pane.querySelectorAll('[data-pg-band]')) {
+    const active = tab.dataset.pgBand === state.centerBand;
+    tab.setAttribute('aria-selected', String(active));
+    tab.classList.toggle('is-active', active);
+  }
+  for (const select of pane.querySelectorAll('[data-pg-filter]')) {
+    const value = select.dataset.pgName === 'category' ? state.categoryFilter : select.dataset.pgName === 'sort' ? state.sortKey : '';
+    if (value && [...select.options].some((option) => option.value === value)) select.value = value;
+  }
+  pane.__ctoxPaneGrammar?.refreshDot?.();
+}
+
+function applyRestored(restored) {
+  if (!restored || typeof restored !== 'object' || restored.v !== 1) return;
+  for (const key of SNAPSHOT_KEYS) {
+    if (key in restored && typeof restored[key] === typeof state[key]) state[key] = restored[key];
+  }
+}
+
+function readLocale(api) {
+  try {
+    return String(api?.shell?.locale?.get?.() || '').startsWith('en') ? 'en' : 'de';
+  } catch {
+    return 'de';
+  }
+}
+
+// Sprache (R8): api.shell.t('app-store.<key>') übersteuert, sonst die eigenen locales (Artefakt, kein HTTP-Abruf),
+// sonst der Rückfalltext im Markup bzw. Aufruf (OFFEN-B).
+function applyLocale(lang) {
+  state.lang = lang === 'en' ? 'en' : 'de';
+  const messages = LOCALES[state.lang] || LOCALES.de;
+  const api = state.api;
+  state.t = (key, fallback) => {
+    const shellKey = `app-store.${key}`;
+    let fromShell = '';
+    try { fromShell = api?.shell?.t ? api.shell.t(shellKey) : ''; } catch {}
+    if (typeof fromShell === 'string' && fromShell && fromShell !== shellKey) return fromShell;
+    return messages[key] ?? fallback ?? key;
+  };
+}
+
+// Zustand nur in der Zustandszone (R11); stabile Codes, damit clear greift.
+function reportStatus(level, code, text, ref, action) {
+  const api = state.api;
+  if (!api?.status) return;
+  const item = { level, code, text: String(text || code) };
+  if (ref) item.ref = ref;
+  if (action && typeof action.run === 'function') item.action = action;
+  api.status.report(item);
+  state.zone.add(code);
+}
+
+function clearStatus(code) {
+  const api = state.api;
+  if (!api?.status || !state.zone.has(code)) return;
+  api.status.clear(code);
+  state.zone.delete(code);
+}
+
+function scheduleRender() {
+  if (state.renderTimer) return;
+  state.renderTimer = setTimeout(() => {
+    state.renderTimer = 0;
+    if (!state.api) return;
+    rebuildCatalog();
+    render();
+  }, 16);
 }
 
 function retireShelf() {
@@ -155,27 +281,8 @@ function retireShelf() {
   state.shelfRetryPending = false;
 }
 
-function ensureStylesheet() {
-  if (document.head.querySelector('link[data-app-store-style]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  const styleUrl = new URL('./index.css', import.meta.url);
-  // Inherit the module's own cache-buster (index.js is imported with
-  // ?v=<build>): fresh JS must never render against a stale cached sheet.
-  const version = String(import.meta.url).split('?v=')[1] || '20260722-app-store-grammar-v1';
-  styleUrl.searchParams.set('v', version);
-  link.href = styleUrl.href;
-  link.dataset.appStoreStyle = 'true';
-  document.head.append(link);
-}
-
 async function loadModuleMarkup() {
-  // Markup inherits the JS cache-buster — like the stylesheet, a deploy must
-  // never leave fresh JS binding against stale cached markup (same contract
-  // as ctox/coding-agents/knowledge/threads).
-  const version = String(import.meta.url).split('?v=')[1] || '20260722-app-store-grammar-v1';
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (version ? `?v=${version}` : '');
-  const html = await fetch(markupHref).then((res) => res.text());
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
@@ -202,13 +309,7 @@ function bindElements(root) {
   els.closeDrawer = root.querySelector('[data-close-drawer]');
   els.viewToggle = root.querySelector('[data-store-view-toggle]');
   els.viewGlyphs = [...root.querySelectorAll('[data-view-glyph]')];
-  els.loading = root.querySelector('[data-loading-spinner]');
-  els.loadingText = root.querySelector('[data-loading-text]');
-  els.refresh = root.querySelector('[data-refresh-marketplace]');
   els.exportCatalog = root.querySelector('[data-export-catalog]');
-  els.message = root.querySelector('[data-store-message]');
-  els.toggleExtras = root.querySelector('[data-toggle-sidebar-extras]');
-  els.sidebarExtras = root.querySelector('[data-sidebar-extras]');
   els.categoryFilter = root.querySelector('[data-pg-filter][data-pg-name="category"]');
   els.shelfStage = root.querySelector('[data-shelf-stage]');
   els.shelfCanvas = root.querySelector('[data-shelf-canvas]');
@@ -220,11 +321,8 @@ function bindElements(root) {
   els.detailCaptureImg = root.querySelector('[data-detail-capture-img]');
 }
 
-// Header-/Modal-Icons kommen aus der Shell-Registry; die lokalen Pfade sind
-// der Wiederanlauf-Fallback, damit Icons eine Shell-Recovery überleben.
+// Header-/Modal-Icons sind app-lokal (App-API 4.0 hat keine Icon-API, OFFEN-D).
 function actionIcon(name) {
-  const fromShell = state.ctx?.getActionIcon?.(name);
-  if (fromShell) return fromShell;
   const paths = {
     close: 'M6 6l12 12M18 6 6 18',
     export: 'M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7',
@@ -281,7 +379,7 @@ function wireEvents() {
     state.drawerOpen = false;
     renderDetails();
   });
-  state.ctx.host.addEventListener('keydown', (event) => {
+  els.root.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && state.drawerOpen) {
       state.drawerOpen = false;
       renderDetails();
@@ -309,24 +407,18 @@ function wireEvents() {
     render({ resetScroll: true });
   });
 
-  els.refresh?.addEventListener('click', () => refreshMarketplace({ force: true }));
   els.exportCatalog?.addEventListener('click', exportVisibleCatalog);
 
-  els.toggleExtras?.addEventListener('click', () => {
-    if (!els.sidebarExtras) return;
-    const isHidden = els.sidebarExtras.toggleAttribute('hidden');
-    els.toggleExtras.setAttribute('aria-pressed', isHidden ? 'false' : 'true');
-  });
 
-  state.ctx.host.querySelector('[data-action="create-scratch"]')?.addEventListener('click', () => {
+  els.root.querySelector('[data-action="create-scratch"]')?.addEventListener('click', () => {
     openCreatorFromStore({ mode: 'scratch' });
   });
 
-  state.ctx.host.querySelector('[data-action="install-github"]')?.addEventListener('click', () => {
+  els.root.querySelector('[data-action="install-github"]')?.addEventListener('click', () => {
     installFromGithub();
   });
 
-  state.ctx.host.querySelector('[data-action="install-zip"]')?.addEventListener('click', () => {
+  els.root.querySelector('[data-action="install-zip"]')?.addEventListener('click', () => {
     installFromZip();
   });
 }
@@ -368,12 +460,22 @@ async function triggerCardAction(appId, actionType) {
     await installMarketplaceItem(item);
   } else if (actionType === 'update') {
     if (!canInstallAppStoreItem(state, item)) return;
+    // Fachverhalten wie v3: ein lokal angepasstes App-Update überschreibt die Anpassung nur nach ausdrücklicher
+    // Bestätigung (mode 'discard'). Automatisch (§9.6) wird es nie angewendet; der Hinweis steht in der Zone.
     const customized = item.modification_status === 'modified' || item.modification_status === 'customized';
     if (customized
-      && !confirm(`${item.title} hat lokale Änderungen. Ein Update überschreibt sie. Vor dem Update wird automatisch eine Wiederherstellungs-Version angelegt – fortfahren?`)) {
+      && !await askConfirm(
+        `${item.title} aktualisieren?`,
+        // v4-allow: text – Bestätigungsdialog (api.shell.dialog), kein Inhaltstext
+        `${item.title} hat lokale Änderungen. Ein Update überschreibt sie. Vor dem Update wird automatisch eine Wiederherstellungs-Version angelegt – fortfahren?`,
+        state.t('actionUpdate', 'Aktualisieren'),
+      )) {
       return;
     }
     await updateInstalledItem(item, { mode: customized ? 'discard' : 'vanilla' });
+  } else if (actionType === 'publish') {
+    if (!canEditAppStoreItem(state, item)) return;
+    publishDraft(item);
   } else if (actionType === 'check-updates') {
     await checkModuleUpdates(item);
   } else if (actionType === 'versions') {
@@ -381,8 +483,10 @@ async function triggerCardAction(appId, actionType) {
   } else if (actionType === 'open') {
     if (item.id === 'create-scratch') {
       openCreatorFromStore({ mode: 'scratch' });
+    } else if (item.kind === 'template') {
+      openCreatorFromStore({ mode: 'template', template: item.id });
     } else if (item.launch_kind === 'desktop-app') {
-      await state.ctx?.openDesktopApp?.(item.id);
+      openModule(item.id);
     } else {
       openModule(item.id);
     }
@@ -405,58 +509,167 @@ async function triggerCardAction(appId, actionType) {
   }
 }
 
-async function loadCatalog() {
-  const doc = await state.ctx.db?.collection?.('business_module_catalog')?.findOne('module-catalog').exec();
-  state.catalog = mergeShellModulesIntoCatalog(doc?.toJSON?.() || { modules: [], templates: [], marketplace: [] });
-  state.marketplace = normalizeMarketplace(state.catalog.marketplace || state.catalog.apps || []);
-}
-
-function applyCatalogMarketplaceState() {
-  if (state.marketplaceStatus === 'loading') return;
-  state.marketplaceStatus = state.marketplace.length ? 'ready' : 'idle';
-  state.marketplaceMessage = state.marketplace.length
-    ? `${state.marketplace.length} projizierte Marketplace-Module geladen`
-    : 'Katalog kommt aus der Server-Projektion; Aktualisierung startet nur manuell.';
-}
-
-function mergeShellModulesIntoCatalog(catalog) {
-  const modules = Array.isArray(catalog?.modules) ? [...catalog.modules] : [];
-  const known = new Set(modules.map((item) => item?.id).filter(Boolean));
-  const shellModules = Array.isArray(state.ctx?.modules) ? state.ctx.modules : [];
-  for (const module of shellModules) {
-    if (!module?.id || known.has(module.id)) continue;
-    modules.push({
-      ...module,
-      source: module.source || (module.core ? 'core' : 'shell'),
-      install_scope: module.install_scope || (module.core ? 'core' : 'installed'),
-      default_installed: module.default_installed !== false,
-    });
-    known.add(module.id);
+// v4-Katalog aus den Plattform-Collections (§9.1/§9.2/§9.6):
+//   business_apps[id]               = {id, title, active_ver, migrated_at_seq, …}
+//   business_app_versions[id@ver]   = {id, app_id, app_ver, manifest{…, provenance{base_release, base_hash, locally_modified}}, migrated_at_seq}
+//   app_catalog[*]                  = {app_id, app_ver, title, layout, source: 'main'|'instance', published_at} (§16.29)
+// Jede App der Instanz ist im Instanz-Store installiert (§9.6). „Update verfügbar“ = app_catalog führt für die App eine
+// höhere Version mit source 'main' als die aktive. Ist die App lokal angepasst (locally_modified), bleibt das Update
+// sichtbar markiert („Update … · angepasst“), steht aber nicht im Band „Updates“ und geht nur über den Verwerfen-Dialog.
+function rebuildCatalog() {
+  const catalogByApp = catalogRowsByApp();
+  const versionsByApp = new Map();
+  for (const version of state.platformVersions || []) {
+    const appId = String(version?.app_id || String(version?.id || '').split('@')[0] || '');
+    if (!appId) continue;
+    if (!versionsByApp.has(appId)) versionsByApp.set(appId, []);
+    versionsByApp.get(appId).push(version);
   }
-  return {
-    ...catalog,
+  const modules = [];
+  const versionStates = {};
+  for (const app of state.platformApps || []) {
+    if (!app?.id) continue;
+    const versions = (versionsByApp.get(app.id) || []).slice()
+      .sort((left, right) => Number(right.migrated_at_seq || 0) - Number(left.migrated_at_seq || 0));
+    const active = versions.find((version) => version.app_ver === app.active_ver) || null;
+    const manifest = active?.manifest && typeof active.manifest === 'object' ? active.manifest : {};
+    const provenance = manifest.provenance && typeof manifest.provenance === 'object' ? manifest.provenance : {};
+    const release = newerMainRelease(catalogByApp.get(app.id), app.active_ver);
+    const layout = manifest.layout && typeof manifest.layout === 'object' ? manifest.layout : (app.layout || {});
+    const installedVersion = String(manifest.version || app.active_ver || '');
+    modules.push({
+      id: app.id,
+      title: app.title || manifest.title || app.id,
+      description: manifest.description || app.description || '',
+      category: layout.category || manifest.category || app.category || '',
+      version: installedVersion,
+      layout,
+      source: 'installed',
+      install_scope: 'installed',
+      installable: true,
+      editable: true,
+      deletable: true,
+      collections: Object.keys(manifest.collections || {}),
+      active_ver: app.active_ver ?? null,
+      provenance,
+      locally_modified: provenance.locally_modified === true,
+      catalog_release: release,
+      lifecycle: release ? {
+        update_available: true,
+        catalog_version: String(release.app_ver),
+        installed_version: installedVersion,
+      } : {},
+    });
+    versionStates[app.id] = {
+      current_bundle_sha256: active?.id || '',
+      baseline_bundle_sha256: provenance.base_hash || '',
+      modified: provenance.locally_modified === true,
+      version_count: versions.length,
+      versions: versions.map((version) => ({
+        version_id: version.id,
+        app_ver: version.app_ver,
+        seq: Number(version.migrated_at_seq || 0),
+        origin: version.manifest?.provenance?.base_release ? 'install' : 'edit',
+        label: String(version.manifest?.version || version.app_ver || version.id),
+        created_at_ms: Date.parse(version.manifest?.created_at || '') || 0,
+        sealed: true,
+        file_count: Object.keys(version.manifest?.files || {}).length,
+        active: version.app_ver === app.active_ver,
+      })),
+    };
+  }
+  const entries = latestCatalogEntries(catalogByApp);
+  state.catalog = {
     modules,
-    templates: Array.isArray(catalog?.templates) ? catalog.templates : [],
-    marketplace: Array.isArray(catalog?.marketplace) ? catalog.marketplace : [],
+    templates: entries.filter(isTemplateEntry).map(normalizeCatalogEntry),
+    marketplace: entries.filter((row) => !isTemplateEntry(row)).map(normalizeCatalogEntry),
+    version_states: versionStates,
+  };
+  state.marketplace = state.catalog.marketplace;
+  state.marketplaceStatus = 'ready';
+  state.marketplaceMessage = '';
+  syncLocallyModifiedZone(modules);
+}
+
+// app_catalog nach App gruppiert, je App absteigend nach Version (gleiche Version: main vor instance, dann neuer).
+function catalogRowsByApp() {
+  const byApp = new Map();
+  for (const row of state.platformCatalog || []) {
+    if (!row || row._deleted) continue;
+    const appId = String(row.app_id || String(row.id || '').split('@')[0] || '');
+    const appVer = String(row.app_ver ?? '');
+    if (!appId || !appVer) continue;
+    if (!byApp.has(appId)) byApp.set(appId, []);
+    byApp.get(appId).push({ ...row, app_id: appId, app_ver: appVer });
+  }
+  for (const rows of byApp.values()) {
+    rows.sort((left, right) => compareVersions(right.app_ver, left.app_ver)
+      || (left.source === 'main' ? 0 : 1) - (right.source === 'main' ? 0 : 1)
+      || String(right.published_at || '').localeCompare(String(left.published_at || '')));
+  }
+  return byApp;
+}
+
+// Höchste main-Version über der aktiven, sonst null (instance-Veröffentlichungen sind kein Update).
+function newerMainRelease(rows, activeVer) {
+  const main = (rows || []).find((row) => row.source === 'main');
+  if (!main) return null;
+  if (activeVer != null && activeVer !== '' && compareVersions(main.app_ver, activeVer) <= 0) return null;
+  return { app_ver: main.app_ver, source: 'main', published_at: main.published_at || '' };
+}
+
+function latestCatalogEntries(byApp) {
+  return [...byApp.values()].map((rows) => rows[0]).filter(Boolean);
+}
+
+// Vorlage = Katalogeintrag mit layout.template === true oder Kategorie „Template(s)“/„Vorlage(n)“ (V4-PORT.md OFFEN-2).
+function isTemplateEntry(row) {
+  const layout = row?.layout && typeof row.layout === 'object' ? row.layout : {};
+  return layout.template === true || /^(templates?|vorlagen?)$/i.test(String(layout.category || '').trim());
+}
+
+function normalizeCatalogEntry(row) {
+  const layout = row.layout && typeof row.layout === 'object' ? row.layout : {};
+  return {
+    id: row.app_id,
+    module_id: row.app_id,
+    title: row.title || row.app_id,
+    description: String(layout.description || ''),
+    category: layout.category || '',
+    version: row.app_ver,
+    developer: 'CTOX',
+    source: row.source === 'instance' ? 'instance' : 'main',
+    layout,
+    icon_svg: layout.icon_svg || '',
+    catalog: { app_ver: row.app_ver, source: row.source, published_at: row.published_at || '' },
+    installable: true,
   };
 }
 
-async function refreshMarketplace({ force = false } = {}) {
-  if (state.marketplaceStatus === 'loading' && !force) return;
-  state.marketplaceStatus = 'loading';
-  state.marketplaceMessage = 'Katalogprojektion wird neu geladen';
-  render();
-  try {
-    await loadCatalog();
-    state.marketplaceStatus = state.marketplace.length ? 'ready' : 'empty';
-    state.marketplaceMessage = state.marketplace.length
-      ? `${state.marketplace.length} Apps im offiziellen Katalog`
-      : 'Keine Apps im offiziellen Katalog projiziert.';
-  } catch (error) {
-    state.marketplaceStatus = state.marketplace.length ? 'stale' : 'error';
-    state.marketplaceMessage = error?.message || String(error);
+// §9.6 / Anf. 70/71: ein Release-Update gilt nur für unveränderte Apps. Ist eine App lokal angepasst und ein Update da,
+// sieht der Admin das in der Zustandszone – nicht als Text in der Liste.
+function syncLocallyModifiedZone(modules) {
+  const wanted = new Set();
+  if (canSeeLocallyModifiedHint()) {
+    for (const module of modules) {
+      if (module.lifecycle?.update_available === true && module.provenance?.locally_modified === true) {
+        const code = `app-store.update.locally_modified.${module.id}`;
+        wanted.add(code);
+        if (!state.zone.has(code) && state.api) {
+          state.api.status.report({ level: 'info', code, text: `${module.title}: ${state.t('status.updateLocallyModified', 'Update verfügbar, App lokal angepasst')}`, ref: module.id });
+          state.zone.add(code);
+        }
+      }
+    }
   }
-  render();
+  for (const code of [...state.zone]) {
+    if (code.startsWith('app-store.update.locally_modified.') && !wanted.has(code)) clearStatus(code);
+  }
+}
+
+function canSeeLocallyModifiedHint() {
+  const role = String(state.actor?.role || '').toLowerCase();
+  return role === 'admin' || role === 'owner' || role === 'chef' || actorHasPermission(state, 'apps.source.edit');
 }
 
 function catalogItems() {
@@ -471,7 +684,7 @@ function rawCatalogItems() {
     id: 'create-scratch',
     module_id: 'create-scratch',
     title: 'Neue App per KI-Prompt erstellen',
-    description: 'Erstelle eine völlig freie, maßgeschneiderte App über einen einzigen deutschen Prompt.',
+    description: 'Freie App aus einem Prompt erstellen.',
     category: 'Templates',
     version: 'v1',
     developer: 'KI Generator',
@@ -529,37 +742,6 @@ const CATEGORY_LABELS = Object.freeze({
 function displayCategory(value, fallback) {
   const category = String(value || fallback || '').trim();
   return CATEGORY_LABELS[category.toLowerCase()] || category;
-}
-
-function normalizeMarketplace(items) {
-  return items.map(normalizeMarketplaceItem).filter(Boolean);
-}
-
-function normalizeMarketplaceItem(item) {
-  const id = sanitizeId(item.module_id || item.id || item.name || '');
-  const downloadUrl = item.download_url || item.archive_url || item.zipball_url || '';
-  if (!id || !downloadUrl) return null;
-  return {
-    id,
-    module_id: id,
-    title: item.title || item.name || id,
-    description: item.description || '',
-    category: displayCategory(item.category, 'Marketplace'),
-    version: item.version || item.release || 'latest',
-    developer: item.developer || item.publisher || item.owner || repoOwner(item.repo) || 'GitHub',
-    license: item.license || 'unknown',
-    source: item.source || 'github',
-    repo: item.repo || item.repository || '',
-    download_url: downloadUrl,
-    source_path: item.source_path || '',
-    manifest_url: item.manifest_url || '',
-    homepage: item.homepage || item.html_url || '',
-    icon_svg: item.layout?.icon_svg || item.icon_svg || '',
-    install_scope: item.install_scope || item.store?.install_scope || '',
-    permissions: Array.isArray(item.permissions) ? item.permissions : (Array.isArray(item.collections) ? item.collections : []),
-    installable: item.installable !== false && item.store?.installable !== false,
-    raw: item,
-  };
 }
 
 function normalizeItem(item, kind) {
@@ -639,6 +821,7 @@ function statusForItem(item, kind) {
 }
 
 function sourceLabel(item, kind) {
+  if (kind === 'marketplace' && item.catalog) return item.source === 'instance' ? 'Diese Instanz' : 'CTOX main';
   if (kind === 'marketplace') return item.repo || item.source || 'GitHub';
   if (kind === 'template') return item.source_module || 'template-store';
   return item.source || kind;
@@ -674,32 +857,37 @@ function syncGrammarSurfaces(items, searched) {
     const node = els.centerPane?.querySelector(`[data-pg-count="${key}"]`);
     if (node) node.textContent = ` (${value})`;
   }
-  // The standing sync-state line is gone; the compact discovery signal folds
-  // into this one footer line (full state text rides on the refresh icon's
-  // tooltip via marketplaceStateLabel).
-  const marketplaceSuffix = state.scope === 'marketplace'
-    && ['ready', 'stale'].includes(state.marketplaceStatus)
-    && state.marketplace.length
-    ? ` · ${state.marketplace.length} GitHub`
-    : '';
-  const footerText = `${appCountLabel(items.length, state.scope, state.marketplaceStatus)}${marketplaceSuffix}`;
+  // Textdiät Regel 3/5: die Anzahl steht im Reiter „Katalog(N)“ – kein zweiter Zähler im Fuß.
+  const footerText = '';
   if (pg?.setFooter) pg.setFooter(footerText);
   else {
     const node = els.centerPane?.querySelector('[data-pg-footer]');
     if (node) node.textContent = footerText;
   }
   const leftFooter = els.leftPane?.querySelector('[data-pg-footer]');
-  if (leftFooter) leftFooter.textContent = `${catalogItems().length} Apps insgesamt`;
+  if (leftFooter) leftFooter.textContent = '';
 }
 
-// Updates band: installed apps whose catalog counterpart advertises a newer
-// version (plus anything the lifecycle projection already flags).
+// Band „Updates“: nur installierte, NICHT lokal angepasste Apps, für die app_catalog eine höhere main-Version führt
+// (update_available aus rebuildCatalog). Früher (v3, OFFEN-4) zählte jede abweichende Anzeige-Zeile „Installiert: x“ /
+// „Katalog: lokal“ als Update – damit stand jede installierte App im Band.
 function itemHasUpdate(item) {
   if (!isInstalledCatalogItem(item)) return false;
-  if (item.update_available === true || item.lifecycle?.updateAvailable === true) return true;
-  const installed = String(item.installed_version || '').replace(/^v/, '');
-  const available = String(item.available_version || '').replace(/^v/, '');
-  return Boolean(installed && available && installed !== '-' && available !== '-' && installed !== available);
+  return item.update_available === true && !itemIsCustomized(item);
+}
+
+function itemIsCustomized(item) {
+  return item?.modification_status === 'modified'
+    || item?.modification_status === 'customized'
+    || item?.raw?.locally_modified === true;
+}
+
+// Angepasste App mit verfügbarem main-Release: eigener Fachbegriff am Eintrag, kein Banner.
+function customizedUpdateBadgeHtml(item) {
+  if (item?.update_available !== true || !itemIsCustomized(item)) return '';
+  const ver = String(item.raw?.catalog_release?.app_ver || '');
+  const text = state.t('badgeUpdateCustomized', 'Update {ver} · angepasst').replace('{ver}', ver);
+  return `<span class="ctox-badge is-warning" data-update-customized="${escapeAttr(ver)}">${escapeHtml(text)}</span>`;
 }
 
 function categoriesOf(items) {
@@ -785,7 +973,7 @@ function downloadJsonFile(filename, payload) {
   anchor.href = url;
   anchor.download = filename;
   anchor.style.display = 'none';
-  (state.ctx?.host || document.documentElement).appendChild(anchor);
+  (state.root || document.documentElement).appendChild(anchor);
   anchor.click();
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -933,11 +1121,12 @@ async function ensureShelf() {
 
 async function buildShelf(owner, hosts) {
   try {
-    const mod = await import('../../vendor/store-shelf/store-shelf.mjs?v=20261014-shell-v2-query-checkpoint-readonly');
+    // Vendor-Bibliothek der App (vendor/store-shelf + vendor/three); scheitert der Import, bleiben DOM-Karten.
+    const mod = await import('./vendor/store-shelf/store-shelf.mjs');
     if (!owner?.active || state.mountOwner !== owner) return null;
     const shelf = mod.createStoreShelf(hosts.canvas, {
       apps: [],
-      locale: (state.ctx?.locale || 'de').startsWith('en') ? 'en' : 'de',
+      locale: state.lang === 'en' ? 'en' : 'de',
       scrollContainer: hosts.scroll,
       track: hosts.track,
       stage: hosts.stage,
@@ -971,9 +1160,22 @@ function shelfAppFor(item) {
     title: item.title || item.id,
     category: item.category || 'App',
     description: item.description || '',
-    iconUrl: locallyServed ? new URL(`../${item.id}/icon.svg`, import.meta.url).pathname : '',
+    // Fremde App-Icons nicht per Pfad aus dem eigenen Artefakt ableiten (`../<id>/icon.svg` war ein HTTP-Abruf
+    // quer über Apps); die Shell löst Artefakt-URLs auf (api.shell.assetUrl, V4-PORT.md OFFEN-1).
+    iconUrl: locallyServed ? appAssetUrl(item.id, item.raw?.layout?.icon_asset || 'icon.svg') : '',
     screenshots: preview ? [preview] : [],
   };
+}
+
+function appAssetUrl(appId, path) {
+  const resolve = state.api?.shell?.assetUrl;
+  if (typeof resolve !== 'function' || !appId || !path) return '';
+  try {
+    const url = resolve.call(state.api.shell, appId, path);
+    return typeof url === 'string' ? url : '';
+  } catch {
+    return '';
+  }
 }
 
 async function syncShelf(items) {
@@ -1015,29 +1217,15 @@ async function syncShelf(items) {
 }
 
 function renderCatalogBody(items, { compact = false } = {}) {
-  if (items.length) return items.map((item) => renderCard(item, { compact }));
-  return [renderEmptyCatalogState({
-    title: emptyCatalogTitle(state.scope, state.query, state.marketplaceStatus),
-    body: emptyCatalogBody(state.scope, state.query, state.marketplaceStatus, state.marketplaceMessage),
-  })];
-}
-
-function renderEmptyCatalogState({ title, body }) {
-  const empty = document.createElement('section');
-  empty.className = 'ctox-empty store-empty-state';
-  empty.setAttribute('role', 'status');
-  empty.innerHTML = `
-    <strong>${escapeHtml(title)}</strong>
-    <span>${escapeHtml(body)}</span>
-  `;
-  return empty;
+  // R11: eine leere Liste rendert nichts.
+  return items.map((item) => renderCard(item, { compact }));
 }
 
 function cardActionsHtml(item, operation, cardStatus, { includeDetails = true } = {}) {
   let actionsHtml = `<div class="app-card-actions">`;
 
   if (operation?.kind === 'running') {
-    actionsHtml += progressButtonHtml(operation.text || `${item.title} wird installiert...`);
+    actionsHtml += progressButtonHtml(operation.text || item.title);
   } else if (item.id === 'create-scratch') {
     actionsHtml += `<button type="button" class="ctox-button ctox-button--sm is-primary" data-card-action="open" aria-label="${escapeHtml(item.title)} erstellen">${escapeHtml(state.t('actionCreate', 'Erstellen'))}</button>`;
   } else if (item.kind === 'marketplace') {
@@ -1129,6 +1317,7 @@ function renderCard(item, { compact = false } = {}) {
     </div>
     <div class="app-card-version-row">
       <span class="ctox-badge ${modStateBadgeClass(item.modification_status)}">${escapeHtml(item.modification_label)}</span>
+      ${customizedUpdateBadgeHtml(item)}
       ${releaseProjectionBadgeHtml(item)}
       ${item.lifecycle?.runtimeInstalled ? `<span class="ctox-badge ${lifecycleStateBadgeClass(item.lifecycle.state)}" data-state="${escapeHtml(item.lifecycle.state)}" title="${escapeAttr(item.lifecycle.title)}">${escapeHtml(item.lifecycle.version)} · ${escapeHtml(item.lifecycle.text)}</span>` : ''}
       ${externalSourceBadgeHtml(item)}
@@ -1231,10 +1420,9 @@ function progressButtonHtml(label) {
     </button>`;
 }
 
-function operationMessageHtml(operation) {
-  if (!operation?.text) return '';
-  const kind = operation.kind || 'running';
-  return `<div class="app-card-operation" data-kind="${escapeHtml(kind)}" role="status">${escapeHtml(operation.text)}</div>`;
+// R11: kein Vorgangstext in der Karte; Befehlsstatus steht in der Zustandszone.
+function operationMessageHtml() {
+  return '';
 }
 
 function renderDetails() {
@@ -1271,27 +1459,14 @@ function renderDetails() {
 }
 
 function renderEmptyDetails() {
-  if (els.detailIcon) els.detailIcon.textContent = '?';
-  if (els.detailTitle) els.detailTitle.textContent = state.t('drawerNoSelection', 'Keine App ausgewählt');
-  if (els.detailVersion) els.detailVersion.textContent = '-';
-  if (els.detailCategory) els.detailCategory.textContent = 'Empty';
-  if (els.detailDeveloper) els.detailDeveloper.textContent = '-';
-  if (els.detailLicense) els.detailLicense.textContent = '-';
-  if (els.detailSource) els.detailSource.textContent = 'App Store';
-  if (els.detailStatus) els.detailStatus.textContent = state.t('statusNoSelection', 'No selection');
-  if (els.readme) {
-    const empty = document.createElement('p');
-    empty.className = 'store-detail-empty';
-    empty.textContent = state.t('emptyDetails', 'Wähle eine App oder ändere den Filter, um Details zu sehen.');
-    els.readme.replaceChildren(empty);
-  }
+  if (els.detail) els.detail.hidden = true;
 }
 
 function renderDocumentation(item) {
   const wrap = document.createElement('div');
   const releaseFacts = releaseFactLinesForItem(item);
   const lines = [
-    item.description || 'No documentation available yet.',
+    item.description || '',
     item.installed_version ? item.installed_version : '',
     item.available_version ? item.available_version : '',
     item.lifecycle?.label ? `Sichtbarkeit: ${item.lifecycle.label} - ${item.lifecycle.reason}` : '',
@@ -1332,57 +1507,46 @@ function releaseFactLinesForItem(item) {
   return lines;
 }
 
-async function installMarketplaceItem(item, { update = false } = {}) {
+// Installieren aus app_catalog (§16.29): ctox.app.update mit base_app_ver = null (die App gibt es auf der Instanz noch
+// nicht; Vergleich-und-Setzen wie §16.22 A3 „null = neue App“), release_ver = Katalogversion.
+async function installMarketplaceItem(item) {
   if (!canInstallAppStoreItem(state, item)) {
-    state.status = { kind: 'error', text: 'Du darfst diese App nicht installieren oder aktualisieren.' };
-    render();
+    reportStatus('warn', 'app-store.permission.denied', 'Du darfst diese App nicht installieren oder aktualisieren.');
     return;
   }
-  await runStoreCommand({
-    label: update ? `Updating ${item.title}...` : `Installing ${item.title}...`,
-    success: update ? `${item.title} updated.` : `${item.title} installed.`,
-    commandType: 'ctox.app_store.install',
-    moduleId: item.id,
-    payload: {
-      module_id: item.id,
-      source_kind: item.repo ? 'github' : 'url',
-      repo: item.repo || '',
-      git_ref: item.repo ? CTOX_BRANCH : '',
-      subpath: item.repo ? item.source_path : '',
-      download_url: item.download_url,
-      source_path: item.source_path,
-      manifest_url: item.manifest_url,
-    },
+  const releaseVer = String(item.raw?.catalog?.app_ver || item.version || '');
+  if (!releaseVer) return;
+  runAppCommand('ctox.app.update', item, { release_ver: releaseVer }, {
+    label: `Installation ${item.title}`,
+    actionLabel: state.t('actionInstall', 'Installieren'),
+    baseAppVer: null,
   });
 }
 
 async function installFromGithub() {
-  if (!canInstallBusinessApps(appStorePermissionOptions(state))) {
-    state.status = { kind: 'error', text: 'Du darfst keine Apps installieren.' };
-    render();
+  if (!actorMay(state, BusinessOsPermissions.AppsInstall)) {
+    reportStatus('warn', 'app-store.permission.denied', 'Du darfst keine Apps installieren.');
     return;
   }
-  const repo = (window.prompt('GitHub-Repository (owner/name):', '') || '').trim();
+  const repo = await askText('GitHub-Repository (owner/name):', '');
   if (!repo) return;
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo)) {
-    state.status = { kind: 'error', text: `Ungültiges Repository: ${repo} (erwartet owner/name).` };
-    render();
+    reportStatus('warn', 'app-store.input.invalid', `Ungültiges Repository: ${repo} (erwartet owner/name).`);
     return;
   }
-  const gitRef = (window.prompt('Branch / Tag / Commit (leer = HEAD):', 'main') || '').trim();
-  const subpath = (window.prompt('Pfad zum Modul im Repo (leer = Wurzel):', '') || '').trim();
-  const moduleId = sanitizeId((window.prompt('Modul-ID (muss zur module.json im Repo passen):', '') || '').trim());
+  const gitRef = await askText('Branch / Tag / Commit (leer = HEAD):', 'main');
+  const subpath = await askText('Pfad zum Modul im Repo (leer = Wurzel):', '');
+  const moduleId = sanitizeId(await askText('Modul-ID (muss zur module.json im Repo passen):', ''));
   if (!moduleId) {
-    state.status = { kind: 'error', text: 'Modul-ID ist erforderlich.' };
-    render();
+    reportStatus('warn', 'app-store.input.invalid', 'Modul-ID ist erforderlich.');
     return;
   }
-  if (!window.confirm(`Aus EXTERNER Quelle installieren?\n\nRepo: ${repo}\nRef: ${gitRef || 'HEAD'}\nModul: ${moduleId}\n\nExterne Apps sind zunächst NICHT verifiziert und erhalten keine Datenrechte bis zur Prüfung.`)) {
+  // v4-allow: text – Bestätigungsdialog (api.shell.dialog), kein Inhaltstext
+  if (!await askConfirm('Aus EXTERNER Quelle installieren?', `Repo: ${repo}\nRef: ${gitRef || 'HEAD'}\nModul: ${moduleId}\n\nExterne Apps sind zunächst NICHT verifiziert und erhalten keine Datenrechte bis zur Prüfung.`, 'Installieren')) {
     return;
   }
-  await runStoreCommand({
-    label: `Installiere ${moduleId} aus GitHub...`,
-    success: `${moduleId} installiert (externe Quelle – nicht verifiziert).`,
+  runStoreCommand({
+    label: `Installation ${moduleId} aus GitHub`,
     commandType: 'ctox.app_store.install',
     moduleId,
     payload: {
@@ -1393,99 +1557,6 @@ async function installFromGithub() {
       subpath,
     },
   });
-}
-
-function bytesToBase64(bytes) {
-  let binary = '';
-  const block = 0x8000;
-  for (let i = 0; i < bytes.length; i += block) {
-    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + block));
-  }
-  return btoa(binary);
-}
-
-// Write an uploaded .zip into the desktop file/chunk store over the RxDB data
-// plane (no HTTP). Mirrors the proven chat-attachment chunk format so the native
-// verified-decode accepts it; the native installer reads it back by file_id.
-async function uploadZipToChunkStore(file) {
-  const db = state.ctx?.db;
-  const syncHandles = await startScopedSyncCollections(
-    ['desktop_files', 'desktop_file_chunks'],
-    'app-store-zip-upload',
-  );
-  const filesColl = db?.collection?.('desktop_files');
-  const chunksColl = db?.collection?.('desktop_file_chunks');
-  if (!filesColl || !chunksColl) throw new Error('Datenbank nicht verfügbar.');
-  try {
-    const bytes = new Uint8Array(await file.arrayBuffer());
-    const base64 = bytesToBase64(bytes);
-    const CHUNK = 16 * 1024;
-    const total = Math.max(1, Math.ceil(base64.length / CHUNK));
-    const now = Date.now();
-    const contentHash = await sha256Hex(base64ToBytes(base64));
-    const fileId = `appzip_${now}_${Math.random().toString(36).slice(2, 10)}`;
-    const generationId = `gen_${now}_${contentHash.slice(0, 12)}`;
-    const chunkRows = await Promise.all(Array.from({ length: total }, async (_, idx) => {
-      const data = base64.slice(idx * CHUNK, (idx + 1) * CHUNK);
-      return {
-        id: `${fileId}_${generationId}_${idx}`,
-        file_id: fileId,
-        generation_id: generationId,
-        content_hash: contentHash,
-        content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
-        idx,
-        total,
-        encoding: 'base64',
-        data,
-        chunk_hash: await sha256Hex(data),
-        chunk_hash_scheme: FILE_CHUNK_HASH_SCHEME,
-        size_bytes: data.length,
-        created_at_ms: now,
-      };
-    }));
-    await writeChunkDocuments(chunksColl, chunkRows);
-    const virtualPath = `/app-store-uploads/${file.name || 'app.zip'}`;
-    await filesColl.upsert({
-      id: fileId,
-      parent_id: '',
-      path: virtualPath,
-      local_path: '',
-      virtual_path: virtualPath,
-      name: file.name || 'app.zip',
-      kind: 'file',
-      mime_type: file.type || 'application/zip',
-      extension: 'zip',
-      size_bytes: bytes.length,
-      owner_id: '',
-      source: 'app-store-upload',
-      content_ref: fileId,
-      content_state: 'available',
-      content_hash: contentHash,
-      content_hash_scheme: FILE_CONTENT_HASH_SCHEME,
-      content_generation_id: generationId,
-      content_synced_at_ms: now,
-      sort_index: now,
-      is_deleted: false,
-      created_at_ms: now,
-      updated_at_ms: now,
-    });
-    await flushScopedSyncCollections(syncHandles);
-    return fileId;
-  } finally {
-    await releaseSyncLeases(syncHandles.leases);
-  }
-}
-
-async function writeChunkDocuments(collection, rows) {
-  const docs = Array.isArray(rows) ? rows.filter(Boolean) : [];
-  if (!docs.length) return;
-  if (typeof collection.bulkUpsert === 'function') {
-    await collection.bulkUpsert(docs);
-    return;
-  }
-  for (const doc of docs) {
-    await collection.upsert(doc);
-  }
 }
 
 function pickZipFile() {
@@ -1499,60 +1570,58 @@ function pickZipFile() {
       input.remove();
       resolve(file);
     }, { once: true });
-    (state.ctx?.host || document.documentElement).appendChild(input);
+    (state.root || document.documentElement).appendChild(input);
     input.click();
   });
 }
 
 async function installFromZip() {
-  if (!canInstallBusinessApps(appStorePermissionOptions(state))) {
-    state.status = { kind: 'error', text: 'Du darfst keine Apps installieren.' };
-    render();
+  if (!actorMay(state, BusinessOsPermissions.AppsInstall)) {
+    reportStatus('warn', 'app-store.permission.denied', 'Du darfst keine Apps installieren.');
     return;
   }
   const file = await pickZipFile();
   if (!file) return;
-  const moduleId = sanitizeId((window.prompt('Modul-ID (muss zur module.json im Zip passen):', '') || '').trim());
+  const moduleId = sanitizeId(await askText('Modul-ID (muss zur module.json im Zip passen):', ''));
   if (!moduleId) {
-    state.status = { kind: 'error', text: 'Modul-ID ist erforderlich.' };
-    render();
+    reportStatus('warn', 'app-store.input.invalid', 'Modul-ID ist erforderlich.');
     return;
   }
-  const subpath = (window.prompt('Pfad zum Modul im Zip (leer = Wurzel):', '') || '').trim();
-  if (!window.confirm(`App aus EXTERNER Zip-Datei installieren?\n\nDatei: ${file.name}\nModul: ${moduleId}\n\nExterne Apps sind zunächst NICHT verifiziert und erhalten keine Datenrechte bis zur Prüfung.`)) {
+  const subpath = await askText('Pfad zum Modul im Zip (leer = Wurzel):', '');
+  // v4-allow: text – Bestätigungsdialog (api.shell.dialog), kein Inhaltstext
+  if (!await askConfirm('App aus EXTERNER Zip-Datei installieren?', `Datei: ${file.name}\nModul: ${moduleId}\n\nExterne Apps sind zunächst NICHT verifiziert und erhalten keine Datenrechte bis zur Prüfung.`, 'Installieren')) {
     return;
   }
+  // v4 (§10.2a Nr. 4): Datei über api.files.put statt Chunk-Collections; der Befehl nennt die Datei-ID und den
+  // Inhalts-Hash (ref). `ref` ist lokal berechnet, kein Warten auf das Netz.
   let fileId;
+  let fileRef;
   try {
-    state.status = { kind: 'info', text: `Lade ${file.name} hoch...` };
-    render();
-    fileId = await uploadZipToChunkStore(file);
-    // Give the chunk store a moment to replicate to the native peer before the
-    // install command tries to read it back.
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    fileId = `appzip_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const upload = state.api.files.put(file, { id: fileId, name: file.name || 'app.zip', mime: file.type || 'application/zip' });
+    fileRef = await upload.ref;
   } catch (err) {
-    state.status = { kind: 'error', text: `Upload fehlgeschlagen: ${err?.message || err}` };
-    render();
+    reportStatus('error', 'app-store.upload.failed', `Upload fehlgeschlagen: ${err?.message || err}`);
     return;
   }
-  await runStoreCommand({
-    label: `Installiere ${moduleId} aus Zip...`,
-    success: `${moduleId} installiert (externe Quelle – nicht verifiziert).`,
+  clearStatus('app-store.upload.failed');
+  runStoreCommand({
+    label: `Installation ${moduleId} aus Zip`,
     commandType: 'ctox.app_store.install',
     moduleId,
     payload: {
       module_id: moduleId,
       source_kind: 'zip',
       file_id: fileId,
+      file_ref: fileRef,
       subpath,
     },
   });
 }
 
 async function checkModuleUpdates(item) {
-  await runStoreCommand({
-    label: `Suche Updates für ${item.title}...`,
-    success: `Update-Prüfung für ${item.title} abgeschlossen.`,
+  runStoreCommand({
+    label: `Update-Prüfung ${item.title}`,
     commandType: 'ctox.module.check_updates',
     moduleId: item.id,
     payload: { module_id: item.id },
@@ -1561,16 +1630,15 @@ async function checkModuleUpdates(item) {
 
 async function updateInstalledItem(item, { mode = 'vanilla' } = {}) {
   if (!canInstallAppStoreItem(state, item)) {
-    state.status = { kind: 'error', text: 'Du darfst diese App nicht aktualisieren.' };
-    render();
+    reportStatus('warn', 'app-store.permission.denied', 'Du darfst diese App nicht aktualisieren.');
     return;
   }
   // GitHub-sourced apps update by re-installing from their pinned source.
   const src = item.app_source;
   if (src && src.kind === 'github' && src.repo) {
-    await runStoreCommand({
-      label: `Aktualisiere ${item.title} aus GitHub...`,
-      success: `${item.title} aus GitHub aktualisiert.`,
+    runStoreCommand({
+      label: `Update ${item.title} aus GitHub`,
+      actionLabel: state.t('actionUpdate', 'Aktualisieren'),
       commandType: 'ctox.app_store.install',
       moduleId: item.id,
       payload: {
@@ -1583,37 +1651,27 @@ async function updateInstalledItem(item, { mode = 'vanilla' } = {}) {
     });
     return;
   }
-  const baseline = item.version_state?.installed_from_bundle_sha256
-    || item.version_state?.baseline_bundle_sha256
-    || '';
-  await runStoreCommand({
-    label: `Updating ${item.title}...`,
-    success: `${item.title} updated.`,
-    commandType: 'ctox.module.update',
-    moduleId: item.id,
-    payload: {
-      module_id: item.id,
-      mode,
-      expected_baseline_sha256: baseline,
-    },
+  // §16.29: ctox.app.update {app_id, base_app_ver, release_ver} – der Kern nimmt es nur für locally_modified=false an.
+  // Eine angepasste App kommt hier nur nach dem Verwerfen-Dialog an (mode 'discard'); die ausdrückliche Zustimmung
+  // trägt discard_local: true (V4-PORT.md OFFEN-3, Kern entscheidet).
+  const releaseVer = String(item.raw?.catalog_release?.app_ver || '');
+  if (!releaseVer) return;
+  runAppCommand('ctox.app.update', item, { release_ver: releaseVer, ...(mode === 'discard' ? { discard_local: true } : {}) }, {
+    label: `Update ${item.title}`,
+    actionLabel: state.t('actionUpdate', 'Aktualisieren'),
   });
 }
 
 async function uninstallInstalledItem(item) {
   if (!canUninstallAppStoreItem(state, item)) {
-    state.status = { kind: 'error', text: 'Du darfst diese App nicht entfernen.' };
-    render();
+    reportStatus('warn', 'app-store.permission.denied', 'Du darfst diese App nicht entfernen.');
     return;
   }
-  if (!confirm(`Uninstall ${item.title}? Local source files will be removed from installed-modules.`)) return;
-  await runStoreCommand({
-    label: `Uninstalling ${item.title}...`,
-    success: `${item.title} uninstalled.`,
-    commandType: 'ctox.app_store.uninstall',
-    moduleId: item.id,
-    payload: {
-      module_id: item.id,
-    },
+  if (!await askConfirm(`${item.title} entfernen?`, `Uninstall ${item.title}? Local source files will be removed from installed-modules.`, state.t('actionUninstall', 'Deinstallieren'))) return;
+  // §16.29: ctox.app.remove {app_id, base_app_ver} – der Kern archiviert die App.
+  runAppCommand('ctox.app.remove', item, {}, {
+    label: `Entfernen ${item.title}`,
+    actionLabel: state.t('actionUninstall', 'Deinstallieren'),
   });
 }
 
@@ -1630,8 +1688,7 @@ function originLabel(origin) {
 async function openVersionsDialog(item) {
   const versions = await moduleBundleVersionsFor(item?.id, item.version_state, item);
   if (!versions.length) {
-    state.status = { kind: 'error', text: `Keine Versionen für ${item.title} vorhanden.` };
-    render();
+    reportStatus('info', 'app-store.versions.none', `Keine Versionen für ${item.title} vorhanden.`, item.id);
     return;
   }
 
@@ -1676,25 +1733,44 @@ async function openVersionsDialog(item) {
     const rollbackBtn = event.target.closest('[data-rollback-version]');
     if (!rollbackBtn) return;
     const versionId = rollbackBtn.dataset.rollbackVersion;
-    if (!confirm(`${item.title} auf diese Version zurücksetzen? Die aktuelle Quelle wird vorher als Wiederherstellungs-Version gesichert.`)) return;
+    // v4-allow: text – Bestätigungsdialog (api.shell.dialog), kein Inhaltstext
+    if (!await askConfirm(`${item.title} zurücksetzen?`, `${item.title} auf diese Version zurücksetzen? Die aktuelle Quelle wird vorher als Wiederherstellungs-Version gesichert.`, 'Wiederherstellen')) return;
     close();
     await rollbackToVersion(item, versionId);
   });
 
   window.addEventListener('keydown', onEscape);
-  (els.root || state.ctx?.host)?.append(overlay);
+  els.root?.append(overlay);
 }
 
-async function rollbackToVersion(item, versionId) {
-  await runStoreCommand({
-    label: `${item.title} wird zurückgesetzt...`,
-    success: `${item.title} auf die gewählte Version zurückgesetzt.`,
-    commandType: 'ctox.module.rollback_version',
-    moduleId: item.id,
-    payload: {
-      module_id: item.id,
-      version_id: versionId,
-    },
+// §9.5/§16.29: Rückfall = vorwärts zurückrollen (der Kern veröffentlicht die frühere Fassung als neue Version):
+// ctox.app.rollback {app_id, base_app_ver, target_ver}. Ein älteres Schema geht nur mit Rück-Migration; fehlt sie,
+// lehnt der Kern ab und die Ablehnung steht in der Zone.
+function rollbackToVersion(item, versionId) {
+  const versions = state.catalog?.version_states?.[item.id]?.versions || item.version_state?.versions || [];
+  const target = versions.find((version) => version.version_id === versionId);
+  const targetVer = String(target?.app_ver ?? String(versionId || '').split('@')[1] ?? '');
+  if (!targetVer) return;
+  runAppCommand('ctox.app.rollback', item, { target_ver: targetVer }, {
+    label: `Zurücksetzen ${item.title}`,
+    actionLabel: 'Wiederherstellen',
+  });
+}
+
+// Eigener Entwurf (app_drafts, id '<nutzer>/<app>') → ctox.app.publish {app_id, base_app_ver, draft_id}.
+function draftFor(appId) {
+  if (!appId) return null;
+  const suffix = `/${appId}`;
+  return (state.platformDrafts || []).find((draft) => draft && !draft._deleted
+    && (draft.app_id === appId || String(draft.id || '').endsWith(suffix))) || null;
+}
+
+function publishDraft(item) {
+  const draft = draftFor(item.id);
+  if (!draft) return;
+  runAppCommand('ctox.app.publish', item, { draft_id: String(draft.id) }, {
+    label: `Veröffentlichen ${item.title}`,
+    actionLabel: state.t('actionPublish', 'Veröffentlichen'),
   });
 }
 
@@ -1702,68 +1778,36 @@ async function openReleaseDialog(item) {
   const model = releaseWizardModel(item, state);
   const overlay = document.createElement('div');
   overlay.className = 'ctox-modal';
-  const dataRows = model.dataAreas.length
-    ? model.dataAreas.map((area) => `
+  // §16.29: ctox.app.release trägt nur den Kanal. Datenbereiche stehen zur Prüfung da (Nachweis, keine Rechte).
+  const dataRows = model.dataAreas.map((area) => `
       <li class="app-release-data-row">
         <div>
           <strong>${escapeHtml(area.label)}</strong>
           <span>${escapeHtml(area.collection)}</span>
         </div>
-        <label>
-          <input type="checkbox" name="read_collections" value="${escapeAttr(area.collection)}">
-          Lesen freigegeben
-        </label>
-        <label>
-          <input type="checkbox" name="write_collections" value="${escapeAttr(area.collection)}">
-          Schreiben freigegeben
-        </label>
-      </li>`).join('')
-    : '<li class="app-release-data-row is-empty">Keine Datenbereiche im Manifest deklariert.</li>';
-  const sourceOptions = releaseVersionOptionsHtml(model.versions, model.sourceVersionId, 'Aktuelle Quelle');
-  const rollbackOptions = releaseVersionOptionsHtml(model.versions, model.rollbackVersionId, 'Kein Rollback-Ziel');
+      </li>`).join('');
   overlay.innerHTML = `
     <form class="ctox-modal-card ctox-modal-card--wide app-release-dialog" role="dialog" aria-modal="true" aria-label="Freigabe von ${escapeAttr(item.title)}">
       <header class="ctox-modal-header">
-        <h3 class="ctox-modal-title">Freigabe vorbereiten - ${escapeHtml(item.title)}</h3>
+        <h3 class="ctox-modal-title">Freigabe - ${escapeHtml(item.title)}</h3>
         <button type="button" class="ctox-pane-icon" data-release-close aria-label="Schließen" title="Schließen">${actionIcon('close')}</button>
       </header>
       <div class="ctox-modal-body app-release-form">
         <label>
-          <span class="ctox-field-label">Zielversion</span>
-          <input class="ctox-input" name="target_version" value="${escapeAttr(model.targetVersion)}" required pattern="\\d+\\.\\d+\\.\\d+">
-        </label>
-        <label>
-          <span class="ctox-field-label">Sichtbarkeit nach Freigabe</span>
+          <span class="ctox-field-label">Kanal</span>
           <select class="ctox-select" name="release_channel">
             <option value="team" ${model.releaseChannel === 'team' ? 'selected' : ''}>Team</option>
             <option value="restricted" ${model.releaseChannel === 'restricted' ? 'selected' : ''}>Eingeschränkt</option>
           </select>
         </label>
-        <label>
-          <span class="ctox-field-label">Quell-Snapshot</span>
-          <select class="ctox-select" name="source_version_id">${sourceOptions}</select>
-        </label>
-        <label>
-          <span class="ctox-field-label">Rollback-Ziel</span>
-          <select class="ctox-select" name="rollback_version_id">${rollbackOptions}</select>
-        </label>
-        <label>
-          <span class="ctox-field-label">App-Verantwortliche</span>
-          <input class="ctox-input" name="responsible_user_ids" value="${escapeAttr(model.responsibleUserIds.join(', '))}" placeholder="user-id, user-id">
-        </label>
-        <label>
-          <span class="ctox-field-label">Release-Notiz</span>
-          <textarea class="ctox-textarea" name="notes" rows="3" placeholder="Was wird für das Team freigegeben?">${escapeHtml(model.notes)}</textarea>
-        </label>
-        <section class="app-release-data-review" aria-label="Datenzugriff Review">
-          <h4>Datenzugriff Review</h4>
-          <p>Datenrechte werden hier nur geprüft und dokumentiert. Fehlende Team-Rechte bleiben als gesperrte Datenbereiche sichtbar.</p>
+        ${dataRows ? `<section class="app-release-data-review" aria-label="Datenbereiche">
+          <h4>Datenbereiche</h4>
           <ul>${dataRows}</ul>
-        </section>
+        </section>` : ''}
       </div>
       <footer class="ctox-modal-footer">
         <button type="button" class="ctox-button" data-release-close>Abbrechen</button>
-        <button type="submit" class="ctox-button is-primary">Freigabe senden</button>
+        <button type="submit" class="ctox-button is-primary">Freigeben</button>
       </footer>
     </form>`;
 
@@ -1782,32 +1826,16 @@ async function openReleaseDialog(item) {
     await releaseModule(item, payload);
   });
   window.addEventListener('keydown', onEscape);
-  (els.root || state.ctx?.host)?.append(overlay);
+  els.root?.append(overlay);
 }
 
+// Versionen live aus business_app_versions (rebuildCatalog → version_states), kein Nachladen, keine Warteschleife.
 async function moduleBundleVersionsFor(moduleId, fallbackState = null, item = null) {
   const fallbackVersions = Array.isArray(fallbackState?.versions) ? fallbackState.versions : [];
   if (fallbackVersions.length) return fallbackVersions;
-  const expectedCount = Number(fallbackState?.version_count || 0);
-  const deadline = expectedCount > 0 ? Date.now() + 15_000 : Date.now();
-  let lastVersions = [];
-  do {
-    try {
-      const doc = await state.ctx?.db?.collection?.('business_module_catalog')?.findOne('module-catalog').exec();
-      const data = doc?.toJSON?.();
-      const versions = data?.version_states?.[moduleId]?.versions;
-      if (Array.isArray(versions)) {
-        lastVersions = versions;
-        if (versions.length || expectedCount === 0) return versions;
-      }
-    } catch {
-      // Runtime-installed app schema changes can briefly restart the native
-      // peer. If the catalog says versions exist, keep the UI action pending
-      // for a short bounded window instead of showing a false empty state.
-    }
-    if (Date.now() < deadline) await delay(250);
-  } while (Date.now() < deadline);
-  return lastVersions.length ? lastVersions : versionSummariesFromLifecycle(item);
+  const versions = state.catalog?.version_states?.[moduleId]?.versions;
+  if (Array.isArray(versions) && versions.length) return versions;
+  return versionSummariesFromLifecycle(item);
 }
 
 function versionSummariesFromLifecycle(item) {
@@ -1841,28 +1869,12 @@ function versionSummariesFromLifecycle(item) {
     .filter(Boolean);
 }
 
-function releaseVersionOptionsHtml(versions, selectedId, emptyLabel) {
-  const options = [`<option value="">${escapeHtml(emptyLabel)}</option>`];
-  for (const version of versions) {
-    const id = String(version?.version_id || '');
-    if (!id) continue;
-    const label = [
-      version.label || originLabel(version.origin),
-      version.seq ? `#${version.seq}` : '',
-      version.created_at_ms ? new Date(version.created_at_ms).toLocaleString() : '',
-    ].filter(Boolean).join(' · ');
-    options.push(`<option value="${escapeAttr(id)}" ${id === selectedId ? 'selected' : ''}>${escapeHtml(label || id)}</option>`);
-  }
-  return options.join('');
-}
-
-async function releaseModule(item, payload) {
-  await runStoreCommand({
-    label: `${item.title} wird freigegeben...`,
-    success: `${item.title} wurde zur Team-Version freigegeben.`,
-    commandType: 'ctox.module.release',
-    moduleId: item.id,
-    payload,
+// §16.29: ctox.app.release {app_id, base_app_ver, channel}. Der Assistent prüft den Datenzugriff (Nachweis, keine
+// Rechte); an den Kern geht nur der Kanal.
+function releaseModule(item, payload) {
+  runAppCommand('ctox.app.release', item, { channel: String(payload?.release_channel || 'team') }, {
+    label: `Freigabe ${item.title}`,
+    actionLabel: state.t('actionRelease', 'Freigeben'),
   });
 }
 
@@ -1882,80 +1894,112 @@ function releasePayloadFromForm(item, form) {
   }, state);
 }
 
-async function runStoreCommand({ label, success, commandType, moduleId, payload }) {
-  setOperation(moduleId, {
-    kind: 'running',
-    text: label,
-    commandType,
-    startedAt: Date.now(),
-  });
-  setBusy(true, label);
-  try {
-    const commandId = `cmd_${newId()}`;
-    const result = await state.ctx.commandBus.dispatch({
-      id: commandId,
-      wait_timeout_ms: STORE_COMMAND_TIMEOUT_MS,
-      module: 'app-store',
-      type: commandType,
-      record_id: moduleId,
-      inbound_channel: 'business_os.app_store',
-      payload,
-      client_context: {
-        source: 'business-os-app-store',
-        module_id: moduleId,
-        command_wait_timeout_ms: STORE_COMMAND_TIMEOUT_MS,
-        actor: actorContext(state.ctx.session),
-      },
-    }, { until: 'accepted', timeoutMs: STORE_COMMAND_TIMEOUT_MS });
-    await loadCatalog();
-    if ([
-      'ctox.app_store.install',
-      'ctox.app_store.uninstall',
-      'ctox.module.install_template',
-      'ctox.module.update',
-      'ctox.module.rollback_version',
-      'ctox.module.release',
-    ].includes(commandType)) {
-      window.dispatchEvent(new CustomEvent('ctox-business-os-modules-changed', {
-        detail: {
-          source: 'app-store',
-          command_type: commandType,
-          module_id: moduleId,
-        },
-      }));
-    }
-    setOperation(moduleId, {
-      kind: 'success',
-      text: success,
-      commandType,
-      result,
-      completedAt: Date.now(),
-    });
-    state.status = { kind: 'success', text: success, result };
-    render();
-  } catch (error) {
-    const text = error?.message || String(error);
-    setOperation(moduleId, {
-      kind: 'error',
-      text,
-      commandType,
-      completedAt: Date.now(),
-    });
-    state.status = { kind: 'error', text };
-    render();
-  } finally {
-    setBusy(false);
-  }
+// R5: Plattform-Befehl über api.command, ohne Warten. Status nur in die Zustandszone (failed → report, done → clear);
+// die Karte zeigt solange einen gesperrten Fortschrittsknopf. Der Katalog aktualisiert sich live aus
+// business_apps/business_app_versions, kein Nachladen, kein Shell-Ereignis.
+// Aktive Version, wie dieser Client sie gerade sieht (business_apps) – die Basis für Vergleich-und-Setzen.
+function activeVerOf(appId) {
+  const row = (state.platformApps || []).find((app) => app?.id === appId && !app._deleted);
+  return row?.active_ver == null ? null : String(row.active_ver);
 }
 
-function setBusy(busy, text = '') {
-  state.busy = busy;
-  const showLoading = busy || state.marketplaceStatus === 'loading';
-  if (els.loading) els.loading.hidden = !showLoading;
-  if (els.loadingText) {
-    els.loadingText.textContent = text || state.marketplaceMessage || 'Katalogprojektion wird geladen.';
+// ctox.app.*: Payload {app_id, base_app_ver, …}. Ablehnung „Basis nicht mehr aktiv“ → Zone mit Aktion.
+function runAppCommand(commandType, item, extra, { label, actionLabel = '', baseAppVer } = {}) {
+  const appId = item.id;
+  const base = baseAppVer === undefined ? activeVerOf(appId) : baseAppVer;
+  return runStoreCommand({
+    label,
+    actionLabel,
+    commandType,
+    moduleId: appId,
+    payload: { app_id: appId, base_app_ver: base, ...extra },
+    conflict: { appId, base },
+  });
+}
+
+// Ablehnung des Kerns (write_result rejected). stale_base/conflict = Basis nicht mehr aktiv → eigener Zoneneintrag je
+// App mit Aktion „Auf aktuelle Version setzen“ (Muster v4/source/source-mode.js); sonst Text mit Begründung des Kerns.
+function reportRejection({ code, label, commandType, result, ref, conflict }) {
+  const reason = String(result?.reason || 'rejected');
+  const detail = result?.detail ? String(result.detail) : '';
+  if (conflict && (reason === 'stale_base' || reason === 'conflict')) {
+    const active = activeVerOf(conflict.appId);
+    const seen = conflict.base == null ? 'keine' : conflict.base;
+    const now = active && active !== conflict.base ? ` (aktiv: ${active})` : '';
+    reportStatus('warn', `app-store.conflict.${conflict.appId}`,
+      `${label} abgelehnt: Basis ${seen} ist nicht mehr aktiv${now}.`, ref,
+      { label: state.t('actionRebase', 'Auf aktuelle Version setzen'), run: () => rebaseView(conflict.appId) });
+    return;
   }
-  if (els.refresh) els.refresh.disabled = busy || state.marketplaceStatus === 'loading';
+  reportStatus('error', code, `${label} abgelehnt: ${detail || reason || commandType}`, ref);
+}
+
+// „Auf aktuelle Version setzen“: Eintrag weg, die App mit ihrer jetzt aktiven Version im Detail; der nächste Befehl
+// nimmt diese Version als Basis. Kein automatisches Wiederholen (wie source-mode rebase: nur die Basis setzen).
+function rebaseView(appId) {
+  clearStatus(`app-store.conflict.${appId}`);
+  if (!state.api) return;
+  state.selectedId = appId;
+  state.drawerOpen = true;
+  render();
+}
+
+function runStoreCommand({ label, commandType, moduleId, payload, actionLabel = '', conflict = null }) {
+  const api = state.api;
+  if (!api) return null;
+  const id = sanitizeId(moduleId);
+  const code = `app-store.command.${commandType}`;
+  const failedText = (reason) => `${label}: ${reason || commandType}`;
+  let handle;
+  try {
+    handle = api.command(commandType, { ...payload }, { record_id: moduleId });
+  } catch (error) {
+    reportStatus('error', code, failedText(error?.message || String(error)), moduleId);
+    return null;
+  }
+  setOperation(id, { kind: 'running', text: actionLabel || label, commandType, commandId: handle.id });
+  let off = null;
+  let finished = false;
+  const finish = () => {
+    finished = true;
+    if (off) { state.commandOffs?.delete(off); off(); off = null; }
+    if (state.operations[id]?.commandId === handle.id) {
+      const next = { ...state.operations };
+      delete next[id];
+      state.operations = next;
+      if (state.api === api) render();
+    }
+  };
+  // write_result des Befehls: abgelehnt → Begründung des Kerns (bei ctox.app.* ggf. Konflikt mit Aktion).
+  const result = Promise.resolve(handle.result).catch(() => null);
+  result.then((r) => {
+    if (state.api !== api || r?.status !== 'rejected') return;
+    reportRejection({ code, label, commandType, result: r, ref: handle.id, conflict });
+    finish();
+  });
+  off = handle.status.subscribe((value) => {
+    if (state.api !== api) return;
+    if (value?.status === 'failed') {
+      // Ein abgelehnter Befehl meldet sich auch als failed; dann spricht nur die Ablehnung (oben).
+      result.then((r) => {
+        if (state.api !== api || r?.status === 'rejected') return;
+        reportStatus('error', code, failedText(value.error), handle.id);
+      });
+      finish();
+    } else if (value?.status === 'done') {
+      clearStatus(code);
+      if (conflict) clearStatus(`app-store.conflict.${conflict.appId}`);
+      finish();
+    }
+  });
+  if (finished && off) { off(); off = null; }
+  if (off) state.commandOffs?.add(off);
+  handle.local?.catch?.((error) => {
+    if (state.api !== api) return;
+    reportStatus('error', code, failedText(error?.message || String(error)), handle.id);
+    finish();
+  });
+  return handle;
 }
 
 function setOperation(moduleId, operation) {
@@ -2003,86 +2047,32 @@ function countsByScope() {
   };
 }
 
-function availableMarketplaceCount() {
-  const installed = installedIds();
-  return state.marketplace.filter((item) => !installed.has(item.module_id || item.id)).length;
+// R11: kein Lade-Overlay, keine Meldungszeile im Inhalt – Katalog ist live und lokal, Zustand in der Zone.
+function renderMarketplaceState() {}
+
+function renderMessage() {}
+
+// R13: App-Sprung über api.shell.navigate (unbekanntes Ziel meldet die Shell selbst in die Zone).
+function openModule(moduleId, params) {
+  if (!moduleId || !state.api) return false;
+  return state.api.shell.navigate(moduleId, params || {});
 }
 
-function renderMarketplaceState() {
-  const counts = countsByScope();
-  // No standing sync-state line: the full discovery state rides on the
-  // refresh header icon's tooltip (marketplaceStateLabel), the compact
-  // signal folds into the center pane footer, and progress surfaces through
-  // the loading overlay while a sync actually runs.
-  if (els.refresh) {
-    const refreshBusy = state.marketplaceStatus === 'loading' || state.busy;
-    els.refresh.disabled = refreshBusy;
-    els.refresh.title = marketplaceStateLabel({
-      status: state.marketplaceStatus,
-      message: state.marketplaceMessage,
-      discoveredCount: state.marketplace.length,
-      availableCount: availableMarketplaceCount(),
-      installedCount: counts.installed,
-    });
-  }
-  const showLoading = state.marketplaceStatus === 'loading' || state.busy;
-  if (els.loading) els.loading.hidden = !showLoading;
-  if (els.loadingText && showLoading) {
-    els.loadingText.textContent = state.marketplaceMessage || 'Katalogprojektion wird geladen.';
-  }
-  if (state.ctx?.host) {
-    const root = state.ctx.host.querySelector('[data-app-store-root]');
-    root?.toggleAttribute('aria-busy', showLoading);
-  }
+// Creator mit Rückweg: früher Tab-Speicher-Übergabe + Hash; jetzt Parameter an api.shell.navigate.
+function openCreatorFromStore({ mode = 'scratch', upgrade = '', template = '' } = {}) {
+  const hash = creatorHashFromStore({ mode, upgrade, template });
+  const params = Object.fromEntries(new URLSearchParams(hash.split('?')[1] || '').entries());
+  return openModule('creator', params);
 }
 
-function renderMessage() {
-  if (!els.message) return;
-  if (!state.status) {
-    els.message.hidden = true;
-    els.message.textContent = '';
-    return;
-  }
-  els.message.hidden = false;
-  els.message.textContent = state.status.text;
-  els.message.dataset.kind = state.status.kind;
-  // Kit callout state (shared/base.css §15b); data-kind stays as the data hook.
-  els.message.classList.toggle('is-danger', state.status.kind === 'error');
-  els.message.classList.toggle('is-success', state.status.kind !== 'error');
-}
-
-function openModule(moduleId) {
-  if (!moduleId) return;
-  window.location.hash = moduleId;
-}
-
-function openCreatorFromStore({ mode = 'scratch', upgrade = '' } = {}) {
-  try {
-    sessionStorage.setItem('ctox.app-store.creatorReturnContext', JSON.stringify({
-      source: 'app-store',
-      return_hash: '#app-store',
-      mode,
-      upgrade,
-      created_at: new Date().toISOString(),
-    }));
-  } catch {}
-  // The creator left the module catalog (the importer took its slot); the
-  // create-from-scratch surface lives on as the windowed desktop app.
-  const openApp = state.ctx?.openApp || state.ctx?.openDesktopApp;
-  if (typeof openApp === 'function') {
-    void openApp('creator', { args: { source: 'app-store', mode, upgrade } });
-    return;
-  }
-  openModule(creatorHashFromStore({ mode, upgrade }));
-}
-
-function creatorHashFromStore({ mode = 'scratch', upgrade = '' } = {}) {
+function creatorHashFromStore({ mode = 'scratch', upgrade = '', template = '' } = {}) {
   const params = new URLSearchParams({
     source: 'app-store',
     return: 'app-store',
     mode,
   });
   if (upgrade) params.set('upgrade', upgrade);
+  if (template) params.set('template', template);
   return `creator?${params.toString()}`;
 }
 
@@ -2144,7 +2134,7 @@ function updateStateFor(item, remote, kind, moduleClass) {
   // download_url overwrite. (A genuine catalog update is handled by the diff
   // branch above and is guarded for customized apps.)
   if (moduleClass === 'fork') {
-    return { available: false, reason: 'Fork-Apps werden lokal weiterentwickelt. Für Upstream-Patches einen Agent beauftragen oder neu forken.' };
+    return { available: false, reason: 'Fork-Apps werden lokal weiterentwickelt.' };
   }
   // Fallback: an explicitly linked external marketplace remote (non-catalog).
   if (remote?.download_url) {
@@ -2189,6 +2179,9 @@ function actionButtonsForManagedItem(item, permissionState = state) {
   }
   if (item.editable && canEditAppStoreItem(permissionState, item)) {
     html += `<button type="button" class="ctox-button ctox-button--sm" data-card-action="edit" aria-label="${escapeHtml(item.title)} bearbeiten">${escapeHtml(state.t('actionEdit', 'Bearbeiten'))}</button>`;
+    if (draftFor(item.id)) {
+      html += `<button type="button" class="ctox-button ctox-button--sm" data-card-action="publish" aria-label="Entwurf von ${escapeHtml(item.title)} veröffentlichen">${escapeHtml(state.t('actionPublish', 'Veröffentlichen'))}</button>`;
+    }
   }
   if (isReleaseCandidateItem(item)) {
     html += canReleaseAppStoreItem(permissionState, item)
@@ -2213,19 +2206,19 @@ function actionButtonsForManagedItem(item, permissionState = state) {
 }
 
 function disabledActionButtonHtml(label, reason, itemTitle = '') {
-  const aria = `${itemTitle ? `${itemTitle}: ` : ''}${label} nicht verfügbar. ${reason}`;
+  const aria = `${itemTitle ? `${itemTitle}: ` : ''}${label} nicht freigegeben. ${reason}`;
   return `<button type="button" class="ctox-button ctox-button--sm denied" disabled aria-disabled="true" title="${escapeAttr(reason)}" aria-label="${escapeAttr(aria)}" data-disabled-reason="${escapeAttr(reason)}">${escapeHtml(label)}</button>`;
 }
 
 function appStorePermissionDeniedReason(action) {
   if (action === 'install' || action === 'update') {
-    return 'Nur Owner, Admins oder Personen mit App-Installationsrecht können Apps installieren oder aktualisieren.';
+    return 'Installieren und Aktualisieren erfordert das App-Installationsrecht.';
   }
   if (action === 'uninstall') {
     return 'Nur Owner, Admins oder Personen mit Entfernungsrecht können diese App entfernen.';
   }
   if (action === 'release') {
-    return 'Nur Owner, Admins oder Personen mit Freigaberecht können eine Team-Version veröffentlichen.';
+    return 'Veröffentlichen erfordert das Freigaberecht.';
   }
   return 'Diese Aktion ist für deine Business-OS Rolle nicht freigegeben.';
 }
@@ -2355,7 +2348,7 @@ function scopeTitle(scope) {
   const t = state.t;
   return {
     all: t('scopeTitleAll', 'Alle Anwendungen'),
-    marketplace: t('scopeTitleMarketplace', 'GitHub Marketplace'),
+    marketplace: t('scopeTitleMarketplace', 'Marketplace'),
     template: t('scopeTitleTemplate', 'Templates'),
     installed: t('scopeTitleInstalled', 'Installierte Apps'),
     system: t('scopeTitleSystem', 'System Apps'),
@@ -2381,7 +2374,7 @@ function applyTranslations(root, t) {
 }
 
 function iconGlyphForItem(item) {
-  if (item.kind === 'marketplace') return item.status === 'installed' ? '✓' : 'GH';
+  if (item.kind === 'marketplace') return item.status === 'installed' ? '✓' : '↓';
   if (item.kind === 'template') return '+';
   if (item.kind === 'installed') return '✓';
   if (item.kind === 'system') return '◆';
@@ -2434,63 +2427,37 @@ function statusLabel(status) {
   }[status] || status;
 }
 
-function appCountLabel(count, scope, marketplaceStatus) {
-  const label = state.t('appsCount', '{count} Apps').replace('{count}', String(count));
-  if (scope === 'marketplace' && marketplaceStatus === 'loading') {
-    return `${label} · Sync`;
-  }
-  return label;
-}
-
-function marketplaceStateLabel({
-  status,
-  message,
-  marketplaceCount = 0,
-  discoveredCount = marketplaceCount,
-  availableCount = marketplaceCount,
-  installedCount,
-}) {
-  if (status === 'loading') return message || `Katalogprojektion wird neu geladen. Installierte Apps bleiben sichtbar.`;
-  if (status === 'ready') {
-    const base = message || `${discoveredCount} Katalog-Apps projiziert.`;
-    return `${base} ${availableCount} noch nicht lokal vorhanden. ${installedCount} installierte Apps lokal gezählt.`;
-  }
-  if (status === 'empty') return message || 'Keine Katalog-Apps projiziert. Installierte Apps bleiben lokal verfügbar.';
-  if (status === 'stale') return `Katalog-Refresh fehlgeschlagen. Zeige letzten Stand: ${message || 'Unbekannter Fehler'}`;
-  if (status === 'error') return `Katalog-Refresh fehlgeschlagen: ${message || 'Unbekannter Fehler'}`;
-  return `Der offizielle Katalog kommt aus der Server-Projektion. Installed: ${installedCount}.`;
-}
-
-function emptyCatalogTitle(scope, query, marketplaceStatus) {
-  if (scope === 'marketplace' && marketplaceStatus === 'loading') return 'Katalog wird aktualisiert';
-  if (scope === 'marketplace' && marketplaceStatus === 'error') return 'Katalog-Refresh fehlgeschlagen';
-  if (query) return 'Keine Apps gefunden';
-  return 'Keine Apps in dieser Kategorie';
-}
-
-function emptyCatalogBody(scope, query, marketplaceStatus, marketplaceMessage = '') {
-  if (scope === 'marketplace' && marketplaceStatus === 'loading') return 'Der Katalog wird gerade aus der Server-Projektion neu geladen.';
-  if (scope === 'marketplace' && marketplaceStatus === 'error') return marketplaceMessage || 'Der letzte Katalog-Refresh konnte nicht geladen werden.';
-  if (query) return `Kein Katalogeintrag passt zu "${query}".`;
-  return 'Wechsle die Kategorie oder aktualisiere den Katalog.';
+function appCountLabel(count) {
+  return state.t('appsCount', '{count} Apps').replace('{count}', String(count));
 }
 
 function externalLinkIcon() {
   return '<svg class="external-link-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17L17 7"></path><path d="M8 7h9v9"></path></svg>';
 }
 
-function repoOwner(repo = '') {
-  return String(repo).split('/')[0] || '';
+// R9: Actor-Spiegel aus api.actor (id, role, permissions); entschieden wird im Core.
+function actorContext(permissionState = state) {
+  const actor = permissionState?.actor || {};
+  const role = String(actor.role || 'user');
+  return {
+    id: actor.id || '',
+    display_name: actor.display_name || actor.id || '',
+    role,
+    is_admin: role === 'admin',
+  };
 }
 
-function actorContext(session) {
-  const user = session?.user || {};
-  return {
-    id: user.id || '',
-    display_name: user.display_name || user.name || user.id || '',
-    role: user.role || 'user',
-    is_admin: Boolean(user.is_admin),
-  };
+// R7: Bestätigung/Eingabe über api.shell.dialog (Form offen, OFFEN-A); ohne Antwort gilt Nein bzw. leer.
+async function askConfirm(title, text, confirmLabel) {
+  if (!state.api) return false;
+  const answer = await state.api.shell.dialog({ kind: 'confirm', title, text, confirm_label: confirmLabel, default: false });
+  return answer === true;
+}
+
+async function askText(title, defaultValue = '') {
+  if (!state.api) return '';
+  const answer = await state.api.shell.dialog({ kind: 'prompt', title, text: title, default: defaultValue });
+  return typeof answer === 'string' ? answer.trim() : '';
 }
 
 function sanitizeId(value) {
@@ -2500,70 +2467,6 @@ function sanitizeId(value) {
 function newId() {
   if (globalThis.crypto?.randomUUID) return crypto.randomUUID();
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-
-async function startScopedSyncCollections(collections, reason) {
-  const sync = state.ctx?.sync;
-  if (!sync?.startCollection && !sync?.leaseCollection) return { handles: [], leases: [] };
-  const leases = [];
-  const handles = [];
-  for (const collection of collections || []) {
-    const handle = await startScopedSyncCollection(sync, collection, reason, leases);
-    if (handle) handles.push(handle);
-  }
-  return {
-    handles,
-    leases,
-  };
-}
-
-async function startScopedSyncCollection(sync, collection, reason, leases) {
-  if (DEMAND_ONLY_SYNC_COLLECTIONS.has(collection)) {
-    if (typeof sync?.leaseCollection === 'function') {
-      const lease = await sync.leaseCollection(collection, reason);
-      leases.push(lease);
-      return lease;
-    }
-    throw new Error(`${collection} requires sync.leaseCollection().`);
-  }
-  return sync?.startCollection?.(collection);
-}
-
-async function flushScopedSyncCollections(syncHandles) {
-  const handles = syncHandles?.handles || [];
-  await Promise.all(handles.map((handle) => waitForSyncBridgeReady(handle, 15000, { allowPush: true })));
-}
-
-async function releaseSyncLeases(leases) {
-  await Promise.all((leases || []).map((lease) => lease?.release?.().catch(() => null)));
-}
-
-async function waitForSyncBridgeReady(handle, timeoutMs = 10000, options = {}) {
-  const state = syncBridgeFromHandle(handle)?.state;
-  if (!state) return;
-  const runWithTimeout = (promise) => Promise.race([
-    Promise.resolve(promise).catch(() => {}),
-    delay(timeoutMs),
-  ]);
-  await Promise.race([
-    Promise.resolve()
-      .then(() => state.awaitInSync?.() || state.awaitInitialReplication?.())
-      .catch(() => {}),
-    delay(timeoutMs),
-  ]);
-  if (options.allowPush && typeof state.pushToRemotePeers === 'function') {
-    await runWithTimeout(state.pushToRemotePeers());
-  } else if (options.allowPush && typeof state.awaitInSync === 'function') {
-    await runWithTimeout(state.awaitInSync());
-  }
-}
-
-function syncBridgeFromHandle(handle) {
-  return handle?.bridge || handle;
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function escapeHtml(value) {
@@ -2580,7 +2483,6 @@ function escapeAttr(value) {
 
 export const __appStoreTestHooks = {
   actionButtonsForManagedItem,
-  appStoreContextChatDetail,
   appStorePermissionDeniedReason,
   buildAppStoreAgentScopeView,
   canEditAppStoreItem,
@@ -2597,12 +2499,13 @@ export const __appStoreTestHooks = {
   chooseCanonicalCatalogItem,
   compareVersions,
   creatorHashFromStore,
-  emptyCatalogBody,
-  emptyCatalogTitle,
+  customizedUpdateBadgeHtml,
   externalLinkIcon,
   isInstalledCatalogItem,
+  isTemplateEntry,
+  itemHasUpdate,
   itemMatchesScope,
-  marketplaceStateLabel,
+  newerMainRelease,
   modificationStateFor,
   originLabel,
   operationMessageHtml,
@@ -2619,67 +2522,52 @@ export const __appStoreTestHooks = {
   versionsButtonHtml,
 };
 
-// Das Menue ist echtes UI und gehoert in den Modul-Root ([data-app-store-root]),
-// nicht auf document.body: dort liegt es ausserhalb des Fensters und deckt den
-// Desktop ab. Der Modul-Root ist auch der Bezugsrahmen der Positionierung.
-function appStoreContextMenuHost(state) {
-  return state.ctx?.host?.querySelector('[data-app-store-root]')
-    || state.ctx?.host
-    || document.documentElement;
+// R9: Rechte-Spiegel (nur Darstellung, entschieden wird im Core). Wie v3 (shared/permissions.js, Rollen-Rückfall):
+// Owner/Chef/Admin dürfen alles, sonst muss das Recht in api.actor.permissions stehen (ersetzt die v3-Governance-Grants;
+// 4.0 liefert Rechte ohne Modul-Scope und ohne Founder-Zuweisung, V4-PORT.md OFFEN-6). App ändern zusätzlich mit
+// `apps.source.edit` (§9.2, PORTING R9).
+function actorHasPermission(permissionState, permission) {
+  const list = permissionState?.actor?.permissions;
+  return Array.isArray(list) && list.includes(permission);
 }
 
-function ensureAppStoreContextMenuElement(state) {
-  const host = appStoreContextMenuHost(state);
-  if (state.contextMenu?.isConnected && state.contextMenu.parentNode === host) return state.contextMenu;
-  const menu = state.contextMenu || document.createElement('div');
-  menu.className = 'ctox-context-menu app-store-context-menu';
-  menu.hidden = true;
-  host.append(menu);
-  state.contextMenu = menu;
-  return menu;
+function actorMay(permissionState, permission) {
+  return roleCanManage(actorContext(permissionState).role) || actorHasPermission(permissionState, permission);
 }
 
-function hideAppStoreContextMenu(state) {
-  if (state.contextMenu) state.contextMenu.hidden = true;
-}
-
-function canModifyAppStoreAppForModule(state, item) {
-  return canModifyBusinessModule(item, appStorePermissionOptions(state));
-}
-
-function canInstallAppStoreItem(state, item) {
+function canModifyAppStoreAppForModule(permissionState, item) {
   const moduleId = String(item?.id || item?.module_id || '').trim();
   if (!moduleId) return false;
-  return canInstallBusinessApps({
-    ...appStorePermissionOptions(state),
-    scopeType: 'module',
-    scopeId: moduleId,
-  });
+  return actorMay(permissionState, BusinessOsPermissions.AppsModify) || actorHasPermission(permissionState, 'apps.source.edit');
 }
 
-function canEditAppStoreItem(state, item) {
-  return canModifyAppStoreAppForModule(state, item);
+function canInstallAppStoreItem(permissionState, item) {
+  const moduleId = String(item?.id || item?.module_id || '').trim();
+  return Boolean(moduleId) && actorMay(permissionState, BusinessOsPermissions.AppsInstall);
 }
 
-function canUninstallAppStoreItem(state, item) {
-  return canUninstallBusinessApp(item, appStorePermissionOptions(state));
+function canEditAppStoreItem(permissionState, item) {
+  return canModifyAppStoreAppForModule(permissionState, item);
 }
 
-function canReleaseAppStoreItem(state, item) {
+function canUninstallAppStoreItem(permissionState, item) {
+  const moduleId = String(item?.id || item?.module_id || '').trim();
+  return Boolean(moduleId) && actorMay(permissionState, BusinessOsPermissions.AppsUninstall);
+}
+
+function canReleaseAppStoreItem(permissionState, item) {
   const moduleId = String(item?.id || item?.module_id || '').trim();
   if (!moduleId || !isReleaseCandidateItem(item)) return false;
-  return canUseBusinessPermission({
-    ...appStorePermissionOptions(state),
-    permission: BusinessOsPermissions.AppsRelease,
-    scopeType: 'module',
-    scopeId: moduleId,
-  });
+  return actorMay(permissionState, BusinessOsPermissions.AppsRelease);
 }
 
-function appStorePermissionOptions(state) {
+function appStorePermissionOptions(permissionState) {
+  const actor = actorContext(permissionState);
   return {
-    session: state?.ctx?.session || null,
-    governance: state?.catalog?.governance || state?.ctx?.governance || null,
+    session: { user: { id: actor.id, role: actor.role } },
+    governance: null,
+    // v3: Founder-Zuweisung/Grant `apps.view` aus der Governance; 4.0: Recht im Actor-Spiegel (ohne Modul-Scope).
+    canAccessNonPublic: actorHasPermission(permissionState, BusinessOsPermissions.AppsView),
   };
 }
 
@@ -2695,7 +2583,7 @@ function buildAppStoreAgentScopeView(state, context = {}, mode = 'data') {
     ? context.data_access
     : {};
   return buildGlobalCtoxAgentScopeView({
-    actor: actorContext(state?.ctx?.session),
+    actor: actorContext(state),
     module: {
       id: moduleId,
       module_id: moduleId,
@@ -2732,159 +2620,4 @@ function buildAppStoreAgentScopeView(state, context = {}, mode = 'data') {
     canModify,
     externalActions: 'none',
   });
-}
-
-function appStoreCommandContextFromElement(state, target) {
-  const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
-
-  const card = element?.closest('[data-app-id]');
-  const appId = card?.dataset?.appId || '';
-  const item = appId ? catalogItems().find((candidate) => candidate.id === appId) : null;
-  const projection = item?.release_projection || appReleaseProjection(item?.raw || item);
-
-  return {
-    module: 'app-store',
-    column: state.drawerOpen ? 'detail' : 'grid',
-    record_type: item ? 'app' : 'store',
-    record_id: item?.id || '',
-    label: item?.title || state.query || 'App Store',
-    app_id: item?.id || '',
-    app_title: item?.title || '',
-    app_description: item?.description || '',
-    app_developer: item?.developer || '',
-    app_version: item?.version || '',
-    app_status: item?.status || '',
-    app_visibility: item?.lifecycle?.state || '',
-    app_visibility_label: item?.lifecycle?.label || '',
-    app_category: item?.category || '',
-    app_source: item?.source || '',
-    data_access: projection?.dataAccess || null,
-    data_access_summary: projection?.dataAccess?.summary || '',
-    active_search: state.query || '',
-    active_scope: state.scope || 'marketplace',
-    selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
-    clicked_text: String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500),
-  };
-}
-
-function renderAppStoreContextMenu(state, context, x, y) {
-  const canModifyApp = canModifyAppStoreContext(state, context);
-  const agentScope = buildAppStoreAgentScopeView(state, context, canModifyApp ? 'app' : 'data');
-  const menu = ensureAppStoreContextMenuElement(state);
-  menu.innerHTML = `
-    <form class="app-store-context-chat" data-app-store-context-chat-form>
-      <header>
-        <div>
-          <strong>Chat to CTOX</strong>
-          <span>${escapeHtml(context.label || 'App Store')}</span>
-        </div>
-        <button type="button" data-app-store-context-close aria-label="Schließen">×</button>
-      </header>
-      ${canModifyApp ? `
-        <div class="ctox-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
-          <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
-          <label><input type="radio" name="contextMode" value="app" /> App ändern</label>
-        </div>
-      ` : ''}
-      ${renderGlobalCtoxAgentScopeHtml({ view: agentScope })}
-      <textarea data-app-store-context-message placeholder="Was soll CTOX im App Store tun oder anpassen?"></textarea>
-      <footer>
-        <span data-app-store-context-status></span>
-        <button type="submit">Senden</button>
-      </footer>
-    </form>
-  `;
-  menu.hidden = false;
-  menu.style.left = '0px';
-  menu.style.top = '0px';
-  const rect = menu.getBoundingClientRect();
-  // x/y sind Viewport-Koordinaten. Seit das Menue im Modul-Root haengt, misst
-  // position:absolute gegen dessen Polsterkante (der Root hat keinen Rahmen),
-  // also erst umrechnen und dann im Fenster statt im Viewport klemmen.
-  const host = menu.parentElement || appStoreContextMenuHost(state);
-  const hostRect = host.getBoundingClientRect();
-  const clampNumber = (val, min, max) => Math.min(max, Math.max(min, val));
-  const maxLeft = Math.max(8, host.clientWidth - rect.width - 8);
-  const maxTop = Math.max(8, host.clientHeight - rect.height - 8);
-  menu.style.left = `${clampNumber(x - hostRect.left, 8, maxLeft)}px`;
-  menu.style.top = `${clampNumber(y - hostRect.top, 8, maxTop)}px`;
-
-  const form = menu.querySelector('[data-app-store-context-chat-form]');
-  const textarea = menu.querySelector('[data-app-store-context-message]');
-  menu.querySelector('[data-app-store-context-close]')?.addEventListener('click', () => hideAppStoreContextMenu(state));
-  form?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const mode = canModifyApp ? (new FormData(form).get('contextMode') || 'data') : 'data';
-    await dispatchAppStoreContextChat(state, context, textarea?.value || '', mode);
-  });
-  requestAnimationFrame(() => textarea?.focus());
-}
-
-async function dispatchAppStoreContextChat(state, context, message, mode = 'data') {
-  const trimmed = String(message || '').trim();
-  const status = state.contextMenu?.querySelector('[data-app-store-context-status]');
-  if (!trimmed) {
-    if (status) status.textContent = 'Nachricht fehlt.';
-    return;
-  }
-
-  const safeMode = mode === 'app' && canModifyAppStoreContext(state, context) ? 'app' : 'data';
-  if (!document.querySelector('[data-ctox-chat-root]')) {
-    if (status) status.textContent = 'Chat ist noch nicht bereit.';
-    return;
-  }
-  if (status) status.textContent = 'Oeffne Chat...';
-  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
-    detail: appStoreContextChatDetail(state, context, trimmed, safeMode),
-  }));
-  hideAppStoreContextMenu(state);
-}
-
-function appStoreContextChatDetail(state, context, message, mode = 'data') {
-  const safeMode = mode === 'app' && canModifyAppStoreContext(state, context) ? 'app' : 'data';
-  const targetModuleId = sanitizeId(context?.app_id || context?.record_id || 'app-store') || 'app-store';
-  const label = context?.label || context?.app_title || targetModuleId || 'App Store';
-  const agentScope = buildAppStoreAgentScopeView(state, context, safeMode);
-  const title = `${safeMode === 'app' ? 'App ändern' : 'Store durchsuchen'} · ${label}`;
-  const instruction = safeMode === 'app'
-    ? `Modifiziere die ausgewählte Business-OS-App "${label}". Zielmodul: ${targetModuleId}.\n\n${message}`
-    : message;
-  return {
-    text: message,
-    module: 'app-store',
-    source_title: 'App Store',
-    command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-    record_id: safeMode === 'app' ? targetModuleId : (context?.record_id || 'app-store'),
-    title,
-    instruction,
-    payload: {
-      title,
-      instruction,
-      prompt: message,
-      user_message: message,
-      mode: safeMode,
-      target: safeMode === 'app' ? 'app' : 'data',
-      module_id: safeMode === 'app' ? targetModuleId : undefined,
-      app_id: safeMode === 'app' ? targetModuleId : (context?.app_id || ''),
-      context,
-      thread_key: 'business-os/app-store',
-    },
-    client_context: {
-      source: 'business-os-app-store',
-      module: 'app-store',
-      source_module: 'app-store',
-      action: 'context-chat',
-      mode: safeMode,
-      target: safeMode === 'app' ? 'app' : 'data',
-      column: context?.column,
-      record_type: context?.record_type,
-      record_id: context?.record_id || targetModuleId,
-      module_id: targetModuleId,
-      app_id: context?.app_id || targetModuleId,
-      actor: agentScope.actor,
-      visible_scope: agentScope,
-      active_search: context?.active_search || '',
-      active_scope: context?.active_scope || '',
-    },
-  };
 }

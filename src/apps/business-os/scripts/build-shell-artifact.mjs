@@ -6,6 +6,7 @@ import {
   mkdir,
   open,
   readdir,
+  readFile,
   rm,
   stat,
   unlink,
@@ -38,6 +39,8 @@ export const RUNTIME_TREES = Object.freeze([
   'template-store',
   'themes',
   'ui-contract',
+  // Shell v4 (M7): Rahmen, Shell-Laufzeit, Code-Ansicht, Boot, Manifeste; Labor/Werkzeuge siehe Ausschlüsse unten.
+  'v4',
   'vendor',
 ]);
 export const MAX_RUNTIME_FILE_COUNT = 20_000;
@@ -82,8 +85,36 @@ const EXCLUDED_DIRECTORIES = new Set([
   'tmp',
   'temp',
 ]);
+// v4: Dateien, auf die v4/manifests/*.manifest.json (Basis-Apps, nicht customer-modules) verweisen – Pfad relativ zur
+// Shell-Wurzel. Wird in collectRuntimePayload gesetzt; außerhalb (z. B. gen-manifest) leer.
+let MANIFEST_REFERENCED = new Set();
+let CUSTOMER_MANIFESTS = new Set();
+export async function manifestReferencedFiles(root) {
+  const out = new Set();
+  CUSTOMER_MANIFESTS = new Set();
+  let names = [];
+  try { names = (await readdir(resolve(root, 'v4', 'manifests'))).filter((n) => n.endsWith('.manifest.json')); } catch { return out; }
+  for (const name of names) {
+    let m;
+    try { m = JSON.parse(await readFile(resolve(root, 'v4', 'manifests', name), 'utf8')); } catch { continue; }
+    const src = String(m?._source_dir || '').replace(/^src\/apps\/business-os\/?/, '');
+    if (src.startsWith('customer-modules/')) { CUSTOMER_MANIFESTS.add(`v4/manifests/${name}`); continue; }
+    const files = Array.isArray(m?.files) ? m.files : Object.keys(m?.files || {});
+    for (const f of files) out.add(src ? `${src}/${f}` : f);
+  }
+  return out;
+}
+// E31.3: Pflichtdatei unter v4/tools, die trotz Ausschluss von v4/tools in den Slot gehört.
+export const V4_REQUIRED_TOOL_FILES = new Set(['v4/tools/manifest/out/ownership.json']);
 const EXCLUDED_UNWIRED_RUNTIME_PREFIXES = Object.freeze([
   'public/calendar-booking',
+  // Shell v4: Prüfstände, Entwicklerwerkzeuge, Schuldenbuch und Abnahmeläufe gehören nicht ins Laufzeit-Artefakt.
+  'v4/frame/lab',
+  'v4/lab',
+  'v4/tools',
+  'v4/debt',
+  'v4/k24',
+  'v4/os-primitives',
 ]);
 const GENERATED_DIRECTORY = /^(?:build|release|cache|local[-_]?state)(?:[._-].*)?$/i;
 const GENERATED_FILE_TOKEN = /(?:^|[._-])(?:build|release|cache|local[-_]?state)(?:[._-]|$)/i;
@@ -136,6 +167,9 @@ export function validateRelativePath(relativePath) {
 
 export function isExcludedRuntimePath(relativePath, { directory = false } = {}) {
   validateRelativePath(relativePath);
+  // E31.3: der Basis-Release-Import des Kerns (schema.rs load_base_release) liest die Eigentumszuordnung aus dem Slot.
+  if (V4_REQUIRED_TOOL_FILES.has(relativePath)) return false;
+  if (directory && [...V4_REQUIRED_TOOL_FILES].some((f) => f.startsWith(`${relativePath}/`))) return false;
   if (EXCLUDED_UNWIRED_RUNTIME_PREFIXES.some((prefix) => (
     relativePath === prefix || relativePath.startsWith(`${prefix}/`)
   ))) return true;
@@ -151,9 +185,14 @@ export function isExcludedRuntimePath(relativePath, { directory = false } = {}) 
     return true;
   }
   if (basename === '.DS_Store' || PACKAGE_LOCKS.has(basename.toLowerCase())) return true;
+  // Shell v4: Berichte und Notizen (*.md) unter v4/ sind Entwicklerdokumentation, kein Laufzeitinhalt.
+  if (!directory && relativePath.startsWith('v4/') && /\.md$/i.test(basename)) return true;
   if (/^(?:agents|claude)(?:\..*)?$/i.test(basename)) return true;
   if (!directory && REQUIRED_RUNTIME_PATHS.has(relativePath)) return false;
   if (!directory && RUNTIME_NOTICE_FILE.test(basename)) return false;
+  // Von einem v4-App-Manifest referenzierte Dateien sind Laufzeitinhalt, auch wenn ihr Name „build“, „release“ oder
+  // „test“ enthält (z. B. handlers/ctox.queue.release.js); siehe manifestReferencedFiles.
+  if (!directory && MANIFEST_REFERENCED.has(relativePath)) return false;
   if (!directory && (TEST_FILE_TOKEN.test(basename) || GENERATED_FILE_TOKEN.test(basename))) return true;
   return false;
 }
@@ -360,6 +399,7 @@ async function collectTree(sourceRoot, relativeDirectory, directories, files, bu
 
 export async function collectRuntimePayload(sourceRoot) {
   const absoluteSourceRoot = resolve(sourceRoot);
+  MANIFEST_REFERENCED = await manifestReferencedFiles(absoluteSourceRoot);
   await assertDirectoryNoSymlink(absoluteSourceRoot, absoluteSourceRoot);
   const directories = [];
   const files = [];
@@ -383,6 +423,10 @@ export async function collectRuntimePayload(sourceRoot) {
     }
   }
 
+  // Manifeste von Kunden-Apps (customer-modules/*) gehören nicht in einen globalen Shell-Release (wie die Apps selbst).
+  for (let i = files.length - 1; i >= 0; i -= 1) {
+    if (CUSTOMER_MANIFESTS.has(files[i].path)) files.splice(i, 1);
+  }
   files.sort((left, right) => comparePaths(left.path, right.path));
   directories.sort(comparePaths);
   const payloadPaths = new Set(files.map((file) => file.path));

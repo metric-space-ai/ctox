@@ -10,10 +10,13 @@
 // sandboxed) · ③ Auftrags-Prompt (action_prompt → chat spawn on fire). The
 // human writes prompts (Wenn/Dann + signal); CTOX programs the watcher. All
 // command flows and collection schemas are unchanged from the previous IA.
-import { createContextMenu } from '../../shared/context-menu.js';
-import { showBusinessPrompt, showBusinessConfirm, showBusinessAlert } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
+// App-API 4.0 (Shell v4): mount(root, api, {restored}) -> {unmount, snapshot}. Protokoll: V4-PORT.md.
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
+// Eingebettete Texte (relativer Modul-Import, kein HTTP-Ladeweg); api.shell.t('iot.<key>') übersteuert (OFFEN-B).
+import messagesDe from './locales/de.json' with { type: 'json' };
+import messagesEn from './locales/en.json' with { type: 'json' };
 
-const BUILD = '20260727-canonical-readiness';
+const RENDER_DEBOUNCE_MS = 60;
 const COLLECTIONS = [
   'iot_realms', 'iot_assets', 'iot_attributes', 'iot_datapoints', 'iot_alarms',
   'iot_dashboards', 'iot_widgets',
@@ -21,8 +24,11 @@ const COLLECTIONS = [
 const ASSET_TYPES = ['Building', 'Room', 'WeatherStation', 'Thermostat', 'Sensor', 'Plug', 'Site'];
 
 const state = {
-  ctx: null,
-  menu: null,
+  api: null,
+  root: null,
+  disposers: [],
+  renderTimer: null,
+  pendingRestore: null,
   collections: empty(),
   realm: 'all',
   band: 'all',            // 'all' | 'signals' | 'alarms'
@@ -34,29 +40,25 @@ const state = {
   dashboardId: '',        // implicit persistence dashboard
   mainView: 'cards',      // MAIN dashboard: 'cards' | 'list'
   dragId: null,
-  loading: true,
-  readiness: {},          // collection → ctx.sync readiness snapshot (frozen)
 };
-
-// Data-driven empty states gate on the readiness of THEIR backing collection:
-// the LEFT tree reads iot_assets, the MAIN dashboard widgets read iot_widgets.
-const READINESS_COLLECTIONS = ['iot_assets', 'iot_widgets'];
 
 function empty() { return Object.fromEntries(COLLECTIONS.map((c) => [c, []])); }
 function esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 // i18n: German is the inline fallback (always works offline); en.json supplies
 // English; de.json may override German. `t(key, de, ...args)` substitutes {0},{1}…
 let MESSAGES = {};
+function messagesFor(lang) { return { ...messagesDe, ...(lang === 'en' ? messagesEn : {}) }; }
 function t(key, de, ...args) {
   let s = MESSAGES[key] ?? de ?? key;
+  const shellT = state.api?.shell?.t;
+  if (typeof shellT === 'function') {
+    const scoped = `iot.${key}`;
+    const v = shellT.call(state.api.shell, scoped);
+    if (typeof v === 'string' && v && v !== scoped) s = v;
+  }
   args.forEach((a, i) => { s = s.replace(`{${i}}`, a); });
   return s;
 }
-function col(name) {
-  const db = state.ctx?.db;
-  return db?.collection?.(name) || null;
-}
-
 // ---------------------------------------------------------------------------
 // Pure helpers (exported for tests — no DOM, no RxDB). Asset rows are annotated
 // { id, name, realm, parent_id, signalCount, alarmOpen }.
@@ -119,8 +121,6 @@ const ACTION_ICON_FALLBACK_PATHS = {
   close: 'M6 6l12 12M18 6L6 18',
 };
 function icon(name) {
-  const fromShell = state.ctx?.getActionIcon?.(name);
-  if (fromShell) return fromShell;
   const path = ACTION_ICON_FALLBACK_PATHS[name] || ACTION_ICON_FALLBACK_PATHS.add;
   return `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="${path}"></path></svg>`;
 }
@@ -154,111 +154,151 @@ function statusBadgeClass(dot) {
   return '';
 }
 
-export async function mount(ctx) {
-  state.ctx = ctx;
-  state.lang = ctx.locale === 'en' ? 'en' : 'de';
-  state.selection = { kind: '', assetId: '', attr: '' };
-  state.loading = true;
-  // Cache-bust the shared i18n module like CSS/HTML below (?v=BUILD), then load
-  // this module's locale messages (German is the inline fallback in t()).
-  try {
-    const { loadModuleMessages } = await import(`../../shared/i18n.js?v=${BUILD}`);
-    MESSAGES = await loadModuleMessages(import.meta.url, ctx.locale || 'de', {});
-  } catch { MESSAGES = {}; }
-  ensureStyles();
-  ctx.host.innerHTML = await loadMarkup();
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
-  state.menu = createContextMenu({ host: document.body, viewportEl: document.documentElement });
+const SNAPSHOT_KEYS = Object.freeze(['realm', 'band', 'view', 'search', 'mainView', 'dashboardId']);
 
-  const root = ctx.host.querySelector('[data-iot-root]');
+export async function mount(root, api, { restored } = {}) {
+  // Modulzustand je Montage neu; Abos gehören dieser Montage (PORTING.md §4 Falle 1).
+  const disposers = [];
+  state.disposers = disposers;
+  state.api = api;
+  state.root = root;
+  state.collections = empty();
+  state.selection = { kind: '', assetId: '', attr: '' };
+  state.expanded = new Set();
+  state.creating = null;
+  state.dashboardId = '';
+  state.realm = 'all'; state.band = 'all'; state.view = 'cards'; state.search = ''; state.mainView = 'cards';
+  state.pendingRestore = null;
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'iot';
+  state.lang = langFrom(api.shell.locale.get());
+  MESSAGES = messagesFor(state.lang);
+  root.innerHTML = await loadMarkup();
+  const appRoot = root.querySelector('[data-iot-root]');
   applyStaticLabels();
   seedGrammarState();
-  // The left column resizer is wired declaratively by the shell from the
-  // `.ctox-column-resizer[data-resizer-var]` handle; the canonical column
-  // grammar (search/tray/reset/active-dot/view-toggle/band) is auto-wired by
-  // the shell from the data-pg-* markup — no module chrome JS here.
-  root?.addEventListener('click', onClick);
-  root?.addEventListener('submit', onSubmit);
-  root?.addEventListener('dragstart', onDragStart);
-  root?.addEventListener('dragover', onDragOver);
-  root?.addEventListener('drop', onDrop);
-  root?.addEventListener('dragend', () => { state.dragId = null; clearDragMarks(); });
-  // The shell reports search / view / tray / band changes on this bubbling
-  // event; those are intentional resets (the tree rebuilds).
-  root?.addEventListener('ctox-pane-grammar-change', onGrammarChange);
-
-  // Paint the frame from the empty state immediately. Cold native projections
-  // must not hold the window lifecycle open while seven collections hydrate.
+  applyRestored(restored);
+  // The canonical column grammar (search/tray/reset/active-dot/view-toggle/band) wires itself from the
+  // data-pg-* markup; die App ruft den Helfer selbst (keine DOM-Heuristik der Shell).
+  appRoot?.addEventListener('click', onClick);
+  appRoot?.addEventListener('submit', onSubmit);
+  appRoot?.addEventListener('dragstart', onDragStart);
+  appRoot?.addEventListener('dragover', onDragOver);
+  appRoot?.addEventListener('drop', onDrop);
+  appRoot?.addEventListener('dragend', () => { state.dragId = null; clearDragMarks(); });
+  // The shell grammar reports search / view / tray / band changes on this bubbling event.
+  appRoot?.addEventListener('ctox-pane-grammar-change', onGrammarChange);
+  autoWirePaneGrammar(root);
+  api.shell.setTitle(t('title', 'IoT'));
   render();
-  let disposed = false;
-  let reloadInFlight = false;
-  let reloadQueued = false;
-  const requestReload = () => {
-    if (disposed) return;
-    if (reloadInFlight) {
-      reloadQueued = true;
-      return;
-    }
-    reloadInFlight = true;
-    reload(() => !disposed)
-      .catch((error) => {
-        if (!disposed) console.error('[iot] reload failed:', error);
-      })
-      .finally(() => {
-        reloadInFlight = false;
-        if (reloadQueued && !disposed) {
-          reloadQueued = false;
-          requestReload();
-        }
-      });
-  };
-  const subs = COLLECTIONS.map((n) => col(n)?.$?.subscribe?.(requestReload)).filter(Boolean);
-  // Canonical collection readiness (shell sync API): re-render on state
-  // transitions so empty lists show the syncing shell until initial replication
-  // is live — never a false "no data" empty. Immediate snapshot per subscribe.
-  state.readiness = {};
-  const subscribeReadiness = ctx.sync?.subscribeCollectionReadiness;
-  const readinessSubs = (typeof subscribeReadiness === 'function'
-    ? READINESS_COLLECTIONS.map((name) => subscribeReadiness.call(ctx.sync, name, (snapshot) => {
-      state.readiness[name] = snapshot;
-      if (!disposed) render();
-    }))
-    : []
-  ).filter((unsub) => typeof unsub === 'function');
-  requestReload();
-
-  return () => {
-    disposed = true;
-    subs.forEach((s) => { try { s.unsubscribe?.(); } catch {} });
-    readinessSubs.forEach((unsubscribe) => { try { unsubscribe(); } catch {} });
-    try { state.menu?.destroy?.(); } catch {}
-    ctx.host.replaceChildren();
-  };
-}
-
-function ensureStyles() {
-  const cssVersion = String(import.meta.url).split('?v=')[1] || BUILD;
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  let link = document.querySelector('link[data-iot-style]');
-  if (!link) {
-    link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.dataset.iotStyle = 'true';
-    document.head.append(link);
+  for (const name of COLLECTIONS) {
+    disposers.push(api.query(name, {}).subscribe((rows) => {
+      state.collections = { ...state.collections, [name]: Array.isArray(rows) ? rows : [] };
+      scheduleRender();
+    }));
   }
-  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
+  disposers.push(api.shell.locale.subscribe((locale) => {
+    const lang = langFrom(locale);
+    if (lang === state.lang) return;
+    state.lang = lang;
+    MESSAGES = messagesFor(lang);
+    applyStaticLabels();
+    render();
+  }));
+  return {
+    unmount() {
+      if (state.renderTimer) clearTimeout(state.renderTimer);
+      state.renderTimer = null;
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (error) { console.warn('[iot] unsubscribe failed', error); }
+      }
+      root.replaceChildren();
+      if (state.root === root) { state.api = null; state.root = null; }
+    },
+    snapshot: iotSnapshot,
+  };
 }
+
+function langFrom(locale) { return String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de'; }
+
+// Snapshot für den Live-Remount: Filter, Ansicht, Auswahl, aufgeklappte Knoten, offenes Anlegeformular/Editor.
+function iotSnapshot() {
+  const snap = { v: 1 };
+  for (const k of SNAPSHOT_KEYS) snap[k] = state[k];
+  snap.selection = { ...state.selection };
+  snap.expanded = [...state.expanded];
+  if (state.creating) {
+    snap.creating = { parentId: state.creating.parentId || null };
+    const form = state.root?.querySelector('[data-form="create"]');
+    if (form) snap.createDraft = Object.fromEntries(new FormData(form).entries());
+  }
+  const editor = state.root?.querySelector('[data-iot-editor]');
+  if (editor) {
+    snap.editor = {
+      widgetId: editor.getAttribute('data-iot-editor'),
+      tab: editor.getAttribute('data-iot-editor-tab') || 'auftrag',
+      fields: Object.fromEntries([...editor.querySelectorAll('[data-ed-field]')].map((el) => [el.dataset.edField, el.value])),
+    };
+  }
+  return snap;
+}
+
+function applyRestored(restored) {
+  if (!restored || typeof restored !== 'object') return;
+  for (const k of SNAPSHOT_KEYS) if (typeof restored[k] === typeof state[k]) state[k] = restored[k];
+  if (restored.selection && typeof restored.selection === 'object') {
+    state.selection = { kind: String(restored.selection.kind || ''), assetId: String(restored.selection.assetId || ''), attr: String(restored.selection.attr || '') };
+  }
+  if (Array.isArray(restored.expanded)) state.expanded = new Set(restored.expanded.map(String));
+  if (restored.creating && typeof restored.creating === 'object') state.creating = { parentId: restored.creating.parentId || null };
+  state.pendingRestore = restored;
+  const el = rootEl();
+  const search = el?.querySelector('[data-pg-search]');
+  if (search) search.value = state.search;
+  const realm = el?.querySelector('[data-pg-filter][data-pg-name="realm"]');
+  if (realm) realm.value = state.realm;
+  for (const tab of el?.querySelectorAll('[data-pg-band]') || []) {
+    const active = tab.dataset.pgBand === state.band;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  }
+  syncLeftViewToggle();
+}
+
+// Offene Eingaben zurückspielen, sobald die Daten des Entwurfs in den Live-Daten stehen.
+function applyPendingRestore() {
+  const r = state.pendingRestore;
+  if (!r) return;
+  if (r.selection?.assetId && !assetById(r.selection.assetId)) return;
+  if (r.editor && !(state.collections.iot_widgets || []).some((w) => w.id === r.editor.widgetId)) return;
+  state.pendingRestore = null;
+  if (r.createDraft && state.creating) {
+    const form = state.root?.querySelector('[data-form="create"]');
+    for (const [k, v] of Object.entries(r.createDraft)) { const f = form?.elements?.namedItem(k); if (f) f.value = v; }
+  }
+  if (r.editor) openWidgetEditor(r.editor.widgetId, r.editor);
+}
+
+function scheduleRender() {
+  if (state.renderTimer) return;
+  state.renderTimer = setTimeout(() => {
+    state.renderTimer = null;
+    if (!state.root) return;
+    if (!state.dashboardId) { const d = dashboards()[0]; if (d) state.dashboardId = d.id; }
+    if (state.dashboardId && !dashboards().some((d) => d.id === state.dashboardId)) state.dashboardId = dashboards()[0]?.id || '';
+    syncSelectionToVisible();
+    render();
+    applyPendingRestore();
+  }, RENDER_DEBOUNCE_MS);
+}
+
 async function loadMarkup() {
-  const markupVersion = String(import.meta.url).split('?v=')[1] || BUILD;
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-  const html = await fetch(markupHref).then((r) => r.text());
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((r) => r.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((n) => n.remove());
   return doc.body.innerHTML;
 }
 
-function rootEl() { return state.ctx?.host?.querySelector('[data-iot-root]'); }
+function rootEl() { return state.root?.querySelector('[data-iot-root]'); }
 
 // Translate the static data-copy labels + search placeholder once on mount.
 function applyStaticLabels() {
@@ -321,22 +361,6 @@ function onGrammarChange(event) {
   state.band = detail.band || 'all';
   state.realm = (detail.filters && detail.filters.realm) || 'all';
   syncLeftViewToggle();
-  syncSelectionToVisible();
-  render();
-}
-
-async function reload(isActive = () => true) {
-  const next = empty();
-  for (const n of COLLECTIONS) {
-    const c = col(n);
-    try { next[n] = c?.find ? (await c.find().exec()).map((d) => (d?.toJSON ? d.toJSON() : d)) : []; } catch { next[n] = []; }
-  }
-  if (!isActive()) return;
-  state.collections = next;
-  state.loading = false;
-  // Keep an implicit persistence dashboard current for widget writes.
-  if (!state.dashboardId) { const d = dashboards()[0]; if (d) state.dashboardId = d.id; }
-  if (state.dashboardId && !dashboards().some((d) => d.id === state.dashboardId)) state.dashboardId = dashboards()[0]?.id || '';
   syncSelectionToVisible();
   render();
 }
@@ -429,18 +453,6 @@ function statusInfo(key) {
 function statusOf(w) { return statusInfo(w.trigger_status) || (w.trigger_code ? statusInfo('armed') : statusInfo('idle')); }
 
 /* ---------- render ---------- */
-// Readiness is a render hint, never a mount blocker: without a snapshot (older
-// shell, tests) lists behave as before. ready === false (never-synced,
-// catching-up, offline-pending) swaps a data-driven empty for the syncing
-// shell — rows always win, so there is no spinner deadlock.
-function collectionSyncing(name) {
-  const snapshot = state.readiness?.[name];
-  return snapshot ? snapshot.ready === false : false;
-}
-function syncingShell() {
-  return `<div class="ctox-syncing" role="status" aria-live="polite">${esc(t('syncing', 'Daten werden synchronisiert.'))}</div>`;
-}
-
 function render() {
   renderTree();
   renderCountsAndFooter();
@@ -457,11 +469,8 @@ function renderCountsAndFooter() {
     const node = el?.querySelector(`[data-pg-count="${key}"]`);
     if (node) node.textContent = ` (${value})`;
   }
-  const realmLabel = state.realm === 'all'
-    ? t('allRealms', 'Alle Bereiche')
-    : (realms().find((r) => (r.realm || r.id) === state.realm)?.name || state.realm);
-  const bandLabel = { all: t('bandAll', 'Alle'), signals: t('bandSignals', 'Signale'), alarms: t('bandAlarms', 'Alarme') }[state.band] || t('bandAll', 'Alle');
-  const footerText = `${visibleAssetRows().length} ${t('assetsWord', 'Assets')} · ${realmLabel} · ${bandLabel}`;
+  // Textdiät Regel 3/5: Anzahl steht im Reiter „Alle(N)“ – kein Fußzähler.
+  const footerText = '';
   if (pg && typeof pg.setFooter === 'function') pg.setFooter(footerText);
   else { const node = el?.querySelector('[data-pg-footer]'); if (node) node.textContent = footerText; }
   // Keep the realm tray options current (preserve the live value).
@@ -481,21 +490,17 @@ function applyRealmOptions(el) {
 // The tree/list SELECTOR. Rebuilt only on data / grammar changes; selection is
 // an in-place class flip (applyTreeSelection), never a rebuild.
 function renderTree() {
-  const host = state.ctx?.host?.querySelector('[data-iot-tree]');
+  const host = state.root?.querySelector('[data-iot-tree]');
   if (!host) return;
   if (!allAssets().length) {
-    // Data-driven empty (unfiltered iot_assets source): show the sync state
-    // until the collection is live, only then "no assets yet".
-    if (collectionSyncing('iot_assets')) {
-      host.innerHTML = syncingShell();
-      return;
-    }
-    host.innerHTML = `<div class="ctox-empty"><strong>${esc(t('tree.emptyTitle', 'Noch keine Assets'))}</strong><span>${esc(t('tree.emptyBody', 'Lege oben links eins an.'))}</span></div>`;
+    // Leere Quelle rendert nichts (Zustand nur in der Zustandszone); das Anlegeformular bleibt erreichbar.
+    host.innerHTML = state.creating ? renderCreateForm() : '';
     return;
   }
   const visible = visibleAssetRows();
   if (!visible.length) {
-    host.innerHTML = `<div class="ctox-empty"><span>${esc(t('tree.noMatch', 'Kein Asset passt zum Filter.'))}</span></div>`;
+    // Rundgang RUND2: auch bei leerem Filter-/Bandergebnis muss „Asset anlegen“ sein Formular zeigen (sonst toter Knopf).
+    host.innerHTML = state.creating && !state.creating.parentId ? renderCreateForm() : '';
     return;
   }
   if (state.view === 'list') {
@@ -572,7 +577,7 @@ function flatRowHtml(row) {
 
 // In-place selection flip across existing rows — NO tree rebuild (scroll stays).
 function applyTreeSelection() {
-  const host = state.ctx?.host?.querySelector('[data-iot-tree]');
+  const host = state.root?.querySelector('[data-iot-tree]');
   const key = selectionKey();
   host?.querySelectorAll('[data-sel-kind]').forEach((rowEl) => {
     const on = (rowEl.getAttribute('data-sel-key') || '') === key;
@@ -623,13 +628,13 @@ function displayedWidgets() {
 }
 
 function renderMain() {
-  const center = state.ctx?.host?.querySelector('[data-iot-center]');
+  const center = state.root?.querySelector('[data-iot-center]');
   if (!center) return;
   if (resolveMainState(hasSelection()) === 'select' || !allAssets().length) {
     // No assets + collection not live yet → sync state, not the selection
     // prompt (there may be assets inbound). Selection-empty stays ungated.
     center.innerHTML = centerRestHeader()
-      + `<div class="ctox-pane-body">${(!allAssets().length && collectionSyncing('iot_assets')) ? syncingShell() : mainEmptyState()}</div>`;
+      + '<div class="ctox-pane-body"></div>';
     return;
   }
   const widgets = displayedWidgets();
@@ -645,7 +650,6 @@ function centerRestHeader() {
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">${esc(t('main.kicker', 'CTOX IoT'))}</span>
           <h2 class="ctox-pane-title">${esc(t('center.title', 'Dashboard'))}</h2>
         </div>
         <div class="ctox-pane-actions"></div>
@@ -654,17 +658,11 @@ function centerRestHeader() {
     </header>`;
 }
 
-function mainEmptyState() {
-  return `<div class="ctox-empty">
-    <strong>${esc(t('main.selectTitle', 'Wähle links ein Asset oder Signal'))}</strong>
-    <span>${esc(t('main.selectBody', 'Das Dashboard mit den CTOX-Aufträgen erscheint dann hier.'))}</span>
-  </div>`;
-}
-
 function mainHeader() {
   const sel = state.selection;
   const title = sel.kind === 'signal' ? signalLabel(signalRef(sel.assetId, sel.attr)) : (assetById(sel.assetId)?.name || sel.assetId);
-  const path = sel.kind === 'signal' ? (assetById(sel.assetId)?.name || '') : (assetPath(sel.assetId) || t('main.kicker', 'CTOX IoT'));
+  // Textdiät: Kicker nur als echter Pfad (Bereich/Asset), nie der Produktname „CTOX IoT“.
+  const path = sel.kind === 'signal' ? (assetById(sel.assetId)?.name || '') : (assetPath(sel.assetId) || '');
   const webhookBtn = sel.kind === 'signal'
     ? `<button class="ctox-pane-icon" type="button" data-act="signal-webhook" aria-label="${esc(t('menu.asWebhook', 'Als Webhook-Quelle einrichten'))}" title="${esc(t('menu.asWebhook', 'Als Webhook-Quelle einrichten'))}">${iconSvg(ICON.webhook)}</button>`
     : '';
@@ -672,7 +670,7 @@ function mainHeader() {
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">${esc(path || t('main.kicker', 'CTOX IoT'))}</span>
+          ${path ? `<span class="ctox-pane-kicker">${esc(path)}</span>` : ''}
           <h2 class="ctox-pane-title">${esc(title)}</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -690,14 +688,7 @@ function mainHeader() {
 
 function renderCards(widgets) {
   if (!widgets.length) {
-    // Data-driven empty (iot_widgets source for the selection): sync state
-    // until the collection is live, only then "no orders yet".
-    if (collectionSyncing('iot_widgets')) return syncingShell();
-    return `<div class="ctox-empty">
-      <strong>${esc(t('cards.emptyTitle', 'Noch keine Aufträge'))}</strong>
-      <p>${t('cards.emptyBody', 'Auftrag anlegen — schreibe <b>Wenn</b> &amp; <b>Dann</b>, CTOX programmiert den Wächter:')}</p>
-      <div><button class="ctox-button" data-act="new-auftrag">${esc(t('cards.newAuftrag', 'Auftrag anlegen'))}</button></div>
-    </div>`;
+    return '';
   }
   const cards = widgets.map(renderWidgetCard).join('');
   return `<div class="iot-dash-grid">${cards}
@@ -784,7 +775,7 @@ const RENDER_FORBIDDEN = new RegExp(`\\b(${[
 ].join('|')})\\b`);
 
 function mountRenderIframes(center) {
-  const cs = getComputedStyle(document.documentElement);
+  const cs = getComputedStyle(state.root || document.documentElement);
   const theme = {
     bg: (cs.getPropertyValue('--surface') || '#171d20').trim() || '#171d20',
     text: (cs.getPropertyValue('--text') || '#cfe6e2').trim() || '#cfe6e2',
@@ -858,7 +849,7 @@ function onClick(e) {
   }
 
   // Selection is an in-place flip — never a tree rebuild.
-  const tree = state.ctx?.host?.querySelector('[data-iot-tree]');
+  const tree = state.root?.querySelector('[data-iot-tree]');
   const row = e.target.closest('[data-sel-kind]');
   if (row && tree && tree.contains(row)) {
     if (row.dataset.selKind === 'signal') selectSignal(row.dataset.assetId, row.dataset.attr);
@@ -873,7 +864,7 @@ function onHeaderAction(action) {
 }
 
 /* ---------- drag-to-reorder the widget grid (persisted via sort_index) ---------- */
-function clearDragMarks() { state.ctx?.host?.querySelectorAll('.iot-widget.drag-over').forEach((el) => el.classList.remove('drag-over')); }
+function clearDragMarks() { state.root?.querySelectorAll('.iot-widget.drag-over').forEach((el) => el.classList.remove('drag-over')); }
 function onDragStart(e) {
   const card = e.target.closest('.iot-widget[data-widget]');
   if (!card) return;
@@ -923,30 +914,51 @@ function reorderWidget(draggedId, targetId) {
 
 // Mint a token-gated inbound webhook bound to this signal and show the operator
 // the one-time URL + token (a real connector — no model needed).
-async function registerWebhook(ref) {
-  const res = await dispatch('ctox.iot.webhook.register', { realm: currentRealm(), signal_ref: ref });
-  const path = res && (res.ingest_path || (res.id ? '/ctox/iot/webhook/' + res.id : ''));
-  const token = res && res.token;
-  const msg = (path || token)
-    ? t('webhook.ready', 'Webhook-Quelle für „{0}" ist eingerichtet.\n\nExterne Sensoren POSTen an:\n  {1}\nmit Header:\n  X-Webhook-Token: {2}\n\nDer Wert wird zum Signal-Datenpunkt — gebundene Wächter feuern automatisch.', signalLabel(ref), path || '(siehe ctox iot webhook)', token || '(im Secret-Store)')
-    : t('webhook.created', 'Webhook-Quelle für „{0}" wurde angelegt.', signalLabel(ref));
-  await showBusinessAlert(msg, { title: t('webhook.title', 'Webhook-Quelle'), confirmLabel: t('btn.ok', 'OK') });
+// The one-time URL + token arrive as the command result (status done) and are shown in an in-window dialog.
+function registerWebhook(ref) {
+  dispatch('ctox.iot.webhook.register', { realm: currentRealm(), signal_ref: ref }, false, (res) => {
+    const path = res && (res.ingest_path || (res.id ? '/ctox/iot/webhook/' + res.id : ''));
+    const token = res && res.token;
+    const msg = (path || token)
+      ? t('webhook.ready', 'Webhook-Quelle für „{0}" ist eingerichtet.\n\nExterne Sensoren POSTen an:\n  {1}\nmit Header:\n  X-Webhook-Token: {2}\n\nDer Wert wird zum Signal-Datenpunkt — gebundene Wächter feuern automatisch.', signalLabel(ref), path || '(siehe ctox iot webhook)', token || '(im Secret-Store)')
+      : t('webhook.created', 'Webhook-Quelle für „{0}" wurde angelegt.', signalLabel(ref));
+    state.api?.shell.dialog({ kind: 'alert', title: t('webhook.title', 'Webhook-Quelle'), text: msg, confirm_label: t('btn.ok', 'OK') });
+  });
 }
 
-function openWidgetMenu(widgetId, event) {
+// In-window dialogs over api.shell.dialog (OFFEN-A: Form von spec). Prompt → string|null, confirm → boolean.
+function promptDialog(text, { title, message, confirmLabel, defaultValue = '' } = {}) {
+  return Promise.resolve(state.api?.shell.dialog({ kind: 'prompt', title, text: message ? `${message}\n\n${text}` : text, confirm_label: confirmLabel, default: defaultValue }))
+    .then((value) => (value === null || value === undefined || value === false ? null : String(value)));
+}
+async function confirmDialog(text, { title, confirmLabel } = {}) {
+  return (await state.api?.shell.dialog({ kind: 'confirm', title, text, confirm_label: confirmLabel, danger: true, default: false })) === true;
+}
+// Hinweise statt Alert-Dialog: Zustandszone der Shell.
+function reportWarn(code, text) { state.api?.status.report({ level: 'warn', code, text }); }
+
+// Kontextmenü über api.shell.menu (nur im App-Fenster).
+async function openWidgetMenu(widgetId, event) {
   const w = (state.collections.iot_widgets || []).find((x) => x.id === widgetId); if (!w) return;
-  state.menu?.show(event, [
-    { label: t('menu.openEditor', 'Editor öffnen (3 CTOX-Teile)'), icon: '</>', action: () => openWidgetEditor(widgetId) },
-    { label: t('menu.editWhen', 'Bedingung bearbeiten (Wenn)'), icon: '✎', action: () => editField(widgetId, 'cond') },
-    { label: t('menu.editThen', 'Aktion bearbeiten (Dann)'), icon: '✎', action: () => editField(widgetId, 'action') },
+  const items = [
+    { id: 'editor', label: t('menu.openEditor', 'Editor öffnen (3 CTOX-Teile)'), icon: '</>', action: () => openWidgetEditor(widgetId) },
+    { id: 'edit-when', label: t('menu.editWhen', 'Bedingung bearbeiten (Wenn)'), icon: '✎', action: () => editField(widgetId, 'cond') },
+    { id: 'edit-then', label: t('menu.editThen', 'Aktion bearbeiten (Dann)'), icon: '✎', action: () => editField(widgetId, 'action') },
     { type: 'separator' },
     {
+      id: 'pause',
       label: w.trigger_status === 'paused' ? t('menu.resume', 'Fortsetzen') : t('menu.pause', 'Pausieren'),
       icon: w.trigger_status === 'paused' ? '▶' : '⏸',
       action: () => dispatch('ctox.iot.widget.pause', { widget_id: widgetId, paused: w.trigger_status !== 'paused' }),
     },
-    { label: t('menu.deleteAuftrag', 'Auftrag löschen'), icon: '🗑', action: () => deleteWidget(w) },
-  ]);
+    { id: 'delete', label: t('menu.deleteAuftrag', 'Auftrag löschen'), icon: '🗑', action: () => deleteWidget(w) },
+  ];
+  const picked = await state.api?.shell.menu({
+    items: items.map(({ action, ...item }) => item),
+    at: event ? { x: event.clientX, y: event.clientY } : null,
+  });
+  const id = typeof picked === 'string' ? picked : picked?.id;
+  items.find((item) => item.id && item.id === id)?.action();
 }
 
 // The editor — each widget's THREE CTOX-programmed parts, editable, each with
@@ -954,42 +966,44 @@ function openWidgetMenu(widgetId, event) {
 // · ③ Widget-Code (render_code, generated). This is the visible "CTOX programs
 // each widget" surface. It edits/displays code; it never executes it (the render
 // sandbox is a separate, isolated concern).
-function openWidgetEditor(widgetId) {
+function openWidgetEditor(widgetId, draft = null) {
   const w = (state.collections.iot_widgets || []).find((x) => x.id === widgetId);
   if (!w) return;
-  let tab = 'auftrag';
+  let tab = draft?.tab || 'auftrag';
+  const fields = { ...(draft?.fields || {}) };
+  state.root?.querySelector('[data-iot-editor]')?.remove();
   const host = document.createElement('div');
   host.className = 'ctox-modal iot-modal-overlay';
+  host.setAttribute('data-iot-editor', widgetId);
+  const val = (name) => (Object.prototype.hasOwnProperty.call(fields, name) ? fields[name] : (w[name] || ''));
   const TABS = { auftrag: t('ed.tabAuftrag', 'Auftrag'), trigger: t('ed.tabTrigger', 'Trigger-Logik'), widget: t('ed.tabWidget', 'Widget-Code') };
 
   const tabBody = () => {
     if (tab === 'auftrag') return `
-      <label class="ctox-field-label">${esc(t('ed.whenLabel', 'Wenn — die Bedingung (Freitext)'))}</label>
-      <textarea class="ctox-textarea iot-ed-area" data-ed-field="cond_text" rows="2" placeholder="${esc(t('ed.whenPlaceholder', 'z.B. wenn es länger als 5 Min über 30°C ist'))}">${esc(w.cond_text || '')}</textarea>
-      <label class="ctox-field-label">${esc(t('ed.thenLabel', 'Dann — der Auftrag an CTOX (wird bei Auslösung als Chat gespawnt)'))}</label>
-      <textarea class="ctox-textarea iot-ed-area" data-ed-field="action_prompt" rows="3" placeholder="${esc(t('ed.thenPlaceholder', "z.B. Kühlung hochfahren und melden, eskalieren wenn's nicht hilft"))}">${esc(w.action_prompt || '')}</textarea>
-      <div class="iot-ed-actions"><button class="ctox-button ctox-run-control" data-ed="save-auftrag"><span aria-hidden="true">▶</span>${esc(t('ed.saveAuftrag', 'Speichern → CTOX programmiert den Wächter neu'))}</button></div>`;
+      <label class="ctox-field-label">${esc(t('ed.whenLabel', 'Wenn'))}</label>
+      <textarea class="ctox-textarea iot-ed-area" data-ed-field="cond_text" rows="2" placeholder="${esc(t('ed.whenPlaceholder', 'z.B. wenn es länger als 5 Min über 30°C ist'))}">${esc(val('cond_text'))}</textarea>
+      <label class="ctox-field-label" title="${esc(t('ed.thenTooltip', 'Wird bei Auslösung als Chat an CTOX gestartet'))}">${esc(t('ed.thenLabel', 'Dann'))}</label>
+      <textarea class="ctox-textarea iot-ed-area" data-ed-field="action_prompt" rows="3" placeholder="${esc(t('ed.thenPlaceholder', "z.B. Kühlung hochfahren und melden, eskalieren wenn's nicht hilft"))}">${esc(val('action_prompt'))}</textarea>
+      <div class="iot-ed-actions"><button class="ctox-button ctox-run-control" data-ed="save-auftrag"><span aria-hidden="true">▶</span>${esc(t('ed.saveAuftrag', 'Speichern'))}</button></div>`;
     if (tab === 'trigger') return `
-      <div class="ctox-callout">${t('ed.triggerNote', 'Von CTOX generierte <b>Wächter-Logik</b> (Rhai, läuft im Backend pro Messwert). Status: <b>{0}</b>', esc(statusOf(w).label))}</div>
-      <textarea class="ctox-textarea iot-ed-area code" data-ed-field="trigger_code" rows="12" spellcheck="false" placeholder="${esc(t('ed.codePlaceholder', '// noch nicht programmiert — „↻ Neu generieren" beauftragt CTOX'))}">${esc(w.trigger_code || '')}</textarea>
+      <textarea class="ctox-textarea iot-ed-area code" title="${esc(t('ed.triggerTooltip', 'Wächter-Logik von CTOX (Rhai), je Messwert ausgewertet'))}" data-ed-field="trigger_code" rows="12" spellcheck="false" placeholder="${esc(t('ed.codePlaceholder', '// noch nicht programmiert — „↻ Neu generieren" beauftragt CTOX'))}">${esc(val('trigger_code'))}</textarea>
       <div class="iot-ed-actions">
         <button class="ctox-button" data-ed="regen-trigger">${esc(t('ed.regen', '↻ Neu generieren (CTOX)'))}</button>
         <button class="ctox-button is-primary" data-ed="save-trigger">${esc(t('btn.save', 'Speichern'))}</button>
       </div>`;
     return `
-      <div class="ctox-callout">${t('ed.renderNote', 'Von CTOX generierter <b>Widget-Code</b> — <code>render(host, api)</code>, gesandboxt. Die Visualisierung ist dem Auftrag untergeordnet.')}</div>
-      <textarea class="ctox-textarea iot-ed-area code" data-ed-field="render_code" rows="12" spellcheck="false" placeholder="${esc(t('ed.codePlaceholder', '// noch nicht programmiert — „↻ Neu generieren" beauftragt CTOX'))}">${esc(w.render_code || '')}</textarea>
+      <textarea class="ctox-textarea iot-ed-area code" title="${esc(t('ed.renderTooltip', 'Widget-Code von CTOX, abgeschottet ausgeführt'))}" data-ed-field="render_code" rows="12" spellcheck="false" placeholder="${esc(t('ed.codePlaceholder', '// noch nicht programmiert — „↻ Neu generieren" beauftragt CTOX'))}">${esc(val('render_code'))}</textarea>
       <div class="iot-ed-actions">
         <button class="ctox-button" data-ed="regen-render">${esc(t('ed.regen', '↻ Neu generieren (CTOX)'))}</button>
         <button class="ctox-button is-primary" data-ed="save-render">${esc(t('btn.save', 'Speichern'))}</button>
       </div>`;
   };
   const draw = () => {
+    host.setAttribute('data-iot-editor-tab', tab);
     host.innerHTML = `
       <div class="ctox-modal-card ctox-modal-card--wide" role="dialog" aria-modal="true" aria-label="${esc(t('ed.title', 'Widget bearbeiten'))}">
         <header class="ctox-modal-header">
           <div class="iot-modal-titles">
-            <span class="ctox-pane-kicker">${esc(t('ed.kicker', 'CTOX-Auftrag · von CTOX programmiert'))}</span>
             <h3 class="ctox-modal-title">${esc(signalLabel(w.signal_ref))}</h3>
           </div>
           <button class="ctox-pane-icon" type="button" data-ed="close" aria-label="${esc(t('btn.close', 'Schließen'))}">${icon('close')}</button>
@@ -1004,33 +1018,33 @@ function openWidgetEditor(widgetId) {
   const field = (name) => host.querySelector(`[data-ed-field="${name}"]`)?.value ?? '';
   const base = () => ({ id: w.id, dashboard_id: w.dashboard_id, realm: w.realm || currentRealm(), signal_ref: w.signal_ref, cond_text: w.cond_text, action_prompt: w.action_prompt, trigger_code: w.trigger_code, render_code: w.render_code });
 
-  host.addEventListener('click', async (e) => {
+  host.addEventListener('click', (e) => {
     if (e.target === host) return close();
     const target = e.target.closest('[data-ed],[data-ed-tab]');
     if (!target) return;
-    if (target.dataset.edTab) { tab = target.dataset.edTab; draw(); return; }
+    if (target.dataset.edTab) { host.querySelectorAll('[data-ed-field]').forEach((el) => { fields[el.dataset.edField] = el.value; }); tab = target.dataset.edTab; draw(); return; }
     switch (target.dataset.ed) {
       case 'close': return close();
       case 'save-auftrag':
-        await dispatch('ctox.iot.widget.upsert', { ...base(), cond_text: field('cond_text').trim(), action_prompt: field('action_prompt').trim() });
-        await dispatch('ctox.iot.widget.compile_trigger', { widget_id: w.id }, true);
+        dispatch('ctox.iot.widget.upsert', { ...base(), cond_text: field('cond_text').trim(), action_prompt: field('action_prompt').trim() });
+        dispatch('ctox.iot.widget.compile_trigger', { widget_id: w.id }, true);
         return close();
       case 'save-trigger':
-        await dispatch('ctox.iot.widget.upsert', { ...base(), trigger_code: field('trigger_code') });
+        dispatch('ctox.iot.widget.upsert', { ...base(), trigger_code: field('trigger_code') });
         return close();
       case 'save-render':
-        await dispatch('ctox.iot.widget.upsert', { ...base(), render_code: field('render_code') });
+        dispatch('ctox.iot.widget.upsert', { ...base(), render_code: field('render_code') });
         return close();
       case 'regen-trigger':
-        await dispatch('ctox.iot.widget.compile_trigger', { widget_id: w.id }, true);
+        dispatch('ctox.iot.widget.compile_trigger', { widget_id: w.id }, true);
         return close();
       case 'regen-render':
-        await dispatch('ctox.iot.widget.generate_render', { widget_id: w.id }, true);
+        dispatch('ctox.iot.widget.generate_render', { widget_id: w.id }, true);
         return close();
     }
   });
   draw();
-  const mountTarget = state.ctx?.host;
+  const mountTarget = rootEl() || state.root;
   if (mountTarget) mountTarget.appendChild(host);
 }
 
@@ -1040,12 +1054,12 @@ function genId(prefix) { return `${prefix}_${Date.now().toString(36)}_${Math.flo
 // Return a usable dashboard id. If none exists we mint the id CLIENT-SIDE and
 // pass it to dashboard.upsert (the backend honours a provided id), so the widget
 // we create next references a real dashboard without waiting for the RxDB reload.
-async function ensureDashboard() {
+function ensureDashboard() {
   if (state.dashboardId && dashboards().some((d) => d.id === state.dashboardId)) return state.dashboardId;
   const existing = dashboards()[0];
   if (existing) { state.dashboardId = existing.id; return existing.id; }
   const id = genId('dash');
-  await dispatch('ctox.iot.dashboard.upsert', { id, realm: currentRealm(), name: t('dash.defaultName', 'Mein Dashboard') });
+  dispatch('ctox.iot.dashboard.upsert', { id, realm: currentRealm(), name: t('dash.defaultName', 'Mein Dashboard') });
   state.dashboardId = id;
   return id;
 }
@@ -1066,48 +1080,51 @@ async function newAuftrag(presetSignal, scopeAssetId) {
     const scopeIds = scopeAssetId ? new Set([scopeAssetId, ...descendantIdsAll(scopeAssetId)]) : null;
     const pool = scopeIds ? allAssets().filter((a) => scopeIds.has(a.id)) : (state.realm === 'all' ? allAssets() : allAssets().filter((a) => (a.realm || 'master') === state.realm));
     const opts = pool.flatMap((a) => numericAttrs(a.id).map((s) => ({ ref: signalRef(a.id, s.attribute_name || s.name), label: `${a.name} · ${s.attribute_name || s.name}` })));
-    if (!opts.length) { await showBusinessAlert(t('auftrag.noSignal', 'Lege zuerst ein Asset mit einem numerischen Signal an.'), { title: t('auftrag.noSignalTitle', 'Kein Signal'), confirmLabel: t('btn.ok', 'OK') }); return; }
-    const picked = await showBusinessPrompt(t('auftrag.pickSignal', 'Welches Signal? Schreibe den Namen:') + '\n' + opts.map((o) => '• ' + o.label).join('\n'), { title: t('auftrag.pickTitle', 'Signal wählen'), confirmLabel: t('btn.next', 'Weiter'), defaultValue: opts[0].label });
+    if (!opts.length) { reportWarn('iot.auftrag.no_signal', t('auftrag.noSignal', 'Lege zuerst ein Asset mit einem numerischen Signal an.')); return; }
+    state.api?.status.clear('iot.auftrag.no_signal');
+    const picked = await promptDialog(t('auftrag.pickSignal', 'Welches Signal? Schreibe den Namen:') + '\n' + opts.map((o) => '• ' + o.label).join('\n'), { title: t('auftrag.pickTitle', 'Signal wählen'), confirmLabel: t('btn.next', 'Weiter'), defaultValue: opts[0].label });
     if (!picked) return;
     const hit = opts.find((o) => o.label.toLowerCase() === String(picked).trim().toLowerCase()) || opts.find((o) => o.label.toLowerCase().includes(String(picked).trim().toLowerCase()));
-    if (!hit) { await showBusinessAlert(t('auftrag.signalUnknown', 'Signal nicht erkannt — Auftrag abgebrochen.'), { title: t('auftrag.cancelled', 'Abgebrochen'), confirmLabel: t('btn.ok', 'OK') }); return; }
+    if (!hit) { reportWarn('iot.auftrag.signal_unknown', t('auftrag.signalUnknown', 'Signal nicht erkannt — Auftrag abgebrochen.')); return; }
+    state.api?.status.clear('iot.auftrag.signal_unknown');
     ref = hit.ref;
   }
-  const cond = await showBusinessPrompt(t('auftrag.whenPrompt', 'Wann soll CTOX handeln? (frei formuliert)'), { title: t('dlg.when', 'Wenn …'), message: signalLabel(ref), confirmLabel: t('btn.next', 'Weiter'), defaultValue: '' });
+  const cond = await promptDialog(t('auftrag.whenPrompt', 'Wann soll CTOX handeln? (frei formuliert)'), { title: t('dlg.when', 'Wenn …'), message: signalLabel(ref), confirmLabel: t('btn.next', 'Weiter'), defaultValue: '' });
   if (cond === null) return;
-  const action = await showBusinessPrompt(t('auftrag.thenPrompt', 'Was soll CTOX dann tun?'), { title: t('dlg.then', 'Dann …'), confirmLabel: t('auftrag.create', 'Auftrag anlegen'), defaultValue: '' });
+  const action = await promptDialog(t('auftrag.thenPrompt', 'Was soll CTOX dann tun?'), { title: t('dlg.then', 'Dann …'), confirmLabel: t('auftrag.create', 'Auftrag anlegen'), defaultValue: '' });
   if (action === null) return;
 
-  const dashId = await ensureDashboard();
+  const dashId = ensureDashboard();
   if (!dashId) return;
   const wid = genId('wid');
   const payload = { id: wid, dashboard_id: dashId, realm: currentRealm(), signal_ref: ref, cond_text: String(cond).trim(), action_prompt: String(action).trim() };
-  await dispatch('ctox.iot.widget.upsert', payload);
+  dispatch('ctox.iot.widget.upsert', payload);
   // Ask CTOX to program the watcher (durable agent-turn task; waits for a model).
-  await dispatch('ctox.iot.widget.compile_trigger', { widget_id: wid }, true);
+  dispatch('ctox.iot.widget.compile_trigger', { widget_id: wid }, true);
   // Focus the new order's signal so it shows in the dashboard immediately.
   const [aid, attr] = parseSignal(ref);
   state.selection = { kind: 'asset', assetId: aid, attr: '' };
+  render();
 }
 
 async function editField(widgetId, which) {
   const w = (state.collections.iot_widgets || []).find((x) => x.id === widgetId); if (!w) return;
   const isCond = which === 'cond';
-  const val = await showBusinessPrompt(isCond ? t('auftrag.whenPromptShort', 'Wann soll CTOX handeln?') : t('auftrag.thenPrompt', 'Was soll CTOX dann tun?'), {
+  const val = await promptDialog(isCond ? t('auftrag.whenPromptShort', 'Wann soll CTOX handeln?') : t('auftrag.thenPrompt', 'Was soll CTOX dann tun?'), {
     title: isCond ? t('dlg.when', 'Wenn …') : t('dlg.then', 'Dann …'), confirmLabel: t('btn.apply', 'Übernehmen'), defaultValue: isCond ? (w.cond_text || '') : (w.action_prompt || ''),
   });
   if (val === null) return;
   const patch = { id: w.id, dashboard_id: w.dashboard_id, realm: w.realm || currentRealm(), signal_ref: w.signal_ref };
   if (isCond) { patch.cond_text = String(val).trim(); patch.action_prompt = w.action_prompt; }
   else { patch.action_prompt = String(val).trim(); patch.cond_text = w.cond_text; }
-  await dispatch('ctox.iot.widget.upsert', patch);
-  if (isCond) await dispatch('ctox.iot.widget.compile_trigger', { widget_id: w.id }, true);
+  dispatch('ctox.iot.widget.upsert', patch);
+  if (isCond) dispatch('ctox.iot.widget.compile_trigger', { widget_id: w.id }, true);
 }
 
 async function deleteWidget(w) {
-  const ok = await showBusinessConfirm(t('del.confirm', 'Auftrag „{0}" löschen?', signalLabel(w.signal_ref)), { title: t('del.title', 'Auftrag löschen'), confirmLabel: t('btn.delete', 'Löschen'), kind: 'danger' });
+  const ok = await confirmDialog(t('del.confirm', 'Auftrag „{0}" löschen?', signalLabel(w.signal_ref)), { title: t('del.title', 'Auftrag löschen'), confirmLabel: t('btn.delete', 'Löschen') });
   if (!ok) return;
-  await dispatch('ctox.iot.widget.delete', { widget_id: w.id });
+  dispatch('ctox.iot.widget.delete', { widget_id: w.id });
 }
 
 /* ---------- import / export (honest, small — JSON via Blob / file input) ---------- */
@@ -1131,7 +1148,7 @@ function exportAssets() {
   } catch (error) {
     console.error('[iot] export failed', error);
   } finally {
-    if (url) window.setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
+    if (url) setTimeout(() => { try { URL.revokeObjectURL(url); } catch {} }, 4000);
   }
 }
 
@@ -1146,30 +1163,29 @@ function importAssets() {
     if (!file) return;
     let parsed;
     try { parsed = JSON.parse(await file.text()); } catch {
-      await showBusinessAlert(t('importInvalid', 'Ungültige JSON-Datei.'), { title: t('import.title', 'Import'), confirmLabel: t('btn.ok', 'OK') });
+      reportWarn('iot.import.invalid', t('importInvalid', 'Ungültige JSON-Datei.'));
       return;
     }
+    state.api?.status.clear('iot.import.invalid');
     const items = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
     const candidates = items.filter((item) => item && typeof item === 'object' && String(item.name || '').trim());
     if (!candidates.length) {
-      await showBusinessAlert(t('importEmpty', 'Keine Datensätze in der Datei.'), { title: t('import.title', 'Import'), confirmLabel: t('btn.ok', 'OK') });
+      reportWarn('iot.import.empty', t('importEmpty', 'Keine Datensätze in der Datei.'));
       return;
     }
-    let count = 0;
+    state.api?.status.clear('iot.import.empty');
     for (const item of candidates) {
       try {
-        await dispatch('ctox.iot.asset.upsert', {
+        dispatch('ctox.iot.asset.upsert', {
           realm: currentRealm(),
           name: String(item.name).trim(),
           asset_type: String(item.asset_type || item.type || 'Sensor'),
           parent_id: item.parent_id || null,
         });
-        count += 1;
       } catch (error) {
         console.error('[iot] import failed', error);
       }
     }
-    await showBusinessAlert(`${t('imported', 'Importiert')}: ${count}`, { title: t('import.title', 'Import'), confirmLabel: t('btn.ok', 'OK') });
   });
   input.click();
 }
@@ -1184,19 +1200,32 @@ function onSubmit(e) {
   }
 }
 
-async function dispatch(command_type, payload, tolerant) {
-  const bus = state.ctx?.commandBus;
-  if (!bus?.dispatch) return;
+// Befehl absetzen, nie warten (R5). failed / lokal ungültig → Zustandszone (tolerante Befehle nur Konsole),
+// done → Zoneneintrag räumen und optional das Ergebnis weiterreichen.
+function dispatch(command_type, payload, tolerant, onDone) {
+  const api = state.api;
+  if (!api) return null;
+  const code = `iot.command.${command_type}`;
+  const record_id = payload.id || payload.widget_id || payload.dashboard_id || payload.name || payload.signal_ref || 'iot';
+  const fail = (error) => {
+    if (tolerant) { console.warn('[iot] command failed', command_type, error); return; }
+    api.status.report({ level: 'error', code, text: `${t('cmd.failed', 'Aktion fehlgeschlagen')}: ${command_type}${error ? ` – ${error}` : ''}`, ...(handle ? { ref: handle.id } : {}) });
+  };
+  let handle = null;
   try {
-    await state.ctx?.sync?.startCollection?.('business_commands');
-    return await bus.dispatch({
-      id: `cmd_iot_${BUILD}_${Math.round(performance.now())}_${Math.floor(Math.random() * 1e4)}`,
-      module: 'iot', command_type,
-      record_id: payload.id || payload.widget_id || payload.dashboard_id || payload.name || payload.signal_ref || 'iot',
-      inbound_channel: 'business_os.iot', payload, client_context: { source_module: 'iot' },
-    });
-  } catch (err) {
-    if (!tolerant) console.error('[iot] command failed', command_type, err);
-    return undefined;
-  }
+    handle = api.command(command_type, {
+      ...payload, module: 'iot', record_id, inbound_channel: 'business_os.iot', client_context: { source_module: 'iot' },
+    }, { record_id });
+  } catch (error) { fail(error?.message || String(error)); return null; }
+  handle.local?.catch?.((error) => fail(error?.message || String(error)));
+  let off = null;
+  let finished = false;
+  off = handle.status.subscribe((st) => {
+    if (finished) return;
+    if (st?.status === 'failed') { finished = true; fail(st.error || ''); off?.(); }
+    else if (st?.status === 'done') { finished = true; api.status.clear(code); off?.(); onDone?.(st.result); }
+  });
+  if (finished) off?.();
+  else state.disposers.push(() => off?.());
+  return handle;
 }

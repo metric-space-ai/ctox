@@ -1,0 +1,54 @@
+{
+ "app": "file-viewer",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Datei-Viewer",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 812
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Datei öffnen…"
+   ],
+   "shot": "file-viewer/420-01-open.png"
+  },
+  {
+   "step": "button Datei öffnen…",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "file-viewer/420-02-button_Datei_ffnen_.png"
+  },
+  {
+   "step": "button Abbrechen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "file-viewer",
+  "Datei-Viewer",
+  "Datei-Viewer"
+ ]
+}

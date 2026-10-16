@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shell v4 Rahmen-Labor</title>
+<style>html,body{margin:0;height:100%}</style>
+</head>
+<body>
+<div id="ctox-shell"></div>
+<script type="module">
+import { createKernelMock } from './kernel-mock.js';
+import * as frame from '../index.js';
+
+const m = (id, ver, category) => ({ app_id: id, app_ver: ver, entry: 'index.js', layout: { icon_asset: 'icon.svg', category } });
+const q = new URLSearchParams(location.search);
+const kernel = createKernelMock({
+  commands: q.get('cmd') === '1',
+  apps: [
+    { id: 'notes', title: 'Notizen', active_ver: '1.0.0', activated_ver: '1.0.0', state: 'activated', target_ver: null, error: null },
+    { id: 'tasks', title: 'Aufgaben', active_ver: '1.0.0', activated_ver: '1.0.0', state: 'activated', target_ver: null, error: null },
+    { id: 'ledger', title: 'Buchhaltung', active_ver: '1.0.0', activated_ver: '1.0.0', state: 'activated', target_ver: null, error: null },
+  ],
+  manifests: {
+    'notes@1.0.0': m('notes', '1.0.0', 'Arbeit'),
+    'tasks@1.0.0': m('tasks', '1.0.0', 'Arbeit'),
+    'ledger@1.0.0': m('ledger', '1.0.0', 'Finanzen'),
+    'ledger@1.1.0': m('ledger', '1.1.0', 'Finanzen'),
+  },
+});
+window.__lab = {
+  kernel,
+  frame,
+  manifestFor: m,
+  activeShell: () => kernel.sim.activeShell(),
+  async swapShell() {
+    const t0 = performance.now();
+    const snap = await frame.stopShell();
+    await frame.startShell(kernel, { restored: snap });
+    return { snap, ms: performance.now() - t0 };
+  },
+};
+await frame.startShell(kernel, {});
+window.__labReady = true;
+</script>
+</body>
+</html>

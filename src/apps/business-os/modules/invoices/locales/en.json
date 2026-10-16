@@ -2,8 +2,6 @@
   "title": "Invoices",
   "scope": "invoices.scope.label",
   "create_button": "+ New Invoice",
-  "empty_hint": "Select an invoice from the list or create a new draft.",
-  "list_empty": "No invoices yet.",
   "state": {
     "draft": "Draft",
     "posted": "Posted",

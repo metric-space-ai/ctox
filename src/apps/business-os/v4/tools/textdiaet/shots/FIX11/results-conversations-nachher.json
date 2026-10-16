@@ -1,0 +1,213 @@
+{
+ "at": "2026-10-16T00:39:18.942Z",
+ "variant": "frame",
+ "stub": "/Users/michaelwelsch/.local/state/shell-v4/stub-pins/a8765b9",
+ "widths": [
+  420,
+  1280
+ ],
+ "ported": [
+  "conversations"
+ ],
+ "skipped": [],
+ "results": [
+  {
+   "app": "conversations",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 314,
+    "visibleElements": 115,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 998,
+    "scrollTop": 0,
+    "title": "Konversationen",
+    "titleCalls": [
+     "Konversationen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/conversations@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.conv-module",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.conv-pane"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 177,
+      "text": "AH anna.schmidt@mueller-maschinenbau.de,"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 146,
+      "y": 76
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "conversations/420.png"
+  },
+  {
+   "app": "conversations",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 313,
+    "visibleElements": 198,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 1716,
+    "scrollTop": 0,
+    "title": "Konversationen",
+    "titleCalls": [
+     "Konversationen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      75,
+      75,
+      75
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/conversations@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "conversations/1280.png"
+  }
+ ],
+ "zoneCases": []
+}

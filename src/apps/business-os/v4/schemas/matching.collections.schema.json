@@ -1,0 +1,276 @@
+{
+  "_app_id": "matching",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {
+    "matching_objects": {
+      "source": "modules/matching/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "matching_requirements": {
+      "source": "modules/matching/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "matching_results": {
+      "source": "modules/matching/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    }
+  },
+  "collections": {
+    "matching_objects": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "_deleted": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "data": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "definition_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "parsed_object": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "prompt_key": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 2
+    },
+    "matching_requirements": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "_deleted": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "data": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "definition_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "parsed_requirement": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "prompt_key": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 2
+    },
+    "matching_results": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "_deleted": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "data": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "definition_id": {
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "object_id": {
+          "type": "string"
+        },
+        "parsed_match": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "requirement_id": {
+          "type": "string"
+        },
+        "schema_version": {
+          "type": "string"
+        },
+        "score": {
+          "type": "number"
+        },
+        "source_ref": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 2
+    }
+  },
+  "migrations": {
+    "matching_objects": {
+      "from_ver": "main@4794af03d",
+      "steps": [],
+      "_schema_version": {
+        "from": 1,
+        "to": 2
+      },
+      "_reasons": [
+        "„title“ nicht mehr Pflicht",
+        "„status“ nicht mehr Pflicht",
+        "„data“ nicht mehr Pflicht"
+      ]
+    },
+    "matching_requirements": {
+      "from_ver": "main@4794af03d",
+      "steps": [],
+      "_schema_version": {
+        "from": 1,
+        "to": 2
+      },
+      "_reasons": [
+        "„title“ nicht mehr Pflicht",
+        "„status“ nicht mehr Pflicht",
+        "„data“ nicht mehr Pflicht"
+      ]
+    },
+    "matching_results": {
+      "from_ver": "main@4794af03d",
+      "steps": [],
+      "_schema_version": {
+        "from": 1,
+        "to": 2
+      },
+      "_reasons": [
+        "„title“ nicht mehr Pflicht",
+        "„status“ nicht mehr Pflicht",
+        "„data“ nicht mehr Pflicht"
+      ]
+    }
+  },
+  "migration_strategies": {
+    "matching_objects": {
+      "1": {
+        "operations": []
+      },
+      "2": {
+        "operations": []
+      }
+    },
+    "matching_requirements": {
+      "1": {
+        "operations": []
+      },
+      "2": {
+        "operations": []
+      }
+    },
+    "matching_results": {
+      "1": {
+        "operations": []
+      },
+      "2": {
+        "operations": []
+      }
+    }
+  }
+}

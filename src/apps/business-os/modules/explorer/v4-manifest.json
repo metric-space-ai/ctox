@@ -1,0 +1,31 @@
+{
+  "_basis": {
+    "foreign_collections": "modules/explorer/V4-PORT.md OFFEN 1 und 6"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "foreign_collections": {
+    "desktop_files": [
+      "read",
+      "write"
+    ],
+    "documents": [
+      "read"
+    ],
+    "files": [
+      "read"
+    ],
+    "knowledge_items": [
+      "read"
+    ],
+    "matching_objects": [
+      "read"
+    ],
+    "outbound_companies": [
+      "read"
+    ],
+    "spreadsheets": [
+      "read"
+    ]
+  }
+}

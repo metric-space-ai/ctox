@@ -1,0 +1,100 @@
+{
+ "app": "mail",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Mail",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neue Mail",
+    "button:Einstellungen",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Ordner (6)",
+    "nav:E-Mail-Gruppen (6)",
+    "button:Posteingang 6 Ungelesen 6",
+    "button:Gesendet Versendete Nachrichte",
+    "button:Alle Nachrichten Posteingang u",
+    "button:Freigabe Wartet auf Freigabe 0",
+    "button:Fehler Prüfung erforderlich 0",
+    "button:Geroutete E-Mails App-Übergabe",
+    "button:Navigationsbreite anpassen",
+    "button:Mails importieren",
+    "button:Mails exportieren",
+    "nav:Alle (6)",
+    "nav:Eingang (6)",
+    "nav:Gesendet (0)",
+    "nav:Aktion nötig (6)",
+    "row:Nachrichten Zeit",
+    "check:Sichtbare Seite auswählen",
+    "row:communication--001 3 neu Budge",
+    "check:Budgetplanung Vertrieb Süd aus",
+    "row:communication--002 12 neu Quar",
+    "check:Quartalsbericht Q3 2026 auswäh",
+    "row:communication--003 1 neu Angeb",
+    "check:Angebot Wartungsvertrag Halle ",
+    "row:communication--004 7 neu Proje",
+    "check:Projektplan Relaunch Kundenpor",
+    "row:communication--005 24 neu Lief",
+    "check:Lieferantenbewertung 2026 ausw",
+    "row:communication--006 5 neu Onboa",
+    "check:Onboarding neue Mitarbeitende "
+   ],
+   "shot": "mail/1280-01-open.png"
+  },
+  {
+   "step": "nav Ordner (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "mail/1280-02-nav_Ordner_6_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 804,
+   "shot": "mail/1280-03-suche_ohne_Treffer.png",
+   "textAfter": 583
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "mail/1280-04-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "mail",
+  "Mail"
+ ]
+}

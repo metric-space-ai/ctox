@@ -50,11 +50,9 @@ Michael/Claude explicitly authorized direct implementation in a normal CTOX PR
 for this performance repair because the embedded Pi model route is unavailable.
 This narrow exception does not authorize an alternate Business OS data plane.
 
-Required regressions (through the Linux GPU lane):
-- node src/apps/business-os/scripts/tests/outbound-scoped-reload.test.mjs
-- node src/apps/business-os/scripts/tests/outbound-lead-revision-loader.test.mjs
-- node src/apps/business-os/scripts/tests/outbound-lead-list-loader.test.mjs
-- node src/apps/business-os/scripts/tests/outbound-import-app.test.mjs
+Required regressions (App-API 4.0; the v3 loader/reload tests were deleted with their modules, V4-PORT.md §19):
+- node --test src/apps/business-os/scripts/tests/outbound-*.test.mjs
+- CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/9fa9948 node --test src/apps/business-os/customer-modules/outbound-lead-generation/tests/v4-api.test.mjs
 
 Real browser load/transfer, detail, edit, export, live updates and reconnect
 acceptance follow installation on the identified customer runtime.

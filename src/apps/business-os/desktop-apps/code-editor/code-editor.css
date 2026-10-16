@@ -1,0 +1,34 @@
+/* Editor-Bibliothek (createCodeEditor) – alles unter .ctox-code-editor, keine Shell-Vorfahren. */
+[data-app="code-editor"] .ctox-code-editor { display: grid; grid-template-columns: minmax(150px, 220px) minmax(0, 1fr); height: 100%; min-height: 0; background: var(--surface, #fff); color: var(--text, #52525b); font: 12px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+[data-app="code-editor"] .ctox-code-editor__side { display: grid; grid-template-rows: auto minmax(0, 1fr); min-height: 0; border-right: 1px solid var(--line, #e4e4e7); background: var(--surface-2, #fcfcfc); }
+[data-app="code-editor"] .ctox-code-editor__search { display: flex; align-items: center; gap: 6px; margin: 8px; padding: 0 8px; height: 28px; border: 1px solid var(--line, #e4e4e7); border-radius: 7px; background: var(--surface, #fff); color: var(--muted, #71717b); }
+[data-app="code-editor"] .ctox-code-editor__search input { flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text, #52525b); font: inherit; }
+[data-app="code-editor"] .ctox-code-editor__files { overflow: auto; min-height: 0; padding: 0 6px 8px; display: grid; align-content: start; gap: 1px; }
+[data-app="code-editor"] .ctox-code-editor__file { text-align: left; border: 0; background: transparent; color: inherit; font: 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 4px 8px; border-radius: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+[data-app="code-editor"] .ctox-code-editor__file:hover { background: color-mix(in srgb, var(--accent, #1b4ed8) 6%, transparent); }
+[data-app="code-editor"] .ctox-code-editor__file.is-active { background: color-mix(in srgb, var(--accent, #1b4ed8) 12%, transparent); color: var(--accent, #1b4ed8); }
+[data-app="code-editor"] .ctox-code-editor__file.is-dirty::after { content: ' ●'; color: var(--accent, #1b4ed8); }
+[data-app="code-editor"] .ctox-code-editor__main { display: grid; grid-template-rows: 36px minmax(0, 1fr); min-width: 0; min-height: 0; }
+[data-app="code-editor"] .ctox-code-editor__bar { display: flex; align-items: center; gap: 6px; padding: 0 8px 0 12px; border-bottom: 1px solid var(--line, #e4e4e7); min-width: 0; overflow-x: auto; }
+[data-app="code-editor"] .ctox-code-editor__bar strong { white-space: nowrap; }
+[data-app="code-editor"] .ctox-code-editor__bar span[data-ce-detail] { color: var(--muted, #71717b); white-space: nowrap; }
+[data-app="code-editor"] .ctox-code-editor__spacer { flex: 1; }
+[data-app="code-editor"] .ctox-code-editor__bar button { height: 26px; padding: 0 10px; border: 1px solid var(--line, #e4e4e7); border-radius: 7px; background: var(--surface, #fff); color: var(--text, #52525b); font: inherit; cursor: pointer; white-space: nowrap; }
+[data-app="code-editor"] .ctox-code-editor__bar button:disabled { opacity: .45; cursor: default; }
+[data-app="code-editor"] .ctox-code-editor__bar button[aria-pressed="true"] { border-color: var(--accent, #1b4ed8); color: var(--accent, #1b4ed8); }
+[data-app="code-editor"] .ctox-code-editor__work { display: grid; grid-template-columns: minmax(0, 1fr) auto; min-height: 0; min-width: 0; }
+[data-app="code-editor"] .ctox-code-editor__host, [data-app="code-editor"] .ctox-code-editor__monaco { min-height: 0; min-width: 0; height: 100%; }
+[data-app="code-editor"] .ctox-code-editor__fallback { display: grid; grid-template-columns: auto minmax(0, 1fr); height: 100%; min-height: 0; }
+[data-app="code-editor"] .ctox-code-editor__lines { margin: 0; padding: 10px 8px; text-align: right; color: var(--muted, #71717b); background: var(--surface-2, #fcfcfc); border-right: 1px solid var(--line, #e4e4e7); overflow: hidden; font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; user-select: none; }
+[data-app="code-editor"] .ctox-code-editor__text { margin: 0; padding: 10px 12px; border: 0; outline: 0; resize: none; background: var(--surface, #fff); color: var(--text, #52525b); font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; min-width: 0; }
+[data-app="code-editor"] .ctox-code-editor__diff { width: min(380px, 45cqw); border-left: 1px solid var(--line, #e4e4e7); overflow: auto; background: var(--surface-2, #fcfcfc); }
+[data-app="code-editor"] .ctox-code-editor__diff[hidden] { display: none; }
+[data-app="code-editor"] .ctox-code-editor__diff-head { padding: 8px 10px; color: var(--muted, #71717b); border-bottom: 1px solid var(--line, #e4e4e7); }
+[data-app="code-editor"] .ctox-code-editor__diff pre { margin: 0; padding: 8px 10px; font: 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+[data-app="code-editor"] .ctox-code-editor__diff .is-add { color: #15803d; }
+[data-app="code-editor"] .ctox-code-editor__diff .is-remove { color: #b91c1c; }
+@container (max-width: 560px) {
+  [data-app="code-editor"] .ctox-code-editor { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 132px) minmax(0, 1fr); }
+  [data-app="code-editor"] .ctox-code-editor__side { border-right: 0; border-bottom: 1px solid var(--line, #e4e4e7); }
+  [data-app="code-editor"] .ctox-code-editor__diff { position: absolute; inset: 72px 0 0 auto; }
+}

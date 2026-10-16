@@ -1,0 +1,729 @@
+{
+  "_capability_evidence": {
+    "agent.task.enqueue": [
+      "handlers/_lib/document-runbook.js",
+      "handlers/research.systematic.report.create.js"
+    ],
+    "agent.task.get": [
+      "handlers/_lib/automation.js"
+    ],
+    "agent.task.workspace.read": [
+      "handlers/research.systematic.report.complete.js"
+    ],
+    "dataframe.window": [
+      "handlers/_lib/report.js"
+    ],
+    "office.edit.apply": [
+      "handlers/_lib/office.js"
+    ],
+    "office.edit.prepare": [
+      "handlers/_lib/office.js",
+      "handlers/_lib/report-writeback.js"
+    ],
+    "office.render": [
+      "handlers/office.document.export.js",
+      "handlers/office.document.freeze_email_content.js"
+    ],
+    "office.settings.save": [
+      "handlers/ctox.office.settings.save.js"
+    ]
+  },
+  "_commands_out_evidence": {
+    "ctox ctox.app.modify.request": [
+      "index.js:658"
+    ],
+    "ctox ctox.chat.task": [
+      "index.js:658"
+    ]
+  },
+  "_declaration": "modules/documents/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/documents/index.html",
+  "_rust_basis": "~3,8k app-spezifisch: `store_office_commands.rs` (1571), `office_staging_repair.rs` (406), `store.rs` Dokumentfunktionen ~1,27k (u. a. `writeback_generated_docx` `:23498`, 242), `rxdb_peer.rs` (~0,3k); Plattform: `office_engine.rs` (16 047)",
+  "_source_dir": "src/apps/business-os/modules/documents",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "documents",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "agent.task.enqueue",
+    "agent.task.get",
+    "agent.task.workspace.read",
+    "dataframe.window",
+    "office.edit.apply",
+    "office.edit.prepare",
+    "office.render",
+    "office.settings.save"
+  ],
+  "collections": {
+    "document_blob_chunks": {
+      "_class_proposal": "Chunk-Collection; §10.2a Nr. 4: Chunk-Collections entfallen, Inhalt über files/Spur 4 – Klasse blob bis zur Ablösung",
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/documents.collections.schema.json",
+      "byte_budget": null,
+      "class": "blob",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": false,
+        "primaryKey": "id",
+        "properties": {
+          "blob_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "type": "string"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "encoding": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "idx": {
+            "type": "number"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "total": {
+            "type": "number"
+          },
+          "version_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "blob_id",
+          "document_id",
+          "version_id",
+          "idx",
+          "total",
+          "mime_type",
+          "encoding",
+          "data",
+          "created_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "document_runbooks": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/documents.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "command_type": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "description": {
+            "type": "string"
+          },
+          "document_type": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "prompt_template": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "document_type",
+          "title",
+          "command_type",
+          "prompt_template",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "document_versions": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/documents.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "blob_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "diagnostics": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "model_json": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "source_kind": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "version": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "document_id",
+          "version",
+          "source_kind",
+          "blob_id",
+          "model_json",
+          "diagnostics",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "documents": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/documents.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "created_at_ms": {
+            "type": "number"
+          },
+          "current_version_id": {
+            "type": "string"
+          },
+          "diagnostics_count": {
+            "type": "number"
+          },
+          "display_cache": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "document_type": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "index_text": {
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "linked_records": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "page_count": {
+            "type": "number"
+          },
+          "source_sha256": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "filename",
+          "mime_type",
+          "status",
+          "current_version_id",
+          "index_text",
+          "is_deleted",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [
+    {
+      "from": [
+        "research"
+      ],
+      "type": "research.systematic.report.create"
+    }
+  ],
+  "commands_out": [
+    {
+      "app": "ctox",
+      "type": "ctox.app.modify.request"
+    },
+    {
+      "app": "ctox",
+      "type": "ctox.chat.task"
+    }
+  ],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "document_blob_chunks": [
+      "read"
+    ],
+    "document_versions": [
+      "read",
+      "write"
+    ],
+    "documents": [
+      "read",
+      "write"
+    ]
+  },
+  "files": {
+    "V4-HANDLERS.md": "bc07a3c513ee45574a168565e852d96122ee9453fd20d4742850ed8f83c34d59",
+    "V4-PORT.md": "30322e8e9cd095ba3a953fa787bf15460e4cc55bf482f8c023603455e8048401",
+    "assets/icon.jpg": "8a673edbc3339255706b8d7e5f119759ab1eb5f3ca85b81a0ac33eb35fa00187",
+    "assets/icon@512.jpg": "7c4ac5c8a10782423ffc9595c2de46e97957b5e2200c5ccd27f53aba6cea4426",
+    "collections.schema.json": "a992fa64bf56efbff2f676c9237355071afba0a46b24dd4cf93b9539cb950e7b",
+    "document-format/src/index.ts": "3bb863f468956bb3e0a61d6f2d4cb8c8dbc2ee68bd67c740c7afe008193ddf0d",
+    "handlers/_lib/automation.js": "1bd0fef11851a1b186acb0b6b62ddd7d666faf949ed6913f98609255676b6db6",
+    "handlers/_lib/document-runbook.js": "cd8f365920bb7f3127012ea4b42f6ca3d8b643f4e7350e0e69146bb83e666e67",
+    "handlers/_lib/office.js": "1725c430a19c3e7e6fc99cbc62c3c8ef16108c0b094da523b3bf37fd714615ba",
+    "handlers/_lib/report-writeback.js": "7269722b67d456dc0b36d2831e0de4f08befa7747c022e8c355a6bad36cd9732",
+    "handlers/_lib/report.js": "e3ea72f1835d7c65d5c415d1d56ed184d80cb5a85d790b77b4b286fd0e0c553c",
+    "handlers/ctox.office.settings.save.js": "286f5fbded786042606ae433825b43c057622f07ffb493a311a5f5e789993707",
+    "handlers/document.extract-requirements.js": "3cf778c7186193bf2a6e0d129cea35e35b82794d39dc8bc6d74450d3d10094c2",
+    "handlers/document.review-risks.js": "277c299f89914d3d6cc9beb74282299db0ed00244e2683c47d804376c77458b7",
+    "handlers/document.runbook.complete.js": "79f5df9143bec896c48d8d99d1778eed95c7d5a3666b672672318a9f56a2a6d8",
+    "handlers/document.runbook.failed.js": "fb84f0315e43e53cc1c7802baf81b7faf42fd0d08d87c9d6238c86f76edba08f",
+    "handlers/document.summarize.js": "73020ba573175bb2844e3aec62af9d62e5c67140e3586da1d669a793c266d10f",
+    "handlers/office.document.commit.js": "12351a72a2ead24b5e971fc836a8e5d8d0640d2e1c11a42106f6173cd84bdbf9",
+    "handlers/office.document.export.js": "ae943ebfe060aba4c3dc535ddff79ae534fa2633992a2a40a1d2314054078618",
+    "handlers/office.document.freeze_email_content.js": "6badc5d5ae1cba0a305c6f3d9d8b13a35c70290b72576cca62b3ba0dbbf0ff18",
+    "handlers/office.document.prepare.js": "8b757661b8cf8eea32ac555ed893c7245ff9c906bc56aabb1f8df4a30ea4b068",
+    "handlers/research.systematic.report.complete.js": "dae6f7aac4406f6026abae27a24679466ef34e4cbe664d796680654ee72fccac",
+    "handlers/research.systematic.report.create.js": "665ce2449526e8eb39950ad6a1ddbc050fc0f1aa7947f1b11af9c71b58a0a882",
+    "handlers/research.systematic.report.failed.js": "6fa51a6cfb84051976594436c9c540d1e239d2b262a1eb5689854dfc6f76acf5",
+    "icon.svg": "55f4efaeb0cf479fe3f5ea3508723657f11990650e531668c6de9484f3be51ff",
+    "index.css": "0681bcd9b653ce4cb5fe801cc1dab0dc76ceb2c3fa70b0efe852daf353bbe5d8",
+    "index.html": "f2e57ed5a990fbec7b1115cd01e9ada1ec9a60b4c4d3878dcaf5fc629bab1e6f",
+    "index.js": "55fe5805edbd5f78a6b49d1d35b7a6c2106f01d03f993ab1a6f5412c12ed5dc4",
+    "locales/de.json": "8a629d1bb9af502bd2529f31bdda7b31d0b7ee62180ce2cea5fb2fe5590d2c57",
+    "locales/en.json": "f6306208eda2ea31faa9db445727c3ad3548fc80fdf91a9bd7c5d0c1dd3a0f23",
+    "module.json": "872237b6a7bdf7d69f443d20fe3417399839c6d3ee7bb60353d8710079956d94",
+    "office-bridge-v4.js": "fdea2336a1ceb748e5b897bc60b1c7bc5f84f4766860ab46af6e14c83dd42f8a",
+    "prompts/document-extract-requirements.md": "9f1a1c1839e2d32fb86d21df7b92c4bca664e5099a72d4e15253bfacbf933cc8",
+    "prompts/document-review-risks.md": "21f93c049927ac7701b9905d6ed5e51a53e26c64d69e188e6a78504dd2b509d7",
+    "prompts/document-runbook.md": "8aae2782517c96ca9af9568eff4dcf249bbb55d92813ce919598ef290899be8a",
+    "prompts/document-summarize.md": "ca59a7c7855807e938587ef991844248949371d6418e44ea35885e3c2392ff06",
+    "prompts/knowledge-auto.md": "16e76849fa439873d8041449f1d14e19b055b51e8a10e69ea0b10830459f81c6",
+    "prompts/knowledge-skill.md": "8bd50bc615532ecedbc8a42057df939a31063d5bb6e58a06fe7f70380fdc5e62",
+    "prompts/knowledge-table.md": "bd0cd2e34e4126983fed7d25501b076b0246889fc6cb9e9abb4168b1c89cb0e7",
+    "prompts/report-type-auto.md": "40616da4e9ff54db804972230cc2a867be78545ae5aefb7c4a38037ddd512085",
+    "prompts/report-type-fixed.md": "44987371e5825d5079e209c0447d65784f515167cd94c9a7a9a0caec5ee5b92a",
+    "prompts/report.md": "716d7d571964bae538bf5324d7730883c5946d3ea4878e3619b8206dfff9af50",
+    "prompts/research-report-auto.md": "d91b14b3a8628d4e2980a6f189bdf61ddc7426ca098d2829294c580c1eee63ed",
+    "prompts/research-report-competitive-analysis.md": "0839281b3d686afe8ebe599c9774675ba8271d8cda410e02843ad512f74bdd41",
+    "prompts/research-report-decision-brief.md": "361230ff9473edb11e6d71bf191c6b45974d5a657986e097b8b7d8bd663c10f4",
+    "prompts/research-report-feasibility-study.md": "96ca2a5d487b791ab54bd015faed9ec7a8106228116eb9b90cd55759f6050fad",
+    "prompts/research-report-literature-review.md": "21e91f53a6f241991871887749f5afcd8530461db1f6d4deaf29fe9c5dfd39d5",
+    "prompts/research-report-market-research.md": "4f6fb2d59ef93ad47db5627d9b1aced0d308265157d68213da72a01861b36203",
+    "prompts/research-report-project-description.md": "86db17d20198a905d26011551749484d6359f3a4016b035d576af34a5c4d19e1",
+    "prompts/research-report-source-review.md": "f48207bfd357c23e99d68091e41d2075b3f8b467f2bd6e8d7cf4cbc65bacd59d",
+    "prompts/research-report-technology-screening.md": "d1c509973e45e4d175c211cc9e315e16ca8503dc5d50b399bb6ed594e773e49d",
+    "prompts/research-report-whitepaper.md": "908e4b15df336723e33443b89f59f19c3bc0059524e37bf30222b420b54e0a4d",
+    "v4-manifest.json": "325caf7a5459ea57452c63a69efe93ed1d8829bc60845b880933662992a10c20",
+    "vendor/document-format.mjs": "8d6760559541d7598d578f2f00d6a8fb76f16c2aea5b8a2381d18fe3edbc4c6a"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "index.js:710",
+          "index.js:729",
+          "index.js:3275"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "ctox_runtime_settings": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "declaration_basis": "modules/documents/V4-PORT.md OFFEN 2 und 3",
+        "sources": [
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "files": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/office.js:131",
+          "handlers/_lib/office.js:142",
+          "handlers/_lib/report.js:277"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "knowledge_items": {
+      "_evidence": {
+        "code_read": [
+          "index.js:23",
+          "index.js:834",
+          "index.js:2573"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/documents/V4-PORT.md OFFEN 2 und 3",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "knowledge"
+    },
+    "knowledge_runbooks": {
+      "_evidence": {
+        "code_read": [
+          "index.js:23",
+          "index.js:835",
+          "index.js:3340"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/documents/V4-PORT.md OFFEN 2 und 3",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "knowledge"
+    },
+    "knowledge_tables": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/report.js:142",
+          "handlers/_lib/report.js:160",
+          "handlers/_lib/report.js:201"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/documents/V4-PORT.md OFFEN 2 und 3",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "knowledge"
+    },
+    "spreadsheet_blob_chunks": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/office.js:71"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "spreadsheets"
+    },
+    "spreadsheet_versions": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/office.js:70",
+          "office-bridge-v4.js:23"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "spreadsheets"
+    },
+    "spreadsheets": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/office.js:68",
+          "handlers/_lib/office.js:69",
+          "office-bridge-v4.js:21"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "spreadsheets"
+    }
+  },
+  "handlers": {
+    "ctox.office.settings.save": "handlers/ctox.office.settings.save.js",
+    "document.extract-requirements": "handlers/document.extract-requirements.js",
+    "document.review-risks": "handlers/document.review-risks.js",
+    "document.runbook.complete": "handlers/document.runbook.complete.js",
+    "document.runbook.failed": "handlers/document.runbook.failed.js",
+    "document.summarize": "handlers/document.summarize.js",
+    "office.document.commit": "handlers/office.document.commit.js",
+    "office.document.export": "handlers/office.document.export.js",
+    "office.document.freeze_email_content": "handlers/office.document.freeze_email_content.js",
+    "office.document.prepare": "handlers/office.document.prepare.js",
+    "research.systematic.report.complete": "handlers/research.systematic.report.complete.js",
+    "research.systematic.report.create": "handlers/research.systematic.report.create.js",
+    "research.systematic.report.failed": "handlers/research.systematic.report.failed.js"
+  },
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/documents.jpg (shared/operator-icon-selection.js, sha256 31123bf17386…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Knowledge",
+    "drawers": {
+      "bottom": "diagnostics, export evidence, and selected document context",
+      "left": "document metadata and import settings"
+    },
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-documents\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-documents\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#3b82f6\" /><stop offset=\"100%\" stop-color=\"#6366f1\" /></linearGradient></defs><path d=\"M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z\" fill=\"url(#grad-documents)\" fill-opacity=\"0.12\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M14 2v4a2 2 0 0 0 2 2h4\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><line x1=\"8\" y1=\"12\" x2=\"16\" y2=\"12\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"8\" y1=\"16\" x2=\"16\" y2=\"16\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line><line x1=\"8\" y1=\"8\" x2=\"10\" y2=\"8\" stroke=\"url(#grad-documents)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></line></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 800,
+        "width": 1180
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#2563eb",
+        "category": "Knowledge",
+        "iconAssetId": "workjet.business-os.documents",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "document",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Documents"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "prompts": [
+    {
+      "name": "document-extract-requirements",
+      "path": "prompts/document-extract-requirements.md"
+    },
+    {
+      "name": "document-review-risks",
+      "path": "prompts/document-review-risks.md"
+    },
+    {
+      "name": "document-runbook",
+      "path": "prompts/document-runbook.md"
+    },
+    {
+      "name": "document-summarize",
+      "path": "prompts/document-summarize.md"
+    },
+    {
+      "name": "knowledge-auto",
+      "path": "prompts/knowledge-auto.md"
+    },
+    {
+      "name": "knowledge-skill",
+      "path": "prompts/knowledge-skill.md"
+    },
+    {
+      "name": "knowledge-table",
+      "path": "prompts/knowledge-table.md"
+    },
+    {
+      "name": "report-type-auto",
+      "path": "prompts/report-type-auto.md"
+    },
+    {
+      "name": "report-type-fixed",
+      "path": "prompts/report-type-fixed.md"
+    },
+    {
+      "name": "report",
+      "path": "prompts/report.md"
+    },
+    {
+      "name": "research-report-auto",
+      "path": "prompts/research-report-auto.md"
+    },
+    {
+      "name": "research-report-competitive-analysis",
+      "path": "prompts/research-report-competitive-analysis.md"
+    },
+    {
+      "name": "research-report-decision-brief",
+      "path": "prompts/research-report-decision-brief.md"
+    },
+    {
+      "name": "research-report-feasibility-study",
+      "path": "prompts/research-report-feasibility-study.md"
+    },
+    {
+      "name": "research-report-literature-review",
+      "path": "prompts/research-report-literature-review.md"
+    },
+    {
+      "name": "research-report-market-research",
+      "path": "prompts/research-report-market-research.md"
+    },
+    {
+      "name": "research-report-project-description",
+      "path": "prompts/research-report-project-description.md"
+    },
+    {
+      "name": "research-report-source-review",
+      "path": "prompts/research-report-source-review.md"
+    },
+    {
+      "name": "research-report-technology-screening",
+      "path": "prompts/research-report-technology-screening.md"
+    },
+    {
+      "name": "research-report-whitepaper",
+      "path": "prompts/research-report-whitepaper.md"
+    }
+  ],
+  "provenance": {
+    "base_hash": "6b4fe21f1443e8470f0fdd3deca5c6d92efedcfac66eceaaa5b149b3a5ea424a",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Dokumente",
+  "triggers": [],
+  "version": "1.0.0"
+}
