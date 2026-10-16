@@ -305,30 +305,38 @@ fn ingest(
             let (count,bytes):(usize,usize)=tx.query_row(
                 "SELECT COUNT(*),COALESCE(SUM(byte_len),0) FROM _write_pending WHERE participant=?1",[participant],|r|Ok((r.get(0)?,r.get(1)?)))?;
             let issued = operation_time(&request.op_id);
-            let reason =
-                if request.id.is_empty() || request.collection.is_empty() || request.gen == 0 {
-                    Some("invalid_input")
-                } else if issued.is_err() {
-                    Some("invalid_op_id")
-                } else if issued
+            let reason = if request.collection == "business_commands"
+                && request
+                    .body
                     .as_ref()
-                    .is_ok_and(|t| *t > now.saturating_add(300_000))
-                {
-                    Some("invalid_time")
-                } else if issued
-                    .as_ref()
-                    .is_ok_and(|t| now.saturating_sub(*t) > OP_HORIZON_MS)
-                {
-                    Some("expired")
-                } else if json.len() > MAX_REQUEST_BYTES
-                    || (seq > next
-                        && (count >= MAX_WAITING
-                            || bytes.saturating_add(json.len()) > MAX_WAITING_BYTES))
-                {
-                    Some("expired")
-                } else {
-                    None
-                };
+                    .is_some_and(|body| routes::validate_persisted_input(body).is_err())
+            {
+                // terminal()/remember() retain only request identity (no
+                // body) and the typed rejection. Never enqueue these bytes.
+                Some("credential_ref_required")
+            } else if request.id.is_empty() || request.collection.is_empty() || request.gen == 0 {
+                Some("invalid_input")
+            } else if issued.is_err() {
+                Some("invalid_op_id")
+            } else if issued
+                .as_ref()
+                .is_ok_and(|t| *t > now.saturating_add(300_000))
+            {
+                Some("invalid_time")
+            } else if issued
+                .as_ref()
+                .is_ok_and(|t| now.saturating_sub(*t) > OP_HORIZON_MS)
+            {
+                Some("expired")
+            } else if json.len() > MAX_REQUEST_BYTES
+                || (seq > next
+                    && (count >= MAX_WAITING
+                        || bytes.saturating_add(json.len()) > MAX_WAITING_BYTES))
+            {
+                Some("expired")
+            } else {
+                None
+            };
             if let Some(reason) = reason {
                 let result = terminal(tx, participant, request, reason, now)?;
                 record(tx, participant, seq, &result, now)?;

@@ -19,10 +19,13 @@ pub struct Route {
 }
 macro_rules! route {
     ($method:literal, $handler:literal) => {
+        route!($method, $handler, false)
+    };
+    ($method:literal, $handler:literal, $streaming:literal) => {
         Route {
             method: $method,
             handler: $handler,
-            streaming: false,
+            streaming: $streaming,
             lane: CONTROL_LANE,
         }
     };
@@ -30,8 +33,22 @@ macro_rules! route {
 /// Exact method names, not the action discriminants inside their native payloads.
 pub const ROUTES: &[Route] = &[
     route!(
+        "ctox.workjet.speech.settings.v1",
+        "src/core/business_os/rxdb_peer_speech_settings.rs:372"
+    ),
+    route!(
+        "ctox.workjet.speech.dictation.v1",
+        "src/core/business_os/rxdb_peer_dictation.rs:348",
+        true
+    ),
+    route!(
+        "ctox.workjet.jour_fixe.speech.v1",
+        "src/core/business_os/rxdb_peer_jour_fixe_speech.rs:260",
+        true
+    ),
+    route!(
         "ctox.workjet.device.v1",
-        "src/core/business_os/rxdb_peer_workjet_devices.rs:122"
+        "src/core/business_os/rxdb_peer_workjet_devices.rs:114"
     ),
     route!(
         "ctox.workjet.grok.v1",
@@ -57,6 +74,75 @@ pub fn resolve(method: &str) -> Result<Route, CommandError> {
         .copied()
         .ok_or_else(|| error("not_found", "unknown_command"))
 }
+/// Before the ordering buffer, document/history or rejection ledger can see
+/// an E25 input. Credential bytes belong only to the official secret provider.
+pub fn validate_persisted_input(document: &Value) -> Result<(), CommandError> {
+    if contains_credential(&document["payload"]) {
+        return Err(error("invalid", "credential_ref_required"));
+    }
+    Ok(())
+}
+fn contains_credential(v: &Value) -> bool {
+    match v {
+        Value::Object(o) => o.iter().any(|(k, v)| {
+            matches!(
+                k.as_str(),
+                "secret"
+                    | "password"
+                    | "access_token"
+                    | "refresh_token"
+                    | "api_key"
+                    | "apiKey"
+                    | "capability_token"
+            ) && !v.is_null()
+                || contains_credential(v)
+        }),
+        Value::Array(a) => a.iter().any(contains_credential),
+        _ => false,
+    }
+}
+/// Preserve already typed native errors; free-text legacy errors are mapped
+/// only through fixed public classes. Provider bodies are never reflected.
+pub fn native_error(message: &str) -> CommandError {
+    if let Ok(typed) = serde_json::from_str::<CommandError>(message) {
+        if [
+            "invalid",
+            "forbidden",
+            "not_found",
+            "conflict",
+            "revoked",
+            "expired",
+            "quota",
+            "unavailable",
+            "stale_base",
+            "migration_required",
+            "locally_modified",
+            "token_expired",
+            "token_used",
+        ]
+        .contains(&typed.code.as_str())
+            && ["rejected", "failed"].contains(&typed.status.as_str())
+            && !typed.reason.is_empty()
+            && typed.reason.len() <= 128
+            && typed
+                .reason
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b"_.:-".contains(&b))
+        {
+            return typed;
+        }
+    }
+    match message {
+        "invalid_request" | "invalid speech request" | "dictation invalid_request" => {
+            error("invalid", "native_payload_invalid")
+        }
+        "denied" | "forbidden" | "workjet device management is not allowed" => {
+            error("forbidden", "native_permission_denied")
+        }
+        "retired" | "revoked" => error("revoked", "native_authority_changed"),
+        _ => error("unavailable", "native_handler_failed"),
+    }
+}
 pub fn error(code: &str, reason: &str) -> CommandError {
     CommandError {
         status: "rejected".into(),
@@ -79,6 +165,18 @@ pub struct NativeCommand {
 impl NativeCommand {
     pub fn validate(&self) -> Result<Route, CommandError> {
         let route = resolve(&self.kind)?;
+        validate_persisted_input(&json!({"type":self.kind,"payload":self.payload}))?;
+        if self.kind == "ctox.workjet.device.v1" && self.payload["action"] == "invite.create" {
+            return Err(error(
+                "unavailable",
+                "protected_invite_result_adapter_required",
+            ));
+        }
+        if self.kind == "ctox.workjet.speech.settings.v1"
+            && self.payload["action"] == "speech.settings.key"
+        {
+            return Err(error("unavailable", "credential_provider_adapter_required"));
+        }
         if [&self.command_id, &self.app_id, &self.actor_id]
             .iter()
             .any(|s| s.is_empty() || s.len() > 180 || s.chars().any(char::is_control))
@@ -89,22 +187,48 @@ impl NativeCommand {
         Ok(route)
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct FileRef {
-    #[serde(rename = "ref")]
-    pub reference: String,
-}
+pub use crate::cas::BlobRef as FileRef;
 /// Core's files/Transfer-CAS adapter. File metadata and command completion must
 /// be applied in the SAME existing writer transaction. CAS bytes may already be
 /// staged, but no caller file path or transfer_id may appear in the completion.
-pub trait ResultFiles {
+pub trait ResultFiles: Send + Sync {
     fn put_json(
         &self,
         tx: &Transaction<'_>,
         command: &NativeCommand,
         bytes: &[u8],
     ) -> Result<FileRef, CommandError>;
+}
+/// Verified CAS receipt plus the schema owner's normal, policy-checked files
+/// insertion. Construct outside the writer; put_json performs metadata only.
+pub struct VerifiedResultFiles {
+    pub blob: crate::cas::VerifiedBlob,
+    pub insert: std::sync::Arc<
+        dyn Fn(&Transaction<'_>, &crate::cas::FileRecord) -> Result<(), CommandError> + Send + Sync,
+    >,
+}
+impl ResultFiles for VerifiedResultFiles {
+    fn put_json(
+        &self,
+        tx: &Transaction<'_>,
+        command: &NativeCommand,
+        bytes: &[u8],
+    ) -> Result<FileRef, CommandError> {
+        let digest = format!("{:x}", Sha256::digest(bytes));
+        if self.blob.reference() != digest || self.blob.size() != bytes.len() as u64 {
+            return Err(error("invalid", "files_ref_digest"));
+        }
+        let reference = FileRef { r#ref: digest };
+        let record = crate::cas::FileRecord {
+            blob: reference.clone(),
+            name: format!("{}-result.json", command.command_id),
+            mime: "application/json".into(),
+            size: self.blob.size(),
+            owner_app: command.app_id.clone(),
+        };
+        (self.insert)(tx, &record)?;
+        Ok(reference)
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -126,15 +250,23 @@ impl Completion {
         }
     }
 }
-/// Run under the retained native publication guard AND the P9 writer fence.
-/// A missing files sink never permits an inline fallback for a large result.
-pub fn completion(
-    tx: &Transaction<'_>,
+/// Pure preparation before CAS staging. Never expose protected native DTOs
+/// to files; the credential/result adapter must resolve them first.
+pub fn prepare_completion(
     command: &NativeCommand,
     native: Value,
-    files: Option<&dyn ResultFiles>,
 ) -> Result<Completion, CommandError> {
     let route = command.validate()?;
+    if contains_credential(&native)
+        || native.get("invite").is_some()
+        || native.get("pairingUri").is_some()
+        || native.get("qrSvg").is_some()
+        || native
+            .pointer("/login/userCode")
+            .is_some_and(|v| !v.is_null())
+    {
+        return Err(error("unavailable", "protected_result_adapter_required"));
+    }
     let (status, value) = if route.streaming {
         match native["state"].as_str() {
             Some("finished" | "committed") => ("done", native),
@@ -151,26 +283,54 @@ pub fn completion(
     } else {
         ("done", native)
     };
-    let bytes =
-        serde_json::to_vec(&value).map_err(|_| error("invalid", "native_result_encoding"))?;
-    let audio = contains_inline_audio(&value);
-    let value = if bytes.len() > INLINE_RESULT_LIMIT || audio {
-        let sink = files.ok_or_else(|| error("unavailable", "files_sink_missing"))?;
-        let reference = sink.put_json(tx, command, &bytes)?;
-        let expected = format!("{:x}", Sha256::digest(&bytes));
-        if reference.reference != expected {
-            return Err(error("invalid", "files_ref_digest"));
-        }
-        serde_json::to_value(reference).map_err(|_| error("invalid", "files_ref_encoding"))?
-    } else {
-        value
-    };
     Ok(Completion {
         command_id: command.command_id.clone(),
         status: status.into(),
         result: Some(value),
         error: None,
     })
+}
+/// Stage these exact JSON DTO bytes in Transfer-CAS OUTSIDE the writer. The
+/// returned ResultFiles adapter only attaches the verified files row inside it.
+pub fn result_file_bytes(
+    command: &NativeCommand,
+    native: Value,
+) -> Result<Option<Vec<u8>>, CommandError> {
+    let prepared = prepare_completion(command, native)?;
+    let Some(value) = prepared.result else {
+        return Ok(None);
+    };
+    let bytes =
+        serde_json::to_vec(&value).map_err(|_| error("invalid", "native_result_encoding"))?;
+    Ok((bytes.len() > INLINE_RESULT_LIMIT || contains_inline_audio(&value)).then_some(bytes))
+}
+/// Run under the retained native publication guard AND the P9 writer fence.
+/// A missing files sink never permits an inline fallback for a large result.
+pub fn completion(
+    tx: &Transaction<'_>,
+    command: &NativeCommand,
+    native: Value,
+    files: Option<&dyn ResultFiles>,
+) -> Result<Completion, CommandError> {
+    let mut prepared = prepare_completion(command, native)?;
+    let Some(value) = prepared.result.take() else {
+        return Ok(prepared);
+    };
+    let bytes =
+        serde_json::to_vec(&value).map_err(|_| error("invalid", "native_result_encoding"))?;
+    let value = if bytes.len() > INLINE_RESULT_LIMIT || contains_inline_audio(&value) {
+        let sink = files.ok_or_else(|| error("unavailable", "files_sink_missing"))?;
+        let reference = sink.put_json(tx, command, &bytes)?;
+        let expected = format!("{:x}", Sha256::digest(&bytes));
+        if reference.r#ref != expected {
+            return Err(error("invalid", "files_ref_digest"));
+        }
+        serde_json::to_value(reference).map_err(|_| error("invalid", "files_ref_encoding"))?
+    } else {
+        value
+    };
+    prepared.result = Some(value);
+    Ok(prepared)
 }
 fn contains_inline_audio(v: &Value) -> bool {
     match v {

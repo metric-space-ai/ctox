@@ -1,6 +1,10 @@
 use super::*;
 #[test]
 fn e25_all_routes_complete_without_changing_method_payload_or_command_id() {
+    println!(
+        "E25_REGISTRY_SOURCE_SHA256 {:x}",
+        Sha256::digest(include_bytes!("command_routes.rs"))
+    );
     let mut db = rusqlite::Connection::open_in_memory().unwrap();
     let tx = db.transaction().unwrap();
     let inventory: Value =
@@ -54,7 +58,7 @@ fn e25_large_and_audio_results_require_verified_files_ref_in_same_transaction() 
                 rusqlite::params![hash, command.app_id, bytes],
             )
             .unwrap();
-            Ok(FileRef { reference: hash })
+            Ok(FileRef { r#ref: hash })
         }
     }
     let mut db = rusqlite::Connection::open_in_memory().unwrap();
@@ -100,5 +104,92 @@ fn e25_large_and_audio_results_require_verified_files_ref_in_same_transaction() 
         db.query_row("SELECT COUNT(*) FROM files", [], |r| r.get::<_, i64>(0))
             .unwrap(),
         0
+    );
+}
+
+#[test]
+fn e25_stream_partials_keep_the_command_id_and_never_finish_on_open() {
+    let mut db = rusqlite::Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    for method in [
+        "ctox.workjet.speech.dictation.v1",
+        "ctox.workjet.jour_fixe.speech.v1",
+    ] {
+        let command = NativeCommand {
+            command_id: "original-stream-command".into(),
+            kind: method.into(),
+            payload: json!({"op":"open"}),
+            app_id: "sender-app".into(),
+            actor_id: "alice".into(),
+        };
+        for state in ["open", "finishing", "running"] {
+            let native = json!({"state":state,"events":[{"partial":"coalesced text"}]});
+            let result = completion(&tx, &command, native.clone(), None).unwrap();
+            assert_eq!(result.command_id, command.command_id);
+            assert_eq!(result.status, "running");
+            assert_eq!(result.result, Some(json!({"partial":native})));
+        }
+        assert_eq!(
+            completion(
+                &tx,
+                &command,
+                json!({"state":"finished","text":"final"}),
+                None
+            )
+            .unwrap()
+            .status,
+            "done"
+        );
+        assert_eq!(
+            completion(
+                &tx,
+                &command,
+                json!({"state":"failed","text":"must not escape"}),
+                None
+            )
+            .unwrap()
+            .result,
+            None
+        );
+    }
+}
+#[test]
+fn e25_protected_control_results_never_become_command_or_files_payloads() {
+    let mut db = rusqlite::Connection::open_in_memory().unwrap();
+    let tx = db.transaction().unwrap();
+    let mut command = NativeCommand {
+        command_id: "cmd".into(),
+        kind: "ctox.workjet.device.v1".into(),
+        payload: json!({"action":"invite.create"}),
+        app_id: "sender-app".into(),
+        actor_id: "alice".into(),
+    };
+    assert_eq!(
+        command.validate().unwrap_err().reason,
+        "protected_invite_result_adapter_required"
+    );
+    command.payload = json!({"action":"binding.list"});
+    assert_eq!(
+        completion(
+            &tx,
+            &command,
+            json!({"invite":{"fixture":"not-a-real-invite"}}),
+            None
+        )
+        .unwrap_err()
+        .reason,
+        "protected_result_adapter_required"
+    );
+    command.kind = "ctox.workjet.grok.v1".into();
+    assert_eq!(
+        completion(
+            &tx,
+            &command,
+            json!({"login":{"userCode":"synthetic-only"}}),
+            None
+        )
+        .unwrap_err()
+        .reason,
+        "protected_result_adapter_required"
     );
 }

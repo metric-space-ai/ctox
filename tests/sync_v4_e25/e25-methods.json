@@ -4,10 +4,14 @@
     {
       "method": "ctox.workjet.device.v1",
       "route": "ctox.workjet.device.v1",
-      "native_handler": "src/core/business_os/rxdb_peer_workjet_devices.rs:122",
+      "native_handler": "src/core/business_os/rxdb_peer_workjet_devices.rs:114",
       "lane": 1,
       "test": "e25_kernel_command_to_native_completion",
-      "mutation": "remove exact route -> unknown_command"
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/app.js:7872; shared/react-settings.js:1540",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency"
     },
     {
       "method": "ctox.workjet.grok.v1",
@@ -15,7 +19,11 @@
       "native_handler": "src/core/business_os/rxdb_peer_grok.rs:390",
       "lane": 1,
       "test": "e25_kernel_command_to_native_completion",
-      "mutation": "remove exact route -> unknown_command"
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/shared/workjet-grok-native.mjs:16",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency"
     },
     {
       "method": "ctox.workjet.calendar.read.v1",
@@ -23,7 +31,11 @@
       "native_handler": "src/core/business_os/rxdb_peer.rs:3168",
       "lane": 1,
       "test": "e25_kernel_command_to_native_completion",
-      "mutation": "remove exact route -> unknown_command"
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/shared/workjet-calendar-native.mjs:30",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency"
     },
     {
       "method": "ctox.browser.live.v1",
@@ -31,7 +43,11 @@
       "native_handler": "src/core/business_os/rxdb_peer.rs:3105",
       "lane": 1,
       "test": "e25_kernel_command_to_native_completion",
-      "mutation": "remove exact route -> unknown_command"
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/modules/browser/index.js:385",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency"
     },
     {
       "method": "ctox.outbound.sellify_lookup.v1",
@@ -39,7 +55,50 @@
       "native_handler": "src/core/business_os/rxdb_peer.rs:3122",
       "lane": 1,
       "test": "e25_kernel_command_to_native_completion",
-      "mutation": "remove exact route -> unknown_command"
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/customer-modules/outbound-lead-generation/index.js:9227",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency"
+    },
+    {
+      "method": "ctox.workjet.speech.settings.v1",
+      "route": "ctox.workjet.speech.settings.v1",
+      "native_handler": "src/core/business_os/rxdb_peer_speech_settings.rs:372",
+      "streaming": false,
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/shared/speech-settings-control.mjs:13",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency"
+    },
+    {
+      "method": "ctox.workjet.speech.dictation.v1",
+      "route": "ctox.workjet.speech.dictation.v1",
+      "native_handler": "src/core/business_os/rxdb_peer_dictation.rs:348",
+      "streaming": true,
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/shared/speech-dictation.mjs:60",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency"
+    },
+    {
+      "method": "ctox.workjet.jour_fixe.speech.v1",
+      "route": "ctox.workjet.jour_fixe.speech.v1",
+      "native_handler": "src/core/business_os/rxdb_peer_jour_fixe_speech.rs:260",
+      "streaming": true,
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/shared/jour-fixe-speech.mjs:14",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency"
     }
   ],
   "already_commands": [
@@ -48,5 +107,51 @@
     "ctox.workjet.project.supervisor.route.capabilities.v1",
     "ctox.workjet.project.supervisor.route.capabilities.v2"
   ],
-  "note": "Action discriminants inside a native payload are not additional requestNative method names."
+  "note": "Action discriminants inside a native payload are not additional requestNative method names.",
+  "bridge_actions": [
+    {
+      "action": "speech.dictation",
+      "method": "ctox.workjet.speech.dictation.v1",
+      "source": "app.js:13916"
+    },
+    {
+      "action": "speech.settings.*",
+      "method": "ctox.workjet.speech.settings.v1",
+      "source": "app.js:13927"
+    },
+    {
+      "action": "project.calendar.accounts.read|project.calendar.events.read",
+      "method": "ctox.workjet.calendar.read.v1",
+      "source": "app.js:13939"
+    },
+    {
+      "action": "project.supervisor.route.*",
+      "route": "existing ctox.workjet.project.supervisor.route.{read,capabilities}.{v1,v2} commands",
+      "handler": "src/core/business_os/command_plane.rs:1963",
+      "requestNative": false
+    },
+    {
+      "action": "project.jour_fixe.narration.read",
+      "route": "readJourFixeNarration + meeting command + existing scoped file-demand loader",
+      "source": "app.js:13950",
+      "requestNative": false
+    }
+  ],
+  "protected_actions": [
+    {
+      "method": "ctox.workjet.device.v1",
+      "action": "invite.create",
+      "status": "unavailable:protected_invite_result_adapter_required"
+    },
+    {
+      "method": "ctox.workjet.speech.settings.v1",
+      "action": "speech.settings.key",
+      "status": "inline secret rejected before durability; credential provider ref adapter required"
+    },
+    {
+      "method": "ctox.workjet.grok.v1",
+      "result": "login.userCode",
+      "status": "unavailable:protected_result_adapter_required"
+    }
+  ]
 }
