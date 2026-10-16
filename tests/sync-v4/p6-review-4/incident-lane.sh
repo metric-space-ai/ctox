@@ -21,4 +21,4 @@ lib="$tools/root/usr/lib/x86_64-linux-gnu"
 LD_LIBRARY_PATH="$lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ldd "$turn" > "$tools/ldd.txt"
 if grep -q 'not found' "$tools/ldd.txt"; then cat "$tools/ldd.txt"; exit 1; fi
 ctox-prep.sh
-python3 tests/sync-v4/p6-review-4/run.py --only scenarios --train "$train" --deadline "$deadline" --turn-bin "$turn" --turn-lib "$lib"
+python3 tests/sync-v4/p6-review-4/run.py --only scenarios --namespace-mutation --train "$train" --deadline "$deadline" --turn-bin "$turn" --turn-lib "$lib"

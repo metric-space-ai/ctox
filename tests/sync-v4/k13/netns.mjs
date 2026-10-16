@@ -6,7 +6,8 @@ const path=process.argv[2],c=JSON.parse(fs.readFileSync(path));
 const ns=kind=>fs.readlinkSync('/proc/self/ns/'+kind);
 const mapping=kind=>fs.readFileSync('/proc/self/'+kind+'_map','utf8').trim().split(/\s+/).map(Number);
 const uid=mapping('uid'),gid=mapping('gid');
-if(process.getuid()!==0 || process.pid!==1 || uid.length!==3 || uid[0]!==0 || uid[1]!==c.uid || uid[2]!==1
+if(!Number.isInteger(c.uid) || c.uid<=0 || !Number.isInteger(c.gid) || c.gid<=0
+  || process.getuid()!==0 || process.pid!==1 || uid.length!==3 || uid[0]!==0 || uid[1]!==c.uid || uid[2]!==1
   || gid.length!==3 || gid[0]!==0 || gid[1]!==c.gid || gid[2]!==1
   || ns('user')===c.hostNamespaces.user || ns('net')===c.hostNamespaces.net
   || ns('mnt')===c.hostNamespaces.mnt || ns('pid')===c.hostNamespaces.pid)

@@ -21,6 +21,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--train', default=TRAIN, help='immutable product train revision, including any controller fix')
 parser.add_argument('--turn-bin', help='explicit existing lane coturn executable')
 parser.add_argument('--turn-lib', help='userspace coturn dependency directory')
+parser.add_argument('--namespace-mutation', action='store_true', help='qualify namespace lifecycle and mutate away the net namespace flag')
 parser.add_argument('--only', choices=['all', 'regressions', 'r10', 'r13', 'r14', 'scenarios']
 , default='all')
 parser.add_argument('--deadline',type=float,help='absolute UTC Unix deadline; reserve time for owned-process cleanup')
@@ -60,6 +61,15 @@ def digest(path):
     with path.open('rb') as stream:
         for chunk in iter(lambda: stream.read(1024*1024), b''): hash.update(chunk)
     return hash.hexdigest()
+def incident_summary(stdout):
+    match=re.search(r'^K13 \| .* \| (.+)/K13/result\.json$',stdout,re.M)
+    assert match, 'namespace contract: incident summary path absent'
+    path=Path(match.group(1))/'p6-result.json'
+    return path,json.loads(path.read_text())
+def private_namespaces(summary):
+    rows=summary.get('scenarios',[])
+    return summary.get('terminal') is True and {r['id'] for r in rows}=={'K13','K21','K22'} and len(rows)==3 and all(
+        r.get('namespaceVerified') is True and r.get('cleanup') is True for r in rows)
 def save():
     (OUT/'results.json').write_text(json.dumps(dict(train=TRAIN, rights_composition=RIGHTS,
         source_head=subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip(),
@@ -146,6 +156,35 @@ if args.only in ('all','scenarios'):
         # The default runner creates a new private artifact output; locate it
         # from the printed evidence path rather than guessing a producer pass.
         RESULTS['scenarios']=dict(exit=p.returncode,log=str(OUT/'train-incidents.log'))
+        if args.namespace_mutation:
+            summary_path,summary=incident_summary(p.stdout)
+            assert private_namespaces(summary), 'namespace contract RED: expected private namespaces or cleanup absent'
+            RESULTS['native_entry']=dict(exit=0 if all(row.get('daemonExecuted') is True and row.get('entryNamespaceBound') is True for row in summary['scenarios']) else 1,
+                evidence=str(summary_path))
+            launcher=ROOT/'tests/sync-v4/k13/run.mjs'
+            original=launcher.read_text()
+            before="'--map-root-user','--net','--mount'"
+            assert original.count(before)==1, 'namespace mutation must select exactly the real launcher flag'
+            mutant=launcher.with_name('.p6-netns-mutant.mjs')
+            assert not mutant.exists(), 'never overwrite another mutation run'
+            mutant.write_text(original.replace(before,"'--map-root-user','--mount'"))
+            try:
+                mutation=run('namespace-mutation-no-net',['node',mutant,'--build',receipt,'--expected-revision',TRAIN]+
+                    (['--turn-bin',args.turn_bin] if args.turn_bin else [])+
+                    (['--turn-lib',args.turn_lib] if args.turn_lib else []),90)
+                mutant_path,mutated=incident_summary(mutation.stdout)
+                assert mutation.returncode!=0 and not private_namespaces(mutated), 'namespace mutation survived'
+                for row in mutated['scenarios']:
+                    assert row.get('daemonExecuted') is False
+                    log=Path(row['evidence']).parent.parent/(row['id']+'.log')
+                    assert 'Private mapped user/net/mount/PID namespaces required' in log.read_text()
+                RESULTS['namespace_contract']=dict(exit=0,positive=str(summary_path),mutant=str(mutant_path),
+                    source=str(launcher.relative_to(ROOT)),line=next(i for i,l in enumerate(original.splitlines(),1) if before in l),
+                    mutation='remove --net from the real namespace launcher; private_namespaces contract turns RED before setup',
+                    source_sha256=digest(launcher),mutant_sha256=digest(mutant))
+                save()
+            finally:
+                mutant.unlink()
     else: RESULTS['scenarios']=dict(status='build unverified',exit=p.returncode)
     save()
 

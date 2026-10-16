@@ -102,12 +102,22 @@ if(build && !summary.scenarios.length) {
       && boot?.root===config.root && Number.isInteger(boot?.pid)
       && JSON.stringify(boot?.args)===JSON.stringify(['service','--foreground','--root',config.root]);
     const row=report?.scenarios?.find(row=>row.id===id);
+    const namespacePath=join(dir,'p6-namespace.json');
+    const ns=fs.existsSync(namespacePath)?JSON.parse(fs.readFileSync(namespacePath)):null;
+    const namespaceVerified=ns?.hostUid===config.uid && ns?.hostGid===config.gid && ns?.pid===1
+
+      && ['user','net','mnt','pid'].every(k=>ns.namespaces?.[k] && ns.namespaces[k]!==config.hostNamespaces[k])
+      && ns?.uidMap?.join(',')===[0,config.uid,1].join(',') && ns?.gidMap?.join(',')===[0,config.gid,1].join(',')
+      && ns?.processLimit?.insideSandbox===true && ns?.privilegedHostEntry===false
+      && report?.processLimits?.some(line=>/Max processes\s+4096\s+4096/.test(line));
+    const entryNamespaceBound=entryBound && boot?.pidNamespace===ns?.namespaces?.pid;
     const cleanup=controller?.groupAbsent===true && report?.cleanup==='owned groups absent';
-    const complete=entryBound && unchanged() && controller?.exit?.code===0 && report?.terminal===true && cleanup
+    const complete=entryNamespaceBound && namespaceVerified && unchanged() && controller?.exit?.code===0 && report?.terminal===true && cleanup
       && report.scenarios.length===1 && row?.status==='measured' && row.pass===true && row.acceptanceComplete===true;
     summary.scenarios.push({id,status:row?.status??'not_run',pass:complete,acceptanceComplete:complete,
       evidence:path,processExit:controller?.exit??null,controller:join(dir,'p6-controller.json'),
       daemonEntryEvidence:entryPath,entryBound,daemonExecuted:entryBound && /ctox v4 store daemon ready/.test(daemonLog),
+      namespaceEvidence:namespacePath,namespaceVerified,entryNamespaceBound,criteria:row?.criteria??null,daemon:report?.daemon??null,
       reason:error??row?.reason??row?.error??report?.error??(!entryBound?'Real service entry was not verified':null),
       cleanup,sourceUnchanged:unchanged()});save();
   }
