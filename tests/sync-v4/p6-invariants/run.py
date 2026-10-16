@@ -59,6 +59,7 @@ def run(name, args, timeout=1200, expected=0):
             code = 124
         finally:
             ACTIVE = None
+    raw_exit=code
     output=(OUT / (name + '.log')).read_text()
     if '--nocapture' in args and 'running 1 test' not in output:
         code=125
@@ -84,7 +85,7 @@ def run(name, args, timeout=1200, expected=0):
         code=125
     if name=='mutation-document-signature-red' and ("ERR_ASSERTION" not in output or 'Missing expected rejection' not in output):
         code=125
-    record = dict(name=name, command=args, exit=code, expected=expected, elapsed_s=round(time.monotonic()-start,3))
+    record = dict(name=name, command=args, exit=code, raw_exit=raw_exit, expected=expected, elapsed_s=round(time.monotonic()-start,3))
     RECORDS.append(record)
     save()
     print('P6_RESULT', name, code, flush=True)
@@ -135,7 +136,7 @@ source_paths = [
     'src/core/business_os/app_platform/runtime_host/authority.rs', 'src/core/app_runtime/lib.rs',
     'src/apps/business-os/kernel/transport-webrtc.mjs', 'src/apps/business-os/kernel/kernel.mjs',
     'src/core/store/manifest_rules.rs', 'src/core/store/cas/mod.rs',
-    'src/core/app_runtime/worker.mjs',
+    'src/core/app_runtime/worker.mjs', 'src/core/sync/src/authority/node.rs',
     *[str(p.relative_to(ROOT)) for p in HERE.glob('*') if p.is_file()],
 ]
 (OUT/'source-binding.json').write_text(json.dumps({
