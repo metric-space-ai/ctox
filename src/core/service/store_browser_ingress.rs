@@ -280,41 +280,67 @@ impl WebRTCPublicationGuard for Publication {
         if self.peer.expires <= Instant::now() {
             return Err(invalid());
         }
-        if self.revocation {return publish();}
+        if self.revocation {
+            return publish();
+        }
         let mut result = None;
         self.admission
             .authority()
             .router
             .with_snapshot(self.peer.rights_ver, &self.peer.epoch, |_, _| {
-                if let Some((session,token))=&self.grant {
-                    session.with_token_current(token,now()/1000,||{result=Some(publish());Ok(())})
-                } else { result=Some(publish());Ok(()) }
+                if let Some((session, token)) = &self.grant {
+                    session.with_token_current(token, now() / 1000, || {
+                        result = Some(publish());
+                        Ok(())
+                    })
+                } else {
+                    result = Some(publish());
+                    Ok(())
+                }
             })
             .map_err(|_| invalid())?;
         result.ok_or_else(invalid)?
     }
 }
-#[path = "store_browser_scope_grant.rs"]
-pub(super) mod scope_grant_route;
 #[path = "store_browser_grant_stream.rs"]
 mod grant_stream;
+#[path = "store_browser_scope_grant.rs"]
+pub(super) mod scope_grant_route;
 impl V4StreamSource for Source {
-    fn control_events(&self,peer:&str)->RxResult<BoxStream<'static,RxResult<Value>>> {grant_stream::events(self,peer)}
+    fn control_events(&self, peer: &str) -> RxResult<BoxStream<'static, RxResult<Value>>> {
+        grant_stream::events(self, peer)
+    }
     fn control(&self, peer: &str, message: Value) -> BoxFuture<'static, RxResult<Option<Value>>> {
         scope_grant_route::control(self, peer, message)
     }
     fn publication(&self, peer: &str, packet: &Value) -> RxResult<Arc<dyn WebRTCPublicationGuard>> {
         let binding = self.admission.peer(peer).map_err(|_| invalid())?;
-        let grant=if matches!(packet["type"].as_str(),Some("page" | "live")) {
-            if packet["participant"] != binding.user || packet["epoch"] != binding.epoch {return Err(invalid());}
-            let session=scope_grant_route::bound_owner(&self.admission,&binding)?.session();
-            let token=session.bound_token(packet["scope_hash"].as_str(),packet["collection"].as_str().ok_or_else(invalid)?,packet["gen"].as_u64().ok_or_else(invalid)?,None).map_err(|_|invalid())?;
-            session.token_current(&token,now()/1000).map_err(|_|invalid())?;
-            Some((session,token))
-        } else {None};
+        let grant = if matches!(packet["type"].as_str(), Some("page" | "live")) {
+            if packet["participant"] != binding.user || packet["epoch"] != binding.epoch {
+                return Err(invalid());
+            }
+            let session = scope_grant_route::bound_owner(&self.admission, &binding)?.session();
+            let token = session
+                .bound_token(
+                    packet["scope_hash"].as_str(),
+                    packet["collection"].as_str().ok_or_else(invalid)?,
+                    packet["gen"].as_u64().ok_or_else(invalid)?,
+                    None,
+                )
+                .map_err(|_| invalid())?;
+            session
+                .token_current(&token, now() / 1000)
+                .map_err(|_| invalid())?;
+            Some((session, token))
+        } else {
+            None
+        };
         Ok(Arc::new(Publication {
             grant,
-            revocation: packet["type"] == "scope_revoke" || (packet["type"] == "write_result" && packet["status"] == "rejected" && packet["reason"] == "revoked"),
+            revocation: packet["type"] == "scope_revoke"
+                || (packet["type"] == "write_result"
+                    && packet["status"] == "rejected"
+                    && packet["reason"] == "revoked"),
             inputs: self.inputs.clone(),
             admission: self.admission.clone(),
             peer: binding,
@@ -331,15 +357,25 @@ impl V4StreamSource for Source {
             inputs.instance_signer().map_err(|_| invalid())?;
             request.as_object_mut().ok_or_else(invalid)?.remove("type");
             let sub: Subscribe = serde_json::from_value(request).map_err(|_| invalid())?;
-            let grant_session=scope_grant_route::bound_owner(&self.admission,&binding)?.session();
-            grant_session.bound_token(Some(&sub.scope_hash),&sub.collection,sub.gen,None).map_err(|_|invalid())?;
+            let grant_session =
+                scope_grant_route::bound_owner(&self.admission, &binding)?.session();
+            grant_session
+                .bound_token(Some(&sub.scope_hash), &sub.collection, sub.gen, None)
+                .map_err(|_| invalid())?;
             let key = SubscriptionKey {
                 participant: binding.user.clone(),
                 collection: sub.collection,
                 scope_hash: sub.scope_hash,
                 gen: sub.gen,
             };
-            let authority: Arc<dyn ReadAuthority> = Arc::new(sync_rights::app_grant::reader::AppGrantReader::new(grant_session,key.clone(),||now()/1000).map_err(|_|invalid())?);
+            let authority: Arc<dyn ReadAuthority> = Arc::new(
+                sync_rights::app_grant::reader::AppGrantReader::new(
+                    grant_session,
+                    key.clone(),
+                    || now() / 1000,
+                )
+                .map_err(|_| invalid())?,
+            );
             let cursor = Subscription::new(
                 inputs.sync.readers.clone(),
                 &inputs.sync.writer,

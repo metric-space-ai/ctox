@@ -1,12 +1,12 @@
 //! D: commit-driven per-app revocations, owned by the browser association.
 use super::*;
-pub(super) fn events(source: &Source, peer: &str) -> RxResult<BoxStream<'static,RxResult<Value>>> {
-    let binding=source.admission.peer(peer).map_err(|_|invalid())?;
-    let inputs=source.inputs.upgrade().ok_or_else(invalid)?;
-    let session=scope_grant_route::bound_owner(&source.admission,&binding)?.session();
-    let commits=inputs.sync.writer.subscribe_commits();
-    let readers=inputs.sync.readers.clone();
-    let signer=inputs.instance_signer().map_err(|_|invalid())?;
+pub(super) fn events(source: &Source, peer: &str) -> RxResult<BoxStream<'static, RxResult<Value>>> {
+    let binding = source.admission.peer(peer).map_err(|_| invalid())?;
+    let inputs = source.inputs.upgrade().ok_or_else(invalid)?;
+    let session = scope_grant_route::bound_owner(&source.admission, &binding)?.session();
+    let commits = inputs.sync.writer.subscribe_commits();
+    let readers = inputs.sync.readers.clone();
+    let signer = inputs.instance_signer().map_err(|_| invalid())?;
     Ok(stream::try_unfold((commits,readers,session,signer,std::collections::VecDeque::new()),
         |(mut commits,readers,session,signer,mut pending):(_,_,_,_,std::collections::VecDeque<Value>)|async move {
             loop {

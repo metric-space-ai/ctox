@@ -60,7 +60,8 @@ impl InstanceSigner for Key {
             ctox_sync::authority::auth::CanonicalInstancePacket::from_scope_bytes(bytes)
         } else {
             ctox_sync::authority::auth::CanonicalInstancePacket::from_stream_bytes(bytes)
-        }.map_err(|_| "canonical E22 encoder denied")?;
+        }
+        .map_err(|_| "canonical E22 encoder denied")?;
         Ok(self.identity.sign_instance_packet(&packet))
     }
 }
@@ -91,7 +92,18 @@ struct Fixture {
 }
 fn manifests() -> Vec<ManifestRules> {
     vec![
-        ManifestRules::from_manifest("ctox-platform", "1", ["business_users".into(), "business_apps".into(), "app_user_preferences".into()].into(), &json!({})).unwrap(),
+        ManifestRules::from_manifest(
+            "ctox-platform",
+            "1",
+            [
+                "business_users".into(),
+                "business_apps".into(),
+                "app_user_preferences".into(),
+            ]
+            .into(),
+            &json!({}),
+        )
+        .unwrap(),
         ManifestRules::from_manifest("a", "1", ["alpha".into()].into(), &json!({})).unwrap(),
         ManifestRules::from_manifest("b", "1", ["beta".into()].into(), &json!({})).unwrap(),
         ManifestRules::from_manifest("shell", "1", ["shell_docs".into()].into(), &json!({}))
@@ -208,7 +220,11 @@ async fn p6_e55_foreign_app_collections_never_enter_the_grant() {
     assert!(f.read(&token, "beta", 1001).await.is_err());
     // A second app gets its own token, not an aggregate grant.
     let b = f.session.issue("b", 1000).await.unwrap();
-    assert!(claims(&b)["collections"].as_array().unwrap().iter().any(|c|c["collection"] == "beta"));
+    assert!(claims(&b)["collections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["collection"] == "beta"));
     let no_right = AppGrantSession::new(
         f.auth.clone(),
         f.key.clone(),
@@ -466,8 +482,15 @@ async fn p6_e55_route_forbidden_duplicate_and_kernel_key_pin() {
 async fn p6_shell_boot_grant_contains_actor_bound_preferences() {
     let f = Fixture::new().await;
     let token = f.session.issue("shell", 1000).await.unwrap();
-    assert!(claims(&token)["collections"].as_array().unwrap().iter().any(|c| c["collection"] == "app_user_preferences"), "shell boot preferences grant missing");
-    let session=f.session.clone();
+    assert!(
+        claims(&token)["collections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["collection"] == "app_user_preferences"),
+        "shell boot preferences grant missing"
+    );
+    let session = f.session.clone();
     f.store.writer().submit(WriteJob::new(Default::default(), move |tx| {
         let scope=session.scope_in_transaction(tx,&token,"app_user_preferences",1001).unwrap();
         let projection=scope.projection("app_user_preferences").unwrap();
@@ -484,26 +507,53 @@ async fn p6_shell_boot_grant_contains_actor_bound_preferences() {
 
 #[tokio::test]
 async fn p6_browser_binding_uses_app_hash_and_retracts_retained_tokens() {
-    let f=Fixture::new().await;
-    let token=f.session.issue("a",1000).await.unwrap();
-    let hash=claims(&token)["scope_hash"].as_str().unwrap().to_owned();
-    assert_eq!(f.session.bound_token(Some(&hash),"alpha",1,None).unwrap(),token);
-    assert!(f.session.bound_token(Some("foreign-app-scope"),"alpha",1,None).is_err(),"foreign scope admitted");
-    assert!(f.session.bound_token(Some(&hash),"beta",1,None).is_err(),"foreign collection admitted");
-    assert!(f.session.bound_token(None,"alpha",1,Some("b")).is_err(),"foreign app write admitted");
-    assert!(f.session.bound_token(None,"alpha",2,Some("a")).is_err(),"foreign generation admitted");
-    f.session.token_current(&token,1001).unwrap();
+    let f = Fixture::new().await;
+    let token = f.session.issue("a", 1000).await.unwrap();
+    let hash = claims(&token)["scope_hash"].as_str().unwrap().to_owned();
+    assert_eq!(
+        f.session
+            .bound_token(Some(&hash), "alpha", 1, None)
+            .unwrap(),
+        token
+    );
+    assert!(
+        f.session
+            .bound_token(Some("foreign-app-scope"), "alpha", 1, None)
+            .is_err(),
+        "foreign scope admitted"
+    );
+    assert!(
+        f.session.bound_token(Some(&hash), "beta", 1, None).is_err(),
+        "foreign collection admitted"
+    );
+    assert!(
+        f.session.bound_token(None, "alpha", 1, Some("b")).is_err(),
+        "foreign app write admitted"
+    );
+    assert!(
+        f.session.bound_token(None, "alpha", 2, Some("a")).is_err(),
+        "foreign generation admitted"
+    );
+    f.session.token_current(&token, 1001).unwrap();
     f.session.revoke_app("a").unwrap().unwrap();
-    assert!(f.session.bound_token(Some(&hash),"alpha",1,None).is_err(),"revoked subscription survived");
-    assert!(f.session.token_current(&token,1001).is_err(),"queued publication survived revoke");
-    assert!(f.read(&token,"alpha",1001).await.is_err());
+    assert!(
+        f.session
+            .bound_token(Some(&hash), "alpha", 1, None)
+            .is_err(),
+        "revoked subscription survived"
+    );
+    assert!(
+        f.session.token_current(&token, 1001).is_err(),
+        "queued publication survived revoke"
+    );
+    assert!(f.read(&token, "alpha", 1001).await.is_err());
     f.close().await;
 }
 
 #[tokio::test]
 async fn p6_shell_boot_preference_cursor_uses_real_p8_and_e55_reader() {
-    use ctox_store::change_log::subscription::{Subscription,SubscriptionKey};
-    let f=Fixture::new().await;
+    use ctox_store::change_log::subscription::{Subscription, SubscriptionKey};
+    let f = Fixture::new().await;
     f.store.writer().submit(WriteJob::new(Default::default(),|tx| {
         for (app,user) in [("shell","alice"),("shell","bob"),("b","alice")] {
             let doc=json!({"id":format!("{app}/{user}/layout"),"app_id":app,"user_id":user,"key":"layout","value":7});
@@ -511,16 +561,43 @@ async fn p6_shell_boot_preference_cursor_uses_real_p8_and_e55_reader() {
         }
         Ok(())
     })).unwrap().await.unwrap();
-    let token=f.session.issue("shell",1000).await.unwrap();
-    let hash=claims(&token)["scope_hash"].as_str().unwrap().to_owned();
-    let ctx=ctox_store::preferences::Context::authenticated("shell","alice",claims(&token)["rights_ver"].as_str().unwrap().parse().unwrap()).unwrap();
-    assert_ne!(hash,ctx.scope_hash(),"fixture must exercise aggregate E55 scope");
-    let key=SubscriptionKey{participant:"alice".into(),collection:"app_user_preferences".into(),scope_hash:hash,gen:1};
-    let reader=Arc::new(reader::AppGrantReader::new(f.session.clone(),key.clone(),||1001).unwrap());
-    let mut cursor=Subscription::new(f.store.readers(),&f.store.writer(),key,None).unwrap();
-    let page=cursor.next_page(100,reader,&*f.key,||1_001_000).await.expect("shell boot preferences cursor rejected aggregate grant");
-    let mut ids=page.docs.iter().map(|d|d.id.as_str()).collect::<Vec<_>>();ids.sort();
-    assert_eq!(ids,vec!["b/alice/layout","shell/alice/layout"],"Shell lost own-app preferences or leaked foreign user");
-    assert!(!page.sig.is_empty(),"P8 cursor must use held E22 signer");
+    let token = f.session.issue("shell", 1000).await.unwrap();
+    let hash = claims(&token)["scope_hash"].as_str().unwrap().to_owned();
+    let ctx = ctox_store::preferences::Context::authenticated(
+        "shell",
+        "alice",
+        claims(&token)["rights_ver"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_ne!(
+        hash,
+        ctx.scope_hash(),
+        "fixture must exercise aggregate E55 scope"
+    );
+    let key = SubscriptionKey {
+        participant: "alice".into(),
+        collection: "app_user_preferences".into(),
+        scope_hash: hash,
+        gen: 1,
+    };
+    let reader =
+        Arc::new(reader::AppGrantReader::new(f.session.clone(), key.clone(), || 1001).unwrap());
+    let mut cursor = Subscription::new(f.store.readers(), &f.store.writer(), key, None).unwrap();
+    let page = cursor
+        .next_page(100, reader, &*f.key, || 1_001_000)
+        .await
+        .expect("shell boot preferences cursor rejected aggregate grant");
+    let mut ids = page.docs.iter().map(|d| d.id.as_str()).collect::<Vec<_>>();
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec!["b/alice/layout", "shell/alice/layout"],
+        "Shell lost own-app preferences or leaked foreign user"
+    );
+    assert!(!page.sig.is_empty(), "P8 cursor must use held E22 signer");
     f.close().await;
 }

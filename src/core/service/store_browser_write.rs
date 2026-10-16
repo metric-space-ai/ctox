@@ -58,7 +58,10 @@ impl BrowserWrite {
         request: &Write,
         after: Option<&Value>,
     ) -> rusqlite::Result<WritePermission> {
-        let rights = match self.current(tx, participant) { Ok(rights)=>rights,Err(_)=>return Ok(WritePermission::Reject("revoked".into())) };
+        let rights = match self.current(tx, participant) {
+            Ok(rights) => rights,
+            Err(_) => return Ok(WritePermission::Reject("revoked".into())),
+        };
         let Some(collection) = ctox_store::schema::active_collection(tx, &request.collection)?
         else {
             return Ok(WritePermission::Reject("forbidden".into()));
@@ -85,8 +88,14 @@ impl BrowserWrite {
             .map(|v| serde_json::from_str(&v))
             .transpose()
             .map_err(|_| sql_invalid("invalid stored document"))?;
-        let app = if matches!(request.collection.as_str(), "business_commands" | "app_user_preferences") {
-            after.or(before.as_ref()).and_then(|d| d["app_id"].as_str()).unwrap_or_else(||request.id.split('/').next().unwrap_or(""))
+        let app = if matches!(
+            request.collection.as_str(),
+            "business_commands" | "app_user_preferences"
+        ) {
+            after
+                .or(before.as_ref())
+                .and_then(|d| d["app_id"].as_str())
+                .unwrap_or_else(|| request.id.split('/').next().unwrap_or(""))
         } else {
             &collection.definition.app_id
         };
@@ -99,20 +108,44 @@ impl BrowserWrite {
         // The existing fence is entered INSIDE P8's WriteJob, with the actual
         // before and post-merge after. Rights publications use this same writer;
         // none can commit between this validation and the document/ops commit.
-        let route=scope_grant_route::bound_owner(&self.admission,&self.peer).map_err(|_|sql_invalid("grant owner unavailable"))?;
-        let session=route.session();
-        let token=match session.bound_token(None,&request.collection,request.gen,Some(app)) {
-            Ok(token)=>token,Err(_)=>return Ok(WritePermission::Reject("revoked".into()))
+        let route = scope_grant_route::bound_owner(&self.admission, &self.peer)
+            .map_err(|_| sql_invalid("grant owner unavailable"))?;
+        let session = route.session();
+        let token = match session.bound_token(None, &request.collection, request.gen, Some(app)) {
+            Ok(token) => token,
+            Err(_) => return Ok(WritePermission::Reject("revoked".into())),
         };
-        let checked=session.with_write_in_transaction(tx,&token,&request.collection,now()/1000,before.as_ref(),after,|| {
-            policy::write_sync_document(&actor,&rights,app,&request.collection,before.as_ref(),after,None)
-        });
-        Ok(if checked.is_ok() { WritePermission::Permit } else { WritePermission::Reject("revoked".into()) })
+        let checked = session.with_write_in_transaction(
+            tx,
+            &token,
+            &request.collection,
+            now() / 1000,
+            before.as_ref(),
+            after,
+            || {
+                policy::write_sync_document(
+                    &actor,
+                    &rights,
+                    app,
+                    &request.collection,
+                    before.as_ref(),
+                    after,
+                    None,
+                )
+            },
+        );
+        Ok(if checked.is_ok() {
+            WritePermission::Permit
+        } else {
+            WritePermission::Reject("revoked".into())
+        })
     }
 }
 impl WriteAuthority for BrowserWrite {
-    fn preference_context(&self,participant:&str)->Option<ctox_store::preferences::Context> {
-        if participant!=self.peer.device {return None;}
+    fn preference_context(&self, participant: &str) -> Option<ctox_store::preferences::Context> {
+        if participant != self.peer.device {
+            return None;
+        }
         self.preferences.lock().ok()?.clone()
     }
     fn authorize(
@@ -121,17 +154,41 @@ impl WriteAuthority for BrowserWrite {
         participant: &str,
         request: &Write,
     ) -> rusqlite::Result<WritePermission> {
-        if self.current(tx, participant).is_err() { return Ok(WritePermission::Reject("revoked".into())); }
-        *self.preferences.lock().map_err(|_|sql_invalid("preference context poisoned"))?=None;
-        if request.collection==ctox_store::preferences::COLLECTION {
-            let session=scope_grant_route::bound_owner(&self.admission,&self.peer).map_err(|_|sql_invalid("grant owner unavailable"))?.session();
-            let app=request.id.split('/').next().unwrap_or("");
-            let context=(|| {
-                let token=session.bound_token(None,&request.collection,request.gen,Some(app))?;
-                let claims=session.verify_in_transaction(tx,&token,now()/1000)?;
-                ctox_store::preferences::Context::authenticated(&claims.app_id,&claims.user_id,claims.rights_ver.parse().map_err(|_|"invalid rights version")?).map_err(str::to_owned)
+        if self.current(tx, participant).is_err() {
+            return Ok(WritePermission::Reject("revoked".into()));
+        }
+        *self
+            .preferences
+            .lock()
+            .map_err(|_| sql_invalid("preference context poisoned"))? = None;
+        if request.collection == ctox_store::preferences::COLLECTION {
+            let session = scope_grant_route::bound_owner(&self.admission, &self.peer)
+                .map_err(|_| sql_invalid("grant owner unavailable"))?
+                .session();
+            let app = request.id.split('/').next().unwrap_or("");
+            let context = (|| {
+                let token =
+                    session.bound_token(None, &request.collection, request.gen, Some(app))?;
+                let claims = session.verify_in_transaction(tx, &token, now() / 1000)?;
+                ctox_store::preferences::Context::authenticated(
+                    &claims.app_id,
+                    &claims.user_id,
+                    claims
+                        .rights_ver
+                        .parse()
+                        .map_err(|_| "invalid rights version")?,
+                )
+                .map_err(str::to_owned)
             })();
-            match context {Ok(ctx)=>*self.preferences.lock().map_err(|_|sql_invalid("preference context poisoned"))?=Some(ctx),Err(_)=>return Ok(WritePermission::Reject("revoked".into()))}
+            match context {
+                Ok(ctx) => {
+                    *self
+                        .preferences
+                        .lock()
+                        .map_err(|_| sql_invalid("preference context poisoned"))? = Some(ctx)
+                }
+                Err(_) => return Ok(WritePermission::Reject("revoked".into())),
+            }
         }
         *self
             .request
@@ -177,7 +234,9 @@ impl WriteAuthority for BrowserWrite {
         participant: &str,
         command: &Value,
     ) -> rusqlite::Result<WritePermission> {
-        if self.current(tx, participant).is_err() { return Ok(WritePermission::Reject("revoked".into())); }
+        if self.current(tx, participant).is_err() {
+            return Ok(WritePermission::Reject("revoked".into()));
+        }
         if command["actor_id"].as_str() != Some(self.peer.user.as_str()) {
             return Ok(WritePermission::Reject("forbidden".into()));
         }

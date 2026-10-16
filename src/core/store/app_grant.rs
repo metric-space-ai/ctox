@@ -158,11 +158,22 @@ fn decode(token: &str) -> scope::Result<SignedGrant> {
 
 /// Shell owns the user's preference mirror across app contexts (E51). App
 /// grants keep their app+user filter; writes always use authorize_app_write.
-fn app_read_scope(rights:&RightsSnapshot,app:&str,role:&str,user:&str,collection:&str)->scope::Result<scope::ResolvedScope> {
-    let mut resolved=rights.resolve_app_collection(app,role,user,collection)?;
-    if app=="shell" && collection==ctox_store::preferences::COLLECTION {
+fn app_read_scope(
+    rights: &RightsSnapshot,
+    app: &str,
+    role: &str,
+    user: &str,
+    collection: &str,
+) -> scope::Result<scope::ResolvedScope> {
+    let mut resolved = rights.resolve_app_collection(app, role, user, collection)?;
+    if app == "shell" && collection == ctox_store::preferences::COLLECTION {
         for projection in &mut resolved.projections {
-            projection.row_filter=scope::RowFilter::Eq{path:"/user_id".into(),value:scope::FilterValue::Literal{value:Value::String(user.into())}};
+            projection.row_filter = scope::RowFilter::Eq {
+                path: "/user_id".into(),
+                value: scope::FilterValue::Literal {
+                    value: Value::String(user.into()),
+                },
+            };
         }
     }
     Ok(resolved)
@@ -186,20 +197,29 @@ fn resolve(
     // E51 is a synthesized scope, not an explicit release-rights row. Shell
     // boot always subscribes it; resolve_app_collection binds app AND actor.
     let preference = super::Right {
-        role: state.role.clone(), collection: ctox_store::preferences::COLLECTION.into(),
-        row_filter: scope::RowFilter::None, field_mask: scope::FieldMask::All,
+        role: state.role.clone(),
+        collection: ctox_store::preferences::COLLECTION.into(),
+        row_filter: scope::RowFilter::None,
+        field_mask: scope::FieldMask::All,
         ops: [Operation::Read, Operation::Write].into(),
     };
     let include_preferences = true;
-    for rule in rights.rules.iter()
+    for rule in rights
+        .rules
+        .iter()
         .filter(|r| r.role == state.role && r.ops.contains(&Operation::Read))
-        .chain((include_preferences && !rights.rules.iter().any(|r| r.role == state.role && r.collection == ctox_store::preferences::COLLECTION)).then_some(&preference))
+        .chain(
+            (include_preferences
+                && !rights.rules.iter().any(|r| {
+                    r.role == state.role && r.collection == ctox_store::preferences::COLLECTION
+                }))
+            .then_some(&preference),
+        )
     {
-        let scope =
-            match app_read_scope(rights, app, &state.role, &state.user, &rule.collection) {
-                Ok(scope) => scope,
-                Err(_) => continue,
-            };
+        let scope = match app_read_scope(rights, app, &state.role, &state.user, &rule.collection) {
+            Ok(scope) => scope,
+            Err(_) => continue,
+        };
         let Some(mut projection) = scope.projection(&rule.collection).cloned() else {
             continue;
         };
@@ -218,9 +238,10 @@ fn resolve(
         };
         let mut operations = vec!["read".to_owned()];
         if rule.ops.contains(&Operation::Write)
-            && (rule.collection == ctox_store::preferences::COLLECTION || manifest
-                .authorize_collection(&rights.manifests, &rule.collection, AppOperation::Write)
-                .is_ok())
+            && (rule.collection == ctox_store::preferences::COLLECTION
+                || manifest
+                    .authorize_collection(&rights.manifests, &rule.collection, AppOperation::Write)
+                    .is_ok())
         {
             operations.push("write".to_owned());
         }
@@ -368,16 +389,38 @@ impl AppGrantSession {
             })
     }
     /// Lookup is not authorization: callers must use the transactional methods.
-    pub fn bound_token(&self, scope_hash: Option<&str>, collection: &str, gen: u64, app: Option<&str>) -> scope::Result<String> {
+    pub fn bound_token(
+        &self,
+        scope_hash: Option<&str>,
+        collection: &str,
+        gen: u64,
+        app: Option<&str>,
+    ) -> scope::Result<String> {
         let state = self.state.lock().map_err(|_| "grant session unavailable")?;
-        if !state.active { return Err("revoked".into()); }
-        state.issued.values().find(|g| {
-            scope_hash.is_none_or(|h| g.claims.scope_hash == h)
-                && app.is_none_or(|a| g.claims.app_id == a)
-                && g.claims.collections.iter().any(|c| c.collection == collection && c.gen == gen)
-        }).map(|g| g.token.clone()).ok_or_else(|| "revoked".into())
+        if !state.active {
+            return Err("revoked".into());
+        }
+        state
+            .issued
+            .values()
+            .find(|g| {
+                scope_hash.is_none_or(|h| g.claims.scope_hash == h)
+                    && app.is_none_or(|a| g.claims.app_id == a)
+                    && g.claims
+                        .collections
+                        .iter()
+                        .any(|c| c.collection == collection && c.gen == gen)
+            })
+            .map(|g| g.token.clone())
+            .ok_or_else(|| "revoked".into())
     }
-    pub fn scope_in_transaction(&self, tx: &Transaction<'_>, token: &str, collection: &str, now: u64) -> scope::Result<scope::ResolvedScope> {
+    pub fn scope_in_transaction(
+        &self,
+        tx: &Transaction<'_>,
+        token: &str,
+        collection: &str,
+        now: u64,
+    ) -> scope::Result<scope::ResolvedScope> {
         self.with_verified_in_transaction(tx, token, now, |claims, rights, state| {
             let base = logical_collection(claims, collection, "read")?;
             let resolved = app_read_scope(rights, &claims.app_id, &state.role, &state.user, &base)?;
@@ -387,13 +430,36 @@ impl AppGrantSession {
         })
     }
     pub fn issued_claims(&self) -> scope::Result<Vec<AppGrantClaims>> {
-        Ok(self.state.lock().map_err(|_| "grant session unavailable")?.issued.values().map(|g|g.claims.clone()).collect())
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| "grant session unavailable")?
+            .issued
+            .values()
+            .map(|g| g.claims.clone())
+            .collect())
     }
     /// Retained-state fence at physical handoff, after transactional validation.
-    pub fn token_current(&self, token: &str, now: u64) -> scope::Result<()> { self.with_token_current(token,now,||Ok(())) }
-    pub fn with_token_current<T>(&self, token:&str, now:u64, publish:impl FnOnce()->scope::Result<T>) -> scope::Result<T> {
+    pub fn token_current(&self, token: &str, now: u64) -> scope::Result<()> {
+        self.with_token_current(token, now, || Ok(()))
+    }
+    pub fn with_token_current<T>(
+        &self,
+        token: &str,
+        now: u64,
+        publish: impl FnOnce() -> scope::Result<T>,
+    ) -> scope::Result<T> {
         let state = self.state.lock().map_err(|_| "grant session unavailable")?;
-        if state.active && state.issued.values().any(|g| g.token == token && now < g.claims.exp) { publish() } else { Err("revoked".into()) }
+        if state.active
+            && state
+                .issued
+                .values()
+                .any(|g| g.token == token && now < g.claims.exp)
+        {
+            publish()
+        } else {
+            Err("revoked".into())
+        }
     }
     /// Used by P8's native reader in its own SQLite snapshot. Authorization,
     /// reprojection and synchronous frame handoff share live policy/session
@@ -409,12 +475,27 @@ impl AppGrantSession {
     ) -> scope::Result<T> {
         self.with_verified_in_transaction(tx, token, now, |claims, rights, state| {
             let base = logical_collection(claims, collection, "read")?;
-            let projected = if claims.app_id=="shell" && base==ctox_store::preferences::COLLECTION {
-                let app=document["app_id"].as_str().ok_or("forbidden")?;
-                let context=ctox_store::preferences::Context::authenticated(app,&state.user,rights.rights_ver)?;
-                if !context.owns(document) {return Err("forbidden".into());}
-                document.clone()
-            } else { rights.authorize_app_read(&claims.app_id,&state.role,&state.user,&base,document)? };
+            let projected =
+                if claims.app_id == "shell" && base == ctox_store::preferences::COLLECTION {
+                    let app = document["app_id"].as_str().ok_or("forbidden")?;
+                    let context = ctox_store::preferences::Context::authenticated(
+                        app,
+                        &state.user,
+                        rights.rights_ver,
+                    )?;
+                    if !context.owns(document) {
+                        return Err("forbidden".into());
+                    }
+                    document.clone()
+                } else {
+                    rights.authorize_app_read(
+                        &claims.app_id,
+                        &state.role,
+                        &state.user,
+                        &base,
+                        document,
+                    )?
+                };
             deliver(projected)
         })
     }

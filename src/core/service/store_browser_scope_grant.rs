@@ -149,8 +149,17 @@ pub(crate) async fn shell(
         .map_err(StoreError::Invalid)
 }
 
-pub(super) fn bound_owner(_admission: &Arc<BrowserAdmission>, peer: &Arc<BrowserPeer>) -> RxResult<Arc<AppGrantRoute>> {
-    ROUTES.get().ok_or_else(invalid)?.lock().map_err(|_|invalid())?
-        .get(&(Arc::as_ptr(peer) as usize)).filter(|e|e.peer.upgrade().is_some_and(|p|Arc::ptr_eq(&p,peer)))
-        .map(|e|e.route.clone()).ok_or_else(invalid)
+pub(super) fn bound_owner(
+    _admission: &Arc<BrowserAdmission>,
+    peer: &Arc<BrowserPeer>,
+) -> RxResult<Arc<AppGrantRoute>> {
+    ROUTES
+        .get()
+        .ok_or_else(invalid)?
+        .lock()
+        .map_err(|_| invalid())?
+        .get(&(Arc::as_ptr(peer) as usize))
+        .filter(|e| e.peer.upgrade().is_some_and(|p| Arc::ptr_eq(&p, peer)))
+        .map(|e| e.route.clone())
+        .ok_or_else(invalid)
 }
