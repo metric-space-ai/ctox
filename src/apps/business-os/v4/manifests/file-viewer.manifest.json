@@ -36,14 +36,14 @@
     "locales/de.json": "f2bb509fc0032beac2af6ad2e6f75948ea150e5fb3bdfd61cec5a2636ec8a71d",
     "locales/en.json": "1fe8a9a00a3bfbbb69266df810be650774a224430355b00ced62f7b2df5d576f",
     "module.json": "8bdfc6afde77f936a194ace763531285696a9f7e60e87ab59ef9466920ab7060",
-    "v4-manifest.json": "caa06f18a80ec0b504e83567b8c1c4714af109a20826ec49e572caad79298086"
+    "v4-manifest.json": "a83522ac5501c93cc30ec44e3b60412f321b3acceec08e6c9c69c566f3d4d473"
   },
   "foreign_collections": {
     "business_commands": {
       "_evidence": {
         "code_read": [],
         "code_write": [],
-        "declaration_basis": "modules/file-viewer/V4-PORT.md OFFEN 4 („keine App-Collection mehr“)",
+        "declaration_basis": "modules/file-viewer/V4-PORT.md OFFEN 4 („keine App-Collection mehr“); desktop_files read: E30 – files.get(ref) einer Explorer-/Desktop-Datei ist nur über eine lesbare desktop_files-Zeile berechtigt (FIXT-2, 16.10.2026)",
         "sources": [
           "module.json.collections",
           "v4-manifest.json"
@@ -54,6 +54,21 @@
       ],
       "owner_app": "ctox-platform"
     },
+    "desktop_files": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "declaration_basis": "modules/file-viewer/V4-PORT.md OFFEN 4 („keine App-Collection mehr“); desktop_files read: E30 – files.get(ref) einer Explorer-/Desktop-Datei ist nur über eine lesbare desktop_files-Zeile berechtigt (FIXT-2, 16.10.2026)",
+        "sources": [
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "desktop"
+    },
     "files": {
       "_evidence": {
         "code_read": [
@@ -62,7 +77,7 @@
           "index.js:134"
         ],
         "code_write": [],
-        "declaration_basis": "modules/file-viewer/V4-PORT.md OFFEN 4 („keine App-Collection mehr“)",
+        "declaration_basis": "modules/file-viewer/V4-PORT.md OFFEN 4 („keine App-Collection mehr“); desktop_files read: E30 – files.get(ref) einer Explorer-/Desktop-Datei ist nur über eine lesbare desktop_files-Zeile berechtigt (FIXT-2, 16.10.2026)",
         "sources": [
           "code",
           "v4-manifest.json"
@@ -114,7 +129,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "175325f63d5aaa4593ae66d67dfe599657bf302b77129c6398f6402225de2d4d",
+    "base_hash": "b01da96469022e3620cb2d1d3ae5d7b90158aaf5e67d6c9516d6c27eb885f936",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

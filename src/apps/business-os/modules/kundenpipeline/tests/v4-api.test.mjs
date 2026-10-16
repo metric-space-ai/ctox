@@ -10,6 +10,7 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/ctox-sync-v4/stub');
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -50,11 +51,15 @@ before(async () => {
   page.on('console', (m) => { if (m.type() === 'error') console.error('[page]', m.text()); });
   page.__errors = errors;
   await page.goto(base);
+  // Befehlsrouten der echten kundenpipeline-Version (v4/manifests/kundenpipeline.manifest.json, wie customers/E35): ohne
+  // aktive Version lehnt der Kern seit E26/E27 kundenpipeline.decision.resolve beim Schreiben mit unknown_command ab.
+  await page.evaluate((routes) => { window.__kundenpipelineRoutes = routes; }, realManifestRoutes('kundenpipeline'));
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false });
     await kernel.ready;
+    await kernel.sim.publishAppVersion(APP, '1', { title: 'Decision Hub', manifestExtra: window.__kundenpipelineRoutes });
     await kernel.sim.push('kundenpipeline_vorgaenge', [
       { id: 'case-1', title: 'Anfrage Müller GmbH', kunde_name: 'Müller GmbH', quelle_json: { kanal: 'mail', body_clean: 'Bitte Angebot für 40 Module.' }, created_at_ms: 1, updated_at_ms: 1 },
     ]);

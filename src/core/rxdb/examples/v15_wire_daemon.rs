@@ -172,7 +172,7 @@ fn doc_schema() -> RxJsonSchema {
         "_attachments".into(),
         JsonSchema {
             schema_type: Some("object".into()),
-            additional_properties: Some(true),
+            additional_properties: Some(true.into()),
             ..Default::default()
         },
     );

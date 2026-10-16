@@ -14,43 +14,33 @@
   "commands_out_unresolved": [],
   "commands_routes_pending": [
     {
-      "app": "browser",
+      "app": null,
       "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
-      "evidence": [
-        "modules/browser/index.js:627"
-      ],
+      "evidence": [],
       "type": "browser.http_auth.respond"
     },
     {
-      "app": "browser",
+      "app": null,
       "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
-      "evidence": [
-        "modules/browser/index.js:587"
-      ],
+      "evidence": [],
       "type": "browser.observer.grant"
     },
     {
-      "app": "browser",
+      "app": null,
       "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
-      "evidence": [
-        "modules/browser/index.js:592"
-      ],
+      "evidence": [],
       "type": "browser.observer.revoke"
     },
     {
-      "app": "browser",
+      "app": null,
       "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
-      "evidence": [
-        "modules/browser/index.js:555"
-      ],
+      "evidence": [],
       "type": "browser.upload.select"
     },
     {
-      "app": "browser",
+      "app": null,
       "basis": "V2-gleich ohne Handler, native Browser-Laufzeit-Handler folgen nach M7 (E44.1, CAP)",
-      "evidence": [
-        "modules/browser/index.js:636"
-      ],
+      "evidence": [],
       "type": "browser.webauthn.respond"
     },
     {
@@ -60,59 +50,45 @@
       "type": "ctox.plan.step.retry"
     },
     {
-      "app": "shell",
+      "app": null,
       "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
-      "evidence": [
-        "v4/shell/workjet/actions/calendar-connect.js:11"
-      ],
+      "evidence": [],
       "type": "ctox.workjet.calendar.connect.v1"
     },
     {
-      "app": "shell",
+      "app": null,
       "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
-      "evidence": [
-        "v4/shell/workjet/actions/meeting.js:150"
-      ],
+      "evidence": [],
       "type": "ctox.workjet.calendar.read.v1"
     },
     {
-      "app": "shell",
+      "app": null,
       "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
-      "evidence": [
-        "v4/shell/workjet/actions/device.js:45"
-      ],
+      "evidence": [],
       "type": "ctox.workjet.device.v1"
     },
     {
-      "app": "shell",
+      "app": null,
       "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
-      "evidence": [
-        "v4/shell/workjet/actions/instance.js:18"
-      ],
+      "evidence": [],
       "type": "ctox.workjet.grok.v1"
     },
     {
-      "app": "shell",
+      "app": null,
       "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
-      "evidence": [
-        "v4/shell/workjet/actions/meeting.js:204"
-      ],
+      "evidence": [],
       "type": "ctox.workjet.jour_fixe.speech.v1"
     },
     {
-      "app": "shell",
+      "app": null,
       "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
-      "evidence": [
-        "v4/shell/workjet/actions/meeting.js:28"
-      ],
+      "evidence": [],
       "type": "ctox.workjet.speech.dictation.v1"
     },
     {
-      "app": "shell",
+      "app": null,
       "basis": "E42: Registry-Route, sobald die E25-Routen von Transfer auf v4/integration liegen",
-      "evidence": [
-        "v4/shell/workjet/actions/meeting.js:105"
-      ],
+      "evidence": [],
       "type": "ctox.workjet.speech.settings.v1"
     }
   ],

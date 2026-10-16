@@ -1640,7 +1640,20 @@ function syncOpenReceiptForm() {
 }
 
 // Buchen nur mit erfassten Angaben – ein leerer Beleg ergäbe eine Buchung über 0 € ohne Datum.
+async function markReceiptFileRejected(receiptId, filename, reason) {
+  const text = String(reason || 'rejected');
+  fibuNotice(`receipt.upload_rejected.${receiptId}`, `${filename}: Datei vom Core abgelehnt (${text})`, 'error');
+  const db = fibuDb();
+  if (!db) return;
+  try {
+    await db.accounting_receipts.change(receiptId, { file_state: 'rejected', file_error: text, updated_at_ms: Date.now() });
+  } catch (error) {
+    fibuNotice(`receipt.upload_rejected.${receiptId}`, `${filename}: Datei vom Core abgelehnt (${text}); Markierung nicht gespeichert (${error?.code || error?.message || error})`, 'error');
+  }
+}
+
 function receiptIsComplete(receipt) {
+  if (receipt?.file_state === 'rejected') return false; // abgelehnte Datei: nicht buchbar
   return Boolean(receipt?.invoice_date) && Boolean(receipt?.suggested_account_id)
     && hasAmount(receipt.net_amount) && hasAmount(receipt.tax_amount) && hasAmount(receipt.gross_amount)
     && Number(receipt.net_amount) + Number(receipt.tax_amount) === Number(receipt.gross_amount);
@@ -2752,9 +2765,12 @@ async function handleBelegeUpload(e) {
       const upload = state.api.files.put(file, { id: fileId, name: file.name, mime });
       await upload.local;
       ref = String(await upload.ref || '');
-      upload.result?.then?.((result) => {
-        if (result?.status === 'rejected') fibuNotice(`receipt.upload_rejected.${id}`, `${file.name}: Datei vom Core abgelehnt (${result.reason || 'rejected'})`, 'error');
-      }, () => {});
+      // E35/STUB-E30: lehnt der Core die Datei nach der lokalen Quittung ab, wird done mit {code, reason} abgelehnt
+      // (ältere Kerne: result rejected). Der Beleg bleibt erhalten und wird markiert (file_state 'rejected'); buchbar
+      // ist er erst wieder mit einer gespeicherten Datei (receiptIsComplete).
+      const onRejected = (reason) => markReceiptFileRejected(id, file.name, reason);
+      if (upload.done?.then) upload.done.catch((error) => onRejected(error?.reason || error?.code || error?.message));
+      else upload.result?.then?.((result) => { if (result?.status === 'rejected') onRejected(result.reason || result.code); }, () => {});
     } catch (error) {
       fibuNotice('receipt.upload_failed', `${file.name}: Datei nicht gespeichert (${error?.code || error?.message || error})`, 'error');
       continue;

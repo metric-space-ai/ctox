@@ -1,0 +1,8 @@
+/* Shell v4 – Korrekturen an der Shell-V2-Chatleiste, die kein Abbild von V2 sind (chat-v2.css bleibt wörtlich generiert).
+   CHATFIX (16.10.2026): Die Inspektionszeile (<details class="ctox-chat-inspection">, summary white-space:nowrap) hat in V2
+   min-width:auto. Ein langer Status („Deine Aufgabe steht auf der Aufgabenliste …“) weitet so die einzige Grid-Spalte des
+   Fensters (gemessen: 460-px-Fenster, Spalte 594 px; live V2 auf welsch 458 → 591 px) und schneidet Nachrichten rechts ab.
+   min-width:0 lässt die Zeile wie vorgesehen mit Ellipse kürzen. */
+[data-v4-chat-v2] .ctox-chat-window > .ctox-chat-inspection {
+  min-width: 0;
+}

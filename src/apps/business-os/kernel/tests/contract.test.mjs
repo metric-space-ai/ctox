@@ -1,6 +1,6 @@
 import {testLocks} from './web-locks.mjs';
 // node --test test/  (Node ≥ 22; ohne IndexedDB läuft der In-Memory-Speicher mit gleicher Schnittstelle)
-import { test } from 'node:test';
+import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
@@ -10,8 +10,11 @@ import { createAppHost } from '../testkit/app-host.mjs';
 const createStubKernel=options=>createContractKernel({locks:testLocks,...options});
 
 let n = 0;
+const fixtureKernels = new Set();
+afterEach(async () => { await Promise.all([...fixtureKernels].map(k => k.close()));fixtureKernels.clear(); });
 async function mk(o = {}) {
   const k = createStubKernel({locks:testLocks, instanceId: `t${process.pid}-${++n}`, userId: 'u1', latencyMs: 5, ...o });
+  fixtureKernels.add(k);
   await k.ready;
   return k;
 }
@@ -411,11 +414,12 @@ test('registerHeader nimmt ein Element; link.state nur online|offline (§16.19 N
 
 test('Generationen (§16.4/§16.16): name@g2, alter Code liest g1, Doppelschreiben, g1 nach Frist verworfen', async () => {
   const k = await mk({ generationGraceMs: 150 });
-  await k.sim.publishAppVersion('crm', '1', {});
+  await k.sim.publishAppVersion('crm', '1', {collections:{leads:{schema:{type:'object',properties:{id:{type:'string'},name:{type:'string'}}}}}});
   const v1 = k.appApi('crm', '1');
   await v1.put('leads', { id: 'l1', name: 'Ada Lovelace' }).result;
   await v1.put('leads', { id: 'l2', name: 'Alan Turing' }).result;
   const st = await k.sim.publishAppVersion('crm', '2', {
+    collections:{leads:{schema:{type:'object',properties:{id:{type:'string'},first:{type:'string'},last:{type:'string'}}}}},
     incompatible: ['leads'],
     migrate: { leads: (d) => { const [first, last] = d.name.split(' '); return { id: d.id, first, last }; } },
   });

@@ -120,3 +120,19 @@ use the Shell-owned versioned SW artifact route. Publication/authorization remai
 
 No old runtime is switched off by this slice. Native-counterpart integration is phases5/8; no production hot-plug
 claim until the installed all-app acceptance. Old runtime retirement requires zero usage for24h on WELSCH.
+
+### E39/E42 command routing
+
+`api.command(type, payload, {target_app})` keeps the sender in `app_id`. For app commands,
+`commands_out` selects the unique target; ambiguous targets require a matching explicit
+`target_app`. Cross-app dispatch also checks the target's `commands_in`, handler and
+initiating user's command right against confirmed manifests. Unknown own commands
+remain `unknown_command`; denied cross-app delivery is `forbidden`. Platform routes
+go to Core and require no app handler or `commands_out`.
+
+`command-inventory.generated.mjs` is projected from the generated native inventory.
+Regenerate with `node src/apps/business-os/kernel/tests/generate-command-inventory.mjs`
+(optionally `--stub-root <private-stub-root>`). `tests/e39-inventory.test.mjs` rejects drift
+and checks native/browser lane names against the same ordered reference.
+`api.shell.canNavigate(target, params)` only reads navigation capability and creates no
+route event or status entry. `params.command_type` requires a declared outbound route.

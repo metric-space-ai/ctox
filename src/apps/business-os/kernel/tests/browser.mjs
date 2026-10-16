@@ -128,9 +128,9 @@ try{
  const rtc=await reader.evaluate(async()=>{
   const {createKernel}=await import('/kernel.mjs');const {WebRTCKernelTransport,createReliableChannels}=await import('/transport-webrtc.mjs');const {FakeNativePeer,offer,scopeFor}=await import('/tests/fake-native-peer.mjs');
   const a=new RTCPeerConnection({iceServers:[]}),b=new RTCPeerConnection({iceServers:[]}),client=createReliableChannels(a),server={};
-  let serverResolve,serverTimer;const serverReady=new Promise((resolve,reject)=>{serverResolve=resolve;serverTimer=setTimeout(()=>reject(Error('Native channel readiness deadline: '+JSON.stringify(Object.values(server).map(c=>[c.label,c.readyState])))),10000);});serverReady.catch(()=>{});
-  const serverCheck=()=>{if(Object.keys(server).length===6&&Object.values(server).every(c=>c.readyState==='open')){clearTimeout(serverTimer);serverResolve();}};
-  b.addEventListener('datachannel',e=>{const name=e.channel.label.slice('ctox-v4-'.length);server[{control:0,commands:1,interactive:2,live:3,initial:4,transfer:5}[name]]=e.channel;e.channel.addEventListener('open',serverCheck,{once:true});serverCheck();});
+  let serverResolve,serverTimer;const serverReady=new Promise((resolve,reject)=>{serverResolve=resolve;serverTimer=setTimeout(()=>{if(!serverCheck())reject(Error('Native channel readiness deadline: '+JSON.stringify(Object.values(server).map(c=>[c.label,c.readyState]))));},10000);});serverReady.catch(()=>{});
+  const serverCheck=()=>{const ready=Object.keys(server).length===6&&Object.values(server).every(c=>c.readyState==='open');if(ready){clearTimeout(serverTimer);serverResolve();}return ready;};
+  b.addEventListener('datachannel',e=>{const name=e.channel.label.slice('ctox-v4-'.length);server[{control:0,commands:1,interactive:2,live:3,'initial-sync':4,transfer:5}[name]]=e.channel;e.channel.addEventListener('open',serverCheck,{once:true});serverCheck();});
   const gathered=pc=>pc.iceGatheringState==='complete'?Promise.resolve():new Promise((r,j)=>{const t=setTimeout(()=>j(Error('ICE gathering deadline')),10000);const f=()=>{if(pc.iceGatheringState==='complete'){clearTimeout(t);pc.removeEventListener('icegatheringstatechange',f);r()}};pc.addEventListener('icegatheringstatechange',f);});
   let native,k;
   try {
