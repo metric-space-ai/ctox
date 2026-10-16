@@ -334,13 +334,17 @@ pub fn resolve(method: &str) -> Result<Route, CommandError> {
 /// Before the ordering buffer, document/history or rejection ledger can see
 /// an E25 input. Credential bytes belong only to the official secret provider.
 pub fn validate_persisted_input(document: &Value) -> Result<(), CommandError> {
-    // E49.2 fulfillment carries only an identifier. Values are supplied to the
-    // protected SecretStore intake, before any command/outbox write.
-    if document["type"] == "ctox.secret.request.fulfill" {
+    // E49.2 request documents carry metadata only. Credential values need the
+    // protected SecretStore intake, never the Core ordering/history log.
+    if matches!(document["type"].as_str(),Some("ctox.secret.request.fulfill" | "ctox.secret.request.decline")) {
         let valid = document["payload"].as_object().is_some_and(|p|
             p.len()==1 && p.get("request_id").and_then(Value::as_str)
                 .is_some_and(|id|!id.is_empty() && id.len()<=180 && !id.chars().any(char::is_control)));
         if !valid { return Err(error("invalid", "credential_ref_required")); }
+    }
+
+    if document["type"] == "ctox.secret.request.list" && !document["payload"].as_object().is_some_and(|p|p.is_empty()) {
+        return Err(error("invalid", "credential_ref_required"));
     }
 
     if contains_credential(&document["payload"])

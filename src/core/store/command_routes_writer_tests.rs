@@ -1,15 +1,16 @@
 use super::*;
 #[tokio::test]
-async fn e49_fulfill_value_is_absent_from_every_persisted_cell() {
+async fn e49_secret_request_values_are_absent_from_every_persisted_cell() {
     use sha2::{Digest,Sha256};
     println!("E49_STORE_SOURCE_SHA256 {:x}",Sha256::digest(include_bytes!("command_routes.rs")));
+    for kind in ["ctox.secret.request.fulfill","ctox.secret.request.decline","ctox.secret.request.list"] {
     let (_dir, writer, readers, ingress) = commands().await;
     let before = readers.read(|tx| change_log::head(tx)).await.unwrap();
     let mut results = Vec::new();
     for seq in [2, 1] {
         let mut w = command(seq, 810 + seq as u16, None, "queued", None, Value::Null);
         let body=w.write.body.as_mut().unwrap();
-        body["type"]=json!("ctox.secret.request.fulfill");
+        body["type"]=json!(kind);
         body["payload"]=json!({"request_id":"request-a","value":"E49-SYNTHETIC-SECRET-CANARY"});
         results.push(ingress.submit("alice".into(),w,NOW).await.unwrap());
     }
@@ -34,7 +35,12 @@ async fn e49_fulfill_value_is_absent_from_every_persisted_cell() {
         assert_eq!(batch.results[0].result.reason.as_deref(),Some("credential_ref_required"));
     }
     assert_eq!(readers.read(|tx|change_log::head(tx)).await.unwrap().head_seq,before.head_seq);
+    let mut safe=command(3,900,None,"queued",None,Value::Null);
+    safe.write.body.as_mut().unwrap()["type"]=json!(kind);
+    safe.write.body.as_mut().unwrap()["payload"]=if kind.ends_with("list") {json!({})} else {json!({"request_id":"request-a"})};
+    assert_eq!(send(&ingress,"alice",safe,NOW).await.status,WriteStatus::Accepted,"metadata input must remain usable");
     readers.shutdown().await.unwrap();writer.shutdown().await.unwrap();
+    }
 }
 
 #[tokio::test]
