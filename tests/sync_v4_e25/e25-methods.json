@@ -1142,6 +1142,20 @@
       "ctox.workjet.session.list"
     ]
   },
+  "app_decision": {
+    "method": "threads.ctox_approval.request",
+    "native_handler": "src/core/business_os/threads.rs::request_approval; approve_approval; decide_without_queue",
+    "test": "e54_app_decision_preserves_privileged_self_review_boundary",
+    "scope": "native registered CLI owner; productive P4 command-to-completion not measured",
+    "options_contract": "1..32 unique string IDs or {id,label?,description?}; app principal from authorized source_context.module; selection decision_option_id (decision_option alias)",
+    "schema_contract": "target_command_type remains a string; app choice has no delegated target payload",
+    "mutations": [
+      "remove app-choice exception -> native assertion red",
+      "remove original optionless self-review gate -> native assertion red",
+      "bypass no-execution decision branch -> native assertion red"
+    ],
+    "source_sha256": "ef1344c6ebbd7c77b22e1b8d8b92f3b059571aea810af9fd9e74c3fe209363a6"
+  },
   "platform_routes": [
     {
       "method": "ctox.secret.request.list",
