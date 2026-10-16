@@ -129,7 +129,9 @@ def main():
         def copy(source, dest):
             dest.parent.mkdir(parents=True, exist_ok=True)
             if source.is_dir():
-                shutil.copytree(source, dest, ignore=shutil.ignore_patterns('node_modules', '.git'))
+                # The main CLI release copies the entire runtime source tree;
+                # do not silently drop a tracked nested runtime dependency.
+                shutil.copytree(source, dest, ignore=shutil.ignore_patterns('.git'))
             else:
                 shutil.copy2(source, dest)
         copy(binary, bundle / 'bin/ctox')
