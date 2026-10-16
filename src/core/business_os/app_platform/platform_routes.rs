@@ -76,7 +76,23 @@ fn allowed(tx: &Transaction<'_>, actor: &BusinessOsActor, kind: &str) -> bool {
     let restart_admin = kind != "ctox.maintenance.restart" || actor.role == BusinessOsRole::Admin;
     restart_admin
         && actor.id.as_deref().is_some_and(|id| !id.is_empty())
-        && policy::evaluate_in_store(tx, actor, right, &BusinessOsScope::workspace()).allowed
+        && policy::sync_rights::read(tx).is_ok_and(|rights| {
+            policy::evaluate_with_rights(&rights, actor, right, &BusinessOsScope::workspace()).allowed
+        })
+}
+
+/// Native hello owner hook. The user identifier must come from its
+/// authenticated binding. This only removes capabilities: no caller role or
+/// advertised capability grants authority, and revocation is read afresh.
+pub(crate) fn filter_session_capabilities(
+    tx: &Transaction<'_>,
+    authenticated_user_id: &str,
+    mut capabilities: Vec<String>,
+) -> Result<Vec<String>, StoreError> {
+    let restart_allowed = super::runtime_host::actor(tx, authenticated_user_id)
+        .is_ok_and(|actor| allowed(tx, &actor, "ctox.maintenance.restart"));
+    capabilities.retain(|name| name != "ctox.maintenance.restart" || restart_allowed);
+    Ok(capabilities)
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -148,9 +164,9 @@ pub(super) fn execute(
                         json!({"request_id":request.request_id,"declined":true})
                     }
                     // Never mark fulfilled before the protected provider commits.
-                    // A native provider must consume command-bound intake and call
-                    // finish_fulfill in the same retained invocation. No raw-value
-                    // fallback and no second RxDB credential ledger exists.
+                    // Completion stays unavailable until the native intake owner
+                    // supplies its SecretStore effect and commit guard. Metadata
+                    // or a caller boolean is never evidence of a secret write.
                     Some("pending") => deny("unavailable", "protected_secret_intake_required"),
                     _ => deny("conflict", "secret_request_closed"),
                 }

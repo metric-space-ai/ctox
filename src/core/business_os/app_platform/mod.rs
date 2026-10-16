@@ -9,7 +9,8 @@
 mod commands;
 #[cfg(test)]
 mod model_check_tests;
-mod platform_routes;
+/// Native owner hooks over this same canonical transaction; never a wire API.
+pub(crate) mod platform_routes;
 pub(crate) mod runtime_host;
 #[cfg(test)]
 mod tests;
@@ -96,6 +97,18 @@ pub(crate) struct Platform {
 }
 
 impl Platform {
+    /// Called by the authenticated native hello owner before serializing its
+    /// selected capabilities. Never accepts a role asserted by the peer.
+    pub(crate) fn filter_session_capabilities(
+        &self,
+        authenticated_user_id: String,
+        capabilities: Vec<String>,
+    ) -> Result<ctox_store::types::JobHandle<Vec<String>>, StoreError> {
+        self.writer.submit(WriteJob::new(JobOptions::default(), move |tx| {
+            platform_routes::filter_session_capabilities(tx, &authenticated_user_id, capabilities)
+        }))
+    }
+
     /// The daemon composition root passes its already registered sync database.
     /// This adapter clones its writer; it never opens a file or registers a
     /// second owner. Key loading is complete before the bounded signer arrives.

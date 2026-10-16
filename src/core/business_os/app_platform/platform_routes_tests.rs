@@ -44,6 +44,17 @@ async fn e49_platform_rights_metadata_grants_and_restart_reply_boundary() {
     db.writer.submit(WriteJob::new(JobOptions::default(),|tx|{
         let admin=BusinessOsActor::new(Some("owner".into()),"admin");
         let user=BusinessOsActor::new(Some("owner".into()),"user");
+        let offered=vec!["files.ref".to_owned(),"ctox.maintenance.restart".to_owned()];
+        assert_eq!(filter_session_capabilities(tx,"owner",offered.clone())?,offered);
+        commands::put(tx,"business_users","owner",&json!({"id":"owner","active":true,"role":"chef"}))?;
+        assert_eq!(filter_session_capabilities(tx,"owner",offered.clone())?,vec!["files.ref"],"E54: chef is not admin even when runtime.manage permits execution");
+        assert_eq!(filter_session_capabilities(tx,"unknown",offered.clone())?,vec!["files.ref"],"E54: no authenticated current actor, no restart capability");
+        commands::put(tx,"business_users","owner",&json!({"id":"owner","active":true,"role":"admin"}))?;
+        let version=policy::sync_rights::read(tx)?.rights_ver;
+        policy::sync_rights::replace(tx,version,&[])?;
+        assert_eq!(filter_session_capabilities(tx,"owner",offered.clone())?,vec!["files.ref"],"E54: same-transaction rights revocation must fence even an Admin");
+        let version=policy::sync_rights::read(tx)?.rights_ver;
+        policy::sync_rights::replace(tx,version,&policy::base_release_rights(&[]))?;
         let kinds=["ctox.secret.request.list","ctox.secret.request.fulfill","ctox.secret.request.decline","ctox.workjet.remote_worker.admit","ctox.maintenance.restart"];
         for (i,kind) in kinds.iter().enumerate() {
             assert!(ctox_store::change_log::subscription::write_contract::routes::resolve(kind).is_ok());
