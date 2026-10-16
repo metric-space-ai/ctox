@@ -6,7 +6,7 @@ Private modules are wired only in the lane checkout and restored in finally.
 R13 uses the pinned #827 authority because train7 does not yet include it;
 this explicit composition is recorded, never represented as train7 alone.
 """
-import argparse, hashlib, json, os, re, shutil, subprocess, sys, time
+import argparse, hashlib, json, os, re, shutil, signal, subprocess, sys, time
 from pathlib import Path
 
 ROOT = Path.cwd()
@@ -18,10 +18,15 @@ if USE_CURRENT_RIGHTS:
     RIGHTS = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--only', choices=['all', 'r10', 'r13', 'r14', 'scenarios'], default='all')
+parser.add_argument('--only', choices=['all', 'regressions', 'r10', 'r13', 'r14', 'scenarios']
+, default='all')
 parser.add_argument('--expect-red', action='store_true', help='qualify specifically reproduced assertion failures; default remains a red target')
 args = parser.parse_args()
 assert sys.platform == 'linux' and os.environ.get('BUILD_LANE_BIN') and os.environ.get('CARGO_TARGET_DIR'), 'canonical GPU lane required'
+os.environ.setdefault('TOKIO_WORKER_THREADS','2')
+# Existing build-only switch: these contracts never exercise optional local
+# inference engines. Avoid reusing CMake source-directory caches from the seed.
+os.environ['CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS']='1'
 TARGET = Path(os.environ['CARGO_TARGET_DIR'])
 OUT = TARGET / ('p6-review4-' + time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()))
 OUT.mkdir(parents=True)
@@ -37,8 +42,22 @@ def save():
         steps=STEPS, results=RESULTS), indent=2)+'\n')
 def run(name, command, timeout=1200, **kwargs):
     at=time.time()
-    p=subprocess.run([str(x) for x in command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, timeout=timeout, **kwargs)
+    child=subprocess.Popen([str(x) for x in command], stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,text=True,start_new_session=True,**kwargs)
+    (OUT/(name+'-process.json')).write_text(json.dumps(dict(owner='01a101a1-d8e3',
+        pid=child.pid,pgid=child.pid,purpose=name,output=str(OUT),stop=f'terminal or {timeout}s'),indent=2))
+    try:
+        stdout,_=child.communicate(timeout=timeout)
+        code=child.returncode
+    except subprocess.TimeoutExpired:
+        os.killpg(child.pid,signal.SIGTERM)
+        try: stdout,_=child.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            os.killpg(child.pid,signal.SIGKILL)
+            stdout,_=child.communicate()
+        code=124
+    p=subprocess.CompletedProcess(command,code,stdout)
+    p.pid=child.pid
     (OUT/(name+'.log')).write_text(p.stdout)
     STEPS.append(dict(name=name, command=[str(x) for x in command], exit=p.returncode, seconds=time.time()-at))
     save(); print(name, 'exit', p.returncode, flush=True)
@@ -90,39 +109,72 @@ if args.only in ('all','scenarios'):
     else: RESULTS['scenarios']=dict(status='build unverified',exit=p.returncode)
     save()
 
-if args.only in ('all','r10','r14'):
-    sources={ROOT/'src/core/service/store_startup.rs':(HERE/'r10.rs','p6_review4'),
-             ROOT/'src/core/store/lcm_adapter.rs':(HERE/'r14.rs','p6_review4')}
+if args.only in ('all','regressions','r10','r14'):
+
+    # Wire private test modules in a disposable source copy. Supplied foreign
+    # production sources remain untouched even in the lane checkout.
+    overlay=OUT/'root-test-source'
+    shutil.copytree(ROOT,overlay,symlinks=True,ignore=shutil.ignore_patterns('.git','target','node_modules','.greppy'))
+    sources={overlay/'src/core/service/store_startup.rs':(HERE/'r10.rs','p6_review4'),
+             overlay/'src/core/store/lcm_adapter.rs':(HERE/'r14.rs','p6_review4')}
     originals={}
     try:
         for path,(source,name) in sources.items(): originals[path]=wire(path,source,name)
-        exe=test_binary('train-tests-build',['cargo','test','--locked','--bin','ctox','--jobs','2'])
-        if args.only in ('all','r10'):
+        exe=test_binary('train-tests-build',['cargo','test','--manifest-path',overlay/'Cargo.toml','--locked','--bin','ctox','--jobs','2'])
+
+        if args.only in ('all','regressions','r10'):
+
             p=run('r10',[exe,'service::store_startup::p6_review4::r10_failed_start_must_retain_custody_until_engine_drains','--exact','--nocapture','--test-threads=1'],60)
-            RESULTS['r10']=dict(exit=p.returncode, reproduced=p.returncode!=0 and 'R10: maintenance acquired custody' in p.stdout)
+            effect=re.search(r'R10_EFFECT_STARTED pid=(\d+)',p.stdout)
+            assert effect and 'R10_DRAIN_FAILED' in p.stdout, 'R10 failed-drain path did not execute'
+            reproduced=p.returncode!=0 and ('R10: maintenance acquired custody' in p.stdout or 'R10: Foreground start returned' in p.stdout)
+            failstop=False
+            # The alternative allowed by the contract is a confirmed WHOLE
+            # daemon/effect fail-stop. A random panic/segfault is not accepted.
+            if not reproduced and p.returncode in (1,-9,-15,-6,134) and 'test result: FAILED' not in p.stdout:
+                deadline=time.monotonic()+2
+                while time.monotonic()<deadline:
+                    try: os.killpg(p.pid,0)
+                    except ProcessLookupError:
+                        failstop=not Path('/proc',effect.group(1)).exists()
+                        break
+                    time.sleep(.05)
+            # Reap/stop any retained effect after independently observing it.
+            if Path('/proc',effect.group(1)).exists():
+                try:
+                    if os.getpgid(int(effect.group(1)))==p.pid:
+                        os.killpg(p.pid,signal.SIGKILL)
+                except ProcessLookupError: pass
+            RESULTS['r10']=dict(exit=0 if failstop else p.returncode,
+                reproduced=reproduced,whole_group_failstop=failstop)
             save()
-        if args.only in ('all','r14'):
+        if args.only in ('all','regressions','r14'):
+
             assert shutil.which('strace'), 'R14 build unverified: strace missing'
             p=run('r14-probe',['strace','-ff','-s','4096','-e','trace=%file,write','-o',OUT/'r14-strace',exe,
                 'context::lcm::owner_adapter::p6_review4::r14_attach_syscall_probe','--exact','--nocapture','--test-threads=1'],60)
             assert p.returncode==0 and 'R14_PATH ' in p.stdout, 'R14 probe did not execute'
             match=re.search(r'R14_PATH (.+)',p.stdout); path=match.group(1).strip()
-            violations=[];polls=0
+            violations=[];control_violations=[];polls=0;control_polls=0
             for trace in OUT.glob('r14-strace.*'):
-                active=False
+                active=False;control_active=False
                 for number,line in enumerate(trace.read_text().splitlines(),1):
                     if 'R14_POLL_BEGIN tid=' in line: active=True;polls+=1
                     elif 'R14_POLL_END tid=' in line: active=False
-                    elif active and ('p6-r14-owned.sqlite3' in line or str(Path(path).parent) in line) and re.match(r'(statx|newfstatat|readlink|readlinkat|lstat|stat|access)\(',line):
-                        violations.append(dict(trace=trace.name,line=number,syscall=line))
+                    elif 'R14_CONTROL_POLL_BEGIN tid=' in line: control_active=True;control_polls+=1
+                    elif 'R14_CONTROL_POLL_END tid=' in line: control_active=False
+                    elif (active or control_active) and ('p6-r14-owned.sqlite3' in line or str(Path(path).parent) in line) and re.match(r'(statx|newfstatat|readlink|readlinkat|lstat|stat|access)\(',line):
+                        (violations if active else control_violations).append(dict(trace=trace.name,line=number,syscall=line))
             assert polls>0, 'R14 syscall observer did not see async polls'
+            assert control_polls>0 and not control_violations, 'R14 blocking-pool positive control failed'
             RESULTS['r14']=dict(exit=1 if violations else 0,reproduced=bool(violations),polls=polls,violations=violations)
             save(); print('R14 async filesystem violations',len(violations),flush=True)
     finally:
         for path,original in originals.items():path.write_bytes(original)
         RESULTS['train_sources_restored']=all(path.read_bytes()==data for path,data in originals.items());save()
 
-if args.only in ('all','r13'):
+if args.only in ('all','regressions','r13'):
+
     harness=OUT/'r13-harness';(harness/'src').mkdir(parents=True)
     inputs=['src/core/business_os/policy.rs']+['src/core/store/'+name+'.rs' for name in
         ['rights','scope','manifest_rules','rights_matrix_tests','rights_tests','scope_tests']]+['src/core/rxdb/src/plugins/replication_webrtc/scope_filter.rs']
@@ -172,6 +224,7 @@ pub struct BusinessOsSession;
 pub fn session_user_id(_:&BusinessOsSession)->Option<&str>{None}
 pub fn session_role(_:&BusinessOsSession)->&'static str{"user"}}
 '''+f'#[path="{harness}/src/core/business_os/policy.rs"] pub mod policy;\n}}\n'+
+        'pub use business_os::policy::sync_rights as rights;\n'+
         f'#[path="{coding}/draft_turn.rs"] mod draft_turn;\n')
     (OUT/'r13-source-binding.json').write_text(json.dumps(dict(policy_revision=RIGHTS,policy_files=bindings,
         draft_source_revision=TRAIN,draft_sha256=digest(coding/'draft_turn.rs'),
@@ -180,7 +233,10 @@ pub fn session_role(_:&BusinessOsSession)->&'static str{"user"}}
     p=run('r13',[exe,'draft_turn::tests::p6_review4::r13_inflight_reply_cannot_patch_draft_after_committed_rights_revocation','--exact','--nocapture','--test-threads=1'],60)
     RESULTS['r13']=dict(exit=p.returncode,reproduced=p.returncode!=0 and 'R13: draft changed after' in p.stdout);save()
 
-required=['r10','r13','r14'] if args.only=='all' else [args.only]
+required=['r10','r13','r14'] if args.only in ('all','regressions') else [args.only]
+if args.only=='all' and not args.expect_red: required.append('scenarios')
+if args.expect_red and args.only=='scenarios': raise SystemExit('--expect-red qualifies functional regression counterexamples only')
+
 if args.expect_red:
     qualified=all(RESULTS.get(name,{}).get('reproduced') is True for name in required if name!='scenarios')
     assert qualified, 'expected functional counterexample not reproduced; inspect individual logs'

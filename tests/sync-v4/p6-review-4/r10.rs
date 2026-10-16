@@ -24,6 +24,7 @@ impl RunningEngine for Undrained {
         let failed = self.1.clone();
         Box::pin(async move {
             if effect.alive() {
+                eprintln!("R10_DRAIN_FAILED native child still alive");
                 failed.notify_one();
                 return Err(StoreError::Busy);
             }
@@ -36,7 +37,9 @@ impl EngineFactory for DrainFactory {
     fn start(&self, _: Arc<StoreInputs>) -> EngineFuture<Box<dyn RunningEngine>> {
         let engine = Undrained(self.effect.clone(), self.failed.clone());
         Box::pin(async move {
-            *engine.0.0.lock().unwrap() = Some(std::process::Command::new("sleep").arg("30").spawn()?);
+            let child = std::process::Command::new("sleep").arg("30").spawn()?;
+            eprintln!("R10_EFFECT_STARTED pid={}", child.id());
+            *engine.0.0.lock().unwrap() = Some(child);
             Ok(Box::new(engine) as Box<dyn RunningEngine>)
         })
     }
@@ -53,6 +56,7 @@ impl EngineFactory for FailedStart {
 // Run alone: native factory registration is global. All waits are bounded.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn r10_failed_start_must_retain_custody_until_engine_drains() {
+    assert!(std::env::var_os("CTOX_STATE_ROOT").is_none(), "fixture refuses a configured state root");
     let directory = tempfile::tempdir().unwrap();
     let root = directory.path().to_owned();
     let effect = Arc::new(Effect(Mutex::new(None)));
@@ -65,6 +69,7 @@ async fn r10_failed_start_must_retain_custody_until_engine_drains() {
     // A retained owner/retry remains pending; today's caller unwinds.
     let returned = tokio::time::timeout(std::time::Duration::from_millis(200), &mut boot).await;
     let effect_alive = effect.alive();
+    let returned_while_effect_alive = returned.is_ok() && effect_alive;
     let id = DbId::new(crate::paths::sync_db(&root)).unwrap();
     let custody = ctox_store::ipc::MaintenanceOwner::acquire(&queue_store::endpoint(&root), id);
     let retained = custody.is_err();
@@ -75,5 +80,7 @@ async fn r10_failed_start_must_retain_custody_until_engine_drains() {
         if !boot.is_finished() { boot.abort(); let _ = boot.await; }
     }
     assert!(effect_alive, "drain-failure fixture had no live native child effect");
+    assert!(!returned_while_effect_alive,
+        "R10: Foreground start returned while its native child effect was still undrained");
     assert!(retained, "R10: maintenance acquired custody while a native engine was still undrained");
 }
