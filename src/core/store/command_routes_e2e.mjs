@@ -95,6 +95,6 @@ try {
  while(inFlight.size)await Promise.all([...inFlight]);
  await rpc('drain');
  assert.deepEqual(peer.errors,[]);
- console.log(JSON.stringify({type:'measured' ,profile:'E25 component, fixture native DTOs, real Kernel/P5/P9 writer/signatures; not product',methods:measured,completion_lanes:[...completionLanes],verified_pages:verified,canonical_replays:replays,pass:measured.every(m=>m.pass)}));
+ await new Promise((resolve,reject)=>process.stdout.write(JSON.stringify({type:'measured' ,profile:'E25 component, fixture native DTOs, real Kernel/P5/P9 writer/signatures; not product',methods:measured,completion_lanes:[...completionLanes],verified_pages:verified,canonical_replays:replays,pass:measured.every(m=>m.pass)})+'\n',error=>error?reject(error):resolve()));
  assert.ok(measured.every(m=>m.pass),"component P1 p95 exceeded 150ms; retain the measured negative result");
 }finally{clearTimeout(timer);await k.close();peer.close();lines.close();}

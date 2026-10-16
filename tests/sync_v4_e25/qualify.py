@@ -2,8 +2,11 @@
 """E13: disable each real E25 route, run the real Kernel/P9 contract, restore.
 Run ONLY through the canonical lane. No remote/profile credentials are read.
 """
-import argparse, hashlib, json, os, pathlib, re, subprocess, time
-p=argparse.ArgumentParser();p.add_argument('--out',type=pathlib.Path,required=True);p.add_argument('--only',action='append');p.add_argument('--routes-only',action='store_true');a=p.parse_args()
+import argparse, hashlib, json, os, pathlib, re, subprocess, time, signal, datetime
+p=argparse.ArgumentParser();p.add_argument('--out',type=pathlib.Path,required=True);p.add_argument('--only',action='append');p.add_argument('--routes-only',action='store_true');p.add_argument('--per-method',action='store_true');p.add_argument('--deadline');a=p.parse_args()
+deadline=datetime.datetime.fromisoformat(a.deadline.replace('Z','+00:00')).timestamp() if a.deadline else float('inf')
+def interrupted(_signal,_frame): raise SystemExit(130)
+signal.signal(signal.SIGTERM,interrupted)
 a.out.mkdir(parents=True,exist_ok=True)
 root=pathlib.Path.cwd();source=root/'src/core/store/command_routes.rs'
 original=source.read_bytes();digest=hashlib.sha256(original).hexdigest()
@@ -14,23 +17,34 @@ if a.only:
     items=[x for x in items if x['method'] in a.only]
 command=['cargo','test','--locked','-p','ctox-store','e25_kernel_command_to_native_completion','--','--nocapture']
 def run(name, selected=command, method=None):
+    if time.time()>=deadline: raise TimeoutError('E25 qualification deadline')
     with (a.out/(name+'.log')).open('w') as log:
-        completed=subprocess.run(selected,stdout=log,stderr=subprocess.STDOUT,env={**os.environ,'RUST_TEST_THREADS':'2','CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS':'1',**({'E25_METHOD':method} if method else {})},timeout=720)
-    return completed.returncode,(a.out/(name+'.log')).read_text()
-receipt={'selected_methods':a.only,'routes_only':a.routes_only,'source_sha256':digest,'command':command,'profile':'component, fixture DTOs; not M7/product acceptance','methods':[]}
+        child=subprocess.Popen(selected,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,env={**os.environ,'RUST_TEST_THREADS':'2','CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS':'1',**({'E25_METHOD':method} if method else {})})
+        receipt['active']={'pid':child.pid,'pgid':child.pid,'command':selected,'stop_condition':'stage timeout, signal or qualification deadline'}
+        (a.out/'mutation.json').write_text(json.dumps(receipt,indent=2)+'\n')
+        try: code=child.wait(timeout=max(1,min(720,deadline-time.time())))
+        except BaseException:
+            if child.poll() is None:
+                os.killpg(child.pid,signal.SIGTERM)
+                try:child.wait(timeout=5)
+                except subprocess.TimeoutExpired:os.killpg(child.pid,signal.SIGKILL);child.wait()
+            raise
+        finally:receipt.pop('active',None)
+    return code,(a.out/(name+'.log')).read_text()
+receipt={'pass':False,'selected_methods':a.only,'per_method':a.per_method,'routes_only':a.routes_only,'source_sha256':digest,'command':command,'profile':'component, fixture DTOs; not M7/product acceptance','methods':[]}
 try:
-    baseline,text=run('baseline',method=items[0]['method'] if a.only else None);assert baseline==0, text[-4000:]
+    baseline,text=run('baseline',method=items[0]['method'] if a.only or a.per_method else None);assert baseline==0, text[-4000:]
     assert 'E25_KERNEL_COMPONENT' in text,'missing actual component execution'
     marker='E25_KERNEL_COMPONENT ';baseline_profile=json.loads(text[text.rindex(marker)+len(marker):].splitlines()[0])
     assert baseline_profile['pass'] and baseline_profile['completion_lanes']==[1]
-    receipt['baseline_scope']='shared full-inventory Kernel profile; immutable source SHA256'
+    receipt['baseline_scope']='fresh Store per route; each measured before its mutation' if a.only or a.per_method else 'shared full-inventory Kernel profile; immutable source SHA256'
     receipt['baseline_log_sha256']=hashlib.sha256(text.encode()).hexdigest()
     for item in items:
         method=item['method'];pattern=r'\s*(?:core_)?route!\(\s*"'+re.escape(method)+r'"\s*,\s*"[^"]*"\s*(?:,\s*(?:true|false))?\s*,?\s*\),'
         # One full, successful profile executed every method with identical
         # immutable source bytes. Reuse that measured baseline, not another
         # compile of the same restored source before every single route mutant.
-        if a.only:
+        if a.only or a.per_method:
             baseline,text=run('baseline_'+method.replace('.','_'),method=method);assert baseline==0,text[-4000:]
             marker='E25_KERNEL_COMPONENT ';baseline_profile=json.loads(text[text.rindex(marker)+len(marker):].splitlines()[0])
         assert any(m['method']==method and m['pass'] for m in baseline_profile['methods']),method
@@ -38,8 +52,9 @@ try:
         source.write_text(candidate);os.utime(source,None)
         code,log=run(method.replace('.','_'),method=method)
         assert code!=0 and 'unknown_command' in log and 'FAILED' in log and 'could not compile' not in log,(method,code,log[-3000:])
-        receipt['methods'].append({'method':method,'mutation':'remove complete route! entry','baseline_exit':baseline,'baseline_log':'baseline.log','mutant_exit':code,'reason':'unknown_command','test':'e25_kernel_command_to_native_completion'})
+        receipt['methods'].append({'method':method,'mutation':'remove complete route! entry','baseline_exit':baseline,'baseline_log':('baseline_'+method.replace('.','_')+'.log') if a.only or a.per_method else 'baseline.log','mutant_exit':code,'reason':'unknown_command','test':'e25_kernel_command_to_native_completion'})
         source.write_bytes(original);os.utime(source,None)
+        (a.out/'mutation.json').write_text(json.dumps(receipt,indent=2)+'\n')
     # Decisive security/transaction invariants, not extra acceptance gates.
     guards=[
         ('secret-not-durable',source,b'if contains_credential(&document["payload"])',b'if false','e25_raw_secret_never_enters_order_buffer_or_command_history','store'),
@@ -60,7 +75,7 @@ try:
     guards += [
         ('unknown-before-write',root/'src/core/store/write_contract.rs',b'routes::owns_type(kind)',b'false','e25_workjet_inventory_is_registered_before_write','store'),
         ('session-peer-binding',root/'src/core/rxdb/src/plugins/replication_webrtc/v4_native_sessions.rs',b'if parent.peer != *peer',b'if false','e25_speech_session_controls_and_native_events_keep_one_opening_identity','rxdb'),
-        ('child-measurement-required',root/'src/core/store/command_routes_e2e.mjs',b"console.log(JSON.stringify({type:'measured'",b"process.exit(0);console.log(JSON.stringify({type:'measured'",'e25_kernel_command_to_native_completion','store'),
+        ('child-measurement-required',root/'src/core/store/command_routes_e2e.mjs',b"await new Promise((resolve,reject)=>process.stdout.write(JSON.stringify({type:'measured'",b"process.exit(0);await new Promise((resolve,reject)=>process.stdout.write(JSON.stringify({type:'measured'",'e25_kernel_command_to_native_completion','store'),
         ('cas-chunk-hash',root/'src/core/rxdb/src/plugins/replication_webrtc/v4_session.rs',b'Sha256::digest(&data)',b'Sha256::digest(b"wrong chunk")','e25_native_cold_range_sends_complete_hashed_chunks_and_fences_revocation','rxdb'),
     ]
     guards += [
@@ -87,7 +102,7 @@ try:
             receipt['guards'].append({'invariant':name,'test':test,'mutant_exit':code,'production_anchor':old.decode() if isinstance(old,bytes) else old.pattern.decode()})
         finally:
             path.write_bytes(clean);os.utime(path,None)
-    restored,text=run('restored',method=items[0]['method'] if a.only else None);assert restored==0,text[-4000:]
+    restored,text=run('restored',method=items[0]['method'] if a.only or a.per_method else None);assert restored==0,text[-4000:]
     native_command=['cargo','test','--locked','--manifest-path','src/core/rxdb/Cargo.toml','--lib','e25_','--','--nocapture']
     native_restored,native_log=run('native-restored',native_command);assert native_restored==0,native_log[-4000:]
     assert 'E25_ADAPTER_SOURCE_SHA256' in native_log,'missing rebuilt native adapter marker'
