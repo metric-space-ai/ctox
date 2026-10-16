@@ -54,7 +54,7 @@ def main(a):
                CTOX_STATE_ROOT=str(root/'runtime'), CTOX_INSTALL_ROOT=str(root/'managed'),
                XDG_CONFIG_HOME=str(home/'.config'), XDG_CACHE_HOME=str(home/'.cache'))
     def run(name, args):
-        command = [str(binary), 'business-os', 'shell-update', *args, '--root', str(current)]
+        command = [str(binary), 'business-os', 'shell-update', *args]
         row = dict(name=name, command=command, startedAtMs=int(time.time()*1000))
         result['commands'].append(row)
         with (out/(name+'.log')).open('w') as log:
@@ -86,7 +86,9 @@ def main(a):
             entryV4='v4/index.html' in names, bootV4='v4/boot.js' in names,
             swV4='v4/sw.js' in names, legacyBoot='v4/boot/index.html' in names,
             kernelModules=sum(n.startswith('kernel/') and n.endswith('.mjs') for n in names),
-            signedEnvelope=any(n.endswith('.release.v2.json') for n in names), files=len(names))
+            signedEnvelope=any(n.endswith('.release.v2.json') for n in names), files=len(names),
+            entrySamples=names[:8], bootstrapSuffixMatches=[n for n in names if
+                n.endswith(('/v4/index.html','/v4/boot.js','/v4/sw.js','/kernel/boot.mjs'))])
         run('before', ['status'])
         stage = run('stage', ['stage', '--version', '0.2.0-beta.1'])
         result['stageExit'] = stage
@@ -95,6 +97,13 @@ def main(a):
                 reason='Supported signed release stage failed; see stage.log. Unsigned local bytes were not substituted.')
         else:
             # The official verifier, not this probe, decides signature/inventory.
+            # Bind its immutable package to the controller's exact candidate;
+            # a same-version release with other bytes is not this rehearsal.
+            staged = (current/'runtime/business-os-shell/slots/0.2.0-beta.1/.ctox-shell-release.v2.json').resolve(strict=True)
+            assert root in staged.parents, 'Staged manifest outside private profile'
+            envelope = json.loads(staged.read_text())
+            result['stagedArtifactSha256'] = envelope['payload']['artifact']['sha256']
+            assert result['stagedArtifactSha256'] == CANDIDATE_SHA, 'Signed package differs from supplied candidate'
             active = run('activate', ['activate'])
             result['activated'] = active == 0
             result['status'] = 'pass' if active == 0 else 'fail'
