@@ -475,7 +475,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
- "tempfile",
  "thiserror 1.0.69",
  "tokio",
  "tokio-stream",
@@ -1473,6 +1472,22 @@ dependencies = [
  "elliptic-curve",
  "primeorder",
  "sha2",
+]
+
+[[package]]
+name = "p6-e55-contract"
+version = "0.0.0"
+dependencies = [
+ "base64",
+ "ctox-rxdb",
+ "ctox-store",
+ "ring",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]
