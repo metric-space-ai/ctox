@@ -165,6 +165,16 @@ impl HttpSurface {
         .map_err(|_| StoreError::Panicked)?
     }
 }
+impl Drop for HttpSurface {
+    fn drop(&mut self) {
+        self.closing.store(true, Ordering::Release);
+        for listener in self.listeners.get_mut().unwrap_or_else(|p| p.into_inner()) {
+            for _ in &listener.workers {
+                listener.server.unblock();
+            }
+        }
+    }
+}
 
 fn answer(
     inputs: &StoreInputs,
@@ -289,6 +299,27 @@ mod tests {
         )?
         .await?;
         let listen: Listen = serde_json::from_slice(&bytes)?;
+        let child_root = root.path().to_owned();
+        let child_addr = listen.addr;
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            let child = std::process::Command::new(std::env::current_exe()?)
+                .args([
+                    "service::store_http::tests::http_cli_process_probe",
+                    "--exact",
+                    "--ignored",
+                    "--nocapture",
+                ])
+                .env("CTOX_C7_HTTP_ROOT", child_root)
+                .env("CTOX_C7_HTTP_ADDR", child_addr.to_string())
+                .output()?;
+            assert!(
+                child.status.success(),
+                "separate serve process failed beside daemon: {}",
+                String::from_utf8_lossy(&child.stdout)
+            );
+            Ok(())
+        })
+        .await??;
         let identity = owner.inputs.instance_signer()?;
         let expected = (
             identity.instance_id().to_owned(),
@@ -331,5 +362,15 @@ mod tests {
             "HTTP survived owner shutdown"
         );
         Ok(())
+    }
+
+    /// Executed only by the parent contract in a real second process.
+    #[test]
+    #[ignore]
+    fn http_cli_process_probe() -> anyhow::Result<()> {
+        let root = std::env::var_os("CTOX_C7_HTTP_ROOT")
+            .ok_or_else(|| anyhow::anyhow!("parent contract root required"))?;
+        let addr = std::env::var("CTOX_C7_HTTP_ADDR")?;
+        serve(Path::new(&root), &addr)
     }
 }
