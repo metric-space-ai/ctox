@@ -7,6 +7,7 @@ use ctox_store::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    io::Write,
     net::SocketAddr,
     path::{Component, Path},
     sync::{
@@ -107,7 +108,29 @@ impl HttpSurface {
                                         .unwrap(),
                                 );
                                 response.add_header(Header::from_bytes("Content-Security-Policy", "default-src 'self'; script-src 'self' blob:; connect-src 'self' wss:; object-src 'none'; base-uri 'self'").unwrap());
-                                let _ = request.respond(response);
+                                if request.url().split('?').next() == Some("/api/business-os/launch-context") {
+                                    // tiny_http buffers only 1 KiB: writing headers and a
+                                    // larger bootstrap body separately can incur delayed
+                                    // ACK/Nagle latency on a reused connection. Keep its
+                                    // canonical HTTP encoder, but emit this bounded control
+                                    // response as one write. Static files still stream normally.
+                                    let mut encoded = Vec::new();
+                                    if response
+                                        .raw_print(
+                                            &mut encoded,
+                                            request.http_version().clone(),
+                                            request.headers(),
+                                            request.method() == &Method::Head,
+                                            None,
+                                        )
+                                        .is_ok()
+                                    {
+                                        let mut writer = request.into_writer();
+                                        let _ = writer.write_all(&encoded).and_then(|()| writer.flush());
+                                    }
+                                } else {
+                                    let _ = request.respond(response);
+                                }
                             }
                             Err(_) => break,
                         }
