@@ -131,83 +131,75 @@ mod tests {
     #[test]
     fn xai_billing_reports_real_period_and_percent_and_rejects_unknown_usage() -> anyhow::Result<()>
     {
-        tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
-            .enable_all()
-            .build()?
-            .block_on(crate::persistence::run_core_sync(move || {
-                let root = tempfile::tempdir()?;
-                crate::secrets::write_secret_record(
-                    root.path(),
-                    SCOPE,
-                    NAME,
-                    &serde_json::to_string(&Stored {
-                        access: "fixture-access".into(),
-                        refresh: None,
-                        identity: None,
-                        expires_at: None,
-                        token_endpoint: "https://auth.x.ai/token".into(),
-                    })?,
-                    None,
-                    json!({"provider":"xai"}),
-                )?;
-                let listener = TcpListener::bind("127.0.0.1:0")?;
-                test_endpoint(
-                    root.path(),
-                    Some(format!("http://{}", listener.local_addr()?)),
-                );
-                let end = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
-                    now_ms() + 8 * 86_400_000,
-                )
-                .unwrap()
-                .to_rfc3339();
-                let server = std::thread::spawn(move || -> anyhow::Result<()> {
-                    for (period, percent) in
-                        [("WEEKLY", 37.25), ("MONTHLY", 0.0), ("WEEKLY", 101.0)]
-                    {
-                        let (mut stream, _) = listener.accept()?;
-                        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-                        let mut bytes = Vec::new();
-                        while !bytes.windows(4).any(|w| w == b"\r\n\r\n") {
-                            let mut chunk = [0; 1024];
-                            let n = stream.read(&mut chunk)?;
-                            anyhow::ensure!(
-                                n > 0 && bytes.len() + n <= 16384,
-                                "invalid fixture request"
-                            );
-                            bytes.extend_from_slice(&chunk[..n]);
-                        }
-                        let text = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
-                        assert!(text.starts_with("get /billing?format=credits "));
-                        assert!(text.contains("authorization: bearer fixture-access"));
-                        assert!(text.contains("x-xai-token-auth: xai-grok-cli"));
-                        let body = json!({"config":{"creditUsagePercent":percent,
+        crate::persistence::test_support::run(move |root| {
+            crate::secrets::write_secret_record(
+                root.path(),
+                SCOPE,
+                NAME,
+                &serde_json::to_string(&Stored {
+                    access: "fixture-access".into(),
+                    refresh: None,
+                    identity: None,
+                    expires_at: None,
+                    token_endpoint: "https://auth.x.ai/token".into(),
+                })?,
+                None,
+                json!({"provider":"xai"}),
+            )?;
+            let listener = TcpListener::bind("127.0.0.1:0")?;
+            test_endpoint(
+                root.path(),
+                Some(format!("http://{}", listener.local_addr()?)),
+            );
+            let end =
+                chrono::DateTime::<chrono::Utc>::from_timestamp_millis(now_ms() + 8 * 86_400_000)
+                    .unwrap()
+                    .to_rfc3339();
+            let server = std::thread::spawn(move || -> anyhow::Result<()> {
+                for (period, percent) in [("WEEKLY", 37.25), ("MONTHLY", 0.0), ("WEEKLY", 101.0)] {
+                    let (mut stream, _) = listener.accept()?;
+                    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+                    let mut bytes = Vec::new();
+                    while !bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                        let mut chunk = [0; 1024];
+                        let n = stream.read(&mut chunk)?;
+                        anyhow::ensure!(
+                            n > 0 && bytes.len() + n <= 16384,
+                            "invalid fixture request"
+                        );
+                        bytes.extend_from_slice(&chunk[..n]);
+                    }
+                    let text = String::from_utf8_lossy(&bytes).to_ascii_lowercase();
+                    assert!(text.starts_with("get /billing?format=credits "));
+                    assert!(text.contains("authorization: bearer fixture-access"));
+                    assert!(text.contains("x-xai-token-auth: xai-grok-cli"));
+                    let body = json!({"config":{"creditUsagePercent":percent,
                     "currentPeriod":{"type":format!("USAGE_PERIOD_TYPE_{period}"),"end":end}},
                     "private_upstream_field":"must-not-be-published"})
-                        .to_string();
-                        write!(
-                            stream,
-                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
-                            body.len(),
-                            body
-                        )?;
-                    }
-                    Ok(())
-                });
-                let weekly = observe(root.path())?;
-                assert_eq!(
-                    weekly.quota["period"], "weekly",
-                    "gateway period must be preserved"
-                );
-                assert_eq!(weekly.quota["used_percent"], 37.25);
-                assert!(!weekly.quota.to_string().contains("private_upstream_field"));
-                let monthly = observe(root.path())?;
-                assert_eq!(monthly.quota["period"], "monthly");
-                assert_eq!(monthly.quota["used_percent"], 0.0);
-                assert_eq!(observe(root.path())?.quota["state"], "unavailable");
-                server.join().unwrap()?;
-                test_endpoint(root.path(), None);
+                    .to_string();
+                    write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )?;
+                }
                 Ok(())
-            }))
+            });
+            let weekly = observe(root.path())?;
+            assert_eq!(
+                weekly.quota["period"], "weekly",
+                "gateway period must be preserved"
+            );
+            assert_eq!(weekly.quota["used_percent"], 37.25);
+            assert!(!weekly.quota.to_string().contains("private_upstream_field"));
+            let monthly = observe(root.path())?;
+            assert_eq!(monthly.quota["period"], "monthly");
+            assert_eq!(monthly.quota["used_percent"], 0.0);
+            assert_eq!(observe(root.path())?.quota["state"], "unavailable");
+            server.join().unwrap()?;
+            test_endpoint(root.path(), None);
+            Ok(())
+        })
     }
 }
