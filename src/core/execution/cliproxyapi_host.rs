@@ -2392,7 +2392,8 @@ impl CodexAlphaSearchAuthSelector for CtoxCodexAlphaSearchAuthority {
         Box::pin(async move {
             let selected = self
                 .router
-                .select("codex", Some(model), self.clock.now_ms(), &self.candidates)
+                .select_async("codex", Some(model), self.clock.now_ms(), &self.candidates)
+                .await
                 .map_err(|_| CodexAlphaSearchError::RefreshUnavailable)?;
             let mut auth = Auth::default();
             auth.id = selected.auth_id;
@@ -2494,7 +2495,7 @@ fn build_ctox_codex_alpha_search_authority(
 ) -> anyhow::Result<Arc<CtoxCodexAlphaSearchAuthority>> {
     let cooldown_store = Arc::new(CtoxCooldownStateStore::new(root));
     Ok(Arc::new(CtoxCodexAlphaSearchAuthority {
-        router: Arc::new(AccountRouter::with_account_state_stores(
+        router: Arc::new(native_account_router(
             cooldown_store.clone(),
             Arc::new(CtoxAccountSessionStore::new(root)),
             Arc::new(CtoxAccountQuotaStore::new(root)),
@@ -3832,6 +3833,22 @@ impl fmt::Debug for CtoxCooldownStateStore {
 /// Async provider outcomes must use the same real Core owner admission as
 /// their synchronous payload adapters. Merely spawning a blocking task does
 /// not carry CUTOVER's private run_core_sync token to that new thread.
+fn native_account_router(
+    store: Arc<dyn CooldownStateStore>,
+    sessions: Arc<dyn ctox_cliproxyapi::sdk::cliproxy::auth::AccountSessionStore>,
+    quotas: Arc<dyn ctox_cliproxyapi::sdk::cliproxy::auth::AccountQuotaStore>,
+) -> AccountRouter {
+    AccountRouter::with_account_state_stores(store, sessions, quotas)
+        .with_state_dispatcher(Arc::new(|operation| Box::pin(async move {
+            if crate::persistence::require_sync_owner_context().is_ok() {
+                operation();
+                return Ok(());
+            }
+            crate::persistence::run_core_sync(move || { operation(); Ok(()) }).await
+                .map_err(|_| ctox_cliproxyapi::sdk::cliproxy::auth::conductor_execution::AccountRoutingError::Store(CooldownStoreError::Read))
+        })))
+}
+
 fn native_cooldown_conductor(store: Arc<CtoxCooldownStateStore>) -> CooldownConductor {
     CooldownConductor::new(store).with_record_dispatcher(Arc::new(|conductor, result| {
         Box::pin(async move {
@@ -3989,7 +4006,7 @@ impl CtoxCliproxyRuntimeFactory {
     ) -> Result<ClaudeSubscriptionAccountPool, CtoxCliproxyRuntimeBuildError> {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
         let conductor = Arc::new(native_cooldown_conductor(cooldown_store.clone()));
-        let router = Arc::new(AccountRouter::with_account_state_stores(
+        let router = Arc::new(native_account_router(
             cooldown_store,
             Arc::new(CtoxAccountSessionStore::new(&self.root)),
             Arc::new(CtoxAccountQuotaStore::new(&self.root)),
@@ -4093,7 +4110,7 @@ impl CtoxCliproxyRuntimeFactory {
     > {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
         let conductor = Arc::new(native_cooldown_conductor(cooldown_store.clone()));
-        let router = Arc::new(AccountRouter::with_account_state_stores(
+        let router = Arc::new(native_account_router(
             cooldown_store,
             Arc::new(CtoxAccountSessionStore::new(&self.root)),
             Arc::new(CtoxAccountQuotaStore::new(&self.root)),
@@ -4155,7 +4172,7 @@ impl CtoxCliproxyRuntimeFactory {
     ) -> Result<AntigravitySubscriptionAccountPool, CtoxCliproxyRuntimeBuildError> {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
         let conductor = Arc::new(native_cooldown_conductor(cooldown_store.clone()));
-        let router = Arc::new(AccountRouter::with_account_state_stores(
+        let router = Arc::new(native_account_router(
             cooldown_store,
             Arc::new(CtoxAccountSessionStore::new(&self.root)),
             Arc::new(CtoxAccountQuotaStore::new(&self.root)),
@@ -4557,99 +4574,115 @@ mod tests {
 
     #[test]
     fn business_os_subscription_projection_tracks_installed_claude_account() {
-        let root = tempfile::tempdir().unwrap();
-        install_claude_subscription(
-            root.path(),
-            "claude-test-account",
-            &credentials("claude-access-do-not-leak", "claude-refresh-do-not-leak"),
-        )
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            install_claude_subscription(
+                root.path(),
+                "claude-test-account",
+                &credentials("claude-access-do-not-leak", "claude-refresh-do-not-leak"),
+            )
+            .unwrap();
+            let projection = provider_subscription_status(root.path());
+            assert_eq!(projection["revision"], 1);
+            assert_eq!(projection["default_provider"], "claude");
+            assert_eq!(projection["accounts"][0]["id"], "claude-test-account");
+            assert_eq!(projection["accounts"][0]["ready"], true);
+            let rendered = projection.to_string();
+            assert!(!rendered.contains("do-not-leak"));
+
+            Ok(())
+        })
         .unwrap();
-        let projection = provider_subscription_status(root.path());
-        assert_eq!(projection["revision"], 1);
-        assert_eq!(projection["default_provider"], "claude");
-        assert_eq!(projection["accounts"][0]["id"], "claude-test-account");
-        assert_eq!(projection["accounts"][0]["ready"], true);
-        let rendered = projection.to_string();
-        assert!(!rendered.contains("do-not-leak"));
     }
 
     #[test]
     fn business_os_subscription_projection_requires_a_complete_credential_tuple() {
-        let root = tempfile::tempdir().unwrap();
-        install_claude_subscription(
-            root.path(),
-            "claude-tuple",
-            &credentials("tuple-access-do-not-leak", "tuple-refresh-do-not-leak"),
-        )
-        .unwrap();
-        let stored = load_instance_proxy_config(root.path()).unwrap().unwrap();
-        let account = &stored.runtime.claude_accounts[0];
-        let access = &account.access_token_secret;
-        let refresh = &account.refresh_token_secret;
-        assert!(projected_credential_tuple_is_ready(
-            root.path(),
-            &[access, refresh]
-        ));
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            install_claude_subscription(
+                root.path(),
+                "claude-tuple",
+                &credentials("tuple-access-do-not-leak", "tuple-refresh-do-not-leak"),
+            )
+            .unwrap();
+            let stored = load_instance_proxy_config(root.path()).unwrap().unwrap();
+            let account = &stored.runtime.claude_accounts[0];
+            let access = &account.access_token_secret;
+            let refresh = &account.refresh_token_secret;
+            assert!(projected_credential_tuple_is_ready(
+                root.path(),
+                &[access, refresh]
+            ));
 
-        let mut invalid = refresh.clone();
-        invalid.scope = "unrelated-scope".to_string();
-        assert!(!projected_credential_tuple_is_ready(
-            root.path(),
-            &[access, &invalid]
-        ));
-        invalid.scope = refresh.scope.clone();
-        invalid.name.push_str("-missing");
-        assert!(!projected_credential_tuple_is_ready(
-            root.path(),
-            &[access, &invalid]
-        ));
+            let mut invalid = refresh.clone();
+            invalid.scope = "unrelated-scope".to_string();
+            assert!(!projected_credential_tuple_is_ready(
+                root.path(),
+                &[access, &invalid]
+            ));
+            invalid.scope = refresh.scope.clone();
+            invalid.name.push_str("-missing");
+            assert!(!projected_credential_tuple_is_ready(
+                root.path(),
+                &[access, &invalid]
+            ));
 
-        crate::secrets::write_secret_records(
-            root.path(),
-            &[crate::secrets::SecretRecordWrite {
-                scope: &refresh.scope,
-                name: &refresh.name,
-                value: " ",
-                description: None,
-                metadata: serde_json::json!({}),
-            }],
-        )
+            crate::secrets::write_secret_records(
+                root.path(),
+                &[crate::secrets::SecretRecordWrite {
+                    scope: &refresh.scope,
+                    name: &refresh.name,
+                    value: " ",
+                    description: None,
+                    metadata: serde_json::json!({}),
+                }],
+            )
+            .unwrap();
+            let projection = provider_subscription_status(root.path());
+            assert_eq!(projection["accounts"][0]["ready"], false);
+            assert_eq!(projection["accounts"][0]["status"], "error");
+            assert!(!projection.to_string().contains("do-not-leak"));
+
+            Ok(())
+        })
         .unwrap();
-        let projection = provider_subscription_status(root.path());
-        assert_eq!(projection["accounts"][0]["ready"], false);
-        assert_eq!(projection["accounts"][0]["status"], "error");
-        assert!(!projection.to_string().contains("do-not-leak"));
     }
 
     #[test]
     fn disconnect_removes_topology_before_encrypted_claude_tuple() {
-        let root = tempfile::tempdir().unwrap();
-        install_claude_subscription(
-            root.path(),
-            "claude-disconnect",
-            &credentials(
-                "claude-disconnect-access-do-not-leak",
-                "claude-disconnect-refresh-do-not-leak",
-            ),
-        )
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            install_claude_subscription(
+                root.path(),
+                "claude-disconnect",
+                &credentials(
+                    "claude-disconnect-access-do-not-leak",
+                    "claude-disconnect-refresh-do-not-leak",
+                ),
+            )
+            .unwrap();
+            let result =
+                disconnect_provider_subscription(root.path(), "claude", "claude-disconnect")
+                    .unwrap();
+            assert_eq!(result["provider"], "claude");
+            assert_eq!(result["revision"], 2);
+            assert_eq!(result["deleted_secret_records"], 2);
+            let stored = load_instance_proxy_config(root.path()).unwrap().unwrap();
+            assert!(stored.runtime.claude_accounts.is_empty());
+            assert!(stored.default_provider.is_empty());
+            assert!(!crate::secrets::secret_exists(
+                root.path(),
+                INSTANCE_CODEX_SECRET_SCOPE,
+                "claude-disconnect-access-token"
+            )
+            .unwrap());
+            assert!(effective_instance_proxy_config(root.path())
+                .unwrap()
+                .is_none());
+
+            Ok(())
+        })
         .unwrap();
-        let result =
-            disconnect_provider_subscription(root.path(), "claude", "claude-disconnect").unwrap();
-        assert_eq!(result["provider"], "claude");
-        assert_eq!(result["revision"], 2);
-        assert_eq!(result["deleted_secret_records"], 2);
-        let stored = load_instance_proxy_config(root.path()).unwrap().unwrap();
-        assert!(stored.runtime.claude_accounts.is_empty());
-        assert!(stored.default_provider.is_empty());
-        assert!(!crate::secrets::secret_exists(
-            root.path(),
-            INSTANCE_CODEX_SECRET_SCOPE,
-            "claude-disconnect-access-token"
-        )
-        .unwrap());
-        assert!(effective_instance_proxy_config(root.path())
-            .unwrap()
-            .is_none());
     }
 
     #[test]
@@ -4663,52 +4696,63 @@ mod tests {
 
     #[test]
     fn ready_kimi_route_is_published_as_provider_model_capability() {
-        let _listener_guard = instance_status_test_guard();
-        use ctox_cliproxyapi::internal::auth::kimi::{
-            KimiAuthBundle, KimiTokenData, KimiTokenStorage, SecretString as KimiSecretString,
-        };
+        crate::persistence::test_support::run(move |owner_root| {
+            let _listener_guard = instance_status_test_guard();
+            use ctox_cliproxyapi::internal::auth::kimi::{
+                KimiAuthBundle, KimiTokenData, KimiTokenStorage, SecretString as KimiSecretString,
+            };
 
-        let root = tempfile::tempdir().unwrap();
-        let token = KimiTokenData::new(
-            KimiSecretString::new("capability-access").unwrap(),
-            Some(KimiSecretString::new("capability-refresh").unwrap()),
-            "Bearer",
-            Some(SystemTime::now() + Duration::from_secs(3600)),
-            "kimi-code",
-        );
-        let storage = KimiTokenStorage::from_bundle(&KimiAuthBundle::new(token, "device"));
-        crate::execution::cliproxyapi_integration::install_kimi_subscription(
-            root.path(),
-            "kimi-capability",
-            &storage,
-        )
+            let root = owner_root;
+            let token = KimiTokenData::new(
+                KimiSecretString::new("capability-access").unwrap(),
+                Some(KimiSecretString::new("capability-refresh").unwrap()),
+                "Bearer",
+                Some(SystemTime::now() + Duration::from_secs(3600)),
+                "kimi-code",
+            );
+            let storage = KimiTokenStorage::from_bundle(&KimiAuthBundle::new(token, "device"));
+            crate::execution::cliproxyapi_integration::install_kimi_subscription(
+                root.path(),
+                "kimi-capability",
+                &storage,
+            )
+            .unwrap();
+            mark_instance_codex_proxy_ready_for_test(root.path());
+            assert_eq!(
+                instance_proxy_route_capabilities(root.path()),
+                [InstanceProxyRouteCapability {
+                    provider: "kimi".to_owned(),
+                    model: "kimi-k3[1m]".to_owned(),
+                    default: true,
+                }]
+            );
+
+            Ok(())
+        })
         .unwrap();
-        mark_instance_codex_proxy_ready_for_test(root.path());
-        assert_eq!(
-            instance_proxy_route_capabilities(root.path()),
-            [InstanceProxyRouteCapability {
-                provider: "kimi".to_owned(),
-                model: "kimi-k3[1m]".to_owned(),
-                default: true,
-            }]
-        );
     }
 
     #[test]
     fn business_os_subscription_projection_tracks_installed_antigravity_account() {
-        let root = tempfile::tempdir().unwrap();
-        let creds = antigravity_credentials(
-            "google-access-do-not-leak",
-            "google-refresh-do-not-leak",
-            SystemTime::now() + Duration::from_secs(3600),
-            "project-test",
-        );
-        install_antigravity_subscription(root.path(), "antigravity-test-account", &creds).unwrap();
-        let projection = provider_subscription_status(root.path());
-        assert_eq!(projection["revision"], 1);
-        assert_eq!(projection["default_provider"], "antigravity");
-        assert_eq!(projection["accounts"][0]["id"], "antigravity-test-account");
-        assert!(!projection.to_string().contains("do-not-leak"));
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            let creds = antigravity_credentials(
+                "google-access-do-not-leak",
+                "google-refresh-do-not-leak",
+                SystemTime::now() + Duration::from_secs(3600),
+                "project-test",
+            );
+            install_antigravity_subscription(root.path(), "antigravity-test-account", &creds)
+                .unwrap();
+            let projection = provider_subscription_status(root.path());
+            assert_eq!(projection["revision"], 1);
+            assert_eq!(projection["default_provider"], "antigravity");
+            assert_eq!(projection["accounts"][0]["id"], "antigravity-test-account");
+            assert!(!projection.to_string().contains("do-not-leak"));
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     fn codex_handles() -> codex_auth::CodexCredentialHandles {
@@ -4887,208 +4931,238 @@ mod tests {
 
     #[test]
     fn ready_persisted_provider_becomes_a_public_model_route() {
-        let _listener_guard = instance_status_test_guard();
-        let root = tempfile::tempdir().unwrap();
-        for (name, value) in [
-            ("persisted-claude-access", "access-token-do-not-store"),
-            ("persisted-claude-refresh", "refresh-token-do-not-store"),
-        ] {
-            crate::secrets::write_secret_record(
-                root.path(),
-                "provider-subscriptions",
-                name,
-                value,
-                Some("test provider credential".to_owned()),
-                serde_json::json!({"test": true}),
-            )
-            .unwrap();
-        }
-        save_instance_proxy_config(root.path(), 0, "claude", stored_claude_runtime()).unwrap();
-        assert!(instance_proxy_route_capabilities(root.path()).is_empty());
-        set_instance_codex_proxy_status(root.path(), InstanceCodexProxyPhase::Ready, None);
-        assert_eq!(
-            instance_proxy_route_capabilities(root.path()),
-            vec![InstanceProxyRouteCapability {
-                provider: "claude".to_owned(),
-                model: "claude-sonnet-4-6".to_owned(),
-                default: true,
-            }]
-        );
+        crate::persistence::test_support::run(move |owner_root| {
+            let _listener_guard = instance_status_test_guard();
+            let root = owner_root;
+            for (name, value) in [
+                ("persisted-claude-access", "access-token-do-not-store"),
+                ("persisted-claude-refresh", "refresh-token-do-not-store"),
+            ] {
+                crate::secrets::write_secret_record(
+                    root.path(),
+                    "provider-subscriptions",
+                    name,
+                    value,
+                    Some("test provider credential".to_owned()),
+                    serde_json::json!({"test": true}),
+                )
+                .unwrap();
+            }
+            save_instance_proxy_config(root.path(), 0, "claude", stored_claude_runtime()).unwrap();
+            assert!(instance_proxy_route_capabilities(root.path()).is_empty());
+            set_instance_codex_proxy_status(root.path(), InstanceCodexProxyPhase::Ready, None);
+            assert_eq!(
+                instance_proxy_route_capabilities(root.path()),
+                vec![InstanceProxyRouteCapability {
+                    provider: "claude".to_owned(),
+                    model: "claude-sonnet-4-6".to_owned(),
+                    default: true,
+                }]
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn empty_subscription_model_list_uses_provider_catalog_not_ctox_main_model() {
-        let _listener_guard = instance_status_test_guard();
-        let root = tempfile::tempdir().unwrap();
-        for (name, value) in [
-            ("persisted-claude-access", "access-token-do-not-store"),
-            ("persisted-claude-refresh", "refresh-token-do-not-store"),
-        ] {
-            crate::secrets::write_secret_record(
-                root.path(),
-                "provider-subscriptions",
-                name,
-                value,
-                Some("test provider credential".to_owned()),
-                serde_json::json!({"test": true}),
-            )
-            .unwrap();
-        }
-        let mut runtime = stored_claude_runtime();
-        runtime.claude_accounts[0].models.clear();
-        save_instance_proxy_config(root.path(), 0, "claude", runtime).unwrap();
-        set_instance_codex_proxy_status(root.path(), InstanceCodexProxyPhase::Ready, None);
+        crate::persistence::test_support::run(move |owner_root| {
+            let _listener_guard = instance_status_test_guard();
+            let root = owner_root;
+            for (name, value) in [
+                ("persisted-claude-access", "access-token-do-not-store"),
+                ("persisted-claude-refresh", "refresh-token-do-not-store"),
+            ] {
+                crate::secrets::write_secret_record(
+                    root.path(),
+                    "provider-subscriptions",
+                    name,
+                    value,
+                    Some("test provider credential".to_owned()),
+                    serde_json::json!({"test": true}),
+                )
+                .unwrap();
+            }
+            let mut runtime = stored_claude_runtime();
+            runtime.claude_accounts[0].models.clear();
+            save_instance_proxy_config(root.path(), 0, "claude", runtime).unwrap();
+            set_instance_codex_proxy_status(root.path(), InstanceCodexProxyPhase::Ready, None);
 
-        let routes = instance_proxy_route_capabilities(root.path());
-        assert!(!routes.is_empty());
-        assert!(routes.iter().all(|route| route.provider == "claude"));
-        assert!(routes.iter().all(|route| route.model != "ctox-gateway"));
-        assert!(routes
-            .iter()
-            .any(|route| route.model == "claude-sonnet-4-6"));
+            let routes = instance_proxy_route_capabilities(root.path());
+            assert!(!routes.is_empty());
+            assert!(routes.iter().all(|route| route.provider == "claude"));
+            assert!(routes.iter().all(|route| route.model != "ctox-gateway"));
+            assert!(routes
+                .iter()
+                .any(|route| route.model == "claude-sonnet-4-6"));
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn provider_model_catalog_snapshot_is_typed_deduplicated_and_secret_free() {
-        let root = tempfile::tempdir().unwrap();
-        for (name, value) in [
-            ("persisted-claude-access", "access-token-do-not-store"),
-            ("persisted-claude-refresh", "refresh-token-do-not-store"),
-        ] {
-            crate::secrets::write_secret_record(
-                root.path(),
-                "provider-subscriptions",
-                name,
-                value,
-                Some("test provider credential".to_owned()),
-                serde_json::json!({"test": true}),
-            )
-            .unwrap();
-        }
-        save_instance_proxy_config(root.path(), 0, "claude", stored_claude_runtime()).unwrap();
-        let effective = effective_instance_proxy_config(root.path())
-            .unwrap()
-            .expect("stored provider config");
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            for (name, value) in [
+                ("persisted-claude-access", "access-token-do-not-store"),
+                ("persisted-claude-refresh", "refresh-token-do-not-store"),
+            ] {
+                crate::secrets::write_secret_record(
+                    root.path(),
+                    "provider-subscriptions",
+                    name,
+                    value,
+                    Some("test provider credential".to_owned()),
+                    serde_json::json!({"test": true}),
+                )
+                .unwrap();
+            }
+            save_instance_proxy_config(root.path(), 0, "claude", stored_claude_runtime()).unwrap();
+            let effective = effective_instance_proxy_config(root.path())
+                .unwrap()
+                .expect("stored provider config");
 
-        let catalog = provider_model_catalog_snapshot(root.path(), &effective);
-        assert_eq!(catalog.len(), 1);
-        assert_eq!(catalog[0]["id"], "claude-sonnet-4-6");
-        assert_eq!(catalog[0]["display_name"], "claude-sonnet-4-6");
-        assert_eq!(catalog[0]["providers"], serde_json::json!(["claude"]));
-        assert_eq!(catalog[0]["default"], true);
-        let serialized = serde_json::to_string(&catalog).unwrap();
-        assert!(!serialized.contains("persisted-claude-access"));
-        assert!(!serialized.contains("access-token-do-not-store"));
-        assert!(!serialized.contains("provider-subscriptions"));
+            let catalog = provider_model_catalog_snapshot(root.path(), &effective);
+            assert_eq!(catalog.len(), 1);
+            assert_eq!(catalog[0]["id"], "claude-sonnet-4-6");
+            assert_eq!(catalog[0]["display_name"], "claude-sonnet-4-6");
+            assert_eq!(catalog[0]["providers"], serde_json::json!(["claude"]));
+            assert_eq!(catalog[0]["default"], true);
+            let serialized = serde_json::to_string(&catalog).unwrap();
+            assert!(!serialized.contains("persisted-claude-access"));
+            assert!(!serialized.contains("access-token-do-not-store"));
+            assert!(!serialized.contains("provider-subscriptions"));
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn persisted_provider_and_automatic_codex_snapshot_merge_without_duplicate_secrets() {
-        let root = tempfile::tempdir().unwrap();
-        for (name, value) in [
-            ("persisted-claude-access", "access-token-do-not-store"),
-            ("persisted-claude-refresh", "refresh-token-do-not-store"),
-        ] {
-            crate::secrets::write_secret_record(
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            for (name, value) in [
+                ("persisted-claude-access", "access-token-do-not-store"),
+                ("persisted-claude-refresh", "refresh-token-do-not-store"),
+            ] {
+                crate::secrets::write_secret_record(
+                    root.path(),
+                    "provider-subscriptions",
+                    name,
+                    value,
+                    Some("test provider credential".to_owned()),
+                    serde_json::json!({"test": true}),
+                )
+                .unwrap();
+            }
+            save_instance_proxy_config(root.path(), 0, "claude", stored_claude_runtime()).unwrap();
+            write_instance_chatgpt_snapshot(
                 root.path(),
-                "provider-subscriptions",
-                name,
-                value,
-                Some("test provider credential".to_owned()),
-                serde_json::json!({"test": true}),
-            )
-            .unwrap();
-        }
-        save_instance_proxy_config(root.path(), 0, "claude", stored_claude_runtime()).unwrap();
-        write_instance_chatgpt_snapshot(
-            root.path(),
-            &fake_chatgpt_jwt("pro", "workspace-a"),
-            "codex-access-do-not-store",
-            "codex-refresh-do-not-store",
-            "routing-account-a",
-        );
+                &fake_chatgpt_jwt("pro", "workspace-a"),
+                "codex-access-do-not-store",
+                "codex-refresh-do-not-store",
+                "routing-account-a",
+            );
 
-        let effective = effective_instance_proxy_config(root.path())
-            .unwrap()
-            .expect("the stored and automatic providers should merge");
-        assert_eq!(effective.default_provider, "claude");
-        assert_eq!(effective.runtime.claude_accounts().len(), 1);
-        assert_eq!(effective.runtime.codex_accounts().len(), 1);
-        assert_eq!(
-            effective.runtime.codex_accounts()[0].id,
-            INSTANCE_CODEX_ACCOUNT_ID
-        );
+            let effective = effective_instance_proxy_config(root.path())
+                .unwrap()
+                .expect("the stored and automatic providers should merge");
+            assert_eq!(effective.default_provider, "claude");
+            assert_eq!(effective.runtime.claude_accounts().len(), 1);
+            assert_eq!(effective.runtime.codex_accounts().len(), 1);
+            assert_eq!(
+                effective.runtime.codex_accounts()[0].id,
+                INSTANCE_CODEX_ACCOUNT_ID
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn encrypted_store_round_trip_uses_typed_handles() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxClaudeSecretStore::new(root.path());
-        let handles = handles();
-        let initial = credentials("access-initial-do-not-leak", "refresh-initial-do-not-leak");
-        store.store_credentials(&handles, &initial).unwrap();
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            let store = CtoxClaudeSecretStore::new(root.path());
+            let handles = handles();
+            let initial = credentials("access-initial-do-not-leak", "refresh-initial-do-not-leak");
+            store.store_credentials(&handles, &initial).unwrap();
 
-        let loaded = store.load_credentials(&handles).unwrap();
-        assert_eq!(
-            loaded.access_token().expose_secret(),
-            "access-initial-do-not-leak"
-        );
-        assert_eq!(
-            loaded.refresh_token().expose_secret(),
-            "refresh-initial-do-not-leak"
-        );
-        assert!(!format!("{loaded:?}").contains("refresh-initial-do-not-leak"));
+            let loaded = store.load_credentials(&handles).unwrap();
+            assert_eq!(
+                loaded.access_token().expose_secret(),
+                "access-initial-do-not-leak"
+            );
+            assert_eq!(
+                loaded.refresh_token().expose_secret(),
+                "refresh-initial-do-not-leak"
+            );
+            assert!(!format!("{loaded:?}").contains("refresh-initial-do-not-leak"));
 
-        let rotated = credentials("access-rotated-do-not-leak", "refresh-rotated-do-not-leak");
-        store.store_credentials(&handles, &rotated).unwrap();
-        assert_eq!(
-            crate::secrets::read_secret_value(
-                root.path(),
-                handles.refresh_token().scope(),
-                handles.refresh_token().name()
-            )
-            .unwrap(),
-            "refresh-rotated-do-not-leak"
-        );
+            let rotated = credentials("access-rotated-do-not-leak", "refresh-rotated-do-not-leak");
+            store.store_credentials(&handles, &rotated).unwrap();
+            assert_eq!(
+                crate::secrets::read_secret_value(
+                    root.path(),
+                    handles.refresh_token().scope(),
+                    handles.refresh_token().name()
+                )
+                .unwrap(),
+                "refresh-rotated-do-not-leak"
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn management_key_snapshot_is_store_backed_strong_and_redacted() {
-        let root = tempfile::tempdir().unwrap();
-        assert!(InstanceManagementKeySnapshot::load(root.path())
-            .unwrap()
-            .is_none());
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            assert!(InstanceManagementKeySnapshot::load(root.path())
+                .unwrap()
+                .is_none());
 
-        crate::secrets::write_secret_record(
-            root.path(),
-            INSTANCE_MANAGEMENT_SECRET_SCOPE,
-            INSTANCE_MANAGEMENT_SECRET_NAME,
-            "too-short",
-            Some("test management key".to_owned()),
-            serde_json::json!({"test": true}),
-        )
-        .unwrap();
-        assert!(InstanceManagementKeySnapshot::load(root.path()).is_err());
-
-        let key = "management-key-with-at-least-32-bytes";
-        crate::secrets::write_secret_record(
-            root.path(),
-            INSTANCE_MANAGEMENT_SECRET_SCOPE,
-            INSTANCE_MANAGEMENT_SECRET_NAME,
-            key,
-            Some("test management key".to_owned()),
-            serde_json::json!({"test": true}),
-        )
-        .unwrap();
-        let snapshot = InstanceManagementKeySnapshot::load(root.path())
-            .unwrap()
+            crate::secrets::write_secret_record(
+                root.path(),
+                INSTANCE_MANAGEMENT_SECRET_SCOPE,
+                INSTANCE_MANAGEMENT_SECRET_NAME,
+                "too-short",
+                Some("test management key".to_owned()),
+                serde_json::json!({"test": true}),
+            )
             .unwrap();
-        assert_eq!(snapshot.key.as_str(), key);
-        assert!(!format!("{snapshot:?}").contains(key));
-        assert_eq!(
-            instance_management_base_url(),
-            "http://127.0.0.1:12436/v0/management"
-        );
+            assert!(InstanceManagementKeySnapshot::load(root.path()).is_err());
+
+            let key = "management-key-with-at-least-32-bytes";
+            crate::secrets::write_secret_record(
+                root.path(),
+                INSTANCE_MANAGEMENT_SECRET_SCOPE,
+                INSTANCE_MANAGEMENT_SECRET_NAME,
+                key,
+                Some("test management key".to_owned()),
+                serde_json::json!({"test": true}),
+            )
+            .unwrap();
+            let snapshot = InstanceManagementKeySnapshot::load(root.path())
+                .unwrap()
+                .unwrap();
+            assert_eq!(snapshot.key.as_str(), key);
+            assert!(!format!("{snapshot:?}").contains(key));
+            assert_eq!(
+                instance_management_base_url(),
+                "http://127.0.0.1:12436/v0/management"
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -5133,8 +5207,9 @@ mod tests {
         assert!(!json.contains("upstream_base_url"));
     }
 
-    #[tokio::test]
-    async fn store_backed_management_handler_serves_only_with_the_stored_key() {
+    #[test]
+    fn store_backed_management_handler_serves_only_with_the_stored_key() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
         use ctox_cliproxyapi::internal::api::handlers::management::{
             ManagementAuthenticator, SystemManagementAuthClock,
         };
@@ -5143,7 +5218,7 @@ mod tests {
         };
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-        let root = tempfile::tempdir().unwrap();
+        let root = owner_root;
         let key = "store-backed-management-key-32-bytes";
         crate::secrets::write_secret_record(
             root.path(),
@@ -5189,6 +5264,9 @@ mod tests {
         let response = String::from_utf8(response).unwrap();
         assert!(response.starts_with("HTTP/1.1 200 OK\r\n"));
         assert!(!response.contains(key));
+
+        Ok(())
+        }).unwrap();
     }
 
     #[test]
@@ -5306,150 +5384,166 @@ mod tests {
 
     #[test]
     fn management_config_source_rejects_missing_credentials_without_persisting() {
-        use ctox_cliproxyapi::internal::api::server_management::{
-            ManagementRuntimeConfigError, ManagementRuntimeConfigMutation,
-            ManagementRuntimeConfigSource as _,
-        };
+        crate::persistence::test_support::run(move |owner_root| {
+            use ctox_cliproxyapi::internal::api::server_management::{
+                ManagementRuntimeConfigError, ManagementRuntimeConfigMutation,
+                ManagementRuntimeConfigSource as _,
+            };
 
-        let root = tempfile::tempdir().unwrap();
-        assert!(load_instance_proxy_config(root.path()).unwrap().is_none());
-        let result = CtoxManagementRuntimeConfigSource::new(root.path().to_path_buf()).replace(
-            ManagementRuntimeConfigMutation {
-                schema: INSTANCE_PROXY_CONFIG_SCHEMA.to_owned(),
-                expected_revision: 0,
-                default_provider: "claude".to_owned(),
-                runtime: stored_claude_runtime(),
-            },
-        );
-        assert_eq!(
-            result.unwrap_err(),
-            ManagementRuntimeConfigError::CredentialUnavailable
-        );
-        assert!(load_instance_proxy_config(root.path()).unwrap().is_none());
+            let root = owner_root;
+            assert!(load_instance_proxy_config(root.path()).unwrap().is_none());
+            let result = CtoxManagementRuntimeConfigSource::new(root.path().to_path_buf()).replace(
+                ManagementRuntimeConfigMutation {
+                    schema: INSTANCE_PROXY_CONFIG_SCHEMA.to_owned(),
+                    expected_revision: 0,
+                    default_provider: "claude".to_owned(),
+                    runtime: stored_claude_runtime(),
+                },
+            );
+            assert_eq!(
+                result.unwrap_err(),
+                ManagementRuntimeConfigError::CredentialUnavailable
+            );
+            assert!(load_instance_proxy_config(root.path()).unwrap().is_none());
 
-        let mut foreign_scope = stored_claude_runtime();
-        foreign_scope.claude_accounts[0].access_token_secret.scope = "ctox-auth".to_owned();
-        let result = CtoxManagementRuntimeConfigSource::new(root.path().to_path_buf()).replace(
-            ManagementRuntimeConfigMutation {
-                schema: INSTANCE_PROXY_CONFIG_SCHEMA.to_owned(),
-                expected_revision: 0,
-                default_provider: "claude".to_owned(),
-                runtime: foreign_scope,
-            },
-        );
-        assert_eq!(result.unwrap_err(), ManagementRuntimeConfigError::Invalid);
-        assert!(load_instance_proxy_config(root.path()).unwrap().is_none());
+            let mut foreign_scope = stored_claude_runtime();
+            foreign_scope.claude_accounts[0].access_token_secret.scope = "ctox-auth".to_owned();
+            let result = CtoxManagementRuntimeConfigSource::new(root.path().to_path_buf()).replace(
+                ManagementRuntimeConfigMutation {
+                    schema: INSTANCE_PROXY_CONFIG_SCHEMA.to_owned(),
+                    expected_revision: 0,
+                    default_provider: "claude".to_owned(),
+                    runtime: foreign_scope,
+                },
+            );
+            assert_eq!(result.unwrap_err(), ManagementRuntimeConfigError::Invalid);
+            assert!(load_instance_proxy_config(root.path()).unwrap().is_none());
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn instance_codex_config_and_refresh_share_one_encrypted_snapshot() {
-        let root = tempfile::tempdir().unwrap();
-        assert!(instance_codex_runtime_config(root.path())
-            .unwrap()
-            .is_none());
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            assert!(instance_codex_runtime_config(root.path())
+                .unwrap()
+                .is_none());
 
-        let original_id = fake_chatgpt_jwt("pro", "workspace-a");
-        write_instance_chatgpt_snapshot(
-            root.path(),
-            &original_id,
-            "access-original-do-not-leak",
-            "refresh-original-do-not-leak",
-            "routing-account-a",
-        );
+            let original_id = fake_chatgpt_jwt("pro", "workspace-a");
+            write_instance_chatgpt_snapshot(
+                root.path(),
+                &original_id,
+                "access-original-do-not-leak",
+                "refresh-original-do-not-leak",
+                "routing-account-a",
+            );
 
-        let config = instance_codex_runtime_config(root.path())
-            .unwrap()
-            .expect("subscription snapshot should enable the Codex route");
-        assert_eq!(config.codex_accounts().len(), 1);
-        let account = &config.codex_accounts()[0];
-        assert_eq!(account.id, INSTANCE_CODEX_ACCOUNT_ID);
-        assert_eq!(account.plan_type, "pro");
-        assert_eq!(
-            account.upstream_base_url,
-            ctox_cliproxyapi::internal::runtime::executor::DEFAULT_CODEX_BASE_URL
-        );
-        let handles = account.credential_handles().unwrap();
-        assert!(is_instance_codex_handles(&handles));
+            let config = instance_codex_runtime_config(root.path())
+                .unwrap()
+                .expect("subscription snapshot should enable the Codex route");
+            assert_eq!(config.codex_accounts().len(), 1);
+            let account = &config.codex_accounts()[0];
+            assert_eq!(account.id, INSTANCE_CODEX_ACCOUNT_ID);
+            assert_eq!(account.plan_type, "pro");
+            assert_eq!(
+                account.upstream_base_url,
+                ctox_cliproxyapi::internal::runtime::executor::DEFAULT_CODEX_BASE_URL
+            );
+            let handles = account.credential_handles().unwrap();
+            assert!(is_instance_codex_handles(&handles));
 
-        let store = CtoxCodexSecretStore::new(root.path());
-        let loaded = store.load_credentials(&handles).unwrap();
-        assert_eq!(loaded.id_token().expose_secret(), original_id);
-        assert_eq!(
-            loaded.access_token().expose_secret(),
-            "access-original-do-not-leak"
-        );
+            let store = CtoxCodexSecretStore::new(root.path());
+            let loaded = store.load_credentials(&handles).unwrap();
+            assert_eq!(loaded.id_token().expose_secret(), original_id);
+            assert_eq!(
+                loaded.access_token().expose_secret(),
+                "access-original-do-not-leak"
+            );
 
-        let rotated_id = fake_chatgpt_jwt("business", "workspace-b");
-        store
-            .store_credentials(
-                &handles,
-                &codex_auth::CodexStoredCredentials::new(
-                    codex_auth::SecretString::new(rotated_id.clone()).unwrap(),
-                    codex_auth::SecretString::new("access-rotated-do-not-leak").unwrap(),
-                    codex_auth::SecretString::new("refresh-rotated-do-not-leak").unwrap(),
-                ),
+            let rotated_id = fake_chatgpt_jwt("business", "workspace-b");
+            store
+                .store_credentials(
+                    &handles,
+                    &codex_auth::CodexStoredCredentials::new(
+                        codex_auth::SecretString::new(rotated_id.clone()).unwrap(),
+                        codex_auth::SecretString::new("access-rotated-do-not-leak").unwrap(),
+                        codex_auth::SecretString::new("refresh-rotated-do-not-leak").unwrap(),
+                    ),
+                )
+                .unwrap();
+
+            let stored: ctox_core::auth::AuthDotJson = serde_json::from_str(
+                &crate::secrets::read_secret_value(
+                    root.path(),
+                    INSTANCE_CHATGPT_AUTH_SCOPE,
+                    INSTANCE_CHATGPT_AUTH_NAME,
+                )
+                .unwrap(),
             )
             .unwrap();
+            let stored_tokens = stored.tokens.unwrap();
+            assert_eq!(stored_tokens.id_token.raw_jwt, rotated_id);
+            assert_eq!(stored_tokens.access_token, "access-rotated-do-not-leak");
+            assert_eq!(stored_tokens.refresh_token, "refresh-rotated-do-not-leak");
+            assert_eq!(
+                stored_tokens.account_id.as_deref(),
+                Some("routing-account-a")
+            );
+            assert!(stored.last_refresh.is_some());
 
-        let stored: ctox_core::auth::AuthDotJson = serde_json::from_str(
-            &crate::secrets::read_secret_value(
-                root.path(),
-                INSTANCE_CHATGPT_AUTH_SCOPE,
-                INSTANCE_CHATGPT_AUTH_NAME,
-            )
-            .unwrap(),
-        )
+            let refreshed_config = instance_codex_runtime_config(root.path())
+                .unwrap()
+                .expect("rotated snapshot should remain routable");
+            assert_eq!(refreshed_config.codex_accounts()[0].plan_type, "business");
+
+            Ok(())
+        })
         .unwrap();
-        let stored_tokens = stored.tokens.unwrap();
-        assert_eq!(stored_tokens.id_token.raw_jwt, rotated_id);
-        assert_eq!(stored_tokens.access_token, "access-rotated-do-not-leak");
-        assert_eq!(stored_tokens.refresh_token, "refresh-rotated-do-not-leak");
-        assert_eq!(
-            stored_tokens.account_id.as_deref(),
-            Some("routing-account-a")
-        );
-        assert!(stored.last_refresh.is_some());
-
-        let refreshed_config = instance_codex_runtime_config(root.path())
-            .unwrap()
-            .expect("rotated snapshot should remain routable");
-        assert_eq!(refreshed_config.codex_accounts()[0].plan_type, "business");
     }
 
     #[test]
     fn instance_codex_router_builds_native_transports_without_network_io() {
-        let root = tempfile::tempdir().unwrap();
-        assert!(build_instance_codex_responses_router(root.path())
-            .unwrap()
-            .is_none());
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            assert!(build_instance_codex_responses_router(root.path())
+                .unwrap()
+                .is_none());
 
-        let id_token = fake_chatgpt_jwt("pro", "workspace-router");
-        write_instance_chatgpt_snapshot(
-            root.path(),
-            &id_token,
-            "access-router-do-not-leak",
-            "refresh-router-do-not-leak",
-            "routing-account-router",
-        );
-        let router = build_instance_codex_responses_router(root.path())
-            .unwrap()
-            .expect("valid subscription snapshot should build a native Codex router");
-        let debug = format!("{router:?}");
-        assert!(debug.contains("codex"));
-        assert!(!debug.contains("access-router-do-not-leak"));
-        assert!(!debug.contains("refresh-router-do-not-leak"));
-        assert!(!debug.contains(&id_token));
-        let routes = build_instance_provider_routes(root.path())
-            .unwrap()
-            .expect("Codex subscription should construct all provider routes");
-        assert!(routes.auxiliary.is_some());
+            let id_token = fake_chatgpt_jwt("pro", "workspace-router");
+            write_instance_chatgpt_snapshot(
+                root.path(),
+                &id_token,
+                "access-router-do-not-leak",
+                "refresh-router-do-not-leak",
+                "routing-account-router",
+            );
+            let router = build_instance_codex_responses_router(root.path())
+                .unwrap()
+                .expect("valid subscription snapshot should build a native Codex router");
+            let debug = format!("{router:?}");
+            assert!(debug.contains("codex"));
+            assert!(!debug.contains("access-router-do-not-leak"));
+            assert!(!debug.contains("refresh-router-do-not-leak"));
+            assert!(!debug.contains(&id_token));
+            let routes = build_instance_provider_routes(root.path())
+                .unwrap()
+                .expect("Codex subscription should construct all provider routes");
+            assert!(routes.auxiliary.is_some());
+
+            Ok(())
+        })
+        .unwrap();
     }
 
-    #[tokio::test]
-    async fn instance_codex_listener_is_loopback_and_dispatches_bounded_http() {
+    #[test]
+    fn instance_codex_listener_is_loopback_and_dispatches_bounded_http() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-        let root = tempfile::tempdir().unwrap();
+        let root = owner_root;
         let id_token = fake_chatgpt_jwt("pro", "workspace-listener");
         write_instance_chatgpt_snapshot(
             root.path(),
@@ -5486,10 +5580,14 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 405 Method Not Allowed\r\n"));
         assert!(!response.contains("access-listener-do-not-leak"));
         assert!(!response.contains("refresh-listener-do-not-leak"));
+
+        Ok(())
+        }).unwrap();
     }
 
-    #[tokio::test]
-    async fn instance_listener_dispatches_kimi_responses_by_explicit_provider() {
+    #[test]
+    fn instance_listener_dispatches_kimi_responses_by_explicit_provider() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
         use ctox_cliproxyapi::internal::api::server::serve_responses_connection_with_logging;
         use ctox_cliproxyapi::internal::api::server_middleware::{
             RequestLoggingMetricsRegistry, RequestLoggingPolicy,
@@ -5499,7 +5597,7 @@ mod tests {
         };
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-        let root = tempfile::tempdir().unwrap();
+        let root = owner_root;
         let token = KimiTokenData::new(
             KimiSecretString::new("host-kimi-access-do-not-leak").unwrap(),
             Some(KimiSecretString::new("host-kimi-refresh-do-not-leak").unwrap()),
@@ -5584,17 +5682,21 @@ mod tests {
             requests[0].headers["Authorization"],
             ["Bearer host-kimi-access-do-not-leak"]
         );
+
+        Ok(())
+        }).unwrap();
     }
 
-    #[tokio::test]
-    async fn host_alpha_search_crosses_tcp_selector_and_typed_credential_transport() {
+    #[test]
+    fn host_alpha_search_crosses_tcp_selector_and_typed_credential_transport() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
         use ctox_cliproxyapi::internal::api::server::serve_provider_connection_with_auxiliary_logging;
         use ctox_cliproxyapi::internal::api::server_middleware::{
             RequestLoggingMetricsRegistry, RequestLoggingPolicy,
         };
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-        let root = tempfile::tempdir().unwrap();
+        let root = owner_root;
         let id_token = fake_chatgpt_jwt("pro", "workspace-alpha");
         write_instance_chatgpt_snapshot(
             root.path(),
@@ -5699,6 +5801,9 @@ mod tests {
         let upstream: serde_json::Value = serde_json::from_slice(&requests[0].body).unwrap();
         assert_eq!(upstream["query"], "rust");
         assert!(upstream.get("prompt_cache_key").is_none());
+
+        Ok(())
+        }).unwrap();
     }
 
     async fn read_complete_http_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
@@ -5797,8 +5902,9 @@ mod tests {
         (address, task)
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn codex_subscription_preset_drives_real_pi_edit_through_native_transport() {
+    #[test]
+    fn codex_subscription_preset_drives_real_pi_edit_through_native_transport() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
         let _listener_guard = instance_status_test_guard();
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
@@ -5810,10 +5916,10 @@ mod tests {
             .is_err()
         {
             eprintln!("SKIP: `node` is not available");
-            return;
+            return Ok(());
         }
 
-        let root = tempfile::tempdir().unwrap();
+        let root = owner_root;
         let mut main_env = BTreeMap::new();
         main_env.insert("CTOX_API_PROVIDER".to_owned(), "openai".to_owned());
         main_env.insert(
@@ -6006,7 +6112,7 @@ mod tests {
             .to_owned();
         let proxy_base_url = format!("http://{proxy_addr}/v1");
         let root_path = root.path().to_owned();
-        let evidence = tokio::task::spawn_blocking(move || {
+        let evidence = crate::persistence::run_core_sync(move || {
             crate::coding_agents::pi_sidecar::run_coding_preset_smoke_with_subscription_proxy_for_test(
                 &root_path,
                 &dist,
@@ -6015,7 +6121,6 @@ mod tests {
             )
         })
         .await
-        .unwrap()
         .unwrap();
 
         proxy.await.unwrap().unwrap();
@@ -6053,10 +6158,14 @@ mod tests {
         assert!(!serialized.contains("refresh-pi-e2e-do-not-leak"));
         assert!(!serialized.contains("workspace-pi-e2e"));
         assert!(!serialized.contains(&proxy_addr.to_string()));
+
+        Ok(())
+        }).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn claude_subscription_preset_drives_real_pi_edit_through_format_bridge() {
+    #[test]
+    fn claude_subscription_preset_drives_real_pi_edit_through_format_bridge() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
         let _listener_guard = instance_status_test_guard();
         if std::process::Command::new("node")
             .arg("--version")
@@ -6066,10 +6175,10 @@ mod tests {
             .is_err()
         {
             eprintln!("SKIP: `node` is not available");
-            return;
+            return Ok(());
         }
 
-        let root = tempfile::tempdir().unwrap();
+        let root = owner_root;
         seed_coding_smoke_main_model(root.path());
         let upstream_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let upstream_addr = upstream_listener.local_addr().unwrap();
@@ -6161,7 +6270,7 @@ mod tests {
         )));
         let root_path = root.path().to_owned();
         let proxy_base_url = format!("http://{proxy_addr}/v1");
-        let evidence = tokio::task::spawn_blocking(move || {
+        let evidence = crate::persistence::run_core_sync(move || {
             crate::coding_agents::pi_sidecar::run_coding_preset_smoke_with_subscription_proxy_for_test(
                 &root_path,
                 &dist,
@@ -6170,7 +6279,6 @@ mod tests {
             )
         })
         .await
-        .unwrap()
         .unwrap();
 
         proxy.await.unwrap().unwrap();
@@ -6192,10 +6300,14 @@ mod tests {
         assert!(!serialized.contains("claude-pi-e2e"));
         assert!(!serialized.contains("do-not-leak"));
         assert!(!serialized.contains(&proxy_addr.to_string()));
+
+        Ok(())
+        }).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn antigravity_subscription_preset_drives_real_pi_edit_through_format_bridge() {
+    #[test]
+    fn antigravity_subscription_preset_drives_real_pi_edit_through_format_bridge() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
         let _listener_guard = instance_status_test_guard();
         if std::process::Command::new("node")
             .arg("--version")
@@ -6205,10 +6317,10 @@ mod tests {
             .is_err()
         {
             eprintln!("SKIP: `node` is not available");
-            return;
+            return Ok(());
         }
 
-        let root = tempfile::tempdir().unwrap();
+        let root = owner_root;
         seed_coding_smoke_main_model(root.path());
         let secret = |name: &str| RuntimeSecretRef {
             scope: INSTANCE_CODEX_SECRET_SCOPE.to_owned(),
@@ -6293,7 +6405,7 @@ mod tests {
         )));
         let root_path = root.path().to_owned();
         let proxy_base_url = format!("http://{proxy_addr}/v1");
-        let evidence = tokio::task::spawn_blocking(move || {
+        let evidence = crate::persistence::run_core_sync(move || {
             crate::coding_agents::pi_sidecar::run_coding_preset_smoke_with_subscription_proxy_for_test(
                 &root_path,
                 &dist,
@@ -6302,7 +6414,6 @@ mod tests {
             )
         })
         .await
-        .unwrap()
         .unwrap();
 
         proxy.await.unwrap().unwrap();
@@ -6319,10 +6430,14 @@ mod tests {
         assert!(!serialized.contains("antigravity-pi-e2e"));
         assert!(!serialized.contains("do-not-leak"));
         assert!(!serialized.contains(&proxy_addr.to_string()));
+
+        Ok(())
+        }).unwrap();
     }
 
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn kimi_subscription_preset_drives_real_pi_edit_through_format_bridge() {
+    #[test]
+    fn kimi_subscription_preset_drives_real_pi_edit_through_format_bridge() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
         let _listener_guard = instance_status_test_guard();
         use ctox_cliproxyapi::internal::auth::kimi::{
             KimiAuthBundle, KimiTokenData, KimiTokenStorage, SecretString as KimiSecretString,
@@ -6336,10 +6451,10 @@ mod tests {
             .is_err()
         {
             eprintln!("SKIP: `node` is not available");
-            return;
+            return Ok(());
         }
 
-        let root = tempfile::tempdir().unwrap();
+        let root = owner_root;
         seed_coding_smoke_main_model(root.path());
         let storage = KimiTokenStorage::from_bundle(&KimiAuthBundle::new(
             KimiTokenData::new(
@@ -6391,7 +6506,7 @@ mod tests {
         )));
         let root_path = root.path().to_owned();
         let proxy_base_url = format!("http://{proxy_addr}/v1");
-        let evidence = tokio::task::spawn_blocking(move || {
+        let evidence = crate::persistence::run_core_sync(move || {
             crate::coding_agents::pi_sidecar::run_coding_preset_smoke_with_subscription_proxy_for_test(
                 &root_path,
                 &dist,
@@ -6400,7 +6515,6 @@ mod tests {
             )
         })
         .await
-        .unwrap()
         .unwrap();
 
         proxy.await.unwrap().unwrap();
@@ -6422,6 +6536,9 @@ mod tests {
         assert!(!serialized.contains("kimi-pi-e2e"));
         assert!(!serialized.contains("do-not-leak"));
         assert!(!serialized.contains(&proxy_addr.to_string()));
+
+        Ok(())
+        }).unwrap();
     }
 
     // Exercise native SDK callbacks on an async task with no inherited TLS.
@@ -6507,12 +6624,17 @@ mod tests {
 
     #[test]
     fn missing_secret_returns_redacted_typed_error() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxClaudeSecretStore::new(root.path());
-        assert_eq!(
-            store.load_credentials(&handles()),
-            Err(SecretStoreError::Missing)
-        );
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            let store = CtoxClaudeSecretStore::new(root.path());
+            assert_eq!(
+                store.load_credentials(&handles()),
+                Err(SecretStoreError::Missing)
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -6557,24 +6679,29 @@ mod tests {
 
     #[test]
     fn codex_store_atomically_round_trips_three_redacted_credentials() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxCodexSecretStore::new(root.path());
-        let handles = codex_handles();
-        let credentials = codex_auth::CodexStoredCredentials::new(
-            codex_auth::SecretString::new("id-do-not-leak").unwrap(),
-            codex_auth::SecretString::new("access-do-not-leak").unwrap(),
-            codex_auth::SecretString::new("refresh-do-not-leak").unwrap(),
-        );
-        store.store_credentials(&handles, &credentials).unwrap();
-        let loaded = store.load_credentials(&handles).unwrap();
-        assert_eq!(loaded.id_token().expose_secret(), "id-do-not-leak");
-        assert_eq!(loaded.access_token().expose_secret(), "access-do-not-leak");
-        assert_eq!(
-            loaded.refresh_token().expose_secret(),
-            "refresh-do-not-leak"
-        );
-        let rendered = format!("{store:?} {loaded:?}");
-        assert!(!rendered.contains("do-not-leak"));
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            let store = CtoxCodexSecretStore::new(root.path());
+            let handles = codex_handles();
+            let credentials = codex_auth::CodexStoredCredentials::new(
+                codex_auth::SecretString::new("id-do-not-leak").unwrap(),
+                codex_auth::SecretString::new("access-do-not-leak").unwrap(),
+                codex_auth::SecretString::new("refresh-do-not-leak").unwrap(),
+            );
+            store.store_credentials(&handles, &credentials).unwrap();
+            let loaded = store.load_credentials(&handles).unwrap();
+            assert_eq!(loaded.id_token().expose_secret(), "id-do-not-leak");
+            assert_eq!(loaded.access_token().expose_secret(), "access-do-not-leak");
+            assert_eq!(
+                loaded.refresh_token().expose_secret(),
+                "refresh-do-not-leak"
+            );
+            let rendered = format!("{store:?} {loaded:?}");
+            assert!(!rendered.contains("do-not-leak"));
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -6622,31 +6749,36 @@ mod tests {
 
     #[test]
     fn antigravity_store_atomically_round_trips_tokens_expiry_and_project() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxAntigravitySecretStore::new(root.path());
-        let handles = antigravity_handles();
-        let expiry = SystemTime::UNIX_EPOCH + Duration::from_millis(1_234_567);
-        store
-            .store_credentials(
-                &handles,
-                &antigravity_credentials(
-                    "access-do-not-leak",
-                    "refresh-do-not-leak",
-                    expiry,
-                    "project-1",
-                ),
-            )
-            .unwrap();
-        let loaded = store.load_credentials(&handles).unwrap();
-        assert_eq!(loaded.access_token().expose_secret(), "access-do-not-leak");
-        assert_eq!(
-            loaded.refresh_token().expose_secret(),
-            "refresh-do-not-leak"
-        );
-        assert_eq!(loaded.expires_at(), expiry);
-        assert_eq!(loaded.project_id(), "project-1");
-        let rendered = format!("{store:?} {loaded:?}");
-        assert!(!rendered.contains("do-not-leak"));
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            let store = CtoxAntigravitySecretStore::new(root.path());
+            let handles = antigravity_handles();
+            let expiry = SystemTime::UNIX_EPOCH + Duration::from_millis(1_234_567);
+            store
+                .store_credentials(
+                    &handles,
+                    &antigravity_credentials(
+                        "access-do-not-leak",
+                        "refresh-do-not-leak",
+                        expiry,
+                        "project-1",
+                    ),
+                )
+                .unwrap();
+            let loaded = store.load_credentials(&handles).unwrap();
+            assert_eq!(loaded.access_token().expose_secret(), "access-do-not-leak");
+            assert_eq!(
+                loaded.refresh_token().expose_secret(),
+                "refresh-do-not-leak"
+            );
+            assert_eq!(loaded.expires_at(), expiry);
+            assert_eq!(loaded.project_id(), "project-1");
+            let rendered = format!("{store:?} {loaded:?}");
+            assert!(!rendered.contains("do-not-leak"));
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -6700,37 +6832,47 @@ mod tests {
 
     #[test]
     fn cooldown_snapshot_persists_in_stable_order_and_can_be_cleared() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxCooldownStateStore::new(root.path());
-        store
-            .save(&[cooldown("account-b", 3_000), cooldown("account-a", 2_000)])
-            .unwrap();
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            let store = CtoxCooldownStateStore::new(root.path());
+            store
+                .save(&[cooldown("account-b", 3_000), cooldown("account-a", 2_000)])
+                .unwrap();
 
-        let loaded = store.load().unwrap();
-        assert_eq!(
-            loaded
-                .iter()
-                .map(|record| record.auth_id.as_str())
-                .collect::<Vec<_>>(),
-            ["account-a", "account-b"]
-        );
+            let loaded = store.load().unwrap();
+            assert_eq!(
+                loaded
+                    .iter()
+                    .map(|record| record.auth_id.as_str())
+                    .collect::<Vec<_>>(),
+                ["account-a", "account-b"]
+            );
 
-        store.save(&[]).unwrap();
-        assert!(store.load().unwrap().is_empty());
+            store.save(&[]).unwrap();
+            assert!(store.load().unwrap().is_empty());
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn invalid_cooldown_snapshot_does_not_replace_existing_state() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxCooldownStateStore::new(root.path());
-        store.save(&[cooldown("account-a", 2_000)]).unwrap();
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            let store = CtoxCooldownStateStore::new(root.path());
+            store.save(&[cooldown("account-a", 2_000)]).unwrap();
 
-        let invalid = cooldown(" ", 4_000);
-        assert_eq!(
-            store.save(&[invalid]),
-            Err(CooldownStoreError::InvalidRecord)
-        );
-        assert_eq!(store.load().unwrap()[0].auth_id, "account-a");
+            let invalid = cooldown(" ", 4_000);
+            assert_eq!(
+                store.save(&[invalid]),
+                Err(CooldownStoreError::InvalidRecord)
+            );
+            assert_eq!(store.load().unwrap()[0].auth_id, "account-a");
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -7015,272 +7157,292 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn typed_runtime_factory_composes_ctox_secrets_and_cooldown_store() {
-        let root = tempfile::tempdir().unwrap();
-        let account = ctox_cliproxyapi::internal::config::ClaudeSubscriptionAccountConfig {
-            id: "account-a".to_owned(),
-            disabled: false,
-            priority: 0,
-            weight: 1,
-            websockets: false,
-            models: Vec::new(),
-            access_token_secret: ctox_cliproxyapi::internal::config::RuntimeSecretRef {
+    #[test]
+    fn typed_runtime_factory_composes_ctox_secrets_and_cooldown_store() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
+            let root = owner_root;
+            let account = ctox_cliproxyapi::internal::config::ClaudeSubscriptionAccountConfig {
+                id: "account-a".to_owned(),
+                disabled: false,
+                priority: 0,
+                weight: 1,
+                websockets: false,
+                models: Vec::new(),
+                access_token_secret: ctox_cliproxyapi::internal::config::RuntimeSecretRef {
+                    scope: "provider-subscriptions".to_owned(),
+                    name: "claude-primary-access".to_owned(),
+                },
+                refresh_token_secret: ctox_cliproxyapi::internal::config::RuntimeSecretRef {
+                    scope: "provider-subscriptions".to_owned(),
+                    name: "claude-primary-refresh".to_owned(),
+                },
+                upstream_scheme: "https".to_owned(),
+                upstream_authority: "api.anthropic.com".to_owned(),
+                proxy_url_secret: None,
+                device_profile: None,
+                timezone: "Pacific/Honolulu".to_owned(),
+            };
+            let config = ctox_cliproxyapi::internal::config::CliproxyRuntimeConfig {
+                request_timeout_ms: 5_000,
+                routing_strategy: SchedulerStrategy::RoundRobin,
+                claude_accounts: vec![account],
+                codex_accounts: Vec::new(),
+                antigravity_accounts: Vec::new(),
+            }
+            .validate()
+            .unwrap();
+            CtoxClaudeSecretStore::new(root.path())
+                .store_credentials(
+                    &config.claude_accounts()[0].credential_handles().unwrap(),
+                    &credentials("access-runtime", "refresh-runtime"),
+                )
+                .unwrap();
+            let transports = HashMap::from([(
+                "account-a".to_owned(),
+                ClaudeAccountTransports {
+                    refresh: Arc::new(UnusedRefreshTransport),
+                    messages: Arc::new(SuccessMessagesTransport),
+                    messages_stream: None,
+                },
+            )]);
+            let pool = CtoxCliproxyRuntimeFactory::new(root.path())
+                .build_claude_pool(
+                    &config,
+                    &transports,
+                    Arc::new(FixedRuntimeClock),
+                    Arc::new(FixedRuntimeClock),
+                )
+                .unwrap();
+
+            let outcome = pool
+                .execute_configured("sonnet", b"{}".to_vec(), false)
+                .await
+                .unwrap();
+            assert_eq!(outcome.selected_auth_id(), "account-a");
+            assert_eq!(outcome.outcome().response().status(), 200);
+            assert_eq!(outcome.outcome().state_persisted(), Some(true));
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn typed_runtime_factory_prepares_profile_and_device_before_first_claude_request() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
+            let root = owner_root;
+            let mut runtime = stored_claude_runtime();
+            runtime.claude_accounts[0].id = "prepared-account".to_owned();
+            runtime.claude_accounts[0].access_token_secret.name = "prepared-access".to_owned();
+            runtime.claude_accounts[0].refresh_token_secret.name = "prepared-refresh".to_owned();
+            let config = runtime.validate().unwrap();
+            CtoxClaudeSecretStore::new(root.path())
+                .store_credentials(
+                    &config.claude_accounts()[0].credential_handles().unwrap(),
+                    &credentials("sk-ant-oat-host-profile", "refresh-runtime"),
+                )
+                .unwrap();
+            let refresh = Arc::new(ProfileRefreshTransport::default());
+            let messages = Arc::new(CapturingMessagesTransport::default());
+            let transports = HashMap::from([(
+                "prepared-account".to_owned(),
+                ClaudeAccountTransports {
+                    refresh: refresh.clone(),
+                    messages: messages.clone(),
+                    messages_stream: None,
+                },
+            )]);
+            let pool = CtoxCliproxyRuntimeFactory::new(root.path())
+                .build_claude_pool(
+                    &config,
+                    &transports,
+                    Arc::new(FixedRuntimeClock),
+                    Arc::new(FixedRuntimeClock),
+                )
+                .unwrap();
+
+            pool.execute_configured(
+                "claude-sonnet-4-6",
+                br#"{"messages":[{"role":"user","content":"hello"}]}"#.to_vec(),
+                false,
+            )
+            .await
+            .unwrap();
+            pool.execute_configured(
+                "claude-sonnet-4-6",
+                br#"{"messages":[{"role":"user","content":"again"}]}"#.to_vec(),
+                false,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(refresh.inspections.load(Ordering::SeqCst), 1);
+            let bodies = messages.0.lock().unwrap();
+            assert_eq!(bodies.len(), 2);
+            for body in bodies.iter() {
+                let value: serde_json::Value = serde_json::from_slice(body).unwrap();
+                let user_id = value["metadata"]["user_id"].as_str().unwrap();
+                assert!(user_id.contains("host-account"));
+                assert!(!user_id.contains("sk-ant-oat-host-profile"));
+            }
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn typed_runtime_factory_builds_codex_pool_from_ctox_secrets() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
+            let root = owner_root;
+            let secret = |name: &str| ctox_cliproxyapi::internal::config::RuntimeSecretRef {
                 scope: "provider-subscriptions".to_owned(),
-                name: "claude-primary-access".to_owned(),
-            },
-            refresh_token_secret: ctox_cliproxyapi::internal::config::RuntimeSecretRef {
+                name: name.to_owned(),
+            };
+            let account = ctox_cliproxyapi::internal::config::CodexSubscriptionAccountConfig {
+                id: "codex-a".to_owned(),
+                disabled: false,
+                priority: 0,
+                weight: 1,
+                websockets: false,
+                models: Vec::new(),
+                id_token_secret: secret("codex-primary-id"),
+                access_token_secret: secret("codex-primary-access"),
+                refresh_token_secret: secret("codex-primary-refresh"),
+                upstream_base_url: "https://chatgpt.example/backend-api/codex".to_owned(),
+                plan_type: "pro".to_owned(),
+                proxy_url_secret: None,
+            };
+            let config = ctox_cliproxyapi::internal::config::CliproxyRuntimeConfig {
+                request_timeout_ms: 5_000,
+                routing_strategy: SchedulerStrategy::RoundRobin,
+                claude_accounts: Vec::new(),
+                codex_accounts: vec![account],
+                antigravity_accounts: Vec::new(),
+            }
+            .validate()
+            .unwrap();
+            CtoxCodexSecretStore::new(root.path())
+                .store_credentials(
+                    &config.codex_accounts()[0].credential_handles().unwrap(),
+                    &codex_auth::CodexStoredCredentials::new(
+                        codex_auth::SecretString::new("invalid-jwt").unwrap(),
+                        codex_auth::SecretString::new("codex-access-runtime").unwrap(),
+                        codex_auth::SecretString::new("codex-refresh-runtime").unwrap(),
+                    ),
+                )
+                .unwrap();
+            let transports = HashMap::from([(
+                "codex-a".to_owned(),
+                CodexAccountTransports {
+                    refresh: Arc::new(UnusedCodexRefreshTransport),
+                    responses: Arc::new(SuccessCodexResponsesTransport),
+                    responses_stream: None,
+                },
+            )]);
+            let pool = CtoxCliproxyRuntimeFactory::new(root.path())
+                .build_codex_pool(
+                    &config,
+                    &transports,
+                    Arc::new(FixedCodexRuntimeClock),
+                    Arc::new(FixedRuntimeClock),
+                )
+                .unwrap();
+
+            let outcome = pool
+                .execute_configured("gpt-5.5", br#"{"input":"hello"}"#.to_vec(), false)
+                .await
+                .unwrap();
+            assert_eq!(outcome.selected_auth_id(), "codex-a");
+            assert_eq!(outcome.outcome().attempts(), 1);
+            assert!(!String::from_utf8_lossy(outcome.outcome().payload())
+                .contains("codex-access-runtime"));
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn typed_runtime_factory_builds_antigravity_pool_with_shared_replay() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
+            let root = owner_root;
+            let secret = |name: &str| ctox_cliproxyapi::internal::config::RuntimeSecretRef {
                 scope: "provider-subscriptions".to_owned(),
-                name: "claude-primary-refresh".to_owned(),
-            },
-            upstream_scheme: "https".to_owned(),
-            upstream_authority: "api.anthropic.com".to_owned(),
-            proxy_url_secret: None,
-            device_profile: None,
-            timezone: "Pacific/Honolulu".to_owned(),
-        };
-        let config = ctox_cliproxyapi::internal::config::CliproxyRuntimeConfig {
-            request_timeout_ms: 5_000,
-            routing_strategy: SchedulerStrategy::RoundRobin,
-            claude_accounts: vec![account],
-            codex_accounts: Vec::new(),
-            antigravity_accounts: Vec::new(),
-        }
-        .validate()
+                name: name.to_owned(),
+            };
+            let account =
+                ctox_cliproxyapi::internal::config::AntigravitySubscriptionAccountConfig {
+                    id: "antigravity-a".to_owned(),
+                    disabled: false,
+                    priority: 0,
+                    weight: 1,
+                    websockets: false,
+                    models: Vec::new(),
+                    access_token_secret: secret("antigravity-primary-access"),
+                    refresh_token_secret: secret("antigravity-primary-refresh"),
+                    state_secret: secret("antigravity-primary-state"),
+                    upstream_base_url: "https://daily-cloudcode-pa.googleapis.com".to_owned(),
+                    proxy_url_secret: None,
+                };
+            let config = ctox_cliproxyapi::internal::config::CliproxyRuntimeConfig {
+                request_timeout_ms: 5_000,
+                routing_strategy: SchedulerStrategy::RoundRobin,
+                claude_accounts: Vec::new(),
+                codex_accounts: Vec::new(),
+                antigravity_accounts: vec![account],
+            }
+            .validate()
+            .unwrap();
+            CtoxAntigravitySecretStore::new(root.path())
+                .store_credentials(
+                    &config.antigravity_accounts()[0]
+                        .credential_handles()
+                        .unwrap(),
+                    &antigravity_credentials(
+                        "antigravity-access-runtime",
+                        "antigravity-refresh-runtime",
+                        SystemTime::UNIX_EPOCH + Duration::from_secs(3_600),
+                        "project-runtime",
+                    ),
+                )
+                .unwrap();
+            let transports = HashMap::from([(
+                "antigravity-a".to_owned(),
+                AntigravityAccountTransports {
+                    refresh: Arc::new(UnusedAntigravityRefreshTransport),
+                    generate: Arc::new(SuccessAntigravityGenerateTransport),
+                    generate_stream: None,
+                },
+            )]);
+            let pool = CtoxCliproxyRuntimeFactory::new(root.path())
+                .build_antigravity_pool(
+                    &config,
+                    &transports,
+                    Arc::new(FixedAntigravityRuntimeClock),
+                    Arc::new(FixedRuntimeClock),
+                )
+                .unwrap();
+            let outcome = pool
+                .execute_configured(
+                    "gemini-3-flash-agent",
+                    br#"{"model":"gemini-3-flash-agent","input":"hello"}"#.to_vec(),
+                    br#"{"request":{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}}"#
+                        .to_vec(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(outcome.selected_auth_id(), "antigravity-a");
+            assert_eq!(outcome.outcome().attempts(), 1);
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(outcome.outcome().payload()).unwrap()
+                    ["status"],
+                "completed"
+            );
+
+            Ok(())
+        })
         .unwrap();
-        CtoxClaudeSecretStore::new(root.path())
-            .store_credentials(
-                &config.claude_accounts()[0].credential_handles().unwrap(),
-                &credentials("access-runtime", "refresh-runtime"),
-            )
-            .unwrap();
-        let transports = HashMap::from([(
-            "account-a".to_owned(),
-            ClaudeAccountTransports {
-                refresh: Arc::new(UnusedRefreshTransport),
-                messages: Arc::new(SuccessMessagesTransport),
-                messages_stream: None,
-            },
-        )]);
-        let pool = CtoxCliproxyRuntimeFactory::new(root.path())
-            .build_claude_pool(
-                &config,
-                &transports,
-                Arc::new(FixedRuntimeClock),
-                Arc::new(FixedRuntimeClock),
-            )
-            .unwrap();
-
-        let outcome = pool
-            .execute_configured("sonnet", b"{}".to_vec(), false)
-            .await
-            .unwrap();
-        assert_eq!(outcome.selected_auth_id(), "account-a");
-        assert_eq!(outcome.outcome().response().status(), 200);
-        assert_eq!(outcome.outcome().state_persisted(), Some(true));
-    }
-
-    #[tokio::test]
-    async fn typed_runtime_factory_prepares_profile_and_device_before_first_claude_request() {
-        let root = tempfile::tempdir().unwrap();
-        let mut runtime = stored_claude_runtime();
-        runtime.claude_accounts[0].id = "prepared-account".to_owned();
-        runtime.claude_accounts[0].access_token_secret.name = "prepared-access".to_owned();
-        runtime.claude_accounts[0].refresh_token_secret.name = "prepared-refresh".to_owned();
-        let config = runtime.validate().unwrap();
-        CtoxClaudeSecretStore::new(root.path())
-            .store_credentials(
-                &config.claude_accounts()[0].credential_handles().unwrap(),
-                &credentials("sk-ant-oat-host-profile", "refresh-runtime"),
-            )
-            .unwrap();
-        let refresh = Arc::new(ProfileRefreshTransport::default());
-        let messages = Arc::new(CapturingMessagesTransport::default());
-        let transports = HashMap::from([(
-            "prepared-account".to_owned(),
-            ClaudeAccountTransports {
-                refresh: refresh.clone(),
-                messages: messages.clone(),
-                messages_stream: None,
-            },
-        )]);
-        let pool = CtoxCliproxyRuntimeFactory::new(root.path())
-            .build_claude_pool(
-                &config,
-                &transports,
-                Arc::new(FixedRuntimeClock),
-                Arc::new(FixedRuntimeClock),
-            )
-            .unwrap();
-
-        pool.execute_configured(
-            "claude-sonnet-4-6",
-            br#"{"messages":[{"role":"user","content":"hello"}]}"#.to_vec(),
-            false,
-        )
-        .await
-        .unwrap();
-        pool.execute_configured(
-            "claude-sonnet-4-6",
-            br#"{"messages":[{"role":"user","content":"again"}]}"#.to_vec(),
-            false,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(refresh.inspections.load(Ordering::SeqCst), 1);
-        let bodies = messages.0.lock().unwrap();
-        assert_eq!(bodies.len(), 2);
-        for body in bodies.iter() {
-            let value: serde_json::Value = serde_json::from_slice(body).unwrap();
-            let user_id = value["metadata"]["user_id"].as_str().unwrap();
-            assert!(user_id.contains("host-account"));
-            assert!(!user_id.contains("sk-ant-oat-host-profile"));
-        }
-    }
-
-    #[tokio::test]
-    async fn typed_runtime_factory_builds_codex_pool_from_ctox_secrets() {
-        let root = tempfile::tempdir().unwrap();
-        let secret = |name: &str| ctox_cliproxyapi::internal::config::RuntimeSecretRef {
-            scope: "provider-subscriptions".to_owned(),
-            name: name.to_owned(),
-        };
-        let account = ctox_cliproxyapi::internal::config::CodexSubscriptionAccountConfig {
-            id: "codex-a".to_owned(),
-            disabled: false,
-            priority: 0,
-            weight: 1,
-            websockets: false,
-            models: Vec::new(),
-            id_token_secret: secret("codex-primary-id"),
-            access_token_secret: secret("codex-primary-access"),
-            refresh_token_secret: secret("codex-primary-refresh"),
-            upstream_base_url: "https://chatgpt.example/backend-api/codex".to_owned(),
-            plan_type: "pro".to_owned(),
-            proxy_url_secret: None,
-        };
-        let config = ctox_cliproxyapi::internal::config::CliproxyRuntimeConfig {
-            request_timeout_ms: 5_000,
-            routing_strategy: SchedulerStrategy::RoundRobin,
-            claude_accounts: Vec::new(),
-            codex_accounts: vec![account],
-            antigravity_accounts: Vec::new(),
-        }
-        .validate()
-        .unwrap();
-        CtoxCodexSecretStore::new(root.path())
-            .store_credentials(
-                &config.codex_accounts()[0].credential_handles().unwrap(),
-                &codex_auth::CodexStoredCredentials::new(
-                    codex_auth::SecretString::new("invalid-jwt").unwrap(),
-                    codex_auth::SecretString::new("codex-access-runtime").unwrap(),
-                    codex_auth::SecretString::new("codex-refresh-runtime").unwrap(),
-                ),
-            )
-            .unwrap();
-        let transports = HashMap::from([(
-            "codex-a".to_owned(),
-            CodexAccountTransports {
-                refresh: Arc::new(UnusedCodexRefreshTransport),
-                responses: Arc::new(SuccessCodexResponsesTransport),
-                responses_stream: None,
-            },
-        )]);
-        let pool = CtoxCliproxyRuntimeFactory::new(root.path())
-            .build_codex_pool(
-                &config,
-                &transports,
-                Arc::new(FixedCodexRuntimeClock),
-                Arc::new(FixedRuntimeClock),
-            )
-            .unwrap();
-
-        let outcome = pool
-            .execute_configured("gpt-5.5", br#"{"input":"hello"}"#.to_vec(), false)
-            .await
-            .unwrap();
-        assert_eq!(outcome.selected_auth_id(), "codex-a");
-        assert_eq!(outcome.outcome().attempts(), 1);
-        assert!(
-            !String::from_utf8_lossy(outcome.outcome().payload()).contains("codex-access-runtime")
-        );
-    }
-
-    #[tokio::test]
-    async fn typed_runtime_factory_builds_antigravity_pool_with_shared_replay() {
-        let root = tempfile::tempdir().unwrap();
-        let secret = |name: &str| ctox_cliproxyapi::internal::config::RuntimeSecretRef {
-            scope: "provider-subscriptions".to_owned(),
-            name: name.to_owned(),
-        };
-        let account = ctox_cliproxyapi::internal::config::AntigravitySubscriptionAccountConfig {
-            id: "antigravity-a".to_owned(),
-            disabled: false,
-            priority: 0,
-            weight: 1,
-            websockets: false,
-            models: Vec::new(),
-            access_token_secret: secret("antigravity-primary-access"),
-            refresh_token_secret: secret("antigravity-primary-refresh"),
-            state_secret: secret("antigravity-primary-state"),
-            upstream_base_url: "https://daily-cloudcode-pa.googleapis.com".to_owned(),
-            proxy_url_secret: None,
-        };
-        let config = ctox_cliproxyapi::internal::config::CliproxyRuntimeConfig {
-            request_timeout_ms: 5_000,
-            routing_strategy: SchedulerStrategy::RoundRobin,
-            claude_accounts: Vec::new(),
-            codex_accounts: Vec::new(),
-            antigravity_accounts: vec![account],
-        }
-        .validate()
-        .unwrap();
-        CtoxAntigravitySecretStore::new(root.path())
-            .store_credentials(
-                &config.antigravity_accounts()[0]
-                    .credential_handles()
-                    .unwrap(),
-                &antigravity_credentials(
-                    "antigravity-access-runtime",
-                    "antigravity-refresh-runtime",
-                    SystemTime::UNIX_EPOCH + Duration::from_secs(3_600),
-                    "project-runtime",
-                ),
-            )
-            .unwrap();
-        let transports = HashMap::from([(
-            "antigravity-a".to_owned(),
-            AntigravityAccountTransports {
-                refresh: Arc::new(UnusedAntigravityRefreshTransport),
-                generate: Arc::new(SuccessAntigravityGenerateTransport),
-                generate_stream: None,
-            },
-        )]);
-        let pool = CtoxCliproxyRuntimeFactory::new(root.path())
-            .build_antigravity_pool(
-                &config,
-                &transports,
-                Arc::new(FixedAntigravityRuntimeClock),
-                Arc::new(FixedRuntimeClock),
-            )
-            .unwrap();
-        let outcome = pool
-            .execute_configured(
-                "gemini-3-flash-agent",
-                br#"{"model":"gemini-3-flash-agent","input":"hello"}"#.to_vec(),
-                br#"{"request":{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}}"#
-                    .to_vec(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(outcome.selected_auth_id(), "antigravity-a");
-        assert_eq!(outcome.outcome().attempts(), 1);
-        assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(outcome.outcome().payload()).unwrap()
-                ["status"],
-            "completed"
-        );
     }
 }
 
