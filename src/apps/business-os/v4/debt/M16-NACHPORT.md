@@ -485,3 +485,7 @@ Nicht zurückgenommen (bewusst): `customer-modules/outbound-lead-generation/modu
   900 px: 2 Knöpfe), die threads-Suche schrumpft auf 98 px (v4-api „linker Kopf“ rot), der Titel „Threads“ wird bei 420 px
   abgeschnitten (G4); news v4-api 2 Tests im Zeitlimit. Braucht eine Gestaltungsentscheidung für v4-Kopfleisten (z. B. Wort
   nur ab Fensterbreite X oder Überlaufmenü) – gilt dann für alle Apps, nicht nur news/threads.
+- **news #799 / 9f6ad058a / #800**: nachportiert (b62ffc4fd Frische-Fenster + Dedupe über Ausgaben, 3fdd00c2b Sofort-Speichern +
+  8-s-Rückgängig im Themen-Dialog + Laufvertrag, f66534cb2 Wochen-Digest mit eigenem Zeitplan `news-digest:<topic>`).
+  Bewusst weggelassen: Checkpoint-Datei im Laufvertrag (v4-Handler haben kein Dateisystem), HN-Zitate/Trend-Kürzung aus dem
+  V2-Writeback (außerhalb der drei Funktionen).
