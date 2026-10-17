@@ -532,7 +532,7 @@ function rebuildCatalog() {
   for (const app of state.platformApps || []) {
     if (!app?.id) continue;
     // Plattform- und Shell-Zeilen (ctox-platform veröffentlicht der Kern selbst, E48; shell ist der Rahmen) sind keine Apps.
-    if (NON_APP_IDS.has(app.id)) continue;
+    if (NON_APP_IDS.has(app.id) || String(app.id).startsWith('lib:')) continue;
     const versions = (versionsByApp.get(app.id) || []).slice()
       .sort((left, right) => Number(right.migrated_at_seq || 0) - Number(left.migrated_at_seq || 0));
     const active = versions.find((version) => version.app_ver === app.active_ver) || null;

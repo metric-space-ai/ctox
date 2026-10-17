@@ -177,7 +177,7 @@ export function normalizeCreatorInstalledApps(catalog) {
   return modules
     .filter((mod) => {
       if (!mod?.id || mod.id === 'creator') return false;
-      if (isV4AppRow(mod)) return !mod.provenance?.base_release && mod.id !== 'shell' && mod.id !== 'ctox-platform';
+      if (isV4AppRow(mod)) return !mod.provenance?.base_release && mod.id !== 'shell' && mod.id !== 'ctox-platform' && !String(mod.id).startsWith('lib:');
       const entry = String(mod?.entry || '');
       const source = String(mod?.source || mod?.store?.distribution || '').toLowerCase();
       return entry.startsWith('installed-modules/')

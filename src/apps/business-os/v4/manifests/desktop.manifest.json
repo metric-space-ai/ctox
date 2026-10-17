@@ -2,10 +2,10 @@
   "_capability_evidence": {},
   "_commands_out_evidence": {
     "ctox ctox.app.modify.request": [
-      "index.js:469"
+      "index.js:522"
     ],
     "ctox ctox.chat.task": [
-      "index.js:469"
+      "index.js:522"
     ]
   },
   "_format": "ctox-shell-v4-app-manifest-draft-1",
@@ -530,7 +530,7 @@
     "iconLayout.js": "0ae3144412aa7eadf72de1b371069a0f9a81f013e0c34890ad0fdb70e33a085e",
     "index.css": "7a2f58a112e216f01bf27bfb9742e930d0c672df32d5ec306842fd8c35d9d75d",
     "index.html": "c932eecbaad9746151824d465ede69e6bf165eadf294474919264ea264fa966e",
-    "index.js": "c4bdae06255b505472a79b49d8a95b12d3c2a283fcf664ffdabc4384dc56de10",
+    "index.js": "913dd80821ae3fedd8e1a2ba31c4f36b19fb511ef797454f569b633b6c936072",
     "locales/de.json": "242a8923e4c4d0bd6b90ec74edd3d233a36a15a2bed0888dfca0de180b51202b",
     "locales/en.json": "223509a2c6d93f60e1afd71055eb155ae692225b962deaaa483e53e8276f17d6",
     "module.json": "ed7fafa5bde5e474afa988935b72066e05cbc59e4142052f56d260d3c82440b6"
@@ -540,7 +540,7 @@
       "_evidence": {
         "code_read": [
           "ctoxLauncher.js:1",
-          "index.js:140"
+          "index.js:144"
         ],
         "code_write": [],
         "sources": [
@@ -568,7 +568,7 @@
     "documents": {
       "_evidence": {
         "code_read": [
-          "index.js:538"
+          "index.js:591"
         ],
         "code_write": [],
         "sources": [
@@ -584,8 +584,8 @@
     "notes": {
       "_evidence": {
         "code_read": [
-          "index.js:297",
-          "index.js:309"
+          "index.js:350",
+          "index.js:362"
         ],
         "code_write": [],
         "sources": [
@@ -616,7 +616,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "b012b15a76653068ee206bac0595508002f0a89e24c159f3d5bdcc3e3f61be5f",
+    "base_hash": "72d81af7e77a8ea8b8ffaa80d55a0e746f4db6679a3d4398d071302c31e91705",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

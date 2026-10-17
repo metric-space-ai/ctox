@@ -47,6 +47,13 @@ assert.match(js, /function normalizeIconLayoutIfNeeded\(\)/u);
 assert.match(js, /const position = clampIconPosition\(doc, doc, currentGrid\(\)\)/u);
 assert.doesNotMatch(js, /const rows = Math\.max\(1, Math\.floor\(usableHeight \/ grid\.cellH\)\)/u);
 assert.match(js, /onReorder: reorderIcons/u);
+// G6 @900: gespeicherte x/y sind die freie Anordnung nach der eigenen Fläche, nie nach Viewport oder Kompaktraster;
+// die selbst gesetzte Standardanordnung folgt der Spaltenzahl der Fläche (ResizeObserver), bis der Nutzer anordnet.
+assert.doesNotMatch(js, /innerWidth/u, 'the grid follows the window surface, never the browser viewport');
+assert.match(js, /function gridPosition\(index, grid = freeGrid\(\)\)/u);
+assert.match(js, /seeded = true;[\s\S]*?const grid = freeGrid\(\);/u);
+assert.match(js, /flowWatch = new ResizeObserver\(\(\) => reflowAuto\(\)\)/u);
+assert.match(js, /function reflowAuto\(\)[\s\S]*?stopAutoFlow\(\); return;/u, 'auto-flow stops once the user arranged icons');
 assert.match(js, /dataset\.workjetMobileHost === 'true'\) return/u);
 assert.match(js, /api\.patch\('desktop_icons', id, \{ sort_index: sortIndex/u);
 assert.match(dragJs, /TOUCH_REORDER_HOLD_MS = 360/u);

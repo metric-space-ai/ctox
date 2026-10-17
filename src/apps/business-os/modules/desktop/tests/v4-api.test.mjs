@@ -60,7 +60,8 @@ before(async () => {
     window.__mod = await import(`/modules/${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false });
     await kernel.ready;
-    await kernel.sim.push('business_apps', [{ id: 'desktop', title: 'Desktop' }, { id: 'explorer', title: 'Explorer' }, { id: 'notes', title: 'Notizen' }, { id: 'ctox', title: 'CTOX' }]);
+    await kernel.sim.push('business_apps', [{ id: 'desktop', title: 'Desktop' }, { id: 'explorer', title: 'Explorer' }, { id: 'notes', title: 'Notizen' }, { id: 'ctox', title: 'CTOX' },
+      { id: 'lib:ctox-office', title: 'lib:ctox-office@1.0' }]);
     // FIXT-R: Eigentümer der Fremd-Collections (ctox-platform, documents, notes) vor der eigenen Version, diese nach der
     // business_apps-Zeile.
     for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
@@ -100,6 +101,9 @@ test('mount: Icons live aus desktop_icons, Standard-Icons für business_apps ang
   assert.ok(!l.includes('Desktop'), 'eigene App nicht als Icon');
   const ids = (await icons()).map((d) => d.id);
   for (const id of ['desk_icon_explorer', 'desk_icon_notes', 'desk_icon_ctox']) assert.ok(ids.includes(id), id);
+  // Plattform (ctox-platform, vom Kern veröffentlicht) und Bibliotheken (lib:*) sind keine Apps → kein Icon.
+  for (const id of ['desk_icon_ctox-platform', 'desk_icon_lib:ctox-office']) assert.ok(!ids.includes(id), id);
+  assert.ok(!l.some((t) => /^lib:|ctox-platform/.test(t)), JSON.stringify(l));
   const layout = await page.evaluate(() => window.__api.get('desktop_layout', 'layout').get());
   assert.equal(layout.grid_cell_w, 120);
   assert.equal(await page.evaluate(() => Boolean(document.querySelector('.ctox-syncing, [role="status"], [data-widget-sync], [data-widget-status], .desktop-icon-empty'))), false);
