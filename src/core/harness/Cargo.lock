@@ -345,7 +345,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -356,7 +356,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -1232,17 +1232,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "console"
-version = "0.16.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d64e8af5551369d19cf50138de61f1c42074ab970f74e99be916646777f8fc87"
-dependencies = [
- "encode_unicode",
- "libc",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "const-hex"
 version = "1.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1351,9 +1340,7 @@ dependencies = [
  "notify",
  "opentelemetry",
  "opentelemetry_sdk",
- "pretty_assertions",
  "regex-lite",
- "reqwest 0.13.4",
  "serde_json",
  "shlex",
  "tempfile",
@@ -1576,8 +1563,6 @@ dependencies = [
  "ctox-utils-json-to-toml",
  "ctox-utils-pty",
  "futures",
- "opentelemetry",
- "opentelemetry_sdk",
  "owo-colors",
  "pretty_assertions",
  "rmcp",
@@ -1590,11 +1575,9 @@ dependencies = [
  "tokio-util",
  "toml 0.9.12+spec-1.1.0",
  "tracing",
- "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
  "walkdir",
- "wiremock",
 ]
 
 [[package]]
@@ -1629,7 +1612,6 @@ dependencies = [
  "ctox-experimental-api-macros",
  "ctox-protocol",
  "ctox-utils-absolute-path",
- "ctox-utils-cargo-bin",
  "inventory",
  "pretty_assertions",
  "rmcp",
@@ -1650,7 +1632,10 @@ name = "ctox-apply-patch"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "assert_matches",
+ "pretty_assertions",
  "similar",
+ "tempfile",
  "thiserror 2.0.18",
  "tree-sitter",
  "tree-sitter-bash",
@@ -1730,6 +1715,7 @@ dependencies = [
  "futures",
  "http 1.4.0",
  "opentelemetry",
+ "pretty_assertions",
  "rand 0.9.4",
  "reqwest 0.13.4",
  "rustls",
@@ -1737,6 +1723,7 @@ dependencies = [
  "rustls-pki-types",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -1769,12 +1756,14 @@ dependencies = [
 name = "ctox-config"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "ctox-app-server-protocol",
  "ctox-execpolicy",
  "ctox-protocol",
  "ctox-utils-absolute-path",
  "futures",
  "multimap",
+ "pretty_assertions",
  "serde",
  "serde_json",
  "serde_path_to_error",
@@ -1837,7 +1826,6 @@ dependencies = [
  "ctox-state",
  "ctox-utils-absolute-path",
  "ctox-utils-cache",
- "ctox-utils-cargo-bin",
  "ctox-utils-home-dir",
  "ctox-utils-image",
  "ctox-utils-pty",
@@ -1856,7 +1844,6 @@ dependencies = [
  "image",
  "include_dir",
  "indexmap 2.14.0",
- "insta",
  "keyring",
  "landlock",
  "libc",
@@ -2002,9 +1989,11 @@ dependencies = [
  "landlock",
  "libc",
  "pkg-config",
+ "pretty_assertions",
  "seccompiler",
  "serde",
  "serde_json",
+ "tempfile",
  "url",
 ]
 
@@ -2020,7 +2009,6 @@ dependencies = [
  "ctox-utils-home-dir",
  "ctox-utils-rustls-provider",
  "globset",
- "pretty_assertions",
  "rama-core",
  "rama-http",
  "rama-http-backend",
@@ -2031,7 +2019,6 @@ dependencies = [
  "rama-unix",
  "serde",
  "serde_json",
- "tempfile",
  "thiserror 2.0.18",
  "time",
  "tokio",
@@ -2057,7 +2044,6 @@ dependencies = [
  "opentelemetry-semantic-conventions",
  "opentelemetry_sdk",
  "os_info",
- "pretty_assertions",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
@@ -2131,13 +2117,16 @@ dependencies = [
  "futures",
  "keyring",
  "oauth2",
+ "pretty_assertions",
  "reqwest 0.13.4",
  "rmcp",
  "schemars 0.8.22",
  "serde",
  "serde_json",
+ "serial_test",
  "sha2",
  "sse-stream",
+ "tempfile",
  "thiserror 2.0.18",
  "tiny_http",
  "tokio",
@@ -2155,12 +2144,15 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "ctox-keyring-store",
+ "keyring",
+ "pretty_assertions",
  "rand 0.9.4",
  "regex",
  "schemars 0.8.22",
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "tracing",
 ]
 
@@ -2168,10 +2160,12 @@ dependencies = [
 name = "ctox-shell-command"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "base64 0.22.1",
  "ctox-protocol",
  "ctox-utils-absolute-path",
  "once_cell",
+ "pretty_assertions",
  "regex",
  "serde",
  "serde_json",
@@ -2228,8 +2222,11 @@ version = "0.0.0"
 dependencies = [
  "dirs",
  "path-absolutize",
+ "pretty_assertions",
  "schemars 0.8.22",
  "serde",
+ "serde_json",
+ "tempfile",
  "ts-rs",
 ]
 
@@ -2274,6 +2271,7 @@ dependencies = [
  "base64 0.22.1",
  "ctox-utils-cache",
  "image",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]
@@ -2282,6 +2280,7 @@ dependencies = [
 name = "ctox-utils-json-to-toml"
 version = "0.0.0"
 dependencies = [
+ "pretty_assertions",
  "serde_json",
  "toml 0.9.12+spec-1.1.0",
 ]
@@ -2296,6 +2295,7 @@ dependencies = [
  "libc",
  "log",
  "portable-pty",
+ "pretty_assertions",
  "shared_library",
  "tokio",
  "winapi",
@@ -2305,6 +2305,7 @@ dependencies = [
 name = "ctox-utils-readiness"
 version = "0.0.0"
 dependencies = [
+ "assert_matches",
  "async-trait",
  "thiserror 2.0.18",
  "time",
@@ -2321,6 +2322,9 @@ dependencies = [
 [[package]]
 name = "ctox-utils-stream-parser"
 version = "0.0.0"
+dependencies = [
+ "pretty_assertions",
+]
 
 [[package]]
 name = "ctox-utils-string"
@@ -2681,7 +2685,7 @@ dependencies = [
  "libc",
  "option-ext",
  "redox_users 0.5.2",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -2804,12 +2808,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "encode_unicode"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "34aa73646ffb006b8f5147f3dc182bd4bcb190227ce861fc4a4844bf8e3cb2c0"
-
-[[package]]
 name = "encoding_rs"
 version = "0.8.35"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2906,7 +2904,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -3780,7 +3778,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -3866,7 +3864,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.58.0",
+ "windows-core 0.62.2",
 ]
 
 [[package]]
@@ -4188,18 +4186,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "insta"
-version = "1.47.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b4a6248eb93a4401ed2f37dfe8ea592d3cf05b7cf4f8efa867b6895af7e094e"
-dependencies = [
- "console",
- "once_cell",
- "similar",
- "tempfile",
-]
-
-[[package]]
 name = "intl-memoizer"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4273,7 +4259,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4942,7 +4928,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -5085,7 +5071,7 @@ version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "51e219e79014df21a225b1860a479e2dcd7cbd9130f4defd4bd0e191ea31d67d"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.22.1",
  "chrono",
  "getrandom 0.2.17",
  "http 1.4.0",
@@ -5963,7 +5949,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.2",
  "rustls",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -6002,7 +5988,7 @@ dependencies = [
  "cfg_aliases 0.2.1",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.3",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -6867,7 +6853,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -6926,7 +6912,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -7529,6 +7515,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "serial_test"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "699f4197115b8a7e7ff19c9a315a4bd6fffec26cc4626ef45ecaea389e081c6d"
+dependencies = [
+ "futures-executor",
+ "futures-util",
+ "log",
+ "once_cell",
+ "parking_lot",
+ "serial_test_derive",
+]
+
+[[package]]
+name = "serial_test_derive"
+version = "3.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94e153fc76e1c6a068703d6d29c508a0b15c061c4b7e43da59cc097bc342673c"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7683,7 +7694,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8214,7 +8225,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8244,7 +8255,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix",
- "windows-sys 0.59.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8928,7 +8939,7 @@ checksum = "f2f6fb2847f6742cd76af783a2a2c49e9375d0a111c7bef6f71cd9e738c72d6e"
 dependencies = [
  "memoffset 0.9.1",
  "tempfile",
- "windows-sys 0.60.2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -9437,7 +9448,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

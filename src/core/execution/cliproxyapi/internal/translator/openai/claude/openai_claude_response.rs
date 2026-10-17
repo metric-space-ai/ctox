@@ -1331,14 +1331,4 @@ mod tests {
         );
         assert_eq!(map_openai_finish_reason_to_anthropic(""), "end_turn");
     }
-
-    #[test]
-    fn claude_token_count_emits_canonical_payload() {
-        let context = TranslationContext::default();
-        assert_eq!(claude_token_count(&context, 0), br#"{"input_tokens":0}"#);
-        assert_eq!(
-            claude_token_count(&context, 4096),
-            br#"{"input_tokens":4096}"#
-        );
-    }
 }

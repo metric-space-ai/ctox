@@ -1,0 +1,102 @@
+import { spawn } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+const [baseline, binary, output] = process.argv.slice(2);
+if (!baseline || !binary || !output) throw Error('baseline source root, immutable native binary, output directory required');
+mkdirSync(output, { recursive: true });
+const after = process.cwd(), rows = [];
+const deadline = Number(process.env.CONTEXT_PROOF_DEADLINE_MS || 0);
+if (!Number.isFinite(deadline) || deadline <= Date.now()) throw Error('Explicit bounded proof deadline required');
+const save = () => writeFileSync(path.join(output, 'summary.json'), JSON.stringify({
+  baseline, after, binary, requiredRunsPerSource: 10, rows,
+  complete: rows.filter(r => r.source === 'before' && r.timings.length).length === 10
+    && rows.filter(r => r.source === 'after' && r.timings.length).length === 10,
+}, null, 2) + '\n');
+async function run(source, index) {
+  const root = source === 'before' ? baseline : after;
+  const lifecycle = path.join(output, `${source}-${index}-processes.json`);
+  // Error labels come only from checked-in smoke source, never from arbitrary
+  // browser/wire text. This identifies the failed phase without logging payloads.
+  const smokeSource = ['browser_rust_smoke.js', 'threads_rightclick_peers.js']
+    .map(file => readFileSync(path.join(root, 'src/core/rxdb/tools', file), 'utf8')).join('\n');
+  const sourceLabels = [...new Set([...smokeSource.matchAll(/(['"])([A-Za-z][A-Za-z0-9 _-]{7,95})\1/g)]
+    .map(match => match[2]))].filter(label => !/token|secret|credential|password|bearer/i.test(label))
+    .sort((a, b) => b.length - a.length);
+  const failedPhaseLabels = new Set();
+  const startedAt = new Date().toISOString();
+  const child = spawn(process.execPath, [path.join(root, 'src/core/rxdb/tools/browser_rust_smoke.js')], {
+    cwd: root, detached: true,
+    env: { ...process.env, CTOX_BIN: binary, SMOKE_MODE: 'business-os-threads-rightclick-ui',
+      SMOKE_PAGE_PATH: '/index.html', BUSINESS_PORT: process.env.BUSINESS_PORT || '19179',
+      SIGNALING_PORT: process.env.SIGNALING_PORT || '19178',
+      SMOKE_PROCESS_LIFECYCLE_PATH: lifecycle },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  const buffers = { stdout: '', stderr: '' };
+  let errors = [], timings = [], warnings = null, browserErrors = null, timedOut = false;
+  const failedEvidenceKeys = new Set();
+  function data(stream, chunk) {
+    let buffer = buffers[stream] + chunk.toString();
+    let pos;
+    while ((pos = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, pos); buffer = buffer.slice(pos + 1);
+      const key = 'context_prompt_first_paint=';
+      const start = line.indexOf(key);
+      if (start >= 0) { try { timings.push(JSON.parse(line.slice(start + key.length))); } catch {} }
+      if (/^browser_warning_count=/.test(line)) warnings = Number(line.split('=')[1]);
+      if (/^browser_error_count=/.test(line)) browserErrors = Number(line.split('=')[1]);
+      if (/missing required evidence:/.test(line)) {
+        errors.push('missing-required-evidence');
+        // Persist only guard names, never the arbitrary browser/wire error body.
+        for (const key of ['browser_warning_count', 'browser_error_count', 'context_prompt_first_paint', 'authorized_native_command']) {
+          if (line.includes(key)) failedEvidenceKeys.add(key);
+        }
+      }
+      if (/page\.evaluate: Error:/.test(line)) {
+        errors.push('browser-evaluate');
+        for (const label of sourceLabels) {
+          if (line.includes(label)) failedPhaseLabels.add(label);
+          if (failedPhaseLabels.size >= 4) break;
+        }
+      }
+      if (/Context prompt .*exceeded 150ms/.test(line)) errors.push('prompt-budget');
+      if (/STREAM_LIMIT_EXCEEDED/.test(line)) errors.push('stream-limit');
+      if (/collection is not registered/.test(line)) errors.push('unregistered-collection');
+    }
+    // Never persist arbitrary wire/bootstrap output or credentials.
+    buffers[stream] = buffer.length > 1024 * 1024 ? '' : buffer;
+  }
+  child.stdout.on('data', chunk => data('stdout', chunk));
+  child.stderr.on('data', chunk => data('stderr', chunk));
+  const timeout = setTimeout(() => { timedOut = true; child.kill('SIGTERM'); }, Math.min(65000, deadline - Date.now()));
+  let force;
+  child.on('exit', () => clearTimeout(force));
+  force = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) process.kill(-child.pid, 'SIGKILL'); }, Math.min(70000, deadline - Date.now() + 5000));
+  const result = await new Promise(resolve => child.on('close', (code, signal) => resolve({ code, signal })));
+  clearTimeout(timeout); clearTimeout(force);
+  let reviewerDirectory = null;
+  try {
+    const captured = JSON.parse(readFileSync(path.join(output, "threads-reviewer-failure-state.json"), "utf8"));
+    const evidence = captured.evidence;
+    if (captured.atMs >= Date.parse(startedAt) && evidence?.contextDirectory) {
+      const probe = evidence.contextDirectory;
+      reviewerDirectory = Object.fromEntries(["menuAttached", "datalistAttached", "reviewerPresent",
+        "requesterPresent", "reviewerLabelMatches", "requesterLabelMatches"]
+        .map(key => [key, probe[key] === true]));
+      reviewerDirectory.optionCount = Number.isSafeInteger(probe.optionCount) ? probe.optionCount : null;
+    }
+  } catch {}
+  rows.push({ source, index, startedAt, endedAt: new Date().toISOString(), pid: child.pid, reviewerDirectory,
+    ...result, timedOut, timings, errorCategories: [...new Set(errors)], warnings, browserErrors,
+    failedEvidenceKeys: [...failedEvidenceKeys], failedPhaseLabels: [...failedPhaseLabels], lifecycle });
+  save(); console.log(JSON.stringify(rows.at(-1)));
+}
+for (let index = 1; index <= 10; index++) {
+  for (const source of ['before', 'after']) {
+    if (Date.now() + 70000 >= deadline) { save(); process.exit(2); }
+    await run(source, index);
+    if (!rows.at(-1).timings.length) { save(); process.exit(3); }
+  }
+}
+save();
+process.exitCode = rows.some(r => r.source === 'after' && (r.code !== 0 || !r.timings.length)) ? 1 : 0;

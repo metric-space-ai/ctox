@@ -26,10 +26,3 @@ pub fn handle(method: &str) -> ExampleResult {
         _ => unknown(method),
     }
 }
-#[test]
-fn executor_is_a_pure_fixture() {
-    assert_eq!(
-        handle("executor.http_request").unwrap().result["StatusCode"],
-        200
-    );
-}

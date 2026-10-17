@@ -563,6 +563,7 @@ where
         });
     }
     super::account_selection::request_account(account);
+    super::account_selection::request_session(&parsed_headers, &body);
     Ok(ParsedRequest {
         method,
         target,

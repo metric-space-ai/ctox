@@ -208,7 +208,7 @@
       }
     },
     "knowledge_tables": {
-      "_class_proposal": "heute demand-only (shared/sync.js:3729 isDemandOnlyPullCollection)",
+      "_class_proposal": "heute demand-only (shared/sync.js:3873 isDemandOnlyPullCollection)",
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "_schema_source": "v4/schemas/knowledge.collections.schema.json",
       "byte_budget": null,

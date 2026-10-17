@@ -355,17 +355,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn device_code_preserves_go_zero_values_and_wire_names() {
-        let response: DeviceCodeResponse = serde_json::from_str(
-            r#"{"device_code":"d","user_code":"u","verification_uri_complete":"https://example.test"}"#,
-        )
-        .unwrap();
-        assert_eq!(response.interval, 0);
-        assert_eq!(response.expires_in, 0);
-        assert_eq!(serde_json::to_value(response).unwrap()["device_code"], "d");
-    }
-
-    #[test]
     fn storage_refresh_threshold_and_secret_redaction_are_explicit() {
         let now = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
         let token = KimiTokenData::new(

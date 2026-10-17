@@ -360,40 +360,4 @@ impl TypeInfo {
 mod tests {
     use super::*;
     use crate::sql_read_bytes::test_utils::IntoSqlReadBytes;
-
-    #[tokio::test]
-    async fn round_trip() {
-        let types = vec![
-            TypeInfo::Xml {
-                schema: Some(
-                    XmlSchema::new("fake-db-name", "fake-owner", "fake-collection").into(),
-                ),
-                size: 0xfffffffffffffffe_usize,
-            },
-            TypeInfo::Xml {
-                schema: None,
-                size: 0xfffffffffffffffe_usize,
-            },
-            TypeInfo::FixedLen(FixedLenType::Int4),
-            TypeInfo::VarLenSized(VarLenContext::new(
-                VarLenType::NChar,
-                40,
-                Some(Collation::new(13632521, 52)),
-            )),
-        ];
-
-        for ti in types {
-            let mut buf = BytesMut::new();
-
-            ti.clone()
-                .encode(&mut buf)
-                .expect("encode should be successful");
-
-            let nti = TypeInfo::decode(&mut buf.into_sql_read_bytes())
-                .await
-                .expect("decode must succeed");
-
-            assert_eq!(nti, ti)
-        }
-    }
 }

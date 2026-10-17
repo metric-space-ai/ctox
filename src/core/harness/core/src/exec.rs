@@ -830,7 +830,7 @@ fn should_use_windows_restricted_token_sandbox(
         )
 }
 
-#[cfg(any(target_os = "windows", test))]
+#[cfg(target_os = "windows")]
 fn unsupported_windows_restricted_token_sandbox_reason(
     sandbox: SandboxType,
     sandbox_policy: &SandboxPolicy,

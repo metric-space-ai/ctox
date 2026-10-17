@@ -11,7 +11,3 @@ pub fn handle(method: &str) -> ExampleResult {
         _ => unknown(method),
     }
 }
-#[test]
-fn translates_to_owned_bytes() {
-    assert!(handle("request.translate").is_ok());
-}

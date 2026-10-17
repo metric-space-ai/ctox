@@ -2,6 +2,7 @@
 // Port-Status: ported
 // License: MIT (upstream); modifications AGPL-3.0-only
 
+use super::tool_search::{search_call_item, ToolSearchPlan};
 use crate::internal::translator::common::sse_event_data;
 use crate::internal::translator::common::SseDecoder;
 use crate::sdk::translator::TranslationContext;
@@ -32,6 +33,9 @@ struct ToolState {
     name: String,
     arguments: String,
     output_index: usize,
+    search: bool,
+    custom: bool,
+    custom_input: String,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -391,11 +395,36 @@ pub fn convert_claude_response_to_openai_responses_non_stream(
                 output.push(message);
             }
             OutputKind::FunctionCall => {
+                let empty_arguments = item.arguments.is_empty();
                 let arguments = if item.arguments.is_empty() {
                     "{}".to_owned()
                 } else {
                     item.arguments
                 };
+                let plan = ToolSearchPlan::from_request(request);
+                if plan.is_search(&item.name) {
+                    output.push(search_call_item(
+                        &item.call_id,
+                        "completed",
+                        if empty_arguments { "" } else { &arguments },
+                    ));
+                    continue;
+                }
+                if plan.enabled {
+                    let (name, namespace, kind) = plan.identity(&item.name);
+                    if kind == Some("custom") {
+                        let input = serde_json::from_str::<Value>(&arguments)
+                            .ok()
+                            .and_then(|v| v["input"].as_str().map(str::to_owned))
+                            .unwrap_or_default();
+                        let mut call = json!({"id":format!("ctc_{}",item.call_id),"type":"custom_tool_call","status":"completed","call_id":item.call_id,"name":name,"input":input});
+                        if let Some(ns) = namespace {
+                            call["namespace"] = json!(ns);
+                        }
+                        output.push(call);
+                        continue;
+                    }
+                }
                 let (name, namespace) = restore_namespace(request, &item.name);
                 let mut call = json!({
                     "id": item.id,
@@ -495,11 +524,29 @@ pub fn convert_claude_response_to_openai_responses(
                         name: block["name"].as_str().unwrap_or("").into(),
                         arguments: String::new(),
                         output_index,
+                        search: ToolSearchPlan::from_request(pick_request(
+                            original_request,
+                            request,
+                        ))
+                        .is_search(block["name"].as_str().unwrap_or("")),
+                        custom: ToolSearchPlan::from_request(pick_request(
+                            original_request,
+                            request,
+                        ))
+                        .identity(block["name"].as_str().unwrap_or(""))
+                        .2 == Some("custom"),
+                        custom_input: String::new(),
                     };
                     state.tools.insert(index, tool.clone());
                     let (name, namespace) =
                         restore_namespace(pick_request(original_request, request), &tool.name);
                     let mut item = json!({"id":format!("fc_{}", tool.id), "type":"function_call", "status":"in_progress", "arguments":"", "call_id":tool.id, "name":name});
+                    if tool.search {
+                        item = search_call_item(&tool.id, "in_progress", "");
+                    }
+                    if tool.custom {
+                        item = json!({"id":format!("ctc_{}",tool.id),"type":"custom_tool_call","status":"in_progress","call_id":tool.id,"name":name,"input":""});
+                    }
                     if let Some(namespace) = namespace {
                         item["namespace"] = Value::String(namespace);
                     }
@@ -537,8 +584,25 @@ pub fn convert_claude_response_to_openai_responses(
                         .unwrap_or("");
                     if let Some(tool) = state.tools.get_mut(&index) {
                         tool.arguments.push_str(partial);
+                        if tool.custom {
+                            let current = gjson::get(&tool.arguments, "input").str().to_owned();
+                            if current.starts_with(&tool.custom_input) {
+                                let delta = current[tool.custom_input.len()..].to_owned();
+                                tool.custom_input = current;
+                                if !delta.is_empty() {
+                                    let id = format!("ctc_{}", tool.id);
+                                    let output_index = tool.output_index;
+                                    output.push(state.emit("response.custom_tool_call_input.delta",json!({"type":"response.custom_tool_call_input.delta","item_id":id,"output_index":output_index,"delta":delta})));
+                                }
+                            }
+                        }
                     }
-                    if let Some(tool) = state.tools.get(&index).cloned() {
+                    if let Some(tool) = state
+                        .tools
+                        .get(&index)
+                        .cloned()
+                        .filter(|tool| !tool.search && !tool.custom)
+                    {
                         output.push(state.emit("response.function_call_arguments.delta", json!({"type":"response.function_call_arguments.delta", "item_id":format!("fc_{}",tool.id), "output_index":tool.output_index, "delta":partial})));
                     }
                 }
@@ -566,6 +630,25 @@ pub fn convert_claude_response_to_openai_responses(
         "content_block_stop" => {
             let index = event.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
             if let Some(tool) = state.tools.get(&index).cloned() {
+                if tool.custom {
+                    let input = gjson::get(&tool.arguments, "input").str().to_owned();
+                    let (name, namespace) =
+                        restore_namespace(pick_request(original_request, request), &tool.name);
+                    let mut item = json!({"id":format!("ctc_{}",tool.id),"type":"custom_tool_call","status":"completed","call_id":tool.id,"name":name,"input":input});
+                    if let Some(ns) = namespace {
+                        item["namespace"] = json!(ns);
+                    }
+                    output.push(state.emit("response.custom_tool_call_input.done",json!({"type":"response.custom_tool_call_input.done","item_id":format!("ctc_{}",tool.id),"output_index":tool.output_index,"input":input})));
+                    state.finished_items.insert(tool.output_index, item.clone());
+                    output.push(state.emit("response.output_item.done",json!({"type":"response.output_item.done","output_index":tool.output_index,"item":item})));
+                    return output;
+                }
+                if tool.search {
+                    let item = search_call_item(&tool.id, "completed", &tool.arguments);
+                    state.finished_items.insert(tool.output_index, item.clone());
+                    output.push(state.emit("response.output_item.done",json!({"type":"response.output_item.done","output_index":tool.output_index,"item":item})));
+                    return output;
+                }
                 let args = if tool.arguments.is_empty() {
                     "{}"
                 } else {
@@ -707,6 +790,23 @@ fn stream_completed(state: &ClaudeToResponsesState, request: &[u8]) -> Value {
 
     let mut indexed = state.finished_items.clone();
     for tool in state.tools.values() {
+        if tool.search {
+            indexed.insert(
+                tool.output_index,
+                search_call_item(&tool.id, "completed", &tool.arguments),
+            );
+            continue;
+        }
+        if tool.custom {
+            let (name, namespace) = restore_namespace(request, &tool.name);
+            let input = gjson::get(&tool.arguments, "input").str().to_owned();
+            let mut item = json!({"id":format!("ctc_{}",tool.id),"type":"custom_tool_call","status":"completed","call_id":tool.id,"name":name,"input":input});
+            if let Some(ns) = namespace {
+                item["namespace"] = json!(ns);
+            }
+            indexed.insert(tool.output_index, item);
+            continue;
+        }
         let args = if tool.arguments.is_empty() {
             "{}"
         } else {
@@ -807,6 +907,9 @@ impl ClaudeToResponsesState {
                                 name: block["name"].as_str().unwrap_or("").into(),
                                 arguments: String::new(),
                                 output_index,
+                                search: false,
+                                custom: false,
+                                custom_input: String::new(),
                             },
                         );
                     }
@@ -912,6 +1015,12 @@ fn pick_request<'a>(original: &'a [u8], translated: &'a [u8]) -> &'a [u8] {
     }
 }
 fn restore_namespace(request: &[u8], qualified: &str) -> (String, Option<String>) {
+    let plan = ToolSearchPlan::from_request(request);
+    if plan.enabled {
+        let (name, namespace, _) = plan.identity(qualified);
+        return (name, namespace);
+    }
+
     let Ok(root) = serde_json::from_slice::<Value>(request) else {
         return (qualified.into(), None);
     };

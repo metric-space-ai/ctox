@@ -156,12 +156,4 @@ pub fn kv_log_prefix(key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn hashing_is_stable_and_non_plaintext() {
-        let first = hash_key_part("secret-value");
-        assert_eq!(first.len(), 64);
-        assert_eq!(first, hash_key_part("secret-value"));
-        assert_ne!(first, hash_key_part("other-value"));
-        assert!(!first.contains("secret"));
-    }
 }

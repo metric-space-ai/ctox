@@ -342,9 +342,9 @@ function assertBusinessOsServerHttpDataApisAreGated() {
     }
   }
   // The control-plane allowlist must never re-admit a Business OS data path. The
-  // knowledge / dataframe / document HTTP handlers still exist behind the 410
-  // gate, so a single allowlist entry like "/api/business-os/knowledge/document"
-  // would silently re-open them as a data bridge. Pin the allowlist to non-data
+  // retired knowledge / dataframe / document routes must remain behind the 410
+  // gate. Do not let a future handler silently re-open them as a data bridge
+  // through an allowlist entry. Pin the allowlist to non-data
   // control-plane routes only; data windows must be served over RxDB/WebRTC.
   const controlPlane = server.match(/fn is_business_os_control_plane_path[\s\S]*?\n\}/);
   if (!controlPlane) {

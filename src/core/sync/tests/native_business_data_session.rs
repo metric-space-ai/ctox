@@ -1994,30 +1994,45 @@ async fn exercise_session(
         if principal_fault == PrincipalFault::None
             && invalidation == AuthorizationInvalidation::None
         {
-            for forbidden_query in [
+            for (query_index, forbidden_query) in [
                 json!({"selector":{"secret":"probe"},"sort":[{"id":"asc"}]}),
                 json!({"selector":{},"sort":[{"secret":"asc"}]}),
                 json!({"selector":{},"sort":[{"id":"asc"}],"index":["secret"]}),
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 let query = ctox_sync::business_data_contract::NativeBusinessDataQuery {
                     collection: "records".into(),
                     scope: NativeBusinessDataScope::Instance {},
                     query: forbidden_query,
                     page_size: 2,
                 };
-                for operation in [
-                    NativeBusinessDataOperation::Query {
-                        session: ready.clone().unwrap(),
-                        query: query.clone(),
-                        page_cursor: None,
-                    },
-                    NativeBusinessDataOperation::Watch {
-                        session: ready.clone().unwrap(),
-                        query,
-                        resume_cursor: None,
-                    },
+                for (operation_name, operation) in [
+                    (
+                        "query",
+                        NativeBusinessDataOperation::Query {
+                            session: ready.clone().unwrap(),
+                            query: query.clone(),
+                            page_cursor: None,
+                        },
+                    ),
+                    (
+                        "watch",
+                        NativeBusinessDataOperation::Watch {
+                            session: ready.clone().unwrap(),
+                            query,
+                            resume_cursor: None,
+                        },
+                    ),
                 ] {
-                    send_request(&mut client, "unreadable-query-field", operation).await;
+                    // Request IDs stay reserved until the host's internal write
+                    // acknowledgement, which can lag the bytes the client has
+                    // already read. Reusing one ID back-to-back races that ack
+                    // and the host correctly closes the stream as a duplicate.
+                    let request_id =
+                        format!("unreadable-query-field-{query_index}-{operation_name}");
+                    send_request(&mut client, &request_id, operation).await;
                     assert_rejected(
                         read_frame(&mut client).await,
                         NativeBusinessDataErrorCode::Unauthorized,

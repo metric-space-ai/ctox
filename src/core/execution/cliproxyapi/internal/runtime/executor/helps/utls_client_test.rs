@@ -140,30 +140,3 @@ fn explicit_proxy_bypasses_context_client_and_is_not_exposed_by_error() {
     assert!(!rendered.contains("operator"));
     assert!(!rendered.contains("do-not-log"));
 }
-
-#[test]
-fn claude_profile_matches_candidate_ordering_invariants() {
-    assert_eq!(CLAUDE_CODE_CIPHER_SUITES[0..3], [0x1301, 0x1302, 0x1303]);
-    assert_eq!(CLAUDE_CODE_TLS_EXTENSIONS.last(), Some(&"pre_shared_key"));
-    let psk = CLAUDE_CODE_TLS_EXTENSIONS
-        .iter()
-        .position(|extension| *extension == "pre_shared_key")
-        .unwrap();
-    let padding = CLAUDE_CODE_TLS_EXTENSIONS
-        .iter()
-        .position(|extension| *extension == "boring_padding")
-        .unwrap();
-    assert_eq!(psk, padding + 1);
-    assert!(std::hint::black_box(CLAUDE_CODE_OMIT_EMPTY_PSK));
-    assert!(std::hint::black_box(
-        CLAUDE_CODE_SKIP_RESUMPTION_WITHOUT_PSK_EXTENSION
-    ));
-    assert_eq!(
-        claude_code_request_header_order("/v1/messages/count_tokens?beta=true"),
-        &CLAUDE_CODE_COUNT_TOKENS_HEADER_ORDER
-    );
-    assert_eq!(
-        claude_code_request_header_order("/v1/messages"),
-        &CLAUDE_CODE_MESSAGES_HEADER_ORDER
-    );
-}

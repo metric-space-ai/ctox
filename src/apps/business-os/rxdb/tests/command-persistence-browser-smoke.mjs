@@ -25,14 +25,19 @@ const server = http.createServer((request, response) => {
   try {
     const path = resolve(root, `.${new URL(request.url, 'http://localhost').pathname}`);
     if (!path.startsWith(`${root}/`)) throw new Error('invalid fixture path');
+    const body = readFileSync(path);
     response.writeHead(200, { 'content-type': 'text/javascript' });
-    response.end(readFileSync(path));
+    response.end(body);
   } catch {
     response.writeHead(200, { 'content-type': 'text/html' });
     response.end('<!doctype html><title>isolated command persistence</title>');
   }
 });
 await new Promise((done) => server.listen(0, '127.0.0.1', done));
+const fallback = await fetch(`http://127.0.0.1:${server.address().port}/missing-fixture`);
+if (fallback.status !== 200 || !(await fallback.text()).includes('isolated command persistence')) {
+  throw new Error('missing static fixture must return the isolated fallback');
+}
 const browser = await chromium.launch({ headless: true });
 try {
   const page = await browser.newPage();

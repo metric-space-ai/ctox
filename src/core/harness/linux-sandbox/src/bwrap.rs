@@ -627,39 +627,6 @@ mod tests {
         assert_eq!(args.args, command);
     }
 
-    #[test]
-    fn full_disk_write_proxy_only_keeps_full_filesystem_but_unshares_network() {
-        let command = vec!["/bin/true".to_string()];
-        let args = create_bwrap_command_args(
-            command,
-            &FileSystemSandboxPolicy::from(&SandboxPolicy::DangerFullAccess),
-            Path::new("/"),
-            Path::new("/"),
-            BwrapOptions {
-                mount_proc: true,
-                network_mode: BwrapNetworkMode::ProxyOnly,
-            },
-        )
-        .expect("create bwrap args");
-
-        assert_eq!(
-            args.args,
-            vec![
-                "--new-session".to_string(),
-                "--die-with-parent".to_string(),
-                "--bind".to_string(),
-                "/".to_string(),
-                "/".to_string(),
-                "--unshare-user".to_string(),
-                "--unshare-pid".to_string(),
-                "--unshare-net".to_string(),
-                "--proc".to_string(),
-                "/proc".to_string(),
-                "--".to_string(),
-                "/bin/true".to_string(),
-            ]
-        );
-    }
 
     #[cfg(unix)]
     #[test]

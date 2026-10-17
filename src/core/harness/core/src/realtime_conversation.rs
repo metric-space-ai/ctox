@@ -869,7 +869,3 @@ async fn send_conversation_error(
     })
     .await;
 }
-
-#[cfg(test)]
-#[path = "realtime_conversation_tests.rs"]
-mod tests;

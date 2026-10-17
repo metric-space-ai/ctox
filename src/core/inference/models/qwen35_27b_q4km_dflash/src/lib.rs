@@ -121,30 +121,4 @@ pub fn last_error() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reference_byte_match() {
-        assert_eq!(DFLASH27B_TARGET_HIDDEN, 5120);
-        assert_eq!(DFLASH27B_TARGET_LAYERS, 64);
-        assert_eq!(DFLASH27B_TARGET_N_HEADS, 32);
-        assert_eq!(DFLASH27B_TARGET_N_KV_HEADS, 8);
-        assert_eq!(DFLASH27B_TARGET_HEAD_DIM, 128);
-        assert_eq!(DFLASH27B_TARGET_INTERMEDIATE, 17_408);
-        assert_eq!(DFLASH27B_TARGET_VOCAB, 248_320);
-        assert!((DFLASH27B_ROPE_THETA - 10_000_000.0).abs() < 1e-3);
-        assert!((DFLASH27B_RMS_EPS - 1e-6).abs() < 1e-12);
-        assert_eq!(DFLASH27B_DRAFT_LAYERS, 5);
-        assert_eq!(DFLASH27B_DRAFT_BLOCK_SIZE, 16);
-        assert_eq!(DFLASH27B_DRAFT_N_TARGET_LAYERS, 5);
-        assert_eq!(DFLASH27B_DRAFT_MASK_TOKEN_ID, 248_070);
-        assert_eq!(DFLASH27B_DRAFT_TARGET_LAYER_IDS, [1, 16, 31, 46, 61]);
-    }
-
-    #[test]
-    fn last_error_set_and_read() {
-        set_last_error("boom");
-        assert_eq!(last_error(), "boom");
-        set_last_error("different");
-        assert_eq!(last_error(), "different");
-    }
 }

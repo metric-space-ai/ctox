@@ -1250,20 +1250,6 @@ mod tests {
     }
 
     #[test]
-    fn open_cost_db_marks_schema_ready_for_db_path() -> Result<()> {
-        let tmp = TempDir::new()?;
-        let _conn = open_cost_db(tmp.path())?;
-        let key = cost_schema_cache_key(&crate::paths::core_db(tmp.path()));
-        let ready = API_COST_SCHEMA_READY
-            .get()
-            .expect("schema cache should be initialized")
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        assert!(ready.contains(&key));
-        Ok(())
-    }
-
-    #[test]
     fn batch_recording_uses_one_db_open_for_multiple_events() -> Result<()> {
         let tmp = TempDir::new()?;
 

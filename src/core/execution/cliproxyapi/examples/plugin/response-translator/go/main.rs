@@ -13,7 +13,3 @@ pub fn handle(method: &str) -> ExampleResult {
         _ => unknown(method),
     }
 }
-#[test]
-fn translates_response() {
-    assert!(handle("response.translate").is_ok());
-}

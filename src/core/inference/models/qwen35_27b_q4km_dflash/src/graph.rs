@@ -87,7 +87,9 @@ pub mod q35 {
 /// Returns `false` on failure and sets [`crate::last_error`].
 ///
 /// ref: `qwen35_target_graph.cpp:71-225`
-pub fn create_target_cache(
+/// # Safety
+/// All raw handles must remain valid and belong to the live ggml backend.
+pub unsafe fn create_target_cache(
     w: &TargetWeights,
     max_ctx: c_int,
     max_verify_tokens_arg: c_int,

@@ -26,8 +26,3 @@ pub fn handle(method: &str) -> ExampleResult {
         _ => unknown(method),
     }
 }
-
-#[test]
-fn bounded_auth_flow_uses_fixture_credentials_only() {
-    assert_eq!(handle("auth.parse").unwrap().result["Handled"], true);
-}

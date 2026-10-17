@@ -51,7 +51,7 @@
   ],
   "collections": {
     "business_chats": {
-      "_class_proposal": "heute demand-only (shared/sync.js:3713 isDemandOnlyPullCollection)",
+      "_class_proposal": "heute demand-only (shared/sync.js:3857 isDemandOnlyPullCollection)",
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "_schema_source": "v4/schemas/ctox.collections.schema.json",
       "byte_budget": null,
@@ -1107,7 +1107,7 @@
       }
     },
     "ctox_harness_events": {
-      "_class_proposal": "heute demand-only (shared/sync.js:3718 isDemandOnlyPullCollection)",
+      "_class_proposal": "heute demand-only (shared/sync.js:3862 isDemandOnlyPullCollection)",
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "_schema_source": "v4/schemas/ctox.collections.schema.json",
       "byte_budget": null,
@@ -1312,7 +1312,7 @@
       }
     },
     "ctox_runs": {
-      "_class_proposal": "heute demand-only (shared/sync.js:3717 isDemandOnlyPullCollection)",
+      "_class_proposal": "heute demand-only (shared/sync.js:3861 isDemandOnlyPullCollection)",
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "_schema_source": "v4/schemas/ctox.collections.schema.json",
       "byte_budget": null,
@@ -3864,7 +3864,7 @@
     "icon.svg": "b0e39a31950163f74430e75f10e54946aa56b896a38c2e8d8bc069faf714fa20",
     "index.css": "7465020600d204abcd08096048753545bab6bdd8177add409b9ea102b064b8b5",
     "index.html": "e4ecc48f41fa232c52fe7c490d41418e85d826f183ac0c8e66ec98fbc501c0e8",
-    "index.js": "e330af0b869495c86600ee9f26650a910dc76df75dacad1dc037a269414ae65d",
+    "index.js": "bfa4b78f3538d41802035edc182734daf4dca67d9a126c5dbf8b88cbd1a6946f",
     "locales/de.json": "0d3a6766c9f9002ded40e015c270e1fe09c5ae5c0e5079f3973848e92aad75d0",
     "locales/en.json": "515778d61cc570c1502bfb94fc6d046503be831a78522908bf1d9b5892895113",
     "module.json": "dc8917de377caa303b2b3c5b6578edc2dde25723dd27ec847edf0df9e7919047",
@@ -4183,7 +4183,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "75e037a13256e20b0b463485947bec0bd4417958c0cf5933247dcb992f2239cb",
+    "base_hash": "9aaeb1b1061689e8429da6e31ba308ad21a76bafb3fca733fc87f8209cc24b99",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

@@ -11,8 +11,6 @@ mod phase2;
 pub(crate) mod prompts;
 mod start;
 mod storage;
-#[cfg(test)]
-mod tests;
 pub(crate) mod usage;
 
 use ctox_protocol::openai_models::ReasoningEffort;

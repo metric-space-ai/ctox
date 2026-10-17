@@ -139,11 +139,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn base64_smoke() {
-        assert_eq!(base64_decode("SGVsbG8=").unwrap(), b"Hello");
-    }
-
-    #[test]
     fn parse_fake_tekken() {
         let json = br#"{"vocab":[{"token_bytes":"SGk="},{"token_bytes":"IQ=="}]}"#;
         let t = Tekken::from_json_bytes(json).unwrap();

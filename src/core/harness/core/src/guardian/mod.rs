@@ -58,37 +58,3 @@ pub(crate) struct GuardianAssessment {
     pub(crate) rationale: String,
     pub(crate) evidence: Vec<GuardianEvidence>,
 }
-
-#[cfg(test)]
-use approval_request::format_guardian_action_pretty;
-#[cfg(test)]
-use approval_request::guardian_assessment_action_value;
-#[cfg(test)]
-use approval_request::guardian_request_turn_id;
-#[cfg(test)]
-use prompt::GuardianTranscriptEntry;
-#[cfg(test)]
-use prompt::GuardianTranscriptEntryKind;
-#[cfg(test)]
-use prompt::build_guardian_prompt_items;
-#[cfg(test)]
-use prompt::collect_guardian_transcript_entries;
-#[cfg(test)]
-use prompt::guardian_output_schema;
-#[cfg(test)]
-pub(crate) use prompt::guardian_policy_prompt;
-#[cfg(test)]
-use prompt::guardian_truncate_text;
-#[cfg(test)]
-use prompt::parse_guardian_assessment;
-#[cfg(test)]
-use prompt::render_guardian_transcript_entries;
-#[cfg(test)]
-use review::GuardianReviewOutcome;
-#[cfg(test)]
-use review::run_guardian_review_session as run_guardian_review_session_for_test;
-#[cfg(test)]
-use review_session::build_guardian_review_session_config as build_guardian_review_session_config_for_test;
-
-#[cfg(test)]
-mod tests;

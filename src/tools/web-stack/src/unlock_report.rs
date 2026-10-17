@@ -2006,7 +2006,7 @@ const SOURCE_CONFIG = Object.freeze({
     }
 
     #[test]
-    fn real_registry_has_fifteen_adapters_with_valid_shared_config() {
+    fn real_registry_matches_shared_config_for_every_adapter() {
         let adapters_dir = default_adapters_dir();
         let shared = std::fs::read_to_string(adapters_dir.join(SHARED_SCRIPT_REL)).unwrap();
         let source_config =
@@ -2014,10 +2014,14 @@ const SOURCE_CONFIG = Object.freeze({
         let protected_config =
             parse_js_config_section(&shared, "const PROTECTED_SOURCE_CONFIG = Object.freeze({");
         let discovered = discover_adapters(&adapters_dir).unwrap();
+        let registered: std::collections::BTreeSet<_> =
+            discovered.iter().map(|(id, _)| id.as_str()).collect();
+        let configured: std::collections::BTreeSet<_> =
+            source_config.keys().map(String::as_str).collect();
+        assert!(!registered.is_empty());
         assert_eq!(
-            discovered.len(),
-            15,
-            "expected 15 registered production adapters"
+            registered, configured,
+            "registered adapters and shared configuration must agree"
         );
         for (source_id, _) in &discovered {
             assert!(

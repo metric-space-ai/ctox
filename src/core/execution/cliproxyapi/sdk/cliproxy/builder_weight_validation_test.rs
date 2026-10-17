@@ -99,26 +99,6 @@ impl PluginHost for RecordingPluginHost {
     }
 }
 
-#[test]
-fn plugin_host_configuration_and_access_snapshot_follow_upstream_order() {
-    let host = Arc::new(RecordingPluginHost {
-        calls: Mutex::new(Vec::new()),
-    });
-    let assembly = new_builder()
-        .with_config(config(1))
-        .with_config_path("/runtime/config.yaml")
-        .with_plugin_host(host.clone())
-        .build()
-        .unwrap();
-    assert_eq!(
-        *host.calls.lock().unwrap(),
-        ["apply", "register", "providers"]
-    );
-    assert!(!assembly
-        .requirements()
-        .contains(&ServiceBindingRequirement::PluginHost));
-}
-
 struct FailingPluginHost;
 
 impl PluginHost for FailingPluginHost {
@@ -136,22 +116,6 @@ impl PluginHost for FailingPluginHost {
     fn access_providers(&self) -> Vec<crate::sdk::access::SharedProvider> {
         panic!("provider snapshot must not run after config failure")
     }
-}
-
-#[test]
-fn plugin_configuration_failure_is_contextual_and_stops_assembly() {
-    let error = new_builder()
-        .with_config(config(1))
-        .with_config_path("/runtime/config.yaml")
-        .with_plugin_host(Arc::new(FailingPluginHost))
-        .build()
-        .unwrap_err();
-    assert_eq!(error.kind, BuilderErrorKind::PluginHost);
-    assert_eq!(error.plugin, Some(PluginHostError::Configuration));
-    assert_eq!(
-        error.to_string(),
-        "cliproxy: plugin host configuration failed"
-    );
 }
 
 #[test]

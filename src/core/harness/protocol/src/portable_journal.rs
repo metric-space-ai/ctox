@@ -377,7 +377,7 @@ fn validate_required_metadata_shape(line: &Value) -> Result<(), PortableJournalE
     ];
     if REQUIRED
         .iter()
-        .any(|field| payload.get(*field).is_none_or(|value| value.is_null()))
+        .any(|field| payload.get(*field).is_none_or(Value::is_null))
     {
         return Err(PortableJournalError::MissingMetadataField);
     }

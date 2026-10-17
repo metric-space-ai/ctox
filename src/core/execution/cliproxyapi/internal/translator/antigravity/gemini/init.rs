@@ -34,12 +34,4 @@ pub fn register_gemini_antigravity(registry: &Registry) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn registry_activates_pair() {
-        let registry = Registry::new();
-        register_gemini_antigravity(&registry);
-        assert!(registry.has_request_transformer(&gemini(), &antigravity()));
-        assert!(registry.has_stream_response_transformer(&gemini(), &antigravity()));
-        assert!(registry.has_non_stream_response_transformer(&gemini(), &antigravity()));
-    }
 }

@@ -229,13 +229,6 @@ impl CoreAuthProvider {
         self.auth_header_attached().then_some("authorization")
     }
 
-    #[cfg(test)]
-    pub(crate) fn for_test(token: Option<&str>, account_id: Option<&str>) -> Self {
-        Self {
-            token: token.map(str::to_string),
-            account_id: account_id.map(str::to_string),
-        }
-    }
 }
 
 impl ApiAuthProvider for CoreAuthProvider {

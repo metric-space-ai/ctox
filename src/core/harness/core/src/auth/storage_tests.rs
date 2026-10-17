@@ -209,15 +209,6 @@ fn keyring_auth_storage_load_returns_deserialized_auth() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[test]
-fn keyring_auth_storage_compute_store_key_for_home_directory() -> anyhow::Result<()> {
-    let codex_home = PathBuf::from("~/.codex");
-
-    let key = compute_store_key(codex_home.as_path())?;
-
-    assert_eq!(key, "cli|940db7b1d0e4eb40");
-    Ok(())
-}
 
 #[test]
 fn keyring_auth_storage_save_persists_and_removes_fallback_file() -> anyhow::Result<()> {

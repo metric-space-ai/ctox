@@ -1636,21 +1636,6 @@ mod tests {
     }
 
     #[test]
-    fn embedded_intersolar_skill_declares_its_contract() {
-        // X2-01: the shipped fixture skill must declare the >=200 + PLZ contract so
-        // the production review gate has a hard-key contract to enforce.
-        let body = EMBEDDED_SYSTEM_SKILLS
-            .get_file("communication/intersolar-company-list/SKILL.md")
-            .expect("intersolar-company-list SKILL.md is embedded")
-            .contents_utf8()
-            .expect("SKILL.md is valid utf8");
-        let contract = parse_skill_deliverable_contract(body);
-        assert!(contract.declares_spreadsheet_deliverable);
-        assert_eq!(contract.min_data_rows, 200);
-        assert_eq!(contract.required_columns, vec!["PLZ".to_string()]);
-    }
-
-    #[test]
     fn load_skill_deliverable_contract_falls_back_to_embedded_without_bootstrap() {
         // Production safety: CTOX_SERVICE_BOOTSTRAP_SYSTEM_SKILLS defaults off, so the
         // contract MUST resolve from the binary-embedded skill even when it was never

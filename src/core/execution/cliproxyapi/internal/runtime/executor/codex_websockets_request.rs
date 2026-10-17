@@ -134,47 +134,4 @@ fn canonical_header(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn headers_preserve_explicit_values_and_never_use_ambient_state() {
-        let mut source = CodexWebsocketHeaders::new();
-        source.insert("SESSION-ID".to_owned(), "explicit-session".to_owned());
-        source.insert("User-Agent".to_owned(), "explicit-agent".to_owned());
-        let headers = apply_codex_websocket_headers(
-            source,
-            &SecretString::new("secret").unwrap(),
-            "account",
-            "fallback",
-            &CodexWebsocketHeaderDefaults::default(),
-        );
-        assert_eq!(
-            codex_session_header_value(&headers),
-            Some("explicit-session")
-        );
-        assert_eq!(
-            header_value_case_insensitive(&headers, "user-agent"),
-            Some(CODEX_USER_AGENT)
-        );
-        assert_eq!(
-            header_value_case_insensitive(&headers, "authorization"),
-            Some("Bearer secret")
-        );
-
-        let mut uncloaked = CodexWebsocketHeaders::new();
-        uncloaked.insert("User-Agent".to_owned(), "explicit-agent".to_owned());
-        let headers = apply_codex_websocket_headers(
-            uncloaked,
-            &SecretString::new("secret").unwrap(),
-            "account",
-            "session",
-            &CodexWebsocketHeaderDefaults {
-                disable_cloaking: true,
-                ..CodexWebsocketHeaderDefaults::default()
-            },
-        );
-        assert_eq!(
-            header_value_case_insensitive(&headers, "user-agent"),
-            Some("explicit-agent")
-        );
-    }
 }

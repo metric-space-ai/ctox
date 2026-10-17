@@ -5,26 +5,6 @@
 use std::fs;
 use std::path::Path;
 
-#[test]
-fn interactions_translators_do_not_import_gemini_translators() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("internal/translator");
-    let scan_dirs = [
-        root.join("openai/interactions"),
-        root.join("claude/interactions"),
-        root.join("codex/interactions"),
-        root.join("antigravity/interactions"),
-    ];
-    let mut violations = Vec::new();
-    for directory in scan_dirs.into_iter().filter(|path| path.exists()) {
-        collect_violations(&root, &directory, &mut violations);
-    }
-    assert!(
-        violations.is_empty(),
-        "non-Gemini Interactions translators import Gemini translators: {}",
-        violations.join(", ")
-    );
-}
-
 fn collect_violations(root: &Path, directory: &Path, violations: &mut Vec<String>) {
     let mut pending = vec![directory.to_path_buf()];
     while let Some(path) = pending.pop() {

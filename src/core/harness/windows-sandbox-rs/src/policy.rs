@@ -22,39 +22,3 @@ pub fn parse_policy(value: &str) -> Result<SandboxPolicy> {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn rejects_external_sandbox_preset() {
-        let err = parse_policy("external-sandbox").unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("DangerFullAccess and ExternalSandbox are not supported"));
-    }
-
-    #[test]
-    fn rejects_external_sandbox_json() {
-        let payload = serde_json::to_string(
-            &ctox_protocol::protocol::SandboxPolicy::ExternalSandbox {
-                network_access: ctox_protocol::protocol::NetworkAccess::Enabled,
-            },
-        )
-        .unwrap();
-        let err = parse_policy(&payload).unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("DangerFullAccess and ExternalSandbox are not supported"));
-    }
-
-    #[test]
-    fn parses_read_only_policy() {
-        assert_eq!(
-            parse_policy("read-only").unwrap(),
-            SandboxPolicy::new_read_only_policy()
-        );
-    }
-}

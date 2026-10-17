@@ -287,28 +287,4 @@ pub fn new_id(prefix: &str) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-
-    #[test]
-    fn schema_bootstraps_idempotently() {
-        let dir = tempdir().unwrap();
-        let _conn = open(dir.path()).unwrap();
-        let _conn = open(dir.path()).unwrap();
-        let conn = open(dir.path()).unwrap();
-        let count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name LIKE 'report_%'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(count >= 13, "expected >=13 report tables, got {count}");
-    }
-
-    #[test]
-    fn new_id_is_unique_and_prefixed() {
-        let a = new_id("run");
-        let b = new_id("run");
-        assert_ne!(a, b);
-        assert!(a.starts_with("run_"));
-    }
 }

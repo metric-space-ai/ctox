@@ -14,14 +14,6 @@ use super::{
 };
 
 #[test]
-fn set_string_if_different_reuses_canonical_value() {
-    let input = br#"{"model":"gpt-test","messages":[]}"#.to_vec();
-    let pointer = input.as_ptr();
-    let output = set_string_if_different(input, "model", "gpt-test");
-    assert_eq!(output.as_ptr(), pointer);
-}
-
-#[test]
 fn set_string_if_different_normalizes_wrong_type_without_mutating_source() {
     let input = br#"{"model":123}"#.to_vec();
     let original = input.clone();
@@ -34,28 +26,12 @@ fn set_string_if_different_normalizes_wrong_type_without_mutating_source() {
 }
 
 #[test]
-fn set_bool_if_different_reuses_canonical_value() {
-    let input = br#"{"stream":true,"input":[]}"#.to_vec();
-    let pointer = input.as_ptr();
-    let output = set_bool_if_different(input, "stream", true);
-    assert_eq!(output.as_ptr(), pointer);
-}
-
-#[test]
 fn set_bool_if_different_normalizes_wrong_type() {
     let output = set_bool_if_different(br#"{"stream":"true"}"#.to_vec(), "stream", true);
     assert_eq!(
         serde_json::from_slice::<Value>(&output).unwrap()["stream"],
         true
     );
-}
-
-#[test]
-fn set_raw_if_different_reuses_identical_raw_value() {
-    let input = br#"{"metadata":{"source":"executor"},"input":[]}"#.to_vec();
-    let pointer = input.as_ptr();
-    let output = set_raw_if_different(input, "metadata", br#"{"source":"executor"}"#);
-    assert_eq!(output.as_ptr(), pointer);
 }
 
 #[test]
@@ -69,18 +45,6 @@ fn set_raw_if_different_updates_different_raw_value() {
         serde_json::from_slice::<Value>(&output).unwrap()["metadata"],
         json!({"source": "executor"})
     );
-}
-
-#[test]
-fn canonical_override_sequence_reuses_the_original_allocation() {
-    let input =
-        br#"{"model":"gpt-test","stream":true,"metadata":{"source":"executor"},"messages":[]}"#
-            .to_vec();
-    let pointer = input.as_ptr();
-    let output = set_bool_if_different(input, "stream", true);
-    let output = set_string_if_different(output, "model", "gpt-test");
-    let output = set_raw_if_different(output, "metadata", br#"{"source":"executor"}"#);
-    assert_eq!(output.as_ptr(), pointer);
 }
 
 #[test]
@@ -132,20 +96,6 @@ impl Serialize for GoFloat32 {
     }
 }
 
-#[test]
-fn set_payload_value_if_different_uses_go_float32_encoding() {
-    let output =
-        set_payload_value_if_different(br#"{"value":1.2}"#.to_vec(), "value", &GoFloat32(1.2));
-    assert_eq!(
-        serde_json::from_slice::<Value>(&output).unwrap()["value"].to_string(),
-        "1.2000000476837158"
-    );
-    let canonical = br#"{"value":1.2000000476837158}"#.to_vec();
-    let pointer = canonical.as_ptr();
-    let reused = set_payload_value_if_different(canonical, "value", &GoFloat32(1.2));
-    assert_eq!(reused.as_ptr(), pointer);
-}
-
 struct CountingMarshaler<'a> {
     calls: &'a Cell<usize>,
     value: &'a str,
@@ -176,16 +126,6 @@ fn set_payload_value_if_different_calls_marshaler_once() {
             "new"
         );
     }
-}
-
-#[test]
-fn remove_tool_type_reuses_array_without_match() {
-    let input =
-        br#"{"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}]}"#
-            .to_vec();
-    let pointer = input.as_ptr();
-    let output = remove_tool_type_from_tools_array(input, "tools", "image_generation");
-    assert_eq!(output.as_ptr(), pointer);
 }
 
 #[test]

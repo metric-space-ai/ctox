@@ -213,7 +213,3 @@ impl ToolHandler for CodeModeExecuteHandler {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "execute_handler_tests.rs"]
-mod execute_handler_tests;

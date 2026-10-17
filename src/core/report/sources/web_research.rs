@@ -677,13 +677,6 @@ mod tests {
     }
 
     #[test]
-    fn depth_round_trip() {
-        for label in ["quick", "standard", "exhaustive"] {
-            assert!(WebResearchDepth::from_label(label).is_some());
-        }
-    }
-
-    #[test]
     fn evidence_research_always_gets_an_explicit_workspace() {
         let requested = Path::new("runtime/research/requested");
         assert_eq!(

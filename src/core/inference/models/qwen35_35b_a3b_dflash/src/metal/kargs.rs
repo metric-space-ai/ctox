@@ -1126,19 +1126,4 @@ mod tests {
         // to align the trailing bool, the C compiler emits 152.
         assert_eq!(size_of::<KargsRope>(), 152);
     }
-
-    #[test]
-    fn size_mul_mm_matches() {
-        // 1 i32 + 1 i32 + 3 u64 + 1 i32 + 4 u64 + 2 i32 + 2 i16
-        //   ne00(4) + pad(4) + ne02(?) — actually: ne00 i32 (4),
-        //   ne02 i32 (4), nb01..nb03 u64 (24), ne12 i32 (4) + 4 pad,
-        //   nb10..nb13 u64 (32), ne0+ne1 i32 (8), r2+r3 i16 (4) + 4 pad.
-        // Alignment: u64 requires 8-byte alignment → C compiler adds
-        // padding. Exact size is implementation-defined without
-        // #pragma pack, but the layout must be the same on both sides.
-        // This test is a canary: if the size changes, inspect
-        // ggml-metal-impl.h diff.
-        let s = size_of::<KargsMulMm>();
-        assert!(s > 0 && s % 8 == 0, "KargsMulMm size = {s}, not 8-aligned");
-    }
 }

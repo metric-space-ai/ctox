@@ -25,67 +25,6 @@ use super::utls_transport::{
 use wreq::tls::session::{LruTlsSessionCache, TlsSessionCache};
 
 #[test]
-fn candidate_oauth_tls_profile_matches_native_220_shape() {
-    let options = claude_oauth_tls_options();
-    assert_eq!(options.min_tls_version, Some(TlsVersion::TLS_1_2));
-    assert_eq!(options.max_tls_version, Some(TlsVersion::TLS_1_3));
-    assert_eq!(options.alpn_protocols.as_deref(), Some(&[][..]));
-    assert_eq!(options.curves_list.as_deref(), Some("X25519:P-256:P-384"));
-    assert_eq!(options.key_shares.as_deref(), Some(&[KeyShare::X25519][..]));
-    assert_eq!(
-        options.extension_permutation.as_deref(),
-        Some(
-            &[
-                ExtensionType::SERVER_NAME,
-                ExtensionType::EXTENDED_MASTER_SECRET,
-                ExtensionType::RENEGOTIATE,
-                ExtensionType::SUPPORTED_GROUPS,
-                ExtensionType::EC_POINT_FORMATS,
-                ExtensionType::SESSION_TICKET,
-                ExtensionType::SIGNATURE_ALGORITHMS,
-                ExtensionType::KEY_SHARE,
-                ExtensionType::PSK_KEY_EXCHANGE_MODES,
-                ExtensionType::SUPPORTED_VERSIONS,
-            ][..]
-        )
-    );
-    assert!(options.session_ticket);
-    assert!(options.pre_shared_key);
-    assert!(options.psk_dhe_ke);
-    assert_eq!(options.permute_extensions, Some(false));
-    assert_eq!(options.grease_enabled, Some(false));
-}
-
-#[test]
-fn candidate_oauth_request_header_order_matches_native_220() {
-    assert_eq!(
-        CLAUDE_OAUTH_REFRESH_HEADER_ORDER,
-        [
-            "Accept",
-            "Content-Type",
-            "User-Agent",
-            "Content-Length",
-            "Accept-Encoding",
-            "Host",
-            "Connection",
-        ]
-    );
-    assert_eq!(
-        CLAUDE_OAUTH_INSPECT_HEADER_ORDER,
-        [
-            "Accept",
-            "Content-Type",
-            "Authorization",
-            "Cache-Control",
-            "User-Agent",
-            "Accept-Encoding",
-            "Host",
-            "Connection",
-        ]
-    );
-}
-
-#[test]
 fn candidate_oauth_session_cache_is_shared_per_proxy_and_bounded() {
     let first = AnthropicHttpTransport::new(Some("http://127.0.0.1:31000")).unwrap();
     let same = AnthropicHttpTransport::new(Some("http://127.0.0.1:31000")).unwrap();

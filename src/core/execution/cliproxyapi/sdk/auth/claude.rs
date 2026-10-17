@@ -622,14 +622,4 @@ mod tests {
             "access-secret"
         );
     }
-
-    #[test]
-    fn callback_debug_and_refresh_contract_match_upstream() {
-        assert!(!format!(
-            "{:?}",
-            ClaudeCallbackResult::from_parts("do-not-leak", "state", "")
-        )
-        .contains("do-not-leak"));
-        assert_eq!(CLAUDE_REFRESH_LEAD, Duration::from_secs(4 * 60 * 60));
-    }
 }

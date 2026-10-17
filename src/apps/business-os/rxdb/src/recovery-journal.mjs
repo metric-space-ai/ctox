@@ -234,6 +234,21 @@ export class CtoxRecoveryJournal {
     return record;
   }
 
+  // A refused write that the replication re-applied on the current master as
+  // a fresh local write (native-owned rebase). The new write is journaled as
+  // an ordinary batch; this entry is closed, not deleted, and is reclaimed by
+  // gcConflicts like any resolved entry.
+  async markConflictReplayed(conflictId) {
+    if (!conflictId) return false;
+    const updated = await updateRecord(this.db, CONFLICT_STORE, conflictId, (current) => (
+      current.state === 'pending'
+        ? { ...current, state: 'resolved', resolution: 'replayed_on_master', resolvedAtMs: Date.now() }
+        : null
+    ));
+    await this.publishStatus();
+    return Boolean(updated);
+  }
+
   async listConflicts() {
     return getAllRecords(this.db, CONFLICT_STORE).then((rows) => rows.filter((row) => row.state === 'pending'));
   }

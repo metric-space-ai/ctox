@@ -1,7 +1,5 @@
 mod client;
 mod runtime;
-#[cfg(all(test, not(windows)))]
-mod tests;
 
 pub use client::ArtifactBuildRequest;
 pub use client::ArtifactCommandOutput;

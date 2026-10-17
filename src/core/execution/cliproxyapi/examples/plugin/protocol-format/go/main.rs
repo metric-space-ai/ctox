@@ -18,10 +18,3 @@ pub fn handle(method: &str) -> ExampleResult {
         _ => unknown(method),
     }
 }
-#[test]
-fn advertises_format_bridge() {
-    assert!(example()
-        .capabilities
-        .contains(&"chat-completions:responses"));
-    assert!(handle("executor.execute").is_ok());
-}

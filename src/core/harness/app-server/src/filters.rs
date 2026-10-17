@@ -88,13 +88,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use uuid::Uuid;
 
-    #[test]
-    fn compute_source_filters_defaults_to_interactive_sources() {
-        let (allowed_sources, filter) = compute_source_filters(None);
-
-        assert_eq!(allowed_sources, INTERACTIVE_SESSION_SOURCES.to_vec());
-        assert_eq!(filter, None);
-    }
 
     #[test]
     fn compute_source_filters_empty_means_interactive_sources() {

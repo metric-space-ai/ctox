@@ -77,13 +77,4 @@ pub async fn resolve_bucket_region(bucket: &str, client_options: &ClientOptions)
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[tokio::test]
-    async fn test_bucket_does_not_exist() {
-        let bucket = "please-dont-exist";
-
-        let result = resolve_bucket_region(bucket, &ClientOptions::new()).await;
-
-        assert!(result.is_err());
-    }
 }

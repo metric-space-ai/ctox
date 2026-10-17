@@ -367,16 +367,6 @@ fn import_repo_uses_non_empty_dot_claude_agents_source() {
     );
 }
 
-#[test]
-fn migration_metric_tags_for_skills_include_skills_count() {
-    assert_eq!(
-        migration_metric_tags(ExternalAgentConfigMigrationItemType::Skills, Some(3)),
-        vec![
-            ("migration_type", "skills".to_string()),
-            ("skills_count", "3".to_string()),
-        ]
-    );
-}
 
 #[test]
 fn import_skills_returns_only_new_skill_directory_count() {

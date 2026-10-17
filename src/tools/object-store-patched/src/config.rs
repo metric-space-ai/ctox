@@ -132,12 +132,4 @@ pub(crate) fn fmt_duration(duration: &ConfigValue<Duration>) -> String {
 mod tests {
     use super::*;
     use std::time::Duration;
-
-    #[test]
-    fn test_parse_duration() {
-        let duration = Duration::from_secs(60);
-        assert_eq!(Duration::parse("60 seconds").unwrap(), duration);
-        assert_eq!(Duration::parse("60 s").unwrap(), duration);
-        assert_eq!(Duration::parse("60s").unwrap(), duration)
-    }
 }

@@ -39,7 +39,7 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | drift_copy_divergence | 0 |
 | prefix_mismatch | 2 |
 | class_proposals | 22 |
-| shell_files | 126 |
+| shell_files | 127 |
 | apps_with_styles | 41 |
 | write_guards | 1 |
 | todo_total | 185 |

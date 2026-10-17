@@ -137,6 +137,7 @@ mod store_policy;
 mod store_policy_audit;
 mod store_projections;
 mod store_release_review;
+mod store_secret_request_commands;
 mod store_workjet_computers;
 mod store_workjet_projects;
 mod store_workjet_sessions;

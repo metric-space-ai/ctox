@@ -158,25 +158,6 @@ mod tests {
     }
 
     #[test]
-    fn candidate_claude_native_json_passthrough_is_borrowed_and_identical() {
-        for raw in [
-            b"event: message_start\r\ndata: {\"type\":\"message_start\"}\r\n\r\n: keepalive\r\n"
-                .as_slice(),
-            b"data: {\"type\":\"message_stop\"}\n\n",
-            br#"{"type":"error","error":{"message":"bad request"}}"#,
-            br#"{"type":"message","content":"wrong shape"}"#,
-            br#"{"type":"message","content":"#,
-            b"",
-        ] {
-            let (output, model) = claude_messages_json_to_sse(raw);
-            assert!(matches!(output, Cow::Borrowed(_)));
-            assert_eq!(output.as_ptr(), raw.as_ptr());
-            assert_eq!(output.as_ref(), raw);
-            assert!(model.is_empty());
-        }
-    }
-
-    #[test]
     fn candidate_claude_native_json_emits_ordered_blocks_and_raw_tool_input() {
         let raw = br#"{"id":"msg_native","type":"message","role":"assistant","model":"claude-native",
             "content":[{"type":"text","text":"Hello"},

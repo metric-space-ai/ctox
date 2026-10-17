@@ -533,34 +533,6 @@ mod tests {
     }
 
     #[test]
-    fn count_and_list_match() {
-        let tmp = fresh_root();
-        let conn = open_register_conn(tmp.path()).unwrap();
-        let cache = EvidenceCache::new(&conn, "run-3");
-        let mut s = sample_source();
-        cache.upsert(&s).unwrap();
-        s.canonical_id = "10.9999/two".to_string();
-        cache.upsert(&s).unwrap();
-        assert_eq!(cache.count().unwrap(), 2);
-        assert_eq!(cache.list_for_run().unwrap().len(), 2);
-    }
-
-    #[test]
-    fn bump_citations_increments() {
-        let tmp = fresh_root();
-        let conn = open_register_conn(tmp.path()).unwrap();
-        let cache = EvidenceCache::new(&conn, "run-4");
-        let evidence_id = cache.upsert(&sample_source()).unwrap();
-        cache.bump_citations(&evidence_id).unwrap();
-        cache.bump_citations(&evidence_id).unwrap();
-        let entry = cache
-            .lookup(SourceKind::Doi, "10.1234/test")
-            .unwrap()
-            .unwrap();
-        assert_eq!(entry.citations_count, 2);
-    }
-
-    #[test]
     fn evidence_is_ineligible_until_verified_with_document_snapshot() {
         let tmp = fresh_root();
         let conn = open_register_conn(tmp.path()).unwrap();

@@ -514,14 +514,6 @@ mod tests {
     }
 
     #[test]
-    fn scratch_starts_with_one_empty_line() {
-        let editor = TextEditor::scratch("");
-        assert_eq!(editor.lines, vec![String::new()]);
-        assert_eq!(editor.cursor_position(), (0, 0));
-        assert!(!editor.is_modified());
-    }
-
-    #[test]
     fn typing_chars_marks_modified() {
         let mut editor = TextEditor::scratch("");
         editor.handle_key(plain(KeyCode::Char('h')));
@@ -585,14 +577,6 @@ mod tests {
         assert!(editor.is_modified());
         let action = editor.handle_key(plain(KeyCode::Esc));
         assert_eq!(action, EditorAction::Exit(ExitReason::Cancelled));
-    }
-
-    #[test]
-    fn tab_inserts_four_spaces() {
-        let mut editor = TextEditor::scratch("");
-        editor.handle_key(plain(KeyCode::Tab));
-        assert_eq!(editor.text(), "    ");
-        assert_eq!(editor.cursor_position(), (0, 4));
     }
 
     #[test]

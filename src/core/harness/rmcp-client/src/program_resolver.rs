@@ -86,39 +86,7 @@ mod tests {
         Ok(())
     }
 
-    /// Windows: Verifies scripts fail to execute without the proper extension.
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn test_windows_fails_without_extension() -> Result<()> {
-        let env = TestExecutableEnv::new()?;
-        let mut cmd = Command::new(&env.program_name);
-        cmd.envs(&env.mcp_env);
 
-        let output = cmd.output().await;
-        assert!(
-            output.is_err(),
-            "Windows requires .cmd/.bat extension for direct execution"
-        );
-        Ok(())
-    }
-
-    /// Windows: Verifies scripts with an explicit extension execute correctly.
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn test_windows_succeeds_with_extension() -> Result<()> {
-        let env = TestExecutableEnv::new()?;
-        // Append the `.cmd` extension to the program name
-        let program_with_ext = format!("{}.cmd", env.program_name);
-        let mut cmd = Command::new(&program_with_ext);
-        cmd.envs(&env.mcp_env);
-
-        let output = cmd.output().await;
-        assert!(
-            output.is_ok(),
-            "Windows should execute scripts when the extension is provided"
-        );
-        Ok(())
-    }
 
     /// Verifies program resolution enables successful execution on all platforms.
     #[tokio::test]

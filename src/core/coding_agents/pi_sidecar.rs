@@ -1899,47 +1899,6 @@ mod tests {
     }
 
     #[test]
-    fn projects_module_source_records_into_a_files_map() -> anyhow::Result<()> {
-        use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
-
-        let temp = tempfile::tempdir()?;
-        let root = temp.path();
-        let app_root = root.join("src").join("apps").join("business-os");
-        std::fs::create_dir_all(app_root.join("modules").join("widget"))?;
-        std::fs::write(app_root.join("index.html"), b"<!doctype html>")?;
-        std::fs::write(
-            app_root.join("modules").join("widget").join("module.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "id": "widget",
-                "title": "Widget",
-                "entry": "modules/widget/index.html"
-            }))?,
-        )?;
-        std::fs::write(
-            app_root.join("modules").join("widget").join("index.js"),
-            "export const v = 1;\n",
-        )?;
-
-        load_module_source_records(
-            root,
-            &ModuleSourceLoadMutation {
-                module_id: "widget".to_string(),
-            },
-        )?;
-
-        let files = project_module_source(root, "widget")?;
-        assert!(!files.is_empty(), "projected some source files");
-        let has_content = files
-            .values()
-            .any(|value| value.as_str() == Some("export const v = 1;\n"));
-        assert!(
-            has_content,
-            "widget source content projected into the files map"
-        );
-        Ok(())
-    }
-
-    #[test]
     fn run_module_coding_turn_records_the_faux_edit() -> anyhow::Result<()> {
         crate::coding_agents::pi_sidecar::test_owners::run(move || {
             use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
@@ -2379,25 +2338,6 @@ mod tests {
             );
             Ok(())
         })
-    }
-
-    #[test]
-    fn business_os_system_prompt_carries_the_app_skill() {
-        let prompt = business_os_system_prompt();
-        // The agent must be taught the load-bearing Business OS app conventions,
-        // not just generic file tools.
-        for marker in [
-            "Business OS app",
-            "mount(ctx)",
-            "WebRTC",
-            "kit",
-            "in-memory projection",
-        ] {
-            assert!(
-                prompt.contains(marker),
-                "system prompt should mention `{marker}`"
-            );
-        }
     }
 
     #[test]

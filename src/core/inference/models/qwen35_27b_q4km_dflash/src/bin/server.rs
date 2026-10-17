@@ -155,7 +155,7 @@ fn main() -> Result<()> {
         dflash::DFLASH27B_DRAFT_BLOCK_SIZE
     };
     let mut cache = TargetCache::default();
-    if !create_target_cache(&target, args.max_ctx, mvt_eff, backend, &mut cache) {
+    if !unsafe { create_target_cache(&target, args.max_ctx, mvt_eff, backend, &mut cache) } {
         unsafe { sys::ggml_backend_free(backend) };
         return Err(anyhow!(
             "create_target_cache failed: {}",

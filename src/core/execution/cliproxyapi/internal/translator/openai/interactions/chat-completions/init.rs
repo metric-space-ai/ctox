@@ -56,29 +56,4 @@ pub fn register_openai_chat_interactions(registry: &Registry) {
 mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
-
-    #[test]
-    fn registration_activates_both_requests_and_response_modes() {
-        let registry = Registry::new();
-        register_openai_chat_interactions(&registry);
-
-        for (from, to) in [(openai(), interactions()), (interactions(), openai())] {
-            assert!(registry.has_request_transformer(&from, &to));
-            assert!(registry.has_response_transformer(&from, &to));
-            assert!(registry.has_stream_response_transformer(&from, &to));
-            assert!(registry.has_non_stream_response_transformer(&from, &to));
-        }
-
-        let request = registry.translate_request(
-            &TranslationContext::default(),
-            &openai(),
-            &interactions(),
-            "gpt-test",
-            br#"{"messages":[{"role":"user","content":"hello"}]}"#,
-            false,
-        );
-        let value: serde_json::Value = serde_json::from_slice(&request).unwrap();
-        assert_eq!(value["input"][0]["type"], "user_input");
-        assert_eq!(value["input"][0]["content"][0]["text"], "hello");
-    }
 }

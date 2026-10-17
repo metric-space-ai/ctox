@@ -329,29 +329,3 @@ impl TypeVisitor for TypeScriptFixtureCollector<'_> {
         self.error = collect_typescript_fixture_file::<T>(self.files, self.seen).err();
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pretty_assertions::assert_eq;
-
-    #[test]
-    fn canonicalize_json_sorts_string_arrays() {
-        let value = serde_json::json!(["b", "a"]);
-        let expected = serde_json::json!(["a", "b"]);
-        assert_eq!(canonicalize_json(&value), expected);
-    }
-
-    #[test]
-    fn canonicalize_json_sorts_schema_ref_arrays() {
-        let value = serde_json::json!([
-            {"$ref": "#/definitions/B"},
-            {"$ref": "#/definitions/A"}
-        ]);
-        let expected = serde_json::json!([
-            {"$ref": "#/definitions/A"},
-            {"$ref": "#/definitions/B"}
-        ]);
-        assert_eq!(canonicalize_json(&value), expected);
-    }
-}

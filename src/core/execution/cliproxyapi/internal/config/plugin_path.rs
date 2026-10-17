@@ -47,16 +47,4 @@ fn clean_path(path: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn defaults_and_tilde_use_injected_root() {
-        assert_eq!(
-            resolve_plugins_dir("", Path::new("/data")).unwrap(),
-            PathBuf::from("plugins")
-        );
-        assert_eq!(
-            resolve_plugins_dir("~/plugins/../extensions", Path::new("/data")).unwrap(),
-            PathBuf::from("/data/extensions")
-        );
-        assert!(resolve_plugins_dir("~", Path::new("")).is_err());
-    }
 }

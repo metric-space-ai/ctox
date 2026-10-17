@@ -282,7 +282,7 @@
       }
     },
     "browser_sessions": {
-      "_class_proposal": "heute demand-only (shared/sync.js:3723 isDemandOnlyPullCollection)",
+      "_class_proposal": "heute demand-only (shared/sync.js:3867 isDemandOnlyPullCollection)",
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "_schema_source": "v4/schemas/browser.collections.schema.json",
       "byte_budget": null,
@@ -400,7 +400,7 @@
       }
     },
     "browser_tabs": {
-      "_class_proposal": "heute demand-only (shared/sync.js:3724 isDemandOnlyPullCollection)",
+      "_class_proposal": "heute demand-only (shared/sync.js:3868 isDemandOnlyPullCollection)",
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "_schema_source": "v4/schemas/browser.collections.schema.json",
       "byte_budget": null,

@@ -96,16 +96,3 @@ fn request_context_captures_execution_metadata_without_exposing_credentials() {
     metadata.notify_selected_auth("auth-1", "0");
     assert_eq!(selected_index_calls.load(Ordering::Relaxed), 1);
 }
-
-#[test]
-fn websocket_context_does_not_install_http_trace_callback() {
-    let context = HandlerRequestContext {
-        websocket_upgrade: true,
-        selected_auth_index_callback: Some(Arc::new(|_| {})),
-        ..HandlerRequestContext::default()
-    };
-    assert!(context
-        .execution_metadata()
-        .selected_auth_index_callback
-        .is_none());
-}

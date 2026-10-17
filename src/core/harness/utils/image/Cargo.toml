@@ -14,3 +14,5 @@ ctox-utils-cache = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "rt", "rt-multi-thread", "macros"] }
 
+[dev-dependencies]
+tempfile = { workspace = true }

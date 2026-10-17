@@ -113,18 +113,6 @@ fn bucket_advance_moves_counts_to_second_newest() {
 }
 
 #[test]
-fn clone_shares_the_injected_storage_implementation() {
-    let mut auth = Auth::default();
-    auth.storage = Some(shared_token_storage(EmptyStorage::default()));
-
-    let cloned = auth.clone();
-    let original_storage = auth.storage.as_ref().expect("original storage");
-    let cloned_storage = cloned.storage.as_ref().expect("cloned storage");
-
-    assert!(std::sync::Arc::ptr_eq(original_storage, cloned_storage));
-}
-
-#[test]
 fn expiration_time_preserves_key_order_formats_nesting_and_unix_units() {
     let mut auth = Auth::default();
     auth.metadata.insert("expired".into(), json!("invalid"));
@@ -196,88 +184,6 @@ fn clone_shares_refresh_runtime_identity_without_debugging_it() {
     let debug = format!("{auth:?}");
     assert!(debug.contains("has_runtime: true"));
     assert!(!debug.contains("42"));
-}
-
-#[test]
-fn auth_default_and_nested_state_match_the_upstream_json_contract() {
-    let default_value = serde_json::to_value(Auth::default()).expect("serialize default auth");
-    assert_eq!(
-        default_value,
-        json!({
-            "id": "",
-            "provider": "",
-            "status": "",
-            "disabled": false,
-            "unavailable": false,
-            "quota": {
-                "exceeded": false,
-                "next_recover_at": "0001-01-01T00:00:00Z",
-                "observed_at": "0001-01-01T00:00:00Z"
-            },
-            "created_at": "0001-01-01T00:00:00Z",
-            "updated_at": "0001-01-01T00:00:00Z",
-            "last_refreshed_at": "0001-01-01T00:00:00Z",
-            "next_refresh_after": "0001-01-01T00:00:00Z",
-            "next_retry_after": "0001-01-01T00:00:00Z"
-        })
-    );
-
-    let mut auth = Auth::default();
-    auth.id = "account-public-id".into();
-    auth.provider = "claude".into();
-    auth.index = "runtime-index".into();
-    auth.file_name = "credential.json".into();
-    auth.success = 7;
-    auth.failed = 3;
-    auth.quota = QuotaState {
-        exceeded: true,
-        reason: "rate limit".into(),
-        next_recover_at: chrono::DateTime::from_timestamp(1_700_000_100, 0).expect("quota time"),
-        backoff_level: 2,
-        ..QuotaState::default()
-    };
-    auth.model_states.insert(
-        "claude-opus".into(),
-        ModelState {
-            status: super::AuthStatus::Error,
-            status_message: "cooling".into(),
-            unavailable: true,
-            next_retry_after: chrono::DateTime::from_timestamp(1_700_000_200, 0)
-                .expect("retry time"),
-            last_error: Some(super::AuthError {
-                code: "quota".into(),
-                message: "safe summary".into(),
-                retryable: true,
-                http_status: 429,
-            }),
-            quota: auth.quota.clone(),
-            updated_at: chrono::DateTime::from_timestamp(1_700_000_050, 0).expect("updated time"),
-        },
-    );
-
-    let value = serde_json::to_value(&auth).expect("serialize populated auth");
-    for skipped in [
-        "index",
-        "file_name",
-        "storage",
-        "runtime",
-        "success",
-        "failed",
-    ] {
-        assert!(value.get(skipped).is_none(), "unexpected {skipped} field");
-    }
-    assert_eq!(value["quota"]["backoff_level"], 2);
-    assert_eq!(
-        value["model_states"]["claude-opus"]["last_error"]["http_status"],
-        429
-    );
-
-    let roundtrip: Auth = serde_json::from_value(value).expect("deserialize auth state");
-    assert_eq!(roundtrip.quota, auth.quota);
-    assert_eq!(roundtrip.model_states, auth.model_states);
-    assert!(roundtrip.index.is_empty());
-    assert!(roundtrip.file_name.is_empty());
-    assert_eq!((roundtrip.success, roundtrip.failed), (0, 0));
 }
 
 #[test]

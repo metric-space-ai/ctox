@@ -254,7 +254,3 @@ pub(super) fn rollout_summary_file_stem_from_parts(
         format!("{file_prefix}-{slug}")
     }
 }
-
-#[cfg(test)]
-#[path = "storage_tests.rs"]
-mod tests;

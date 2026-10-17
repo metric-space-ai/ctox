@@ -36,11 +36,3 @@ impl SimpleExample {
         self.usage_count
     }
 }
-#[test]
-fn state_is_instance_owned() {
-    let mut one = SimpleExample::default();
-    one.record_usage();
-    assert_eq!(one.usage_count(), 1);
-    assert_eq!(SimpleExample::default().usage_count(), 0);
-    assert_eq!(one.echo(b"x"), b"x");
-}

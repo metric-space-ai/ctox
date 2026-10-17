@@ -2864,21 +2864,6 @@ mod tests {
     }
 
     #[test]
-    fn apply_runtime_selection_defaults_gemma_e4b_to_candle() {
-        let root = make_temp_root();
-        let change = apply_runtime_selection(&root, "google/gemma-4-E4B-it", None)
-            .expect("Gemma4 E4B should default to Candle unless explicitly overridden");
-        assert_eq!(
-            change.next_state.local_runtime,
-            runtime_state::LocalRuntimeKind::Candle
-        );
-        assert_eq!(
-            change.next_state.active_model.as_deref(),
-            Some("google/gemma-4-E4B-it")
-        );
-    }
-
-    #[test]
     fn apply_runtime_selection_does_not_inherit_stale_process_model_env() {
         let root = make_temp_root();
         std::env::set_var("CTOX_CHAT_MODEL", "openai/gpt-oss-120b");

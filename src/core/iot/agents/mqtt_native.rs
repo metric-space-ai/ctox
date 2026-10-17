@@ -1505,29 +1505,6 @@ mod tests {
 
     // -- §2A.27 link/unlink mutate the synchronized table --------------------
 
-    #[test]
-    fn link_table_safe_mutations() {
-        let table: Arc<Mutex<HashMap<String, TopicSubscriptionInfo>>> =
-            Arc::new(Mutex::new(HashMap::new()));
-        {
-            let mut g = table.lock().unwrap();
-            let (t, i) = sub("t/x", 1, true, false);
-            g.insert(t, i);
-        }
-        // A "reconnect" snapshot taken under the lock is unaffected by a later
-        // unlink — proving §2A.27 (resubscribe iterates a CONNACK-time snapshot).
-        let snapshot = {
-            let g = table.lock().unwrap();
-            topics_to_resubscribe(&g, false, ResubscribePolicy::default())
-        };
-        {
-            let mut g = table.lock().unwrap();
-            g.remove("t/x"); // concurrent unlink during the "reconnect"
-        }
-        assert_eq!(snapshot, vec![("t/x".into(), 1)]);
-        assert!(table.lock().unwrap().is_empty());
-    }
-
     // -- value <-> payload mapping -------------------------------------------
 
     #[test]

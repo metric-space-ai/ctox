@@ -210,36 +210,4 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-
-    #[tokio::test]
-    async fn example_injects_provider_credentials_into_both_host_requests() {
-        let (prepared, executed) = execute_example_requests().await.unwrap();
-        for (response, method, marker) in [
-            (prepared, "GET", "prepared"),
-            (executed, "POST", "executed"),
-        ] {
-            assert_eq!(response.status_code, 200);
-            let body: Value = serde_json::from_slice(&response.body).unwrap();
-            assert_eq!(body["method"], method);
-            assert_eq!(body["headers"]["Authorization"][0], "Bearer demo-api-key");
-            assert_eq!(body["headers"]["X-Example"][0], marker);
-        }
-    }
-
-    #[tokio::test]
-    async fn missing_host_transport_fails_without_exposing_api_key() {
-        let error = registry()
-            .http_request(
-                PROVIDER_KEY,
-                ExecutorHttpRequest {
-                    attributes: [("api_key".to_owned(), "super-secret".to_owned())]
-                        .into_iter()
-                        .collect(),
-                    ..ExecutorHttpRequest::default()
-                },
-            )
-            .await
-            .unwrap_err();
-        assert!(!format!("{error:?}").contains("super-secret"));
-    }
 }

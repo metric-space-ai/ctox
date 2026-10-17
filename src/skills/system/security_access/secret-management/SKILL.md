@@ -86,7 +86,8 @@ ctox secret show --scope "<scope>" --name "<name>"
 Retrieve the raw value only for the bounded local step that truly needs it:
 
 ```sh
-ctox secret get --scope "<scope>" --name "<name>"
+ctox secret get --scope "<scope>" --name "<name>" --reveal   # humans only; refused in agent sessions
+ctox secret exec --env VAR="<scope>/<name>" -- <command>   # agents: use the value without seeing it
 ```
 
 ## Guardrails

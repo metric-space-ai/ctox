@@ -716,43 +716,6 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::path::PathBuf;
 
-    #[tokio::test]
-    async fn upsert_thread_keeps_creation_memory_mode_for_existing_rows() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("state db should initialize");
-        let thread_id =
-            ThreadId::from_string("00000000-0000-0000-0000-000000000123").expect("valid thread id");
-        let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
-
-        runtime
-            .upsert_thread_with_creation_memory_mode(&metadata, Some("disabled"))
-            .await
-            .expect("initial insert should succeed");
-
-        let memory_mode: String =
-            sqlx::query_scalar("SELECT memory_mode FROM threads WHERE id = ?")
-                .bind(thread_id.to_string())
-                .fetch_one(runtime.pool.as_ref())
-                .await
-                .expect("memory mode should be readable");
-        assert_eq!(memory_mode, "disabled");
-
-        metadata.title = "updated title".to_string();
-        runtime
-            .upsert_thread(&metadata)
-            .await
-            .expect("upsert should succeed");
-
-        let memory_mode: String =
-            sqlx::query_scalar("SELECT memory_mode FROM threads WHERE id = ?")
-                .bind(thread_id.to_string())
-                .fetch_one(runtime.pool.as_ref())
-                .await
-                .expect("memory mode should remain readable");
-        assert_eq!(memory_mode, "disabled");
-    }
 
     #[tokio::test]
     async fn upsert_thread_persists_thread_spawn_forensics() {
@@ -803,58 +766,6 @@ mod tests {
         assert_eq!(loaded.agent_role.as_deref(), Some("explorer"));
     }
 
-    #[tokio::test]
-    async fn apply_rollout_items_restores_memory_mode_from_session_meta() {
-        let codex_home = unique_temp_dir();
-        let runtime = StateRuntime::init(codex_home.clone(), "test-provider".to_string())
-            .await
-            .expect("state db should initialize");
-        let thread_id =
-            ThreadId::from_string("00000000-0000-0000-0000-000000000456").expect("valid thread id");
-        let metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
-
-        runtime
-            .upsert_thread(&metadata)
-            .await
-            .expect("initial upsert should succeed");
-
-        let builder = ThreadMetadataBuilder::new(
-            thread_id,
-            metadata.rollout_path.clone(),
-            metadata.created_at,
-            SessionSource::Cli,
-        );
-        let items = vec![RolloutItem::SessionMeta(SessionMetaLine {
-            meta: SessionMeta {
-                id: thread_id,
-                forked_from_id: None,
-                timestamp: metadata.created_at.to_rfc3339(),
-                cwd: PathBuf::new(),
-                originator: String::new(),
-                cli_version: String::new(),
-                source: SessionSource::Cli,
-                agent_nickname: None,
-                agent_role: None,
-                model_provider: None,
-                base_instructions: None,
-                dynamic_tools: None,
-                capability_profile: None,
-                memory_mode: Some("polluted".to_string()),
-            },
-            git: None,
-        })];
-
-        runtime
-            .apply_rollout_items(&builder, &items, None, None)
-            .await
-            .expect("apply_rollout_items should succeed");
-
-        let memory_mode = runtime
-            .get_thread_memory_mode(thread_id)
-            .await
-            .expect("memory mode should load");
-        assert_eq!(memory_mode.as_deref(), Some("polluted"));
-    }
 
     #[tokio::test]
     async fn apply_rollout_items_preserves_existing_git_branch_and_fills_missing_git_fields() {

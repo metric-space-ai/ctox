@@ -86,16 +86,16 @@ fn main() -> Result<()> {
     gctx.realize().map_err(|e| anyhow!(e))?;
     println!("[hybrid] tensors realized on backend");
 
-    gctx.upload_f32(t_x, &h_x).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_w, &h_w).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_bias, &h_bias).map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_x, &h_x) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_w, &h_w) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_bias, &h_bias) }.map_err(|e| anyhow!(e))?;
 
     let stream = CUstream(std::ptr::null_mut());
     let exec = ExecCtx::new(kernels, stream);
 
     // Step 1 — RMSNorm (Rust-native)
-    let rt_x = gctx.as_rust_tensor(t_x);
-    let rt_x1 = gctx.as_rust_tensor(t_x1);
+    let rt_x = unsafe { gctx.as_rust_tensor(t_x) };
+    let rt_x1 = unsafe { gctx.as_rust_tensor(t_x1) };
     rms_norm(&exec, &rt_x, &rt_x1, 1e-6).map_err(|e| anyhow!(e))?;
     // Sync so ggml sees rms_norm's writes before mul_mat reads them.
     unsafe { dflash::cuda_port::driver::cuStreamSynchronize(stream) };
@@ -109,13 +109,13 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow!(e))?;
 
     // Step 3 — add (Rust-native)
-    let rt_mm = gctx.as_rust_tensor(t_mm);
-    let rt_bias = gctx.as_rust_tensor(t_bias);
-    let rt_out = gctx.as_rust_tensor(t_out);
+    let rt_mm = unsafe { gctx.as_rust_tensor(t_mm) };
+    let rt_bias = unsafe { gctx.as_rust_tensor(t_bias) };
+    let rt_out = unsafe { gctx.as_rust_tensor(t_out) };
     add(&exec, &rt_mm, &rt_bias, &rt_out).map_err(|e| anyhow!(e))?;
     unsafe { dflash::cuda_port::driver::cuStreamSynchronize(stream) };
 
-    let h_got = gctx.download_f32(t_out, ny).map_err(|e| anyhow!(e))?;
+    let h_got = unsafe { gctx.download_f32(t_out, ny) }.map_err(|e| anyhow!(e))?;
 
     // ══════════════════════════════════════════════════════════
     // Reference — same chain, all through ggml.
@@ -125,9 +125,9 @@ fn main() -> Result<()> {
     let r_w = gref.new_tensor_f32([n, k, 1, 1], "r_w");
     let r_bias = gref.new_tensor_f32([m, k, 1, 1], "r_bias");
     gref.realize().map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_x, &h_x).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_w, &h_w).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_bias, &h_bias).map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_x, &h_x) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_w, &h_w) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_bias, &h_bias) }.map_err(|e| anyhow!(e))?;
     let r_out = gref
         .compute(|gc| unsafe {
             let n1 = sys::ggml_rms_norm(gc, r_x, 1e-6);
@@ -135,7 +135,7 @@ fn main() -> Result<()> {
             sys::ggml_add(gc, mm, r_bias)
         })
         .map_err(|e| anyhow!(e))?;
-    let h_ref = gref.download_f32(r_out, ny).map_err(|e| anyhow!(e))?;
+    let h_ref = unsafe { gref.download_f32(r_out, ny) }.map_err(|e| anyhow!(e))?;
 
     let mut max_abs = 0.0_f32;
     let mut max_idx = 0usize;

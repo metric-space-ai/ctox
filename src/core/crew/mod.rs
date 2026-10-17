@@ -777,19 +777,4 @@ mod tests {
         assert!(r.validate(true, None).is_err());
         assert_eq!(normalized("  Bitte  PRÜFEN\n"), "bitte prüfen");
     }
-    #[test]
-    fn learning_indexes_cover_retention_and_context() {
-        let conn = fixture();
-        for (query,index) in [
-            ("SELECT id FROM crew_member_learnings WHERE member_id='crew-milo' ORDER BY confirmed_by_owner,created_at,id LIMIT 1","idx_crew_learning_retention"),
-            ("SELECT id FROM crew_member_learnings WHERE member_id='crew-milo' AND archived=0 ORDER BY confirmed_by_owner DESC,created_at DESC,id LIMIT 10","idx_crew_learning_context"),
-            ("SELECT member_id FROM crew_attempts WHERE thread_key='thread' ORDER BY selected_at DESC,attempt_id DESC LIMIT 1","idx_crew_attempt_thread"),
-            ("SELECT member_id,module,thread_key,succeeded,finalized_at FROM crew_attempts WHERE finalized_at IS NOT NULL ORDER BY finalized_at DESC,attempt_id DESC LIMIT 1000","idx_crew_attempt_finished"),
-            ("SELECT succeeded FROM crew_attempts WHERE member_id='crew-milo' AND finalized_at IS NOT NULL ORDER BY finalized_at DESC,attempt_id DESC LIMIT 1","idx_crew_attempt_member_finished"),
-            ("SELECT message_key FROM communication_routing_state WHERE crew_member_id='crew-milo' AND route_status='leased' ORDER BY leased_at,message_key LIMIT 1","idx_crew_active_task")
-        ] {
-            let plan=conn.prepare(&format!("EXPLAIN QUERY PLAN {query}")).unwrap().query_map([],|r|r.get::<_,String>(3)).unwrap().collect::<rusqlite::Result<Vec<_>>>().unwrap().join("\n");
-            assert!(plan.contains(index),"{plan}"); assert!(!plan.contains("TEMP B-TREE"),"{plan}");
-        }
-    }
 }

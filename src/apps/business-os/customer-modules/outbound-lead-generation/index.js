@@ -22,6 +22,8 @@ import { revealDetailIfStacked } from './stacked-detail-reveal.mjs';
 import { doppelteAdapterIds } from './adapter-dedupe.mjs';
 import { optionalKeysForRequiredCheckbox } from './required-field-selection.mjs';
 import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
+import { revealDetailIfStacked } from './stacked-detail-reveal.mjs';
+import { doppelteAdapterIds } from './adapter-dedupe.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
 // Scrape-Registry = OLG-eigene Collections (Strang OLGSCR); dieselben Lese-Sichten wie die Handler.
 import {

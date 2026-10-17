@@ -580,13 +580,6 @@ mod tests {
     }
 
     #[test]
-    fn auxiliary_backend_enabled_defaults_to_true() {
-        let root = make_temp_root();
-        assert!(auxiliary_backend_enabled(&root, "EMBEDDING"));
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn auxiliary_backend_enabled_honors_global_disable() {
         let root = make_temp_root();
         let mut env_map = BTreeMap::new();

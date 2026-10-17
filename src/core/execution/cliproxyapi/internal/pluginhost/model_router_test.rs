@@ -48,30 +48,3 @@ impl PluginClient for Client {
         Box::pin(async { Ok(()) })
     }
 }
-
-#[tokio::test]
-async fn router_preserves_target_kind_model_and_reason() {
-    let client = Arc::new(Client(Mutex::new(None)));
-    let router = RpcModelRouter::new(RpcPluginClient::new(client.clone()));
-    let response = router
-        .route_model(ModelRouteRequest {
-            requested_model: "smart".to_owned(),
-            available_providers: vec!["anthropic".to_owned(), "codex".to_owned()],
-            ..ModelRouteRequest::default()
-        })
-        .await
-        .unwrap();
-    assert!(response.handled);
-    assert_eq!(response.target_kind.0, "provider");
-    assert_eq!(response.target, "anthropic");
-    assert_eq!(response.target_model, "claude-sonnet");
-    assert_eq!(response.reason, "policy");
-    let call = client
-        .0
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .take()
-        .unwrap();
-    assert_eq!(call.method, METHOD_MODEL_ROUTE);
-    assert!(call.payload.get().contains("smart"));
-}

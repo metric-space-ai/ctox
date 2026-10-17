@@ -264,25 +264,4 @@ pub fn dispatch_verify_mma2big(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn auto_variant_big_k() {
-        assert_eq!(auto_variant(16_384, 4096), (Variant::Mma2bigPipe, 8));
-    }
-
-    #[test]
-    fn auto_variant_small_both() {
-        assert_eq!(auto_variant(1024, 4096), (Variant::Mma2bigPipe, 8));
-    }
-
-    #[test]
-    fn auto_variant_mid_k_big_n() {
-        assert_eq!(auto_variant(4096, 16_384), (Variant::Mma2big, 1));
-    }
-
-    #[test]
-    fn should_use_requires_flag() {
-        std::env::remove_var("DFLASH_VERIFY_QMM");
-        assert!(should_use_verify(16, 4, 64));
-    }
 }

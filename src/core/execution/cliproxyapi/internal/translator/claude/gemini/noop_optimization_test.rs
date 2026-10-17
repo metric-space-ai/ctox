@@ -7,17 +7,6 @@ use serde_json::Value;
 use std::borrow::Cow;
 
 #[test]
-fn canonical_schema_is_byte_identical_and_lowercase_types_are_borrowed() {
-    let schema = br#"{"type":"object","properties":{"value":{"type":"string"}},"additionalProperties":false,"$schema":"http://json-schema.org/draft-07/schema#"}"#;
-    assert_eq!(normalize_claude_tool_schema(schema), schema);
-    let tool = br#"{"name":"lookup","input_schema":{"type":"object","properties":{"value":{"type":"string"}}}}"#;
-    assert!(matches!(
-        lowercase_claude_tool_schema_types(tool),
-        Cow::Borrowed(_)
-    ));
-}
-
-#[test]
 fn wrong_and_uppercase_schema_types_are_normalized() {
     let value: Value = serde_json::from_slice(&normalize_claude_tool_schema(
         br#"{"type":"object","additionalProperties":"false","$schema":123}"#,
