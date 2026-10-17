@@ -1351,16 +1351,36 @@ async fn apply_browser_runtime_command_as(
     }
 
     if e44::is_control_response(command_type) {
-        anyhow::ensure!(store::webrtc_capability_allows_collection_permission(
-            root, capability_token, "browser_sessions", BusinessOsPermission::DataWrite),
-            "browser control response requires session write permission");
+        anyhow::ensure!(
+            store::webrtc_capability_allows_collection_permission(
+                root,
+                capability_token,
+                "browser_sessions",
+                BusinessOsPermission::DataWrite
+            ),
+            "browser control response requires session write permission"
+        );
         e44::require_owned_session(&existing_session, &profile_owner)?;
-        if matches!(command_type, "browser.observer.grant" | "browser.observer.revoke") {
-            let observers = e44::update_observers(database, &existing_session, &profile_owner,
-                command_type, &payload).await?;
-            mark_browser_runtime_command_completed(database, document, accepted,
+        if matches!(
+            command_type,
+            "browser.observer.grant" | "browser.observer.revoke"
+        ) {
+            let observers = e44::update_observers(
+                database,
+                &existing_session,
+                &profile_owner,
+                command_type,
+                &payload,
+            )
+            .await?;
+            mark_browser_runtime_command_completed(
+                database,
+                document,
+                accepted,
                 json!({"ok": true, "session_id": session_id,
-                    "allowed_observer_user_ids": observers})).await?;
+                    "allowed_observer_user_ids": observers}),
+            )
+            .await?;
             return Ok(());
         }
     }
@@ -1527,8 +1547,8 @@ async fn apply_browser_runtime_command_as(
 
     // Resolve/authorize sensitive inputs before any runner is started. Only native
     // secret values and verified file bytes cross into the private runtime channel.
-    let control_response = e44::prepare_response(root, capability_token, command_id,
-        command_type, &payload)?;
+    let control_response =
+        e44::prepare_response(root, capability_token, command_id, command_type, &payload)?;
 
     let credential_fill = if command_type == "browser.credential.fill" {
         anyhow::ensure!(existing_session.is_object(), "browser session not found");
@@ -1713,71 +1733,73 @@ async fn apply_browser_runtime_command_as(
     // Translate the lifecycle command into a runtime operation.
     let (op, op_params): (&str, Value) = if let Some(response) = control_response {
         response
-    } else { match command_type {
-        "browser.navigate" | "browser.session.start" | "browser.reset" => {
-            ("navigate", json!({ "url": target_url, "timeoutMs": 30000 }))
-        }
-        "browser.reload" => ("reload", json!({ "timeoutMs": 30000 })),
-        "browser.back" => ("back", json!({ "timeoutMs": 30000 })),
-        "browser.forward" => ("forward", json!({ "timeoutMs": 30000 })),
-        // The runner has carried tab_open/tab_activate/tab_close all along;
-        // only the bridge was missing, so the "new tab" button in the UI wrote
-        // a command nothing consumed. `tab_id` comes from the command payload,
-        // which is what lets the caller address a specific tab.
-        "browser.tab.open" => (
-            "tab_open",
-            json!({ "tabId": tab_id, "url": target_url, "timeoutMs": 30000 }),
-        ),
-        "browser.tab.activate" => ("tab_activate", json!({ "tabId": tab_id })),
-        "browser.tab.close" => ("tab_close", json!({ "tabId": tab_id })),
-        // Ein offener Seitendialog blockiert die ferne Seite vollstaendig --
-        // ohne diese Bruecke war der Antwortknopf wirkungslos und die Sitzung
-        // stand, bis jemand sie neu startete.
-        "browser.dialog.respond" => (
-            "dialog_respond",
-            json!({
-                "accept": payload.get("accept").and_then(Value::as_bool).unwrap_or(false),
-                "value": payload.get("value").cloned().unwrap_or(Value::Null),
-            }),
-        ),
-        "browser.permission.respond" => (
-            "permission_respond",
-            json!({
-                "accept": payload.get("accept").and_then(Value::as_bool).unwrap_or(false),
-            }),
-        ),
-        // Zwischenablage. Der kopierte Text bleibt im Arbeitsspeicher der
-        // Sitzung (`LiveBrowserSession::clipboard`, mit Verfall) und wird
-        // bewusst NICHT in RxDB projiziert: Was jemand im fernen Browser
-        // kopiert, kann eine Zugangskennung sein, und replizierte Dokumente
-        // liegen auf jedem Peer. Der Speicher war fertig gebaut, nur nie
-        // angeschlossen -- die drei Knoepfe schrieben Befehle, die niemand las.
-        "browser.clipboard.copy" => ("clipboard_copy", json!({})),
-        "browser.clipboard.paste" => (
-            "clipboard_paste",
-            json!({ "value": session.clipboard().unwrap_or_default() }),
-        ),
-        "browser.clipboard.clear" => {
-            session.clear_clipboard();
-            // Kein Runner-Aufruf noetig; nav_state haelt die Antwortform gleich.
-            ("nav_state", json!({}))
-        }
-        "browser.credential.fill" => {
-            let fill = credential_fill
-                .as_ref()
-                .context("credential fill was not resolved")?;
-            (
-                "credential_fill",
+    } else {
+        match command_type {
+            "browser.navigate" | "browser.session.start" | "browser.reset" => {
+                ("navigate", json!({ "url": target_url, "timeoutMs": 30000 }))
+            }
+            "browser.reload" => ("reload", json!({ "timeoutMs": 30000 })),
+            "browser.back" => ("back", json!({ "timeoutMs": 30000 })),
+            "browser.forward" => ("forward", json!({ "timeoutMs": 30000 })),
+            // The runner has carried tab_open/tab_activate/tab_close all along;
+            // only the bridge was missing, so the "new tab" button in the UI wrote
+            // a command nothing consumed. `tab_id` comes from the command payload,
+            // which is what lets the caller address a specific tab.
+            "browser.tab.open" => (
+                "tab_open",
+                json!({ "tabId": tab_id, "url": target_url, "timeoutMs": 30000 }),
+            ),
+            "browser.tab.activate" => ("tab_activate", json!({ "tabId": tab_id })),
+            "browser.tab.close" => ("tab_close", json!({ "tabId": tab_id })),
+            // Ein offener Seitendialog blockiert die ferne Seite vollstaendig --
+            // ohne diese Bruecke war der Antwortknopf wirkungslos und die Sitzung
+            // stand, bis jemand sie neu startete.
+            "browser.dialog.respond" => (
+                "dialog_respond",
                 json!({
-                    "selector": fill.selector,
-                    "fieldRole": fill.field_role,
-                    "usernameValue": fill.username,
-                    "passwordValue": fill.password,
+                    "accept": payload.get("accept").and_then(Value::as_bool).unwrap_or(false),
+                    "value": payload.get("value").cloned().unwrap_or(Value::Null),
                 }),
-            )
+            ),
+            "browser.permission.respond" => (
+                "permission_respond",
+                json!({
+                    "accept": payload.get("accept").and_then(Value::as_bool).unwrap_or(false),
+                }),
+            ),
+            // Zwischenablage. Der kopierte Text bleibt im Arbeitsspeicher der
+            // Sitzung (`LiveBrowserSession::clipboard`, mit Verfall) und wird
+            // bewusst NICHT in RxDB projiziert: Was jemand im fernen Browser
+            // kopiert, kann eine Zugangskennung sein, und replizierte Dokumente
+            // liegen auf jedem Peer. Der Speicher war fertig gebaut, nur nie
+            // angeschlossen -- die drei Knoepfe schrieben Befehle, die niemand las.
+            "browser.clipboard.copy" => ("clipboard_copy", json!({})),
+            "browser.clipboard.paste" => (
+                "clipboard_paste",
+                json!({ "value": session.clipboard().unwrap_or_default() }),
+            ),
+            "browser.clipboard.clear" => {
+                session.clear_clipboard();
+                // Kein Runner-Aufruf noetig; nav_state haelt die Antwortform gleich.
+                ("nav_state", json!({}))
+            }
+            "browser.credential.fill" => {
+                let fill = credential_fill
+                    .as_ref()
+                    .context("credential fill was not resolved")?;
+                (
+                    "credential_fill",
+                    json!({
+                        "selector": fill.selector,
+                        "fieldRole": fill.field_role,
+                        "usernameValue": fill.username,
+                        "passwordValue": fill.password,
+                    }),
+                )
+            }
+            _ => ("nav_state", json!({})),
         }
-        _ => ("nav_state", json!({})),
-    }};
+    };
 
     let op_result = match manager.request(&session, op, op_params).await {
         Ok(value) => value,
@@ -1814,8 +1836,10 @@ async fn apply_browser_runtime_command_as(
     };
 
     if e44::is_control_response(command_type) {
-        anyhow::ensure!(op_result.get("ok").and_then(Value::as_bool) == Some(true),
-            "browser control response failed");
+        anyhow::ensure!(
+            op_result.get("ok").and_then(Value::as_bool) == Some(true),
+            "browser control response failed"
+        );
     }
 
     // Was der ferne Browser als Auswahl meldet, wird hier zur Zwischenablage
