@@ -129,6 +129,7 @@ def setup(config, delegated=False):
         if c.get('dressSmoke'):
             dropin = unit_dir / 'ctox.service.d'
             dropin.mkdir(mode=0o700, exist_ok=True)
+            os.chown(dropin, c['uid'], c['gid'])
             (dropin / 'm7-evidence.conf').write_text('[Service]\nStandardOutput=append:' + str(out / 'native-service.log') + '\nStandardError=append:' + str(out / 'native-service.log') + '\n')
         (unit_dir / 'm7-home-probe.service').write_text('[Service]\nType=oneshot\nWorkingDirectory=%h\nExecStart=/usr/bin/true\n')
         subprocess.run(prefix + ['systemctl', '--user', 'daemon-reload'], env=env, capture_output=True, timeout=5, check=True)

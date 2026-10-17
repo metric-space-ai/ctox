@@ -31,10 +31,18 @@ if(!dry){
 }else if(tag)throw Error('Candidate dry-run cannot claim a signed main slot');
 const verified=spawnSync('python3',['-c',"import importlib.util,json,sys;s=importlib.util.spec_from_file_location('release','tests/sync-v4/k11/m7-release.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m);print(json.dumps(m.verify_package(json.load(open(sys.argv[1])))))",release],{encoding:'utf8',timeout:180000});if(verified.status!==0)throw Error('Native release inventory/content verification failed: '+verified.stderr);
 const config=join(out,'signed-smoke.json');fs.writeFileSync(config,JSON.stringify({mainSha:mainSha||artifact.revision,version,releaseTag:tag||null,candidateDryRun:dry}),{mode:0o600});
+// Host policy selects only the existing isolated setup, never host services.
+let namespaceMode=opt('namespace-mode')||process.env.M7_NAMESPACE_MODE||'auto';
+if(namespaceMode==='auto'){
+ const policy='/proc/sys/kernel/apparmor_restrict_unprivileged_userns';
+ const restricted=fs.existsSync(policy)&&fs.readFileSync(policy,'utf8').trim()==='1';
+ namespaceMode=restricted&&spawnSync('sudo',['-n','true'],{stdio:'ignore',timeout:3000}).status===0?'privileged':'unprivileged';
+}
+if(!['privileged','unprivileged'].includes(namespaceMode))throw Error('Unknown private namespace setup mode');
 const log=fs.openSync(join(out,'driver.log'),'w',0o600),at=Date.now();
-const child=spawnSync(process.execPath,[new URL('./installer-smoke.mjs',import.meta.url).pathname,old,release,join(out,'rehearsal'),'yes',config],{stdio:['ignore',log,log],timeout:12*60*1000});fs.closeSync(log);
+const child=spawnSync(process.execPath,[new URL('./installer-smoke.mjs',import.meta.url).pathname,old,release,join(out,'rehearsal'),'yes',config],{stdio:['ignore',log,log],timeout:12*60*1000,env:{...process.env,M7_NAMESPACE_MODE:namespaceMode}});fs.closeSync(log);
 const resultFile=join(out,'rehearsal/result.json'),record=fs.existsSync(resultFile)?JSON.parse(fs.readFileSync(resultFile)):{};
-const result={schema:'ctox.m7.signed-dress.v1',startedAtMs:at,terminal:true,candidateDryRun:dry,mainSha:mainSha||artifact.revision,releaseTag:tag||null,controllerExit:child.status,controllerError:child.error?.message,durationMs:Date.now()-at,installerExecuted:record.installer?.installerExecuted===true,completedInstallerTransition:record.installerExecuted===true,roundtripExecuted:record.roundtripExecuted===true,dataPreserved:record.dataPreserved===true,afterUpdate:record.installer?.signedSmoke,afterForward:record.installer?.forward?.signedSmoke,installerFailure:record.error||record.failure?.error,installerFailureDetail:record.installer?.calls?.findLast(call=>call.code!==0)?.failure};
+const result={schema:'ctox.m7.signed-dress.v1',startedAtMs:at,terminal:true,candidateDryRun:dry,namespaceMode,mainSha:mainSha||artifact.revision,releaseTag:tag||null,controllerExit:child.status,controllerError:child.error?.message,durationMs:Date.now()-at,installerExecuted:record.installer?.installerExecuted===true,completedInstallerTransition:record.installerExecuted===true,roundtripExecuted:record.roundtripExecuted===true,dataPreserved:record.dataPreserved===true,afterUpdate:record.installer?.signedSmoke,afterForward:record.installer?.forward?.signedSmoke,installerFailure:record.error||record.failure?.error,installerFailureDetail:record.installer?.calls?.findLast(call=>call.code!==0)?.failure};
 result.pass=!dry&&child.status===0&&result.installerExecuted&&result.roundtripExecuted&&result.dataPreserved&&result.afterUpdate?.pass===true&&result.afterForward?.pass===true;
 result.preparationPass=child.status===0&&result.installerExecuted&&result.roundtripExecuted&&result.dataPreserved;
 fs.writeFileSync(join(out,'result.json'),JSON.stringify(result,null,2),{mode:0o600});
