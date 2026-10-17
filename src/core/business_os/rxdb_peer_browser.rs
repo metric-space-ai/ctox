@@ -3204,7 +3204,7 @@ async fn gc_settled_business_commands(database: &Arc<RxDatabase>) -> anyhow::Res
     let settled = commands
         .find(Some(MangoQuery {
             selector: Some(json!({
-                "status": { "$in": ["completed", "failed", "cancelled", "canceled", "blocked"] },
+                "status": { "$in": ["done", "rejected", "completed", "failed", "cancelled", "canceled", "blocked"] },
                 "updated_at_ms": { "$lt": cutoff }
             })),
             // Without this sort the query ordered by (status, id), SQLite took
@@ -4384,17 +4384,22 @@ mod tests {
             .expect("business_commands collection");
         let recent = now_ms() as u64;
         for (id, status, updated_at_ms) in [
-            ("old_completed", "completed", 1_u64),
+            ("old_completed", "done", 1_u64),
             ("old_failed", "failed", 2_u64),
+            ("old_rejected", "rejected", 2_u64),
             ("old_running", "running", 1_u64),
-            ("recent_completed", "completed", recent),
+            ("recent_completed", "done", recent),
         ] {
             commands
                 .incremental_upsert(json!({
                     "id": id,
                     "command_id": id,
                     "module": "ctox",
-                    "command_type": "ctox.test",
+                    "type": "ctox.test",
+                    "app_id": "browser-gc-fixture",
+                    "actor_id": "fixture-owner",
+                    "created_at": chrono::DateTime::from_timestamp_millis(updated_at_ms as i64)
+                        .expect("valid fixture timestamp").to_rfc3339(),
                     "status": status,
                     "created_at_ms": updated_at_ms,
                     "updated_at_ms": updated_at_ms,
@@ -4408,7 +4413,7 @@ mod tests {
             .await
             .expect("collect settled business commands");
 
-        assert_eq!(removed, 2);
+        assert_eq!(removed, 3);
         let remaining = commands
             .find(None)
             .expect("query remaining commands")
