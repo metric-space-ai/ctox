@@ -22,7 +22,12 @@ export async function performDressSmoke({config,root,output,env,cli,quiesce,phas
     if(config.slotSha256&&manifest.artifact.sha256!==config.slotSha256)throw Error('Signed slot archive checksum differs from pinned official asset');
     const active=await cli(['business-os','shell-update','activate'],{allowFailure:true});
     result.signedSlot.activateExit=active.code;result.signedSlot.status=active.code===0?'pass':'fail';
-    if(active.code===0)expectedRoot=join(slot,'v4/index.html');
+    if(active.code===0){
+     const read=await cli(['business-os','shell-update','status'],{allowFailure:true});let state;try{const text=fs.readFileSync(read.log,'utf8');state=JSON.parse(text.slice(text.indexOf('{'),text.lastIndexOf('}')+1));}catch{}
+     result.signedSlot.statusReadback={exit:read.code,activeVersion:state?.activeVersion,currentSlot:state?.currentSlot,recoveryShell:state?.recoveryShell,phase:state?.phase};
+     if(read.code!==0||state?.activeVersion!==config.version||!state?.currentSlot||state?.recoveryShell!==false){result.signedSlot.status='fail';throw Error('Activated signed slot status readback does not match');}
+     expectedRoot=join(slot,'v4/index.html');
+    }
    }
   }
   // HttpSurface chooses its immutable asset root at startup. Restart only this

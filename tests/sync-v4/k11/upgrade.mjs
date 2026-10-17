@@ -171,7 +171,7 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
    if(final.phase!=='completed'||finalCurrent!==join(releases,release)||hash(fs.readFileSync(join(finalCurrent,'bin/ctox')))!==after.binarySha256)throw Error('Forward re-install did not restore the verified candidate');
    record.forward={startedAtMs:forwardAt,durationMs:Date.now()-forwardAt,binarySha256:after.binarySha256,phase:final.phase};
    const serviceCall=await cli(['status'],{allowFailure:true});
-   const statusText=fs.readFileSync(serviceCall.log,'utf8');let serviceStatus;try{serviceStatus=JSON.parse(statusText);}catch{}
+   const statusText=fs.readFileSync(serviceCall.log,'utf8');let serviceStatus;try{serviceStatus=JSON.parse(statusText.slice(statusText.indexOf('{'),statusText.lastIndexOf('}')+1));}catch{}
    record.forward.serviceStatus={exit:serviceCall.code,running:serviceStatus?.running===true,manager:serviceStatus?.manager,evidence:serviceCall.log,measuredAtMs:Date.now()};
    if(serviceCall.code!==0||serviceStatus?.running!==true)throw Error('Installed forward service status is not running');
    quiesce();record.forward.dataReadback=readback('forward');

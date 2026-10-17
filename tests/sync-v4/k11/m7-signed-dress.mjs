@@ -27,9 +27,20 @@ if(!artifact.package||!artifact.packageSha256||!artifact.reference?.includes('re
 let version=null;
 if(!dry){
  if(!/^[a-f0-9]{40}$/.test(mainSha||'')||artifact.revision!==mainSha)throw Error('Main artifact exact source required');
- const mainRef=['refs/remotes/origin/main','refs/heads/main'].find(ref=>spawnSync('git',['rev-parse','--verify',ref],{stdio:'ignore'}).status===0);
+ // Lane mirrors can have an old local main while the pinned candidate object
+ // is current. Witness the official main ref without mutating shared refs.
+ const official='https://github.com/metric-space-ai/ctox.git';
+ const witness=spawnSync('git',['ls-remote','--exit-code',official,'refs/heads/main'],{encoding:'utf8',timeout:30000});
+ const mainRef=/^([a-f0-9]{40})\s+refs\/heads\/main$/m.exec(witness.stdout||'')?.[1];
+ if(witness.status!==0||!mainRef)throw Error('Cannot witness official main source');
+ if(spawnSync('git',['cat-file','-e',mainRef+'^{commit}'],{stdio:'ignore'}).status!==0){
+  const fetch=spawnSync('git',['fetch','--no-write-fetch-head','--filter=blob:none',official,mainRef],{stdio:'ignore',timeout:90000});
+  if(fetch.status!==0)throw Error('Cannot obtain witnessed main ancestry objects');
+ }
+ fs.writeFileSync(join(out,'main-source-witness.json'),JSON.stringify({observedAtMs:Date.now(),repository:official,officialMainSha:mainRef,sharedRefsChanged:false,slotSource:slotSource||mainSha},null,2),{mode:0o600});
  if(!mainRef||(!candidateSigned&&spawnSync('git',['merge-base','--is-ancestor',mainSha,mainRef],{stdio:'ignore'}).status!==0))throw Error('Given native source is not on the canonical fetched main ref');
  if(candidateSigned&&(!/^[a-f0-9]{40}$/.test(slotSource||'')||spawnSync('git',['merge-base','--is-ancestor',slotSource,mainRef],{stdio:'ignore'}).status!==0||!/^[a-f0-9]{64}$/.test(slotSha||'')))throw Error('Candidate requires an explicit signed-main slot source and checksum');
+ if(!candidateSigned&&slotSource&&slotSource!==mainSha)throw Error('Independent slot source requires explicit private candidate mode');
  version=/^business-os-shell-v(0\.2\.0-beta\.\d+)$/.exec(tag||'')?.[1];if(!version)throw Error('Real signed0.2.0-beta.N release tag required');
 }else if(tag)throw Error('Candidate dry-run cannot claim a signed main slot');
 const verified=spawnSync('python3',['-c',"import importlib.util,json,sys;s=importlib.util.spec_from_file_location('release','tests/sync-v4/k11/m7-release.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m);print(json.dumps(m.verify_package(json.load(open(sys.argv[1])))))",release],{encoding:'utf8',timeout:180000});if(verified.status!==0)throw Error('Native release inventory/content verification failed: '+verified.stderr);
