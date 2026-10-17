@@ -182,21 +182,23 @@ fn wrong_peer_scope_and_revoked_actor_cannot_reuse_stream() -> anyhow::Result<()
         Ok(())
     })
 }
-#[tokio::test]
-async fn duplicate_pcm_is_idempotent_and_conflicting_sequence_is_terminal() -> anyhow::Result<()> {
-    let (_root, registry, s, id, server) = fixture().await?;
-    for _ in 0..2 {
+#[test]
+fn duplicate_pcm_is_idempotent_and_conflicting_sequence_is_terminal() -> anyhow::Result<()> {
+    crate::persistence::test_support::run_scoped_async(move || async move {
+        let (_root, registry, s, id, server) = fixture().await?;
+        for _ in 0..2 {
+            let mut w = req(&s, &id, "write");
+            w.sequence = Some(1);
+            w.pcm_base64 = Some(STANDARD.encode([0; 640]));
+            call(&registry, &s, w).await?;
+        }
         let mut w = req(&s, &id, "write");
         w.sequence = Some(1);
-        w.pcm_base64 = Some(STANDARD.encode([0; 640]));
-        call(&registry, &s, w).await?;
-    }
-    let mut w = req(&s, &id, "write");
-    w.sequence = Some(1);
-    w.pcm_base64 = Some(STANDARD.encode([1; 640]));
-    assert!(call(&registry, &s, w).await.is_err());
-    drop(registry);
-    drop(s);
-    server.abort();
-    Ok(())
+        w.pcm_base64 = Some(STANDARD.encode([1; 640]));
+        assert!(call(&registry, &s, w).await.is_err());
+        drop(registry);
+        drop(s);
+        server.abort();
+        Ok(())
+    })
 }

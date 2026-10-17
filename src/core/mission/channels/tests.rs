@@ -1950,79 +1950,80 @@ fn terminal_command_orphaned_queue_lease_settles_to_terminal_route() {
 
 #[test]
 fn failed_app_create_command_can_retry_with_same_command_and_queue_ids() {
-    let root = std::env::temp_dir().join(format!(
-        "ctox-app-create-terminal-retry-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    fs::create_dir_all(&root).expect("failed to create temp test root");
-    let created = create_queue_task(
-        &root,
-        QueueTaskCreateRequest {
-            title: "retry app import".to_string(),
-            prompt: "Retry the immutable app import.".to_string(),
-            thread_key: "queue/app-create-terminal-retry".to_string(),
-            workspace_root: None,
-            priority: "normal".to_string(),
-            suggested_skill: Some("business-os-app-module-development".to_string()),
-            parent_message_key: None,
-            extra_metadata: None,
-        },
-    )
-    .expect("failed to create queue task");
-    update_queue_task(
-        &root,
-        QueueTaskUpdateRequest {
-            message_key: created.message_key.clone(),
-            route_status: Some("failed".to_string()),
-            status_note: Some("model API unavailable".to_string()),
-            ..Default::default()
-        },
-    )
-    .expect("failed to terminalize app queue task");
-    let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open channel db");
-    conn.execute(
-        "INSERT INTO business_command_aggregates (
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            fs::create_dir_all(&root).expect("failed to create temp test root");
+            let created = create_queue_task(
+                &root,
+                QueueTaskCreateRequest {
+                    title: "retry app import".to_string(),
+                    prompt: "Retry the immutable app import.".to_string(),
+                    thread_key: "queue/app-create-terminal-retry".to_string(),
+                    workspace_root: None,
+                    priority: "normal".to_string(),
+                    suggested_skill: Some("business-os-app-module-development".to_string()),
+                    parent_message_key: None,
+                    extra_metadata: None,
+                },
+            )
+            .expect("failed to create queue task");
+            update_queue_task(
+                &root,
+                QueueTaskUpdateRequest {
+                    message_key: created.message_key.clone(),
+                    route_status: Some("failed".to_string()),
+                    status_note: Some("model API unavailable".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("failed to terminalize app queue task");
+            let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open channel db");
+            conn.execute(
+                "INSERT INTO business_command_aggregates (
             command_id, idempotency_key, payload_hash, module, command_type,
             execution_mode, execution_phase, terminal_status, projection_version,
             intent_json, error_code, error_message, created_at_ms, updated_at_ms
          ) VALUES (?1, ?2, 'hash', 'importer', 'ctox.business_os.app.create',
                    'queue', 'terminal', 'failed', 4, '{}', 'runtime_api',
                    'model API unavailable', 1, 1)",
-        params!["cmd-app-retry-1", "idem-app-retry-1"],
-    )
-    .expect("seed terminal app command aggregate");
-    conn.execute(
-        "INSERT INTO business_command_task_links (command_id, task_id, created_at_ms)
+                params!["cmd-app-retry-1", "idem-app-retry-1"],
+            )
+            .expect("seed terminal app command aggregate");
+            conn.execute(
+                "INSERT INTO business_command_task_links (command_id, task_id, created_at_ms)
          VALUES (?1, ?2, 1)",
-        params!["cmd-app-retry-1", created.message_key],
-    )
-    .expect("link app command to queue task");
-    drop(conn);
+                params!["cmd-app-retry-1", created.message_key],
+            )
+            .expect("link app command to queue task");
+            drop(conn);
 
-    let retried = retry_failed_app_create_business_command(&root, "cmd-app-retry-1")
-        .expect("retry failed app-create command");
-    assert_eq!(retried["command_id"], "cmd-app-retry-1");
-    assert_eq!(retried["task_id"], created.message_key);
-    assert_eq!(retried["status"], "queued");
-    let task = load_queue_task(&root, &created.message_key)
-        .expect("load retried queue task")
-        .expect("retried queue task exists");
-    assert_eq!(task.route_status, "pending");
-    assert!(task.lease_owner.is_none());
-    let inspected = inspect_business_command(&root, "cmd-app-retry-1")
-        .expect("inspect retried app command")
-        .expect("retried app command exists");
-    assert_eq!(inspected["command"]["execution_phase"], "queued");
-    assert_eq!(inspected["command"]["terminal_status"], "none");
-    assert_eq!(inspected["command"]["projection_version"], 5);
+            let retried = retry_failed_app_create_business_command(&root, "cmd-app-retry-1")
+                .expect("retry failed app-create command");
+            assert_eq!(retried["command_id"], "cmd-app-retry-1");
+            assert_eq!(retried["task_id"], created.message_key);
+            assert_eq!(retried["status"], "queued");
+            let task = load_queue_task(&root, &created.message_key)
+                .expect("load retried queue task")
+                .expect("retried queue task exists");
+            assert_eq!(task.route_status, "pending");
+            assert!(task.lease_owner.is_none());
+            let inspected = inspect_business_command(&root, "cmd-app-retry-1")
+                .expect("inspect retried app command")
+                .expect("retried app command exists");
+            assert_eq!(inspected["command"]["execution_phase"], "queued");
+            assert_eq!(inspected["command"]["terminal_status"], "none");
+            assert_eq!(inspected["command"]["projection_version"], 5);
 
-    let second = retry_failed_app_create_business_command(&root, "cmd-app-retry-1")
-        .expect_err("queued app command must not be retried twice");
-    assert!(second.to_string().contains("not a terminal failed"));
-    let _ = fs::remove_dir_all(&root);
+            let second = retry_failed_app_create_business_command(&root, "cmd-app-retry-1")
+                .expect_err("queued app command must not be retried twice");
+            assert!(second.to_string().contains("not a terminal failed"));
+
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 #[test]
@@ -2257,216 +2258,233 @@ fn typed_holds_block_on_wait_ref_and_budget_technical_retries() {
 
 #[test]
 fn attempt_bound_hold_and_failed_ack_do_not_rewrite_on_resume() -> Result<()> {
-    let root = tempfile::tempdir()?;
-    fs::create_dir_all(root.path().join("runtime"))?;
-    let db_path = resolve_db_path(root.path(), None);
-    let engine =
-        crate::context::lcm::LcmEngine::open(&db_path, crate::context::lcm::LcmConfig::default())?;
+    crate::persistence::test_support::run_scoped(move || {
+        let root = crate::persistence::test_support::scoped_tempdir()?;
+        let queue_root = root.path().to_owned();
+        crate::persistence::test_support::with_queue(&queue_root, move || {
+            fs::create_dir_all(root.path().join("runtime"))?;
+            let db_path = resolve_db_path(root.path(), None);
 
-    let held = create_queue_task(
-        root.path(),
-        QueueTaskCreateRequest {
-            title: "attempt-bound hold".to_string(),
-            prompt: "Hold once across finalization resume.".to_string(),
-            thread_key: "queue/attempt-hold".to_string(),
-            workspace_root: None,
-            priority: "normal".to_string(),
-            suggested_skill: None,
-            parent_message_key: None,
-            extra_metadata: None,
-        },
-    )?;
-    lease_queue_task(root.path(), &held.message_key, "ctox-test")?;
-    engine.begin_worker_attempt_finalization(
-        crate::context::lcm::WorkerAttemptFinalizationInput {
-            attempt_id: "attempt-hold-once",
-            work_key: "queue:attempt-hold-once",
-            conversation_id: 7201,
-            source_label: "queue-test",
-            agent_outcome: crate::context::lcm::AgentOutcome::Success,
-            reply_text: "held",
-            error_text: None,
-        },
-    )?;
-    assert_eq!(
-        hold_leased_messages_for_attempt(
-            root.path(),
-            "attempt-hold-once",
-            std::slice::from_ref(&held.message_key),
-            &HoldReason::MissingArtifact,
-            "artifact is still missing",
-        )?,
-        1
-    );
-    let held_once: (i64, String, Option<String>) = open_channel_db(&db_path)?.query_row(
-        "SELECT failure_attempt_count, updated_at, retry_not_before
+            let held = create_queue_task(
+                root.path(),
+                QueueTaskCreateRequest {
+                    title: "attempt-bound hold".to_string(),
+                    prompt: "Hold once across finalization resume.".to_string(),
+                    thread_key: "queue/attempt-hold".to_string(),
+                    workspace_root: None,
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: None,
+                },
+            )?;
+            lease_queue_task(root.path(), &held.message_key, "ctox-test")?;
+            crate::lcm::run_begin_worker_attempt_finalization(
+                &db_path,
+                crate::context::lcm::WorkerAttemptFinalizationInput {
+                    attempt_id: "attempt-hold-once",
+                    work_key: "queue:attempt-hold-once",
+                    conversation_id: 7201,
+                    source_label: "queue-test",
+                    agent_outcome: crate::context::lcm::AgentOutcome::Success,
+                    reply_text: "held",
+                    error_text: None,
+                },
+            )?;
+            assert_eq!(
+                hold_leased_messages_for_attempt(
+                    root.path(),
+                    "attempt-hold-once",
+                    std::slice::from_ref(&held.message_key),
+                    &HoldReason::MissingArtifact,
+                    "artifact is still missing",
+                )?,
+                1
+            );
+            let held_once: (i64, String, Option<String>) = open_channel_db(&db_path)?.query_row(
+                "SELECT failure_attempt_count, updated_at, retry_not_before
          FROM communication_routing_state WHERE message_key = ?1",
-        [held.message_key.as_str()],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    )?;
-    thread::sleep(std::time::Duration::from_millis(2));
-    assert_eq!(
-        hold_leased_messages_for_attempt(
-            root.path(),
-            "attempt-hold-once",
-            std::slice::from_ref(&held.message_key),
-            &HoldReason::MissingArtifact,
-            "artifact is still missing",
-        )?,
-        0
-    );
-    let held_after_resume: (i64, String, Option<String>) = open_channel_db(&db_path)?.query_row(
-        "SELECT failure_attempt_count, updated_at, retry_not_before
+                [held.message_key.as_str()],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            thread::sleep(std::time::Duration::from_millis(2));
+            assert_eq!(
+                hold_leased_messages_for_attempt(
+                    root.path(),
+                    "attempt-hold-once",
+                    std::slice::from_ref(&held.message_key),
+                    &HoldReason::MissingArtifact,
+                    "artifact is still missing",
+                )?,
+                0
+            );
+            let held_after_resume: (i64, String, Option<String>) = open_channel_db(&db_path)?
+                .query_row(
+                    "SELECT failure_attempt_count, updated_at, retry_not_before
          FROM communication_routing_state WHERE message_key = ?1",
-        [held.message_key.as_str()],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    )?;
-    assert_eq!(held_after_resume, held_once);
+                    [held.message_key.as_str()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+            assert_eq!(held_after_resume, held_once);
 
-    let failed = create_queue_task(
-        root.path(),
-        QueueTaskCreateRequest {
-            title: "attempt-bound failed ack".to_string(),
-            prompt: "Fail once across finalization resume.".to_string(),
-            thread_key: "queue/attempt-failed".to_string(),
-            workspace_root: None,
-            priority: "normal".to_string(),
-            suggested_skill: None,
-            parent_message_key: None,
-            extra_metadata: None,
-        },
-    )?;
-    lease_queue_task(root.path(), &failed.message_key, "ctox-test")?;
-    engine.begin_worker_attempt_finalization(
-        crate::context::lcm::WorkerAttemptFinalizationInput {
-            attempt_id: "attempt-failed-once",
-            work_key: "queue:attempt-failed-once",
-            conversation_id: 7202,
-            source_label: "queue-test",
-            agent_outcome: crate::context::lcm::AgentOutcome::ExecutionError,
-            reply_text: "failed",
-            error_text: Some("terminal worker failure"),
-        },
-    )?;
-    assert_eq!(
-        ack_leased_messages_for_attempt(
-            root.path(),
-            "attempt-failed-once",
-            std::slice::from_ref(&failed.message_key),
-            "failed",
-            Some("terminal worker failure"),
-        )?,
-        1
-    );
-    let failed_once: (String, Option<String>, String) = open_channel_db(&db_path)?.query_row(
-        "SELECT updated_at, acked_at, last_error
+            let failed = create_queue_task(
+                root.path(),
+                QueueTaskCreateRequest {
+                    title: "attempt-bound failed ack".to_string(),
+                    prompt: "Fail once across finalization resume.".to_string(),
+                    thread_key: "queue/attempt-failed".to_string(),
+                    workspace_root: None,
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: None,
+                },
+            )?;
+            lease_queue_task(root.path(), &failed.message_key, "ctox-test")?;
+            crate::lcm::run_begin_worker_attempt_finalization(
+                &db_path,
+                crate::context::lcm::WorkerAttemptFinalizationInput {
+                    attempt_id: "attempt-failed-once",
+                    work_key: "queue:attempt-failed-once",
+                    conversation_id: 7202,
+                    source_label: "queue-test",
+                    agent_outcome: crate::context::lcm::AgentOutcome::ExecutionError,
+                    reply_text: "failed",
+                    error_text: Some("terminal worker failure"),
+                },
+            )?;
+            assert_eq!(
+                ack_leased_messages_for_attempt(
+                    root.path(),
+                    "attempt-failed-once",
+                    std::slice::from_ref(&failed.message_key),
+                    "failed",
+                    Some("terminal worker failure"),
+                )?,
+                1
+            );
+            let failed_once: (String, Option<String>, String) = open_channel_db(&db_path)?
+                .query_row(
+                    "SELECT updated_at, acked_at, last_error
          FROM communication_routing_state WHERE message_key = ?1",
-        [failed.message_key.as_str()],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    )?;
-    thread::sleep(std::time::Duration::from_millis(2));
-    assert_eq!(
-        ack_leased_messages_for_attempt(
-            root.path(),
-            "attempt-failed-once",
-            std::slice::from_ref(&failed.message_key),
-            "failed",
-            Some("terminal worker failure"),
-        )?,
-        0
-    );
-    let failed_after_resume: (String, Option<String>, String) = open_channel_db(&db_path)?
-        .query_row(
-            "SELECT updated_at, acked_at, last_error
+                    [failed.message_key.as_str()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+            thread::sleep(std::time::Duration::from_millis(2));
+            assert_eq!(
+                ack_leased_messages_for_attempt(
+                    root.path(),
+                    "attempt-failed-once",
+                    std::slice::from_ref(&failed.message_key),
+                    "failed",
+                    Some("terminal worker failure"),
+                )?,
+                0
+            );
+            let failed_after_resume: (String, Option<String>, String) = open_channel_db(&db_path)?
+                .query_row(
+                    "SELECT updated_at, acked_at, last_error
              FROM communication_routing_state WHERE message_key = ?1",
-            [failed.message_key.as_str()],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-    assert_eq!(failed_after_resume, failed_once);
-    Ok(())
+                    [failed.message_key.as_str()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+            assert_eq!(failed_after_resume, failed_once);
+            Ok(())
+        })
+    })
 }
 
 #[test]
 fn attempt_ack_waits_for_a_concurrent_writer_instead_of_failing_locked() -> Result<()> {
-    // thesen 07.10.2026: a deferred ack read the attempt marker while another
-    // connection kept committing; the ack's write then failed at once with
-    // "database is locked" (no busy wait once a read transaction is open, or
-    // SQLite 517 after a commit). The attempt stayed `finalizing` and its
-    // review was repeated on every re-lease without terminalizing the task.
-    let root = tempfile::tempdir()?;
-    fs::create_dir_all(root.path().join("runtime"))?;
-    let db_path = resolve_db_path(root.path(), None);
-    let engine =
-        crate::context::lcm::LcmEngine::open(&db_path, crate::context::lcm::LcmConfig::default())?;
-    let mut tasks = Vec::new();
-    for index in 0..24 {
-        let task = create_queue_task(
-            root.path(),
-            QueueTaskCreateRequest {
-                title: format!("ack under a busy writer {index}"),
-                prompt: "Fail while another connection keeps committing.".to_string(),
-                thread_key: format!("queue/attempt-ack-contended-{index}"),
-                workspace_root: None,
-                priority: "normal".to_string(),
-                suggested_skill: None,
-                parent_message_key: None,
-                extra_metadata: None,
-            },
-        )?;
-        lease_queue_task(root.path(), &task.message_key, "ctox-test")?;
-        let attempt_id = format!("attempt-ack-contended-{index}");
-        engine.begin_worker_attempt_finalization(
-            crate::context::lcm::WorkerAttemptFinalizationInput {
-                attempt_id: &attempt_id,
-                work_key: &format!("queue:{attempt_id}"),
-                conversation_id: 7300 + index,
-                source_label: "queue-test",
-                agent_outcome: crate::context::lcm::AgentOutcome::Success,
-                reply_text: "reviewed",
-                error_text: None,
-            },
-        )?;
-        tasks.push((attempt_id, task.message_key));
-    }
-    // Warm every lazily created schema object before the writer starts, so
-    // the measured window holds only the ack's own transaction.
-    open_channel_db(&db_path)?;
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let writer_stop = Arc::clone(&stop);
-    let writer_path = db_path.clone();
-    let writer = thread::spawn(move || -> Result<()> {
-        let mut conn = Connection::open(&writer_path)?;
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
-        conn.execute_batch("CREATE TABLE IF NOT EXISTS ack_lock_probe (value INTEGER);")?;
-        while !writer_stop.load(std::sync::atomic::Ordering::Relaxed) {
-            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            tx.execute("INSERT INTO ack_lock_probe VALUES (1)", [])?;
-            thread::sleep(std::time::Duration::from_millis(1));
-            tx.commit()?;
-            // Short gaps like the RxDB peer's: a waiting writer gets its turn.
-            thread::sleep(std::time::Duration::from_millis(2));
-        }
-        Ok(())
-    });
-    let mut failures = Vec::new();
-    for (attempt_id, message_key) in &tasks {
-        if let Err(error) = ack_leased_messages_for_attempt(
-            root.path(),
-            attempt_id,
-            std::slice::from_ref(message_key),
-            "failed",
-            Some("terminal completion-review failure"),
-        ) {
-            failures.push(format!("{message_key}: {error}"));
-        }
-    }
-    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    writer.join().expect("busy writer")?;
-    assert!(
-        failures.is_empty(),
-        "acks failed under a busy writer: {failures:?}"
-    );
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        // thesen 07.10.2026: a deferred ack read the attempt marker while another
+        // connection kept committing; the ack's write then failed at once with
+        // "database is locked" (no busy wait once a read transaction is open, or
+        // SQLite 517 after a commit). The attempt stayed `finalizing` and its
+        // review was repeated on every re-lease without terminalizing the task.
+        let root = crate::persistence::test_support::scoped_tempdir()?;
+        let queue_root = root.path().to_owned();
+        crate::persistence::test_support::with_queue(&queue_root, move || {
+            fs::create_dir_all(root.path().join("runtime"))?;
+            let db_path = resolve_db_path(root.path(), None);
+            let mut tasks = Vec::new();
+            for index in 0..24 {
+                let task = create_queue_task(
+                    root.path(),
+                    QueueTaskCreateRequest {
+                        title: format!("ack under a busy writer {index}"),
+                        prompt: "Fail while another connection keeps committing.".to_string(),
+                        thread_key: format!("queue/attempt-ack-contended-{index}"),
+                        workspace_root: None,
+                        priority: "normal".to_string(),
+                        suggested_skill: None,
+                        parent_message_key: None,
+                        extra_metadata: None,
+                    },
+                )?;
+                lease_queue_task(root.path(), &task.message_key, "ctox-test")?;
+                let attempt_id = format!("attempt-ack-contended-{index}");
+                crate::lcm::run_begin_worker_attempt_finalization(
+                    &db_path,
+                    crate::context::lcm::WorkerAttemptFinalizationInput {
+                        attempt_id: &attempt_id,
+                        work_key: &format!("queue:{attempt_id}"),
+                        conversation_id: 7300 + index,
+                        source_label: "queue-test",
+                        agent_outcome: crate::context::lcm::AgentOutcome::Success,
+                        reply_text: "reviewed",
+                        error_text: None,
+                    },
+                )?;
+                tasks.push((attempt_id, task.message_key));
+            }
+            // Warm every lazily created schema object before the writer starts, so
+            // the measured window holds only the ack's own transaction.
+            open_channel_db(&db_path)?;
+            let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+            let writer_stop = Arc::clone(&stop);
+            let writer_path = db_path.clone();
+            let writer_root = root.path().to_owned();
+            let writer = thread::spawn(move || -> Result<()> {
+                crate::persistence::run_core_blocking_at(&writer_root, move || {
+                    crate::lcm::with_lcm_write(&writer_path, |conn| {
+                        conn.execute_batch(
+                            "CREATE TABLE IF NOT EXISTS ack_lock_probe (value INTEGER);",
+                        )?;
+                        Ok(())
+                    })?;
+                    while !writer_stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        crate::lcm::with_lcm_write(&writer_path, |conn| {
+                            conn.execute("INSERT INTO ack_lock_probe VALUES (1)", [])?;
+                            thread::sleep(std::time::Duration::from_millis(1));
+                            Ok(())
+                        })?;
+                        thread::sleep(std::time::Duration::from_millis(2));
+                    }
+                    Ok(())
+                })
+            });
+            let mut failures = Vec::new();
+            for (attempt_id, message_key) in &tasks {
+                if let Err(error) = ack_leased_messages_for_attempt(
+                    root.path(),
+                    attempt_id,
+                    std::slice::from_ref(message_key),
+                    "failed",
+                    Some("terminal completion-review failure"),
+                ) {
+                    failures.push(format!("{message_key}: {error}"));
+                }
+            }
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            writer.join().expect("busy writer")?;
+            assert!(
+                failures.is_empty(),
+                "acks failed under a busy writer: {failures:?}"
+            );
+            Ok(())
+        })
+    })
 }
 
 #[test]
@@ -2621,13 +2639,10 @@ fn owner_profile_settings_merge_adds_founder_mailboxes_for_routing() {
 
 #[test]
 fn founder_ack_guard_uses_sqlite_owner_profiles() {
-    let root = std::env::temp_dir().join(format!(
-        "ctox-founder-ack-owner-profiles-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
+    crate::persistence::test_support::run_scoped(move || {
+    let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+let root = owner_root.path().to_path_buf();
+crate::persistence::test_support::with_queue(&root.clone(), move || {
     fs::create_dir_all(root.join("runtime")).expect("failed to create temp test root");
 
     let db_path = resolve_db_path(&root, None);
@@ -2676,7 +2691,12 @@ fn founder_ack_guard_uses_sqlite_owner_profiles() {
         .to_string()
         .contains("cannot mark founder/owner/admin inbound mail as handled"));
 
-    let _ = fs::remove_dir_all(&root);
+
+Ok(())
+
+})
+
+}).unwrap();
 }
 
 #[test]
@@ -2733,13 +2753,10 @@ fn queue_task_workspace_root_round_trips_and_legacy_prompt_falls_back() {
 
 #[test]
 fn failed_queue_ack_requires_and_persists_failure_reason() {
-    let root = std::env::temp_dir().join(format!(
-        "ctox-queue-failed-ack-reason-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
+    crate::persistence::test_support::run_scoped(move || {
+    let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+let root = owner_root.path().to_path_buf();
+crate::persistence::test_support::with_queue(&root.clone(), move || {
     fs::create_dir_all(&root).expect("failed to create temp test root");
 
     let task = create_queue_task(
@@ -2793,7 +2810,12 @@ fn failed_queue_ack_requires_and_persists_failure_reason() {
         Some("worker execution failed before completion review")
     );
 
-    let _ = fs::remove_dir_all(&root);
+
+Ok(())
+
+})
+
+}).unwrap();
 }
 
 #[test]
@@ -3756,7 +3778,10 @@ fn reviewed_external_chat_send_writes_core_transition_proof() {
 
 #[test]
 fn fake_bot_chat_send_requires_exact_review_and_marks_audit_sent() {
-    let root = unique_root("ctox-fake-chat-reviewed-send");
+    crate::persistence::test_support::run_scoped(move || {
+    let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+let root = owner_root.path().to_path_buf();
+crate::persistence::test_support::with_queue(&root.clone(), move || {
     fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
     let mut runtime_settings = BTreeMap::new();
     runtime_settings.insert(
@@ -3884,7 +3909,12 @@ fn fake_bot_chat_send_requires_exact_review_and_marks_audit_sent() {
         "recorded remote id must be the id the provider reported"
     );
 
-    let _ = fs::remove_dir_all(&root);
+
+Ok(())
+
+})
+
+}).unwrap();
 }
 
 #[test]
@@ -4108,63 +4138,62 @@ fn reviewed_founder_send_success_reaches_terminal_sent() {
 
 #[test]
 fn founder_inbound_cannot_be_handled_without_reviewed_send() {
-    let root = std::env::temp_dir().join(format!(
-        "ctox-founder-handled-guard-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-    let mut runtime_settings = BTreeMap::new();
-    runtime_settings.insert(
-        "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
-        "founder@example.com".to_string(),
-    );
-    crate::inference::runtime_env::save_runtime_env_map(&root, &runtime_settings)
-        .expect("failed to persist owner setting");
-    let db_path = crate::paths::core_db(&root);
-    let mut conn = open_channel_db(&db_path).expect("failed to open db");
-    let inbound_key = "email:cto1@example.com::INBOX::handled-guard-1";
-    upsert_communication_message(
-        &mut conn,
-        UpsertMessage {
-            message_key: inbound_key,
-            channel: "email",
-            account_key: "email:cto1@example.com",
-            thread_key: "<handled-guard-thread@example.com>",
-            remote_id: "remote-handled-guard-1",
-            direction: "inbound",
-            folder_hint: "INBOX",
-            sender_display: "Max Mustermann",
-            sender_address: "founder@example.com",
-            recipient_addresses_json: "[\"cto1@example.com\"]",
-            cc_addresses_json: "[]",
-            bcc_addresses_json: "[]",
-            subject: "Bitte antworten",
-            preview: "Bitte antworten",
-            body_text: "Bitte antworte.",
-            body_html: "",
-            raw_payload_ref: "",
-            trust_level: "trusted",
-            status: "received",
-            seen: false,
-            has_attachments: false,
-            external_created_at: "2026-04-24T18:05:00Z",
-            observed_at: "2026-04-24T18:05:00Z",
-            metadata_json: "{}",
-        },
-    )
-    .expect("message upsert");
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+            let mut runtime_settings = BTreeMap::new();
+            runtime_settings.insert(
+                "CTOX_OWNER_EMAIL_ADDRESS".to_string(),
+                "founder@example.com".to_string(),
+            );
+            crate::inference::runtime_env::save_runtime_env_map(&root, &runtime_settings)
+                .expect("failed to persist owner setting");
+            let db_path = crate::paths::core_db(&root);
+            let mut conn = open_channel_db(&db_path).expect("failed to open db");
+            let inbound_key = "email:cto1@example.com::INBOX::handled-guard-1";
+            upsert_communication_message(
+                &mut conn,
+                UpsertMessage {
+                    message_key: inbound_key,
+                    channel: "email",
+                    account_key: "email:cto1@example.com",
+                    thread_key: "<handled-guard-thread@example.com>",
+                    remote_id: "remote-handled-guard-1",
+                    direction: "inbound",
+                    folder_hint: "INBOX",
+                    sender_display: "Max Mustermann",
+                    sender_address: "founder@example.com",
+                    recipient_addresses_json: "[\"cto1@example.com\"]",
+                    cc_addresses_json: "[]",
+                    bcc_addresses_json: "[]",
+                    subject: "Bitte antworten",
+                    preview: "Bitte antworten",
+                    body_text: "Bitte antworte.",
+                    body_html: "",
+                    raw_payload_ref: "",
+                    trust_level: "trusted",
+                    status: "received",
+                    seen: false,
+                    has_attachments: false,
+                    external_created_at: "2026-04-24T18:05:00Z",
+                    observed_at: "2026-04-24T18:05:00Z",
+                    metadata_json: "{}",
+                },
+            )
+            .expect("message upsert");
 
-    let err = ack_leased_messages(&root, &[inbound_key.to_string()], "handled")
-        .expect_err("founder inbound should not be handleable before reviewed send");
-    assert!(err
-        .to_string()
-        .contains("cannot mark founder/owner/admin inbound mail as handled"));
+            let err = ack_leased_messages(&root, &[inbound_key.to_string()], "handled")
+                .expect_err("founder inbound should not be handleable before reviewed send");
+            assert!(err
+                .to_string()
+                .contains("cannot mark founder/owner/admin inbound mail as handled"));
 
-    let _ = std::fs::remove_file(&db_path);
-    let _ = fs::remove_dir_all(&root);
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 #[test]
@@ -4398,77 +4427,76 @@ fn take_messages_cas_rejects_concurrent_lease_steal() {
 
 #[test]
 fn releasing_leased_message_to_pending_does_not_ack_it() {
-    let root = std::env::temp_dir().join(format!(
-        "ctox-channel-pending-release-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
-    let db_path = crate::paths::core_db(&root);
-    let mut conn = open_channel_db(&db_path).expect("failed to open db");
-    upsert_communication_message(
-        &mut conn,
-        UpsertMessage {
-            message_key: "pending-release-1",
-            channel: "email",
-            account_key: "email:cto1@example.com",
-            thread_key: "<pending-release@example.com>",
-            remote_id: "remote-pending-release-1",
-            direction: "inbound",
-            folder_hint: "INBOX",
-            sender_display: "Customer",
-            sender_address: "customer@example.com",
-            recipient_addresses_json: "[\"cto1@example.com\"]",
-            cc_addresses_json: "[]",
-            bcc_addresses_json: "[]",
-            subject: "Needs rework",
-            preview: "needs rework",
-            body_text: "Please rework before replying.",
-            body_html: "",
-            raw_payload_ref: "",
-            trust_level: "trusted",
-            status: "received",
-            seen: false,
-            has_attachments: false,
-            external_created_at: "2026-04-24T18:42:06Z",
-            observed_at: "2026-04-24T18:42:06Z",
-            metadata_json: "{}",
-        },
-    )
-    .expect("message upsert");
-    ensure_routing_rows_for_inbound(&conn).expect("routing rows");
-    let taken = take_messages(&mut conn, Some("email"), 10, "ctox-service")
-        .expect("take messages should succeed");
-    assert_eq!(taken.len(), 1);
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+            let db_path = crate::paths::core_db(&root);
+            let mut conn = open_channel_db(&db_path).expect("failed to open db");
+            upsert_communication_message(
+                &mut conn,
+                UpsertMessage {
+                    message_key: "pending-release-1",
+                    channel: "email",
+                    account_key: "email:cto1@example.com",
+                    thread_key: "<pending-release@example.com>",
+                    remote_id: "remote-pending-release-1",
+                    direction: "inbound",
+                    folder_hint: "INBOX",
+                    sender_display: "Customer",
+                    sender_address: "customer@example.com",
+                    recipient_addresses_json: "[\"cto1@example.com\"]",
+                    cc_addresses_json: "[]",
+                    bcc_addresses_json: "[]",
+                    subject: "Needs rework",
+                    preview: "needs rework",
+                    body_text: "Please rework before replying.",
+                    body_html: "",
+                    raw_payload_ref: "",
+                    trust_level: "trusted",
+                    status: "received",
+                    seen: false,
+                    has_attachments: false,
+                    external_created_at: "2026-04-24T18:42:06Z",
+                    observed_at: "2026-04-24T18:42:06Z",
+                    metadata_json: "{}",
+                },
+            )
+            .expect("message upsert");
+            ensure_routing_rows_for_inbound(&conn).expect("routing rows");
+            let taken = take_messages(&mut conn, Some("email"), 10, "ctox-service")
+                .expect("take messages should succeed");
+            assert_eq!(taken.len(), 1);
 
-    ack_leased_messages(&root, &["pending-release-1".to_string()], "pending")
-        .expect("pending release should succeed");
-    let (route_status, acked_at): (String, Option<String>) = conn
+            ack_leased_messages(&root, &["pending-release-1".to_string()], "pending")
+                .expect("pending release should succeed");
+            let (route_status, acked_at): (String, Option<String>) = conn
         .query_row(
             "SELECT route_status, acked_at FROM communication_routing_state WHERE message_key = ?1",
             params!["pending-release-1"],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .expect("missing routing row");
-    assert_eq!(route_status, "pending");
-    assert!(acked_at.is_none());
+            assert_eq!(route_status, "pending");
+            assert!(acked_at.is_none());
 
-    let taken_again = take_messages(&mut conn, Some("email"), 10, "ctox-service")
-        .expect("released pending message should be leaseable again");
-    assert_eq!(taken_again.len(), 1);
-    let acked_after_retake: Option<String> = conn
-        .query_row(
-            "SELECT acked_at FROM communication_routing_state WHERE message_key = ?1",
-            params!["pending-release-1"],
-            |row| row.get(0),
-        )
-        .expect("missing routing row after retake");
-    assert!(acked_after_retake.is_none());
+            let taken_again = take_messages(&mut conn, Some("email"), 10, "ctox-service")
+                .expect("released pending message should be leaseable again");
+            assert_eq!(taken_again.len(), 1);
+            let acked_after_retake: Option<String> = conn
+                .query_row(
+                    "SELECT acked_at FROM communication_routing_state WHERE message_key = ?1",
+                    params!["pending-release-1"],
+                    |row| row.get(0),
+                )
+                .expect("missing routing row after retake");
+            assert!(acked_after_retake.is_none());
 
-    let _ = fs::remove_file(&db_path);
-    let _ = fs::remove_dir_all(&root);
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 #[test]
@@ -5205,90 +5233,94 @@ fn channel_context_groups_thread_state_blockers_and_open_questions() {
 // `pipeline_status` will resolve via `resolve_db_path(root, None)`.
 #[test]
 fn pipeline_status_reports_thread_state() {
-    let root = std::env::temp_dir().join(format!(
-        "ctox-pipeline-status-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
 
-    let thread_key = "pipeline-status-thread";
+            let thread_key = "pipeline-status-thread";
 
-    // Seed the channel db with one outbound message and one routing row.
-    let db_path = crate::paths::core_db(&root);
-    let mut conn = open_channel_db(&db_path).expect("open channel db");
-    upsert_communication_message(
-        &mut conn,
-        UpsertMessage {
-            message_key: "outbound-1",
-            channel: "email",
-            account_key: "email:cto1@example.com",
-            thread_key,
-            remote_id: "remote-1",
-            direction: "outbound",
-            folder_hint: "Sent",
-            sender_display: "CTOX",
-            sender_address: "cto1@example.com",
-            recipient_addresses_json: "[\"founder@example.com\"]",
-            cc_addresses_json: "[]",
-            bcc_addresses_json: "[]",
-            subject: "Founder update",
-            preview: "Update for founder.",
-            body_text: "Update for founder.",
-            body_html: "",
-            raw_payload_ref: "",
-            trust_level: "trusted",
-            status: "sent",
-            seen: true,
-            has_attachments: false,
-            external_created_at: "2026-04-27T10:00:00Z",
-            observed_at: "2026-04-27T10:00:00Z",
-            metadata_json: "{}",
-        },
-    )
-    .expect("failed to upsert outbound");
+            // Seed the channel db with one outbound message and one routing row.
+            let db_path = crate::paths::core_db(&root);
+            let mut conn = open_channel_db(&db_path).expect("open channel db");
+            upsert_communication_message(
+                &mut conn,
+                UpsertMessage {
+                    message_key: "outbound-1",
+                    channel: "email",
+                    account_key: "email:cto1@example.com",
+                    thread_key,
+                    remote_id: "remote-1",
+                    direction: "outbound",
+                    folder_hint: "Sent",
+                    sender_display: "CTOX",
+                    sender_address: "cto1@example.com",
+                    recipient_addresses_json: "[\"founder@example.com\"]",
+                    cc_addresses_json: "[]",
+                    bcc_addresses_json: "[]",
+                    subject: "Founder update",
+                    preview: "Update for founder.",
+                    body_text: "Update for founder.",
+                    body_html: "",
+                    raw_payload_ref: "",
+                    trust_level: "trusted",
+                    status: "sent",
+                    seen: true,
+                    has_attachments: false,
+                    external_created_at: "2026-04-27T10:00:00Z",
+                    observed_at: "2026-04-27T10:00:00Z",
+                    metadata_json: "{}",
+                },
+            )
+            .expect("failed to upsert outbound");
 
-    // Seed an agent assistant row with structured outcome on the matching conversation_id.
-    let conversation_id =
-        crate::execution::agent::turn_loop::conversation_id_for_thread_key(Some(thread_key));
-    let engine = crate::lcm::LcmEngine::open(&db_path, crate::lcm::LcmConfig::default())
-        .expect("open lcm engine");
-    let _ = engine
-        .add_message_with_outcome(
-            conversation_id,
-            "assistant",
-            "(agent turn did not complete)",
-            Some(crate::lcm::AgentOutcome::TurnTimeout),
-        )
-        .expect("seed assistant row");
-    // Bump the failure counter to simulate one failed turn.
-    let _ = engine
-        .increment_mission_agent_failure_count(conversation_id)
-        .expect("bump failure count");
+            // Seed an agent assistant row with structured outcome on the matching conversation_id.
+            let conversation_id =
+                crate::execution::agent::turn_loop::conversation_id_for_thread_key(Some(
+                    thread_key,
+                ));
+            crate::lcm::with_lcm_write_session(&db_path, move |_, engine| {
+                let _ = engine
+                    .add_message_with_outcome(
+                        conversation_id,
+                        "assistant",
+                        "(agent turn did not complete)",
+                        Some(crate::lcm::AgentOutcome::TurnTimeout),
+                    )
+                    .expect("seed assistant row");
+                // Bump the failure counter to simulate one failed turn.
+                let _ = engine
+                    .increment_mission_agent_failure_count(conversation_id)
+                    .expect("bump failure count");
+                Ok(())
+            })
+            .expect("seed owner-backed LCM outcome and failure count");
 
-    let report = pipeline_status(&root, Some(thread_key), 10).expect("pipeline status");
-    assert_eq!(report.thread_key.as_deref(), Some(thread_key));
-    assert_eq!(report.send_attempts.len(), 1);
-    assert_eq!(report.send_attempts[0].message_key, "outbound-1");
-    assert_eq!(report.agent_attempts.len(), 1);
-    assert_eq!(
-        report.agent_attempts[0].outcome.as_deref(),
-        Some("TurnTimeout")
-    );
-    assert_eq!(report.agent_failure_count, 1);
-    // No review row was seeded → no founder_outbound_intent.
-    assert!(!report.founder_outbound_intent);
-    assert_eq!(report.rewrite_iteration_count, 0);
-    assert_eq!(report.rework_iteration_count, 1);
-    assert_eq!(report.current_disposition, "RequeueInternalWork");
-    assert!(
-        report.strategic_directive_authority_events.is_empty(),
-        "no strategic-directive authority events seeded → field must be empty"
-    );
+            let report = pipeline_status(&root, Some(thread_key), 10).expect("pipeline status");
+            assert_eq!(report.thread_key.as_deref(), Some(thread_key));
+            assert_eq!(report.send_attempts.len(), 1);
+            assert_eq!(report.send_attempts[0].message_key, "outbound-1");
+            assert_eq!(report.agent_attempts.len(), 1);
+            assert_eq!(
+                report.agent_attempts[0].outcome.as_deref(),
+                Some("TurnTimeout")
+            );
+            assert_eq!(report.agent_failure_count, 1);
+            // No review row was seeded → no founder_outbound_intent.
+            assert!(!report.founder_outbound_intent);
+            assert_eq!(report.rewrite_iteration_count, 0);
+            assert_eq!(report.rework_iteration_count, 1);
+            assert_eq!(report.current_disposition, "RequeueInternalWork");
+            assert!(
+                report.strategic_directive_authority_events.is_empty(),
+                "no strategic-directive authority events seeded → field must be empty"
+            );
 
-    let _ = fs::remove_dir_all(&root);
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 // E (PR): pipeline_status surfaces strategic-directive owner-authority
@@ -5296,87 +5328,88 @@ fn pipeline_status_reports_thread_state() {
 // details reference a different thread.
 #[test]
 fn pipeline_status_surfaces_strategic_directive_authority_events() {
-    let root = std::env::temp_dir().join(format!(
-        "ctox-pipeline-strategy-auth-{}-{}",
-        std::process::id(),
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            fs::create_dir_all(root.join("runtime")).expect("failed to create runtime dir");
 
-    let thread_key = "pipeline-strategy-auth-thread";
-    let conversation_id =
-        crate::execution::agent::turn_loop::conversation_id_for_thread_key(Some(thread_key));
+            let thread_key = "pipeline-strategy-auth-thread";
+            let conversation_id =
+                crate::execution::agent::turn_loop::conversation_id_for_thread_key(Some(
+                    thread_key,
+                ));
 
-    // Seed two strategic-directive authority events: one matching this
-    // thread, one matching an unrelated thread. Only the first should
-    // surface in the report.
-    let _ = crate::governance::record_event(
-        &root,
-        crate::governance::GovernanceEventRequest {
-            mechanism_id: "strategic_directive_mutation_owner_authorised",
-            conversation_id: Some(conversation_id),
-            severity: "info",
-            reason: "test-permitted",
-            action_taken: "permitted_strategic_directive_mutation",
-            details: serde_json::json!({
-                "triggered_by_message_key": "owner-msg-A",
-                "sender_address": "owner@example.com",
-                "sender_role": "owner",
-                "directive_kind": "mission",
-                "attempted_status": "active",
-                "action": "set",
-                "thread_key": thread_key,
-                "conversation_id": conversation_id,
-            }),
-            idempotence_key: Some("test-permitted-A"),
-        },
-    )
-    .expect("record permitted event");
-    let _ = crate::governance::record_event(
-        &root,
-        crate::governance::GovernanceEventRequest {
-            mechanism_id: "strategic_directive_mutation_blocked_non_owner_sender",
-            conversation_id: None,
-            severity: "critical",
-            reason: "test-blocked-other-thread",
-            action_taken: "blocked_strategic_directive_mutation",
-            details: serde_json::json!({
-                "triggered_by_message_key": "founder-msg-B",
-                "sender_address": "founder@example.com",
-                "sender_role": "founder",
-                "directive_kind": "vision",
-                "attempted_status": "active",
-                "action": "set",
-                "thread_key": "some-other-thread",
-            }),
-            idempotence_key: Some("test-blocked-B"),
-        },
-    )
-    .expect("record blocked event");
+            // Seed two strategic-directive authority events: one matching this
+            // thread, one matching an unrelated thread. Only the first should
+            // surface in the report.
+            let _ = crate::governance::record_event(
+                &root,
+                crate::governance::GovernanceEventRequest {
+                    mechanism_id: "strategic_directive_mutation_owner_authorised",
+                    conversation_id: Some(conversation_id),
+                    severity: "info",
+                    reason: "test-permitted",
+                    action_taken: "permitted_strategic_directive_mutation",
+                    details: serde_json::json!({
+                        "triggered_by_message_key": "owner-msg-A",
+                        "sender_address": "owner@example.com",
+                        "sender_role": "owner",
+                        "directive_kind": "mission",
+                        "attempted_status": "active",
+                        "action": "set",
+                        "thread_key": thread_key,
+                        "conversation_id": conversation_id,
+                    }),
+                    idempotence_key: Some("test-permitted-A"),
+                },
+            )
+            .expect("record permitted event");
+            let _ = crate::governance::record_event(
+                &root,
+                crate::governance::GovernanceEventRequest {
+                    mechanism_id: "strategic_directive_mutation_blocked_non_owner_sender",
+                    conversation_id: None,
+                    severity: "critical",
+                    reason: "test-blocked-other-thread",
+                    action_taken: "blocked_strategic_directive_mutation",
+                    details: serde_json::json!({
+                        "triggered_by_message_key": "founder-msg-B",
+                        "sender_address": "founder@example.com",
+                        "sender_role": "founder",
+                        "directive_kind": "vision",
+                        "attempted_status": "active",
+                        "action": "set",
+                        "thread_key": "some-other-thread",
+                    }),
+                    idempotence_key: Some("test-blocked-B"),
+                },
+            )
+            .expect("record blocked event");
 
-    let report = pipeline_status(&root, Some(thread_key), 10).expect("pipeline status");
-    let events = &report.strategic_directive_authority_events;
-    assert_eq!(
+            let report = pipeline_status(&root, Some(thread_key), 10).expect("pipeline status");
+            let events = &report.strategic_directive_authority_events;
+            assert_eq!(
         events.len(),
         1,
         "expected exactly the matching authority event in the per-thread report, got {events:#?}"
     );
-    assert_eq!(
-        events[0].mechanism_id,
-        "strategic_directive_mutation_owner_authorised"
-    );
-    assert_eq!(events[0].sender_role.as_deref(), Some("owner"));
-    assert_eq!(events[0].directive_kind.as_deref(), Some("mission"));
-    assert_eq!(events[0].action.as_deref(), Some("set"));
-    assert_eq!(
-        events[0].triggered_by_message_key.as_deref(),
-        Some("owner-msg-A")
-    );
+            assert_eq!(
+                events[0].mechanism_id,
+                "strategic_directive_mutation_owner_authorised"
+            );
+            assert_eq!(events[0].sender_role.as_deref(), Some("owner"));
+            assert_eq!(events[0].directive_kind.as_deref(), Some("mission"));
+            assert_eq!(events[0].action.as_deref(), Some("set"));
+            assert_eq!(
+                events[0].triggered_by_message_key.as_deref(),
+                Some("owner-msg-A")
+            );
 
-    let _ = fs::remove_dir_all(&root);
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 fn unique_root(prefix: &str) -> PathBuf {
@@ -6767,110 +6800,115 @@ fn business_command_queue_claim_is_atomic_and_idempotent() {
 
 #[test]
 fn adapter_reconciliation_keeps_one_open_task_per_configuration() -> Result<()> {
-    let root = tempfile::tempdir()?;
-    let claim = |id: &str, digest: &str| {
-        let mut claim = business_command_claim(id, id);
-        claim.command_type = "outbound.research.adapters.reconcile".into();
-        claim.intent["payload"] = json!({"configuration_digest":digest});
-        claim
-    };
-    let request = |id: &str| QueueTaskCreateRequest {
-        title: "Adapterabgleich".into(),
-        prompt: "Reconcile the adapters".into(),
-        thread_key: format!("adapter/{id}"),
-        workspace_root: None,
-        priority: "low".into(),
-        suggested_skill: None,
-        parent_message_key: None,
-        extra_metadata: Some(json!({"idempotency_key":id})),
-    };
-    let first = claim_business_command_with_queue(
-        root.path(),
-        claim("adapter-first", "v1"),
-        request("adapter-first"),
-    )?;
-    lease_queue_task(root.path(), &first.task.message_key, "worker")?;
-    for n in 0..10 {
-        let id = format!("adapter-duplicate-{n}");
-        let duplicate =
-            claim_business_command_with_queue(root.path(), claim(&id, "v1"), request(&id))?;
-        assert_eq!(duplicate.task.route_status, "cancelled");
-        let projection = business_command_projection(root.path(), &id)?;
-        assert_eq!(projection["terminal_status"], "cancelled");
-        assert_eq!(
-            projection["result"]["superseded_by_task_id"],
-            first.task.message_key
-        );
-    }
-    let changed = claim_business_command_with_queue(
-        root.path(),
-        claim("adapter-new", "v2"),
-        request("adapter-new"),
-    )?;
-    assert_eq!(changed.task.route_status, "pending");
-    let conn = open_channel_db(&resolve_db_path(root.path(), None))?;
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM communication_routing_state WHERE route_status IN ('pending','leased')", [], |r|r.get(0))?;
-    assert_eq!(count, 2);
-    let plan: Vec<String> = conn.prepare("EXPLAIN QUERY PLAN SELECT command_id FROM business_command_aggregates
+    crate::persistence::test_support::run_scoped(move || {
+        let root = crate::persistence::test_support::scoped_tempdir()?;
+        let queue_root = root.path().to_owned();
+        crate::persistence::test_support::with_queue(&queue_root, move || {
+            let claim = |id: &str, digest: &str| {
+                let mut claim = business_command_claim(id, id);
+                claim.command_type = "outbound.research.adapters.reconcile".into();
+                claim.intent["payload"] = json!({"configuration_digest":digest});
+                claim
+            };
+            let request = |id: &str| QueueTaskCreateRequest {
+                title: "Adapterabgleich".into(),
+                prompt: "Reconcile the adapters".into(),
+                thread_key: format!("adapter/{id}"),
+                workspace_root: None,
+                priority: "low".into(),
+                suggested_skill: None,
+                parent_message_key: None,
+                extra_metadata: Some(json!({"idempotency_key":id})),
+            };
+            let first = claim_business_command_with_queue(
+                root.path(),
+                claim("adapter-first", "v1"),
+                request("adapter-first"),
+            )?;
+            lease_queue_task(root.path(), &first.task.message_key, "worker")?;
+            for n in 0..10 {
+                let id = format!("adapter-duplicate-{n}");
+                let duplicate =
+                    claim_business_command_with_queue(root.path(), claim(&id, "v1"), request(&id))?;
+                assert_eq!(duplicate.task.route_status, "cancelled");
+                let projection = business_command_projection(root.path(), &id)?;
+                assert_eq!(projection["terminal_status"], "cancelled");
+                assert_eq!(
+                    projection["result"]["superseded_by_task_id"],
+                    first.task.message_key
+                );
+            }
+            let changed = claim_business_command_with_queue(
+                root.path(),
+                claim("adapter-new", "v2"),
+                request("adapter-new"),
+            )?;
+            assert_eq!(changed.task.route_status, "pending");
+            let conn = open_channel_db(&resolve_db_path(root.path(), None))?;
+            let count: i64 = conn.query_row("SELECT COUNT(*) FROM communication_routing_state WHERE route_status IN ('pending','leased')", [], |r|r.get(0))?;
+            assert_eq!(count, 2);
+            let plan: Vec<String> = conn.prepare("EXPLAIN QUERY PLAN SELECT command_id FROM business_command_aggregates
         WHERE command_type='outbound.research.adapters.reconcile' AND execution_phase!='terminal'
           AND module=?1 AND record_id=?2 AND json_extract(intent_json,'$.payload.configuration_digest')=?3
         ORDER BY created_at_ms,command_id LIMIT 1")?
         .query_map(params!["tests","record-1","v1"], |r|r.get(3))?.collect::<rusqlite::Result<_>>()?;
-    assert!(
-        plan.iter()
-            .any(|line| line.contains("idx_active_adapter_reconciliation")),
-        "{plan:?}"
-    );
-    let replay = claim_business_command_with_queue(
-        root.path(),
-        claim("adapter-duplicate-0", "v1"),
-        request("adapter-duplicate-0"),
-    )?;
-    assert_eq!(
-        replay.task.route_status, "cancelled",
-        "idempotent replay must not revive duplicate work"
-    );
-    let mut other_actor = claim("adapter-other-actor", "v1");
-    other_actor.intent["native_authorization"] = json!({"actor":{"user_id":"other"}});
-    let other = claim_business_command_with_queue(
-        root.path(),
-        other_actor,
-        request("adapter-other-actor"),
-    )?;
-    assert_eq!(
-        other.task.route_status, "pending",
-        "different authority must not share work"
-    );
-    let mut other_context = claim("adapter-other-context", "v1");
-    other_context.intent["client_context"] = json!({"source":"other-surface"});
-    let other = claim_business_command_with_queue(
-        root.path(),
-        other_context,
-        request("adapter-other-context"),
-    )?;
-    assert_eq!(
-        other.task.route_status, "pending",
-        "different audited context must not share work"
-    );
-    transition_business_command_for_task(
-        root.path(),
-        &first.task.message_key,
-        "cancelled",
-        None,
-        None,
-        None,
-        "fixture cancels original",
-    )?;
-    let fresh = claim_business_command_with_queue(
-        root.path(),
-        claim("adapter-after-terminal", "v1"),
-        request("adapter-after-terminal"),
-    )?;
-    assert_eq!(
-        fresh.task.route_status, "pending",
-        "a completed reconciliation must not suppress future work"
-    );
-    Ok(())
+            assert!(
+                plan.iter()
+                    .any(|line| line.contains("idx_active_adapter_reconciliation")),
+                "{plan:?}"
+            );
+            let replay = claim_business_command_with_queue(
+                root.path(),
+                claim("adapter-duplicate-0", "v1"),
+                request("adapter-duplicate-0"),
+            )?;
+            assert_eq!(
+                replay.task.route_status, "cancelled",
+                "idempotent replay must not revive duplicate work"
+            );
+            let mut other_actor = claim("adapter-other-actor", "v1");
+            other_actor.intent["native_authorization"] = json!({"actor":{"user_id":"other"}});
+            let other = claim_business_command_with_queue(
+                root.path(),
+                other_actor,
+                request("adapter-other-actor"),
+            )?;
+            assert_eq!(
+                other.task.route_status, "pending",
+                "different authority must not share work"
+            );
+            let mut other_context = claim("adapter-other-context", "v1");
+            other_context.intent["client_context"] = json!({"source":"other-surface"});
+            let other = claim_business_command_with_queue(
+                root.path(),
+                other_context,
+                request("adapter-other-context"),
+            )?;
+            assert_eq!(
+                other.task.route_status, "pending",
+                "different audited context must not share work"
+            );
+            transition_business_command_for_task(
+                root.path(),
+                &first.task.message_key,
+                "cancelled",
+                None,
+                None,
+                None,
+                "fixture cancels original",
+            )?;
+            let fresh = claim_business_command_with_queue(
+                root.path(),
+                claim("adapter-after-terminal", "v1"),
+                request("adapter-after-terminal"),
+            )?;
+            assert_eq!(
+                fresh.task.route_status, "pending",
+                "a completed reconciliation must not suppress future work"
+            );
+            Ok(())
+        })
+    })
 }
 
 #[test]
@@ -7213,159 +7251,174 @@ fn registered_saga_replays_claimed_effect_and_keeps_failed_compensation_visible(
 
 #[test]
 fn business_command_cannot_complete_before_typed_result_review_and_validation() {
-    let root = business_command_test_root("ctox-business-command-terminal-gate");
-    let claimed = claim_business_command_with_queue(
-        &root,
-        business_command_claim("command-terminal-gate", "sha256:terminal-gate"),
-        QueueTaskCreateRequest {
-            title: "Terminal gate".to_string(),
-            prompt: "Prove terminal ordering.".to_string(),
-            thread_key: "business-os/tests/terminal-gate".to_string(),
-            workspace_root: Some(root.display().to_string()),
-            priority: "normal".to_string(),
-            suggested_skill: None,
-            parent_message_key: None,
-            extra_metadata: Some(json!({"idempotency_key": "command-terminal-gate"})),
-        },
-    )
-    .expect("claim command");
-    let task_id = claimed.task.message_key;
-    lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "leased",
-        None,
-        None,
-        None,
-        "worker leased",
-    )
-    .expect("lease command");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "running",
-        None,
-        None,
-        None,
-        "worker started",
-    )
-    .expect("start command");
-    persist_business_command_worker_result(&root, &task_id, "done").expect("persist typed result");
-    let persisted = business_command_projection(&root, "command-terminal-gate")
-        .expect("load persisted result envelope");
-    assert_eq!(persisted["result"]["command_id"], "command-terminal-gate");
-    assert_eq!(persisted["result"]["execution_task_id"], task_id);
-    assert_eq!(persisted["result"]["user_message"], "done");
-    assert!(persisted["result"]["structured_output"].is_null());
-    assert!(persisted["result"]["verification_claims"].is_array());
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            let claimed = claim_business_command_with_queue(
+                &root,
+                business_command_claim("command-terminal-gate", "sha256:terminal-gate"),
+                QueueTaskCreateRequest {
+                    title: "Terminal gate".to_string(),
+                    prompt: "Prove terminal ordering.".to_string(),
+                    thread_key: "business-os/tests/terminal-gate".to_string(),
+                    workspace_root: Some(root.display().to_string()),
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(json!({"idempotency_key": "command-terminal-gate"})),
+                },
+            )
+            .expect("claim command");
+            let task_id = claimed.task.message_key;
+            lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "worker leased",
+            )
+            .expect("lease command");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "running",
+                None,
+                None,
+                None,
+                "worker started",
+            )
+            .expect("start command");
+            persist_business_command_worker_result(&root, &task_id, "done")
+                .expect("persist typed result");
+            let persisted = business_command_projection(&root, "command-terminal-gate")
+                .expect("load persisted result envelope");
+            assert_eq!(persisted["result"]["command_id"], "command-terminal-gate");
+            assert_eq!(persisted["result"]["execution_task_id"], task_id);
+            assert_eq!(persisted["result"]["user_message"], "done");
+            assert!(persisted["result"]["structured_output"].is_null());
+            assert!(persisted["result"]["verification_claims"].is_array());
 
-    let premature = transition_business_command_for_task(
-        &root,
-        &task_id,
-        "handled",
-        Some(&json!({"user_reply": "done"})),
-        None,
-        None,
-        "assistant prose claimed completion",
-    )
-    .expect_err("completion before review must fail");
-    assert!(premature
-        .to_string()
-        .contains("passed review and validation"));
+            let premature = transition_business_command_for_task(
+                &root,
+                &task_id,
+                "handled",
+                Some(&json!({"user_reply": "done"})),
+                None,
+                None,
+                "assistant prose claimed completion",
+            )
+            .expect_err("completion before review must fail");
+            assert!(premature
+                .to_string()
+                .contains("passed review and validation"));
 
-    record_business_command_review(
-        &root,
-        &task_id,
-        "passed",
-        "passed",
-        &json!({"review": "PASS", "validation": "PASS"}),
-    )
-    .expect("persist review");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "handled",
-        Some(&json!({"user_reply": "done"})),
-        None,
-        None,
-        "reviewed completion",
-    )
-    .expect("terminalize after evidence");
-    let projection =
-        business_command_projection(&root, "command-terminal-gate").expect("load projection");
-    assert_eq!(projection["execution_phase"], "terminal");
-    assert_eq!(projection["terminal_status"], "completed");
-    let _ = fs::remove_dir_all(root);
+            record_business_command_review(
+                &root,
+                &task_id,
+                "passed",
+                "passed",
+                &json!({"review": "PASS", "validation": "PASS"}),
+            )
+            .expect("persist review");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "handled",
+                Some(&json!({"user_reply": "done"})),
+                None,
+                None,
+                "reviewed completion",
+            )
+            .expect("terminalize after evidence");
+            let projection = business_command_projection(&root, "command-terminal-gate")
+                .expect("load projection");
+            assert_eq!(projection["execution_phase"], "terminal");
+            assert_eq!(projection["terminal_status"], "completed");
+
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 #[test]
 fn failed_queue_ack_terminalizes_linked_business_command() {
-    let root = business_command_test_root("ctox-business-command-failed-queue-ack");
-    let claimed = claim_business_command_with_queue(
-        &root,
-        business_command_claim("command-failed-queue-ack", "sha256:failed-queue-ack"),
-        QueueTaskCreateRequest {
-            title: "Terminal failure projection".to_string(),
-            prompt: "Fail the linked command with the queue task.".to_string(),
-            thread_key: "business-os/tests/failed-queue-ack".to_string(),
-            workspace_root: Some(root.display().to_string()),
-            priority: "normal".to_string(),
-            suggested_skill: None,
-            parent_message_key: None,
-            extra_metadata: Some(json!({"idempotency_key": "command-failed-queue-ack"})),
-        },
-    )
-    .expect("claim command");
-    let task_id = claimed.task.message_key;
-    lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "leased",
-        None,
-        None,
-        None,
-        "worker leased",
-    )
-    .expect("lease command");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "running",
-        None,
-        None,
-        None,
-        "worker started",
-    )
-    .expect("start command");
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            let claimed = claim_business_command_with_queue(
+                &root,
+                business_command_claim("command-failed-queue-ack", "sha256:failed-queue-ack"),
+                QueueTaskCreateRequest {
+                    title: "Terminal failure projection".to_string(),
+                    prompt: "Fail the linked command with the queue task.".to_string(),
+                    thread_key: "business-os/tests/failed-queue-ack".to_string(),
+                    workspace_root: Some(root.display().to_string()),
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(json!({"idempotency_key": "command-failed-queue-ack"})),
+                },
+            )
+            .expect("claim command");
+            let task_id = claimed.task.message_key;
+            lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "worker leased",
+            )
+            .expect("lease command");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "running",
+                None,
+                None,
+                None,
+                "worker started",
+            )
+            .expect("start command");
 
-    ack_leased_messages_with_failure_reason(
-        &root,
-        std::slice::from_ref(&task_id),
-        "failed",
-        "finite review budget exhausted",
-    )
-    .expect("fail linked queue task and command atomically");
+            ack_leased_messages_with_failure_reason(
+                &root,
+                std::slice::from_ref(&task_id),
+                "failed",
+                "finite review budget exhausted",
+            )
+            .expect("fail linked queue task and command atomically");
 
-    let projection = business_command_projection(&root, "command-failed-queue-ack")
-        .expect("load terminal command projection");
-    assert_eq!(projection["execution_phase"], "terminal");
-    assert_eq!(projection["terminal_status"], "failed");
-    assert_eq!(projection["error_code"], "queue_terminal_failure");
-    assert_eq!(
-        projection["error_message"],
-        "finite review budget exhausted"
-    );
-    let task = load_queue_task(&root, &task_id)
-        .expect("load failed queue task")
-        .expect("failed queue task remains inspectable");
-    assert_eq!(task.route_status, "failed");
-    assert_eq!(
-        task.status_note.as_deref(),
-        Some("finite review budget exhausted")
-    );
-    let _ = fs::remove_dir_all(root);
+            let projection = business_command_projection(&root, "command-failed-queue-ack")
+                .expect("load terminal command projection");
+            assert_eq!(projection["execution_phase"], "terminal");
+            assert_eq!(projection["terminal_status"], "failed");
+            assert_eq!(projection["error_code"], "queue_terminal_failure");
+            assert_eq!(
+                projection["error_message"],
+                "finite review budget exhausted"
+            );
+            let task = load_queue_task(&root, &task_id)
+                .expect("load failed queue task")
+                .expect("failed queue task remains inspectable");
+            assert_eq!(task.route_status, "failed");
+            assert_eq!(
+                task.status_note.as_deref(),
+                Some("finite review budget exhausted")
+            );
+
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 #[test]
@@ -7615,549 +7668,604 @@ fn business_command_audit_resolves_only_proven_transient_intake_failures() {
 
 #[test]
 fn cancelling_linked_queue_task_terminalizes_business_command() {
-    let root = business_command_test_root("ctox-business-command-cancel");
-    let claimed = claim_business_command_with_queue(
-        &root,
-        business_command_claim("command-cancel", "sha256:cancel"),
-        QueueTaskCreateRequest {
-            title: "Cancel linked work".to_string(),
-            prompt: "This task will be cancelled.".to_string(),
-            thread_key: "business-os/tests/cancel".to_string(),
-            workspace_root: Some(root.display().to_string()),
-            priority: "normal".to_string(),
-            suggested_skill: None,
-            parent_message_key: None,
-            extra_metadata: Some(json!({"idempotency_key": "command-cancel"})),
-        },
-    )
-    .expect("claim command");
-    let task_id = claimed.task.message_key;
-    lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "leased",
-        None,
-        None,
-        None,
-        "initial lease",
-    )
-    .expect("lease command");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "running",
-        None,
-        None,
-        None,
-        "initial execution",
-    )
-    .expect("run command");
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            let claimed = claim_business_command_with_queue(
+                &root,
+                business_command_claim("command-cancel", "sha256:cancel"),
+                QueueTaskCreateRequest {
+                    title: "Cancel linked work".to_string(),
+                    prompt: "This task will be cancelled.".to_string(),
+                    thread_key: "business-os/tests/cancel".to_string(),
+                    workspace_root: Some(root.display().to_string()),
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(json!({"idempotency_key": "command-cancel"})),
+                },
+            )
+            .expect("claim command");
+            let task_id = claimed.task.message_key;
+            lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "initial lease",
+            )
+            .expect("lease command");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "running",
+                None,
+                None,
+                None,
+                "initial execution",
+            )
+            .expect("run command");
 
-    let cancelled = update_queue_task(
-        &root,
-        QueueTaskUpdateRequest {
-            message_key: task_id,
-            route_status: Some("cancelled".to_string()),
-            status_note: Some("operator cancelled stale work".to_string()),
-            ..Default::default()
-        },
-    )
-    .expect("cancel linked queue task");
-    assert_eq!(cancelled.route_status, "cancelled");
+            let cancelled = update_queue_task(
+                &root,
+                QueueTaskUpdateRequest {
+                    message_key: task_id,
+                    route_status: Some("cancelled".to_string()),
+                    status_note: Some("operator cancelled stale work".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("cancel linked queue task");
+            assert_eq!(cancelled.route_status, "cancelled");
 
-    let projection = business_command_projection(&root, "command-cancel").expect("load projection");
-    assert_eq!(projection["execution_phase"], "terminal");
-    assert_eq!(projection["terminal_status"], "cancelled");
-    let _ = fs::remove_dir_all(root);
+            let projection =
+                business_command_projection(&root, "command-cancel").expect("load projection");
+            assert_eq!(projection["execution_phase"], "terminal");
+            assert_eq!(projection["terminal_status"], "cancelled");
+
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 #[test]
 fn cancelled_ack_terminalizes_linked_business_command_atomically() {
-    let root = business_command_test_root("ctox-business-command-cancel-ack");
-    let claimed = claim_business_command_with_queue(
-        &root,
-        business_command_claim("command-cancel-ack", "sha256:cancel-ack"),
-        QueueTaskCreateRequest {
-            title: "Cancel acknowledged work".to_string(),
-            prompt: "This linked task will be cancelled through the ack path.".to_string(),
-            thread_key: "business-os/tests/cancel-ack".to_string(),
-            workspace_root: Some(root.display().to_string()),
-            priority: "normal".to_string(),
-            suggested_skill: None,
-            parent_message_key: None,
-            extra_metadata: Some(json!({"idempotency_key": "command-cancel-ack"})),
-        },
-    )
-    .expect("claim command");
-    let task_id = claimed.task.message_key;
-    lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "leased",
-        None,
-        None,
-        None,
-        "initial lease",
-    )
-    .expect("lease command");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "running",
-        None,
-        None,
-        None,
-        "initial execution",
-    )
-    .expect("run command");
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            let claimed = claim_business_command_with_queue(
+                &root,
+                business_command_claim("command-cancel-ack", "sha256:cancel-ack"),
+                QueueTaskCreateRequest {
+                    title: "Cancel acknowledged work".to_string(),
+                    prompt: "This linked task will be cancelled through the ack path.".to_string(),
+                    thread_key: "business-os/tests/cancel-ack".to_string(),
+                    workspace_root: Some(root.display().to_string()),
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(json!({"idempotency_key": "command-cancel-ack"})),
+                },
+            )
+            .expect("claim command");
+            let task_id = claimed.task.message_key;
+            lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "initial lease",
+            )
+            .expect("lease command");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "running",
+                None,
+                None,
+                None,
+                "initial execution",
+            )
+            .expect("run command");
 
-    assert_eq!(
-        ack_leased_messages(&root, std::slice::from_ref(&task_id), "cancelled")
-            .expect("cancel through ack path"),
-        1
-    );
-    let projection =
-        business_command_projection(&root, "command-cancel-ack").expect("load projection");
-    assert_eq!(projection["execution_phase"], "terminal");
-    assert_eq!(projection["terminal_status"], "cancelled");
-    assert_eq!(
-        load_queue_task(&root, &task_id)
-            .expect("load cancelled task")
-            .expect("cancelled task exists")
-            .route_status,
-        "cancelled"
-    );
-    let _ = fs::remove_dir_all(root);
+            assert_eq!(
+                ack_leased_messages(&root, std::slice::from_ref(&task_id), "cancelled")
+                    .expect("cancel through ack path"),
+                1
+            );
+            let projection =
+                business_command_projection(&root, "command-cancel-ack").expect("load projection");
+            assert_eq!(projection["execution_phase"], "terminal");
+            assert_eq!(projection["terminal_status"], "cancelled");
+            assert_eq!(
+                load_queue_task(&root, &task_id)
+                    .expect("load cancelled task")
+                    .expect("cancelled task exists")
+                    .route_status,
+                "cancelled"
+            );
+
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 #[test]
 fn legacy_cancelled_queue_command_migration_runs_once_per_database() {
-    let root = business_command_test_root("ctox-business-command-reconcile-cancel");
-    let claimed = claim_business_command_with_queue(
-        &root,
-        business_command_claim("command-reconcile-cancel", "sha256:reconcile-cancel"),
-        QueueTaskCreateRequest {
-            title: "Repair cancelled work".to_string(),
-            prompt: "Simulate a legacy split-brain cancellation.".to_string(),
-            thread_key: "business-os/tests/reconcile-cancel".to_string(),
-            workspace_root: Some(root.display().to_string()),
-            priority: "normal".to_string(),
-            suggested_skill: None,
-            parent_message_key: None,
-            extra_metadata: Some(json!({"idempotency_key": "command-reconcile-cancel"})),
-        },
-    )
-    .expect("claim command");
-    let task_id = claimed.task.message_key;
-    lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "leased",
-        None,
-        None,
-        None,
-        "initial lease",
-    )
-    .expect("lease command");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "running",
-        None,
-        None,
-        None,
-        "initial execution",
-    )
-    .expect("run command");
-    let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open core db");
-    conn.execute(
-        "UPDATE communication_routing_state
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            let claimed = claim_business_command_with_queue(
+                &root,
+                business_command_claim("command-reconcile-cancel", "sha256:reconcile-cancel"),
+                QueueTaskCreateRequest {
+                    title: "Repair cancelled work".to_string(),
+                    prompt: "Simulate a legacy split-brain cancellation.".to_string(),
+                    thread_key: "business-os/tests/reconcile-cancel".to_string(),
+                    workspace_root: Some(root.display().to_string()),
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(json!({"idempotency_key": "command-reconcile-cancel"})),
+                },
+            )
+            .expect("claim command");
+            let task_id = claimed.task.message_key;
+            lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "initial lease",
+            )
+            .expect("lease command");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "running",
+                None,
+                None,
+                None,
+                "initial execution",
+            )
+            .expect("run command");
+            let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open core db");
+            conn.execute(
+                "UPDATE communication_routing_state
          SET route_status = 'cancelled', lease_owner = NULL, leased_at = NULL,
              lease_expires_at = NULL
          WHERE message_key = ?1",
-        params![task_id],
-    )
-    .expect("seed legacy cancelled route");
-    drop(conn);
+                params![task_id],
+            )
+            .expect("seed legacy cancelled route");
+            drop(conn);
 
-    let report = audit_and_migrate_business_command_storage(&root, false)
-        .expect("report legacy cancelled rows");
-    assert_eq!(
-        report["cancelled_queue_command_drift"]
-            .as_array()
-            .map(Vec::len),
-        Some(1)
-    );
-    let applied = audit_and_migrate_business_command_storage(&root, true)
-        .expect("migrate legacy cancelled rows");
-    assert_eq!(applied["repaired_cancelled_queue_commands"], 1);
-    assert_eq!(
-        applied["legacy_cancelled_queue_command_migration"]["applied_now"],
-        true
-    );
-    let projection = business_command_projection(&root, "command-reconcile-cancel")
-        .expect("load reconciled projection");
-    assert_eq!(projection["execution_phase"], "terminal");
-    assert_eq!(projection["terminal_status"], "cancelled");
-    let clean =
-        audit_and_migrate_business_command_storage(&root, false).expect("verify migration marker");
-    assert_eq!(
-        clean["cancelled_queue_command_drift"]
-            .as_array()
-            .map(Vec::len),
-        Some(0)
-    );
-    assert_eq!(
-        clean["legacy_cancelled_queue_command_migration"]["already_applied"],
-        true
-    );
-    let second_apply =
-        audit_and_migrate_business_command_storage(&root, true).expect("skip completed migration");
-    assert_eq!(second_apply["repaired_cancelled_queue_commands"], 0);
-    assert_eq!(
-        second_apply["legacy_cancelled_queue_command_migration"]["already_applied"],
-        true
-    );
-    assert_eq!(
-        second_apply["legacy_cancelled_queue_command_migration"]["applied_now"],
-        false
-    );
-    let _ = fs::remove_dir_all(root);
+            let report = audit_and_migrate_business_command_storage(&root, false)
+                .expect("report legacy cancelled rows");
+            assert_eq!(
+                report["cancelled_queue_command_drift"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(1)
+            );
+            let applied = audit_and_migrate_business_command_storage(&root, true)
+                .expect("migrate legacy cancelled rows");
+            assert_eq!(applied["repaired_cancelled_queue_commands"], 1);
+            assert_eq!(
+                applied["legacy_cancelled_queue_command_migration"]["applied_now"],
+                true
+            );
+            let projection = business_command_projection(&root, "command-reconcile-cancel")
+                .expect("load reconciled projection");
+            assert_eq!(projection["execution_phase"], "terminal");
+            assert_eq!(projection["terminal_status"], "cancelled");
+            let clean = audit_and_migrate_business_command_storage(&root, false)
+                .expect("verify migration marker");
+            assert_eq!(
+                clean["cancelled_queue_command_drift"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(0)
+            );
+            assert_eq!(
+                clean["legacy_cancelled_queue_command_migration"]["already_applied"],
+                true
+            );
+            let second_apply = audit_and_migrate_business_command_storage(&root, true)
+                .expect("skip completed migration");
+            assert_eq!(second_apply["repaired_cancelled_queue_commands"], 0);
+            assert_eq!(
+                second_apply["legacy_cancelled_queue_command_migration"]["already_applied"],
+                true
+            );
+            assert_eq!(
+                second_apply["legacy_cancelled_queue_command_migration"]["applied_now"],
+                false
+            );
+
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 #[test]
 fn reconciler_repairs_failed_queue_with_nonterminal_command() {
-    let root = business_command_test_root("ctox-business-command-reconcile-failed");
-    let claimed = claim_business_command_with_queue(
-        &root,
-        business_command_claim("command-reconcile-failed", "sha256:reconcile-failed"),
-        QueueTaskCreateRequest {
-            title: "Repair failed work".to_string(),
-            prompt: "Simulate a legacy split-brain terminal failure.".to_string(),
-            thread_key: "business-os/tests/reconcile-failed".to_string(),
-            workspace_root: Some(root.display().to_string()),
-            priority: "normal".to_string(),
-            suggested_skill: None,
-            parent_message_key: None,
-            extra_metadata: Some(json!({"idempotency_key": "command-reconcile-failed"})),
-        },
-    )
-    .expect("claim command");
-    let task_id = claimed.task.message_key;
-    lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "leased",
-        None,
-        None,
-        None,
-        "initial lease",
-    )
-    .expect("lease command");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "running",
-        None,
-        None,
-        None,
-        "initial execution",
-    )
-    .expect("run command");
-    let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open core db");
-    conn.execute(
-        "UPDATE communication_routing_state
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            let claimed = claim_business_command_with_queue(
+                &root,
+                business_command_claim("command-reconcile-failed", "sha256:reconcile-failed"),
+                QueueTaskCreateRequest {
+                    title: "Repair failed work".to_string(),
+                    prompt: "Simulate a legacy split-brain terminal failure.".to_string(),
+                    thread_key: "business-os/tests/reconcile-failed".to_string(),
+                    workspace_root: Some(root.display().to_string()),
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(json!({"idempotency_key": "command-reconcile-failed"})),
+                },
+            )
+            .expect("claim command");
+            let task_id = claimed.task.message_key;
+            lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "initial lease",
+            )
+            .expect("lease command");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "running",
+                None,
+                None,
+                None,
+                "initial execution",
+            )
+            .expect("run command");
+            let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open core db");
+            conn.execute(
+                "UPDATE communication_routing_state
          SET route_status = 'failed', lease_owner = NULL, leased_at = NULL,
              lease_expires_at = NULL, last_error = 'finite review budget exhausted'
          WHERE message_key = ?1",
-        params![task_id],
-    )
-    .expect("seed legacy failed route");
-    drop(conn);
+                params![task_id],
+            )
+            .expect("seed legacy failed route");
+            drop(conn);
 
-    let report = audit_and_migrate_business_command_storage(&root, false)
-        .expect("report failed queue/command drift");
-    assert_eq!(
-        report["terminal_failure_queue_command_drift"]
-            .as_array()
-            .map(Vec::len),
-        Some(1)
-    );
-    let applied = audit_and_migrate_business_command_storage(&root, true)
-        .expect("repair failed queue/command drift");
-    assert_eq!(applied["repaired_terminal_failure_queue_commands"], 1);
-    assert_eq!(
-        applied["terminal_failure_queue_command_drift"]
-            .as_array()
-            .map(Vec::len),
-        Some(0)
-    );
-    let projection = business_command_projection(&root, "command-reconcile-failed")
-        .expect("load reconciled failed command");
-    assert_eq!(projection["execution_phase"], "terminal");
-    assert_eq!(projection["terminal_status"], "failed");
-    assert_eq!(
-        projection["error_code"],
-        "queue_terminal_failure_reconciled"
-    );
-    let _ = fs::remove_dir_all(root);
+            let report = audit_and_migrate_business_command_storage(&root, false)
+                .expect("report failed queue/command drift");
+            assert_eq!(
+                report["terminal_failure_queue_command_drift"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(1)
+            );
+            let applied = audit_and_migrate_business_command_storage(&root, true)
+                .expect("repair failed queue/command drift");
+            assert_eq!(applied["repaired_terminal_failure_queue_commands"], 1);
+            assert_eq!(
+                applied["terminal_failure_queue_command_drift"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(0)
+            );
+            let projection = business_command_projection(&root, "command-reconcile-failed")
+                .expect("load reconciled failed command");
+            assert_eq!(projection["execution_phase"], "terminal");
+            assert_eq!(projection["terminal_status"], "failed");
+            assert_eq!(
+                projection["error_code"],
+                "queue_terminal_failure_reconciled"
+            );
+
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 #[test]
 fn review_rework_reuses_task_and_increments_attempt() {
-    let root = business_command_test_root("ctox-business-command-rework-attempt");
-    let claimed = claim_business_command_with_queue(
-        &root,
-        business_command_claim("command-rework", "sha256:rework"),
-        QueueTaskCreateRequest {
-            title: "Rework continuity".to_string(),
-            prompt: "Keep this command and task.".to_string(),
-            thread_key: "business-os/tests/rework".to_string(),
-            workspace_root: Some(root.display().to_string()),
-            priority: "normal".to_string(),
-            suggested_skill: None,
-            parent_message_key: None,
-            extra_metadata: Some(json!({"idempotency_key": "command-rework"})),
-        },
-    )
-    .expect("claim command");
-    let task_id = claimed.task.message_key;
-    lease_queue_task(&root, &task_id, "ctox-test").expect("lease first queue attempt");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "leased",
-        None,
-        None,
-        None,
-        "attempt one lease",
-    )
-    .expect("lease first attempt");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "running",
-        None,
-        None,
-        None,
-        "attempt one",
-    )
-    .expect("start first attempt");
-    persist_business_command_worker_result(&root, &task_id, "first answer")
-        .expect("persist first result");
-    record_business_command_review(
-        &root,
-        &task_id,
-        "failed",
-        "pending",
-        &json!({"feedback": "fix it"}),
-    )
-    .expect("record rework");
-    ack_leased_messages(&root, std::slice::from_ref(&task_id), "pending")
-        .expect("release first queue attempt");
-    lease_queue_task(&root, &task_id, "ctox-test").expect("lease second queue attempt");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "leased",
-        None,
-        None,
-        None,
-        "attempt two lease",
-    )
-    .expect("lease second attempt");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "running",
-        None,
-        None,
-        None,
-        "attempt two",
-    )
-    .expect("start second attempt");
-    persist_business_command_worker_result(&root, &task_id, "second answer")
-        .expect("persist second result");
-    let projection = business_command_projection(&root, "command-rework").expect("load projection");
-    assert_eq!(projection["attempt"], 2);
-    let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open core db");
-    let result_count: i64 = conn
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            let claimed = claim_business_command_with_queue(
+                &root,
+                business_command_claim("command-rework", "sha256:rework"),
+                QueueTaskCreateRequest {
+                    title: "Rework continuity".to_string(),
+                    prompt: "Keep this command and task.".to_string(),
+                    thread_key: "business-os/tests/rework".to_string(),
+                    workspace_root: Some(root.display().to_string()),
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(json!({"idempotency_key": "command-rework"})),
+                },
+            )
+            .expect("claim command");
+            let task_id = claimed.task.message_key;
+            lease_queue_task(&root, &task_id, "ctox-test").expect("lease first queue attempt");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "attempt one lease",
+            )
+            .expect("lease first attempt");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "running",
+                None,
+                None,
+                None,
+                "attempt one",
+            )
+            .expect("start first attempt");
+            persist_business_command_worker_result(&root, &task_id, "first answer")
+                .expect("persist first result");
+            record_business_command_review(
+                &root,
+                &task_id,
+                "failed",
+                "pending",
+                &json!({"feedback": "fix it"}),
+            )
+            .expect("record rework");
+            ack_leased_messages(&root, std::slice::from_ref(&task_id), "pending")
+                .expect("release first queue attempt");
+            lease_queue_task(&root, &task_id, "ctox-test").expect("lease second queue attempt");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "attempt two lease",
+            )
+            .expect("lease second attempt");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "running",
+                None,
+                None,
+                None,
+                "attempt two",
+            )
+            .expect("start second attempt");
+            persist_business_command_worker_result(&root, &task_id, "second answer")
+                .expect("persist second result");
+            let projection =
+                business_command_projection(&root, "command-rework").expect("load projection");
+            assert_eq!(projection["attempt"], 2);
+            let conn = open_channel_db(&resolve_db_path(&root, None)).expect("open core db");
+            let result_count: i64 = conn
         .query_row(
             "SELECT COUNT(*) FROM business_command_results WHERE command_id = 'command-rework'",
             [],
             |row| row.get(0),
         )
         .expect("count attempt results");
-    assert_eq!(result_count, 2);
-    let _ = fs::remove_dir_all(root);
+            assert_eq!(result_count, 2);
+
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 #[test]
 fn releasing_failed_queue_task_moves_running_command_to_retry_wait() {
-    let root = business_command_test_root("ctox-business-command-manual-release");
-    let claimed = claim_business_command_with_queue(
-        &root,
-        business_command_claim("command-manual-release", "sha256:manual-release"),
-        QueueTaskCreateRequest {
-            title: "Recover interrupted command".to_string(),
-            prompt: "Continue the interrupted command.".to_string(),
-            thread_key: "business-os/tests/manual-release".to_string(),
-            workspace_root: Some(root.display().to_string()),
-            priority: "normal".to_string(),
-            suggested_skill: None,
-            parent_message_key: None,
-            extra_metadata: Some(json!({"idempotency_key": "command-manual-release"})),
-        },
-    )
-    .expect("claim command");
-    let task_id = claimed.task.message_key;
-    lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "leased",
-        None,
-        None,
-        None,
-        "initial lease",
-    )
-    .expect("lease command");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "running",
-        None,
-        None,
-        None,
-        "initial execution",
-    )
-    .expect("run command");
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            let claimed = claim_business_command_with_queue(
+                &root,
+                business_command_claim("command-manual-release", "sha256:manual-release"),
+                QueueTaskCreateRequest {
+                    title: "Recover interrupted command".to_string(),
+                    prompt: "Continue the interrupted command.".to_string(),
+                    thread_key: "business-os/tests/manual-release".to_string(),
+                    workspace_root: Some(root.display().to_string()),
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(json!({"idempotency_key": "command-manual-release"})),
+                },
+            )
+            .expect("claim command");
+            let task_id = claimed.task.message_key;
+            lease_queue_task(&root, &task_id, "ctox-test").expect("lease queue task");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "initial lease",
+            )
+            .expect("lease command");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "running",
+                None,
+                None,
+                None,
+                "initial execution",
+            )
+            .expect("run command");
 
-    update_queue_task(
-        &root,
-        QueueTaskUpdateRequest {
-            message_key: task_id.clone(),
-            route_status: Some("failed".to_string()),
-            status_note: Some("worker interrupted before lifecycle cleanup".to_string()),
-            ..Default::default()
-        },
-    )
-    .expect("record interrupted queue route");
-    let released = update_queue_task(
-        &root,
-        QueueTaskUpdateRequest {
-            message_key: task_id.clone(),
-            route_status: Some("pending".to_string()),
-            status_note: Some("operator retry".to_string()),
-            ..Default::default()
-        },
-    )
-    .expect("release interrupted command");
-    assert_eq!(released.route_status, "pending");
-    let projection = business_command_projection(&root, "command-manual-release")
-        .expect("load released command projection");
-    assert_eq!(projection["execution_phase"], "retry_wait");
+            update_queue_task(
+                &root,
+                QueueTaskUpdateRequest {
+                    message_key: task_id.clone(),
+                    route_status: Some("failed".to_string()),
+                    status_note: Some("worker interrupted before lifecycle cleanup".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("record interrupted queue route");
+            let released = update_queue_task(
+                &root,
+                QueueTaskUpdateRequest {
+                    message_key: task_id.clone(),
+                    route_status: Some("pending".to_string()),
+                    status_note: Some("operator retry".to_string()),
+                    ..Default::default()
+                },
+            )
+            .expect("release interrupted command");
+            assert_eq!(released.route_status, "pending");
+            let projection = business_command_projection(&root, "command-manual-release")
+                .expect("load released command projection");
+            assert_eq!(projection["execution_phase"], "retry_wait");
 
-    lease_queue_task(&root, &task_id, "ctox-test").expect("lease retry");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "leased",
-        None,
-        None,
-        None,
-        "retry lease",
-    )
-    .expect("retry_wait must transition to leased");
-    let projection = business_command_projection(&root, "command-manual-release")
-        .expect("load retried command projection");
-    assert_eq!(projection["execution_phase"], "leased");
-    let _ = fs::remove_dir_all(root);
+            lease_queue_task(&root, &task_id, "ctox-test").expect("lease retry");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "retry lease",
+            )
+            .expect("retry_wait must transition to leased");
+            let projection = business_command_projection(&root, "command-manual-release")
+                .expect("load retried command projection");
+            assert_eq!(projection["execution_phase"], "leased");
+
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 #[test]
 fn unavailable_review_waits_for_retry_without_blocking_command() {
-    let root = business_command_test_root("ctox-business-command-review-unavailable");
-    let claimed = claim_business_command_with_queue(
-        &root,
-        business_command_claim("command-review-unavailable", "sha256:review-unavailable"),
-        QueueTaskCreateRequest {
-            title: "Retry unavailable review".to_string(),
-            prompt: "Answer from supplied facts.".to_string(),
-            thread_key: "business-os/tests/review-unavailable".to_string(),
-            workspace_root: Some(root.display().to_string()),
-            priority: "normal".to_string(),
-            suggested_skill: None,
-            parent_message_key: None,
-            extra_metadata: Some(json!({"idempotency_key": "command-review-unavailable"})),
-        },
-    )
-    .expect("claim command");
-    let task_id = claimed.task.message_key;
-    lease_queue_task(&root, &task_id, "ctox-test").expect("lease first queue attempt");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "leased",
-        None,
-        None,
-        None,
-        "attempt one lease",
-    )
-    .expect("lease command");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "running",
-        None,
-        None,
-        None,
-        "attempt one",
-    )
-    .expect("run command");
-    persist_business_command_worker_result(&root, &task_id, "correct answer")
-        .expect("persist typed result");
-    record_business_command_review(
-        &root,
-        &task_id,
-        "held",
-        "pending",
-        &json!({"retryable_hold": true, "reason": "reviewer unavailable"}),
-    )
-    .expect("record retryable review hold");
+    crate::persistence::test_support::run_scoped(move || {
+        let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+        let root = owner_root.path().to_path_buf();
+        crate::persistence::test_support::with_queue(&root.clone(), move || {
+            let claimed = claim_business_command_with_queue(
+                &root,
+                business_command_claim("command-review-unavailable", "sha256:review-unavailable"),
+                QueueTaskCreateRequest {
+                    title: "Retry unavailable review".to_string(),
+                    prompt: "Answer from supplied facts.".to_string(),
+                    thread_key: "business-os/tests/review-unavailable".to_string(),
+                    workspace_root: Some(root.display().to_string()),
+                    priority: "normal".to_string(),
+                    suggested_skill: None,
+                    parent_message_key: None,
+                    extra_metadata: Some(json!({"idempotency_key": "command-review-unavailable"})),
+                },
+            )
+            .expect("claim command");
+            let task_id = claimed.task.message_key;
+            lease_queue_task(&root, &task_id, "ctox-test").expect("lease first queue attempt");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "attempt one lease",
+            )
+            .expect("lease command");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "running",
+                None,
+                None,
+                None,
+                "attempt one",
+            )
+            .expect("run command");
+            persist_business_command_worker_result(&root, &task_id, "correct answer")
+                .expect("persist typed result");
+            record_business_command_review(
+                &root,
+                &task_id,
+                "held",
+                "pending",
+                &json!({"retryable_hold": true, "reason": "reviewer unavailable"}),
+            )
+            .expect("record retryable review hold");
 
-    let projection =
-        business_command_projection(&root, "command-review-unavailable").expect("load projection");
-    assert_eq!(projection["execution_phase"], "retry_wait");
-    assert_eq!(projection["terminal_status"], "none");
-    assert_eq!(projection["retryable"], true);
+            let projection = business_command_projection(&root, "command-review-unavailable")
+                .expect("load projection");
+            assert_eq!(projection["execution_phase"], "retry_wait");
+            assert_eq!(projection["terminal_status"], "none");
+            assert_eq!(projection["retryable"], true);
 
-    ack_leased_messages(&root, std::slice::from_ref(&task_id), "pending")
-        .expect("release held queue attempt");
-    lease_queue_task(&root, &task_id, "ctox-test").expect("lease review retry queue attempt");
-    transition_business_command_for_task(
-        &root,
-        &task_id,
-        "leased",
-        None,
-        None,
-        None,
-        "review retry lease",
-    )
-    .expect("retry_wait must be leasable");
-    let projection = business_command_projection(&root, "command-review-unavailable")
-        .expect("reload projection");
-    assert_eq!(projection["execution_phase"], "leased");
-    let _ = fs::remove_dir_all(root);
+            ack_leased_messages(&root, std::slice::from_ref(&task_id), "pending")
+                .expect("release held queue attempt");
+            lease_queue_task(&root, &task_id, "ctox-test")
+                .expect("lease review retry queue attempt");
+            transition_business_command_for_task(
+                &root,
+                &task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "review retry lease",
+            )
+            .expect("retry_wait must be leasable");
+            let projection = business_command_projection(&root, "command-review-unavailable")
+                .expect("reload projection");
+            assert_eq!(projection["execution_phase"], "leased");
+
+            Ok(())
+        })
+    })
+    .unwrap();
 }
 
 #[test]
 fn typed_result_persistence_hold_retries_command_and_queue_together() {
-    let root = business_command_test_root("ctox-business-command-result-hold");
+    crate::persistence::test_support::run_scoped(move || {
+    let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+let root = owner_root.path().to_path_buf();
+crate::persistence::test_support::with_queue(&root.clone(), move || {
     let claimed = claim_business_command_with_queue(
         &root,
         business_command_claim("command-result-hold", "sha256:result-hold"),
@@ -8232,7 +8340,13 @@ fn typed_result_persistence_hold_retries_command_and_queue_together() {
         hold_reason.as_deref(),
         Some("technical:typed-command-result-persist")
     );
-    let _ = fs::remove_dir_all(root);
+
+
+Ok(())
+
+})
+
+}).unwrap();
 }
 
 #[test]
@@ -8406,7 +8520,10 @@ fn queue_task_update_keeps_its_place_unless_priority_changes() {
 
 #[test]
 fn provider_capacity_hold_waits_without_spending_the_failure_budget() {
-    let root = business_command_test_root("ctox-provider-capacity-hold");
+    crate::persistence::test_support::run_scoped(move || {
+    let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+let root = owner_root.path().to_path_buf();
+crate::persistence::test_support::with_queue(&root.clone(), move || {
     let claimed = claim_business_command_with_queue(
         &root,
         business_command_claim("command-capacity-hold", "sha256:capacity-hold"),
@@ -8513,7 +8630,13 @@ fn provider_capacity_hold_waits_without_spending_the_failure_budget() {
         (500..=600).contains(&wait_seconds()),
         "capacity backoff restarts after a technical hold"
     );
-    let _ = fs::remove_dir_all(root);
+
+
+Ok(())
+
+})
+
+}).unwrap();
 }
 
 #[test]
