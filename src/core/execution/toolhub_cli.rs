@@ -94,7 +94,16 @@ impl ApprovalGates for TicketGates<'_> {
         }
         Ok(())
     }
+
+    fn builder_mission_service(&self, work_id: &str) -> Result<Option<String>> {
+        Ok(tickets::load_ticket_self_work_item(self.root, work_id)?
+            .filter(|item| item.kind == BUILDER_MISSION_KIND && !matches!(item.state.as_str(), "closed" | "failed" | "cancelled"))
+            .and_then(|item| item.metadata["service"].as_str().map(str::to_string)))
+    }
 }
+
+/// Internal work-item kind of a builder mission (`request-adapter`).
+pub(crate) const BUILDER_MISSION_KIND: &str = "adapter-build";
 
 /// `policy::evaluate` for the acting Business OS role.
 pub(crate) struct CtoxPolicy {
@@ -179,7 +188,7 @@ pub(crate) fn handle_toolhub_command(root: &Path, args: &[String]) -> Result<()>
     Ok(())
 }
 
-pub(crate) const USAGE: &str = "usage: ctox toolhub [--as supervisor|worker|oneshot|mcp] <search|get-schema|list|execute|draft-spec|validate|live-test|submit|approve|activate|deactivate|rollback|request-adapter|rules> ...";
+pub(crate) const USAGE: &str = "usage: ctox toolhub [--as supervisor|worker|oneshot|mcp] <search|get-schema|list|execute|draft-spec|validate|live-test|approve|activate|deactivate|rollback|request-adapter|rules> ...";
 
 /// `transport` is injectable for tests; production uses ureq with the
 /// SSRF-guarded options.
@@ -231,13 +240,12 @@ pub(crate) fn run(
             )?;
             b.live_test(p1()?, p2()?, &probes, flag(args, "--account"))
         }
-        "submit" => b.submit_for_approval(p1()?, p2()?),
         "approve" => b.approve(
             req(flag(args, "--gate"), "--gate")?,
             Decision::parse(flag(args, "--decision").unwrap_or("approve"))?,
             req(flag(args, "--user-quote"), "--user-quote")?,
         ),
-        "activate" => b.activate(p1()?, p2()?),
+        "activate" => b.activate(p1()?, p2()?, flag(args, "--mission")),
         "deactivate" => b.deactivate(p1()?),
         "rollback" => b.rollback(p1()?),
         "request-adapter" => request_adapter(root, role, p1()?, flag(args, "--reason").unwrap_or("")),
@@ -272,10 +280,10 @@ fn request_adapter(root: &Path, role: AgentRole, service: &str, reason: &str) ->
         root,
         tickets::TicketSelfWorkUpsertInput {
             source_system: "internal".into(),
-            kind: "adapter-build".into(),
+            kind: BUILDER_MISSION_KIND.into(),
             title: format!("Adapter bauen: {slug} / Build adapter: {slug}"),
             body_text: format!(
-                "Baue einen ToolHub-Adapter für `{slug}` mit dem Skill adapter-builder: Katalog prüfen (`ctox toolhub search --include-catalog`), sonst Spec entwerfen, validieren, live testen, zur Freigabe vorlegen. Aktivieren nur nach Freigabe durch den Nutzer.\n\nBuild a ToolHub adapter for `{slug}` with the adapter-builder skill: check the catalog, else draft, validate, live-test and submit the spec. Activate only after the user approves.\n\nGrund / Reason: {reason}"
+                "Baue einen ToolHub-Adapter für `{slug}` mit dem Skill adapter-builder: Katalog prüfen (`ctox toolhub search --include-catalog`), sonst Spec entwerfen, validieren, live testen und mit `--mission <diese work_id>` selbst aktivieren (ohne Nutzerfreigabe).\n\nBuild a ToolHub adapter for `{slug}` with the adapter-builder skill: check the catalog, else draft, validate, live-test and activate it yourself with `--mission <this work_id>` (no user approval).\n\nGrund / Reason: {reason}"
             ),
             state: "open".into(),
             metadata: json!({"skill": "adapter-builder", "service": slug, "reason": reason, "dedupe_key": dedupe_key, "requested_by_role": role.as_str()}),

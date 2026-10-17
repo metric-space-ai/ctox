@@ -22,35 +22,24 @@ fn cli(root: &Path, args: &[&str]) -> Result<Value> {
     run(root, &args, Some(Arc::new(Mock)))
 }
 
-/// What the approval-reply sweep does for an authorized owner reply.
-fn owner_approves(root: &Path, gate: &str) {
-    let conn = rusqlite::Connection::open(crate::paths::core_db(root)).unwrap();
-    conn.execute_batch("CREATE TABLE IF NOT EXISTS ticket_approval_reply_ledger (message_key TEXT PRIMARY KEY, work_id TEXT NOT NULL, action TEXT NOT NULL, sender_address TEXT NOT NULL, body_sha256 TEXT NOT NULL, residual_text TEXT NOT NULL, decision_status TEXT NOT NULL, followup_message_key TEXT, observed_at TEXT NOT NULL, applied_at TEXT);").unwrap();
-    conn.execute("INSERT INTO ticket_approval_reply_ledger VALUES ('owner-reply-1', ?1, 'approve', 'owner@example.org', 'abcdef0123456789abcdef', '', 'observed', NULL, '2026-10-16T00:00:00Z', NULL)", [gate]).unwrap();
-    tickets::set_ticket_approval_gate_state_from_authorized_reply(root, gate, "closed", "owner-reply-1").unwrap();
-}
-
 const PROBES: &str = r#"[{"tool":"ZIPPOPOTAM_LOOKUP_POSTAL_CODE","args":{"country":"de","postal_code":"10115"}}]"#;
 
 #[test]
-fn cli_end_to_end_with_real_approval_gate_work_items() {
+fn cli_end_to_end_autonomous_activation_inside_builder_mission() {
     let r = root("e2e");
+    let m = cli(&r, &["--as", "worker", "request-adapter", "zippopotam", "--reason", "postal codes"]).unwrap();
+    let mission = m["work_id"].as_str().unwrap().to_string();
     cli(&r, &["--as", "worker", "draft-spec", "--from-catalog", "zippopotam"]).unwrap();
     assert_eq!(cli(&r, &["--as", "worker", "validate", "zippopotam", "1.0.0"]).unwrap()["ok"], json!(true));
     assert_eq!(cli(&r, &["--as", "worker", "live-test", "zippopotam", "1.0.0", "--probes-json", PROBES]).unwrap()["passed"], json!(true));
-    let s = cli(&r, &["--as", "worker", "submit", "zippopotam", "1.0.0"]).unwrap();
-    let gate = s["gate_id"].as_str().unwrap().to_string();
-    let item = tickets::load_ticket_self_work_item(&r, &gate).unwrap().unwrap();
-    assert_eq!(item.kind, "approval-gate");
-    assert_eq!(item.state, "open");
-    assert!(cli(&r, &["--as", "worker", "approve", "--gate", &gate, "--user-quote", "ja"]).is_err());
-    // No owner reply yet: even a supervisor cannot approve.
-    let err = cli(&r, &["--as", "supervisor", "approve", "--gate", &gate, "--user-quote", "ja"]).unwrap_err();
-    assert!(err.to_string().contains("waiting_for_user"), "{err}");
-    owner_approves(&r, &gate);
-    cli(&r, &["--as", "supervisor", "approve", "--gate", &gate, "--decision", "approve", "--user-quote", "Ja, freigeben"]).unwrap();
-    assert_eq!(tickets::load_ticket_self_work_item(&r, &gate).unwrap().unwrap().state, "closed");
-    cli(&r, &["--as", "supervisor", "activate", "zippopotam", "1.0.0"]).unwrap();
+    // One-shot never activates; a worker only inside its builder mission.
+    assert!(cli(&r, &["activate", "zippopotam", "1.0.0", "--mission", &mission]).unwrap_err().to_string().contains("not_allowed"));
+    assert!(cli(&r, &["--as", "worker", "activate", "zippopotam", "1.0.0"]).is_err());
+    assert!(cli(&r, &["--as", "worker", "submit", "zippopotam", "1.0.0"]).is_err(), "no submit step any more");
+    let a = cli(&r, &["--as", "worker", "activate", "zippopotam", "1.0.0", "--mission", &mission]).unwrap();
+    assert_eq!(a["active"]["version"], json!("1.0.0"));
+    let gates = tickets::list_ticket_self_work_items(&r, Some("internal"), None, 100).unwrap();
+    assert!(gates.iter().all(|i| i.kind != "approval-gate"), "adapter setup opens no approval gate (no nag)");
     let out = cli(&r, &["execute", "ZIPPOPOTAM_LOOKUP_POSTAL_CODE", "--args-json", r#"{"country":"de","postal_code":"10115"}"#]).unwrap();
     assert_eq!(out["data"]["places"][0]["place name"], json!("Berlin"));
     let found = cli(&r, &["search", "postal"]).unwrap();

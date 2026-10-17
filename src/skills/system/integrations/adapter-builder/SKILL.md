@@ -1,6 +1,6 @@
 ---
 name: adapter-builder
-description: Add a connector for a new external service at runtime without recompiling CTOX. Research the official API docs, write a declarative adapter spec (ctox.adapter-spec/v1), validate it, prove it with a real live call, and request activation from the user through the supervisor. Use when an agent needs a service that `toolhub catalog` does not list.
+description: Add a connector for a new external service at runtime without recompiling CTOX. Research the official API docs, write a declarative adapter spec (ctox.adapter-spec/v1), validate it, prove it with a real live call, and activate it autonomously (no user approval; a fresh passing live test is the gate). Use when an agent needs a service that `toolhub catalog` does not list.
 class: system
 state: draft
 cluster: integrations
@@ -22,8 +22,14 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
 
 ## Rollen / Roles (hard rules)
 
-- Only the **supervisor** talks to the user (credential card, activation card).
-  Persistent workers hand the request to the supervisor and wait. One-shot
+- Adapter setup is **autonomous**: no user approval to install or activate.
+  The gate is technical: validate passes and a live test passed within 24 h
+  for exactly this spec (sha256). Supervisor activates any time; a persistent
+  worker only inside a builder mission (`--mission <work_id>`); one-shot
+  workers and external MCP never.
+- Only the **supervisor** talks to the user (credential card, and per-call
+  approval of destructive actions). Persistent workers hand such requests to
+  the supervisor and wait. One-shot
   workers never interact: they finish with `needs_user` and a short reason.
 - Only the CTOX core instance makes outbound HTTPS calls. Workjet and the
   browser talk to the instance only through ctox sync.
@@ -65,13 +71,14 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
    consent, only in a test object, and clean up afterwards. Record per action:
    PASS / FAIL / SKIP with reason. An action without a passing live call is not
    done; remove it from the spec or mark the spec as not ready.
-8. **Request activation.** The supervisor shows the activation card: service,
-   version, allowed hosts, actions grouped by risk, live-test result, diff to
-   the previous version. Only after the user approves:
-   `SpecStore::activate(slug, version, actor)`; the hub picks it up via
-   `reload_specs_if_changed` without restart.
-9. **Rollback** if a new version misbehaves: `SpecStore::rollback(slug, actor)`
-   (or `deactivate`). Report what happened.
+8. **Activate** yourself, right after a passing live test:
+   `ctox_toolhub_activate <slug> <version>` (worker: with `mission`). No user
+   step. The hub picks it up via `reload_specs_if_changed` without restart.
+   Report to the supervisor what was activated (service, hosts, actions by risk).
+9. **Rollback.** After 5 consecutive failed calls (mapping errors, 5xx, 400/410)
+   the active version rolls back automatically to the previous one (once, no
+   ping-pong; see `history.jsonl` event `auto_rollback`). Otherwise the
+   supervisor uses `ctox_toolhub_rollback` or `deactivate`. Report what happened.
 
 ## Werkzeuge / Tools (ctox toolhub, since 2026-10-16)
 
@@ -86,14 +93,15 @@ session, never by you. Rules per role: `ctox toolhub --as <role> rules`.
 | Draft | `ctox_toolhub_draft_spec` (`spec_json` or `from_catalog`) | all except MCP |
 | Validate | `ctox_toolhub_validate <slug> <version>` | all except MCP |
 | Live test + review proof | `ctox_toolhub_live_test` with `probes_json` `[{tool,args,cleanup[]}]` | reads: all; write probes: supervisor; destructive: never |
-| Submit | `ctox_toolhub_submit_for_approval` → `approval-gate` work item | supervisor, worker |
-| User decision | `ctox_toolhub_approve gate decision=approve|read_only|reject user_quote="<user's words>"` | supervisor only, after asking the user |
-| Activate / deactivate / rollback | `ctox_toolhub_activate` etc. | supervisor only |
+| Activate (no user approval) | `ctox_toolhub_activate <slug> <version> [mission]` | supervisor; worker only with its builder mission |
+| Deactivate / rollback | `ctox_toolhub_deactivate`, `ctox_toolhub_rollback` | supervisor (plus automatic rollback on repeated failures) |
+| Per-call approval (destructive only) | `ctox_toolhub_approve gate decision=approve|reject user_quote="<user's words>"` | supervisor only, after asking the user |
 | Use | `ctox_toolhub_execute` (destructive: first `approval_required` + gate, then again with `approval_gate`) | per role rules |
 
-Hard checks in code: activation needs a passing review younger than 24 h, a
-recorded user decision bound to the spec sha256 and a closed gate; any spec
-change after approval blocks activation. Every step lands in
+Hard checks in code: activation needs a validating spec and a passing live-test
+proof younger than 24 h bound to the spec sha256; any change after the test
+blocks activation. The egress validator (https only, allowed hosts, public IPs)
+always applies. Destructive calls still need a single-use per-call gate. Every step lands in
 `runtime/toolhub/adapter-specs/<slug>/history.jsonl` (argument hashes only).
 
 ## Stand / Status (2026-10-15)
@@ -160,8 +168,9 @@ change after approval blocks activation. Every step lands in
   URL that answers HEAD 200 (https://example.com/ works; a path that 404s does not).
 - **Wired (2026-10-16, branch feat/toolhub-adapter-builder):** `ctox toolhub` CLI,
   harness tools `ctox_toolhub_*`, read-only MCP tools `business_os.toolhub_*`,
-  builder mission `request-adapter`. Approval runs through the supervisor chat
-  until the S2 card exists. Older note:
+  builder mission `request-adapter`. Since 2026-10-17 (user decision) adapter
+  setup is autonomous: no approval gate, no email nag for adapters; auto-rollback
+  after repeated failures. Older note:
 - **Not wired yet (before 2026-10-16):** the toolhub was not part of the `ctox` binary on main, so there
   was no `ctox toolhub spec …` command, no MCP tool and no activation card yet.
   Until then steps 4 to 9 run only in tests. The user-facing parts (cards,

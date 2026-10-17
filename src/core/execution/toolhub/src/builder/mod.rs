@@ -1,20 +1,22 @@
 //! Adapter-builder agent interface (`docs/rfcs/toolhub-adapter-builder.md`).
 //!
 //! DE: Werkzeuge, mit denen ein CTOX-Agent Dienste sucht, ausführt und fehlende
-//! Dienste als Spec entwirft, prüft, live testet und zur Freigabe vorlegt.
-//! Aktiviert wird nur mit einer Nutzerentscheidung, die an den sha256 der
-//! geprüften Version gebunden ist.
+//! Dienste als Spec entwirft, prüft, live testet und selbst aktiviert. Ohne
+//! Nutzerfreigabe; Voraussetzung ist ein bestandener, höchstens 24 h alter
+//! Live-Test, der an den sha256 der Version gebunden ist.
 //!
 //! EN: Tools for a CTOX agent to search and run services and to draft,
-//! validate, live-test and submit missing ones as specs. Activation needs a
-//! user decision bound to the sha256 of the tested version.
+//! validate, live-test and activate missing ones autonomously. No user
+//! approval: activation needs a passing live-test proof younger than 24 h
+//! bound to the sha256 of the version. The runtime risk policy stays:
+//! destructive calls need a per-call approval gate.
 //!
-//! The host (the `ctox` binary) supplies the secret backend, the approval
-//! gates (`approval-gate` work items) and the Business OS policy check; this
-//! crate owns the flow, the role matrix and the per-instance records:
+//! The host (the `ctox` binary) supplies the secret backend, the per-call
+//! approval gates and builder-mission lookup, and the Business OS policy
+//! check; this crate owns the flow, the role matrix and the records:
 //! - `<specs>/<slug>/reviews/<version>.json`   live-test proof
-//! - `<specs>/<slug>/approvals/<version>.json` pointer to the gate
-//! - `<root>/runtime/toolhub/gates/<id>.json`   gate record with the decision
+//! - `<specs>/<slug>/health.json`              consecutive failures (auto-rollback)
+//! - `<root>/runtime/toolhub/gates/<id>.json`   per-call gate record
 //! - `<root>/runtime/toolhub/drafts/<slug>/<version>.json` drafts
 //! - `<specs>/<slug>/history.jsonl`            audit (append-only)
 pub mod catalog;
@@ -36,7 +38,7 @@ use crate::store::SecretBackend;
 use crate::toolkits::ToolkitAdapter;
 pub use roles::{AgentRole, Denied, Tool};
 
-/// A live-test proof older than this cannot be submitted.
+/// A live-test proof older than this cannot activate a version.
 pub const REVIEW_MAX_AGE_SECS: u64 = 24 * 3600;
 
 /// Business OS permissions the host checks with `policy::evaluate`.
@@ -53,7 +55,13 @@ pub trait PolicyGate {
     fn check(&self, permission: Permission) -> Result<()>;
 }
 
-/// New `approval-gate` work item for the supervisor.
+/// Consecutive failed calls of the active version before it is rolled back
+/// automatically (only if a previous version exists).
+pub const AUTO_ROLLBACK_AFTER: u32 = 5;
+
+const AUTO_ROLLBACK_ACTOR: &str = "toolhub:auto-rollback";
+
+/// New per-call `approval-gate` work item (destructive actions only).
 #[derive(Debug, Clone, Serialize)]
 pub struct GateRequest {
     pub title: String,
@@ -61,33 +69,35 @@ pub struct GateRequest {
     pub metadata: Value,
 }
 
-/// Host side of the approval gates (`approval-gate` internal work items).
+/// Host side: per-call approval gates (`approval-gate` internal work items)
+/// and the builder-mission lookup.
 pub trait ApprovalGates {
     fn open(&self, request: &GateRequest) -> Result<String>;
     /// `open`, `closed`, `failed`, ... ; `None` if the gate does not exist.
     fn state(&self, gate_id: &str) -> Result<Option<String>>;
     fn decide(&self, gate_id: &str, approved: bool) -> Result<()>;
+    /// Service slug of a live (not closed/failed) builder mission, if
+    /// `work_id` is one. Workers may activate only inside such a mission.
+    fn builder_mission_service(&self, work_id: &str) -> Result<Option<String>> {
+        let _ = work_id;
+        Ok(None)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Decision {
     Approve,
-    ReadOnly,
     Reject,
 }
 
 impl Decision {
     pub fn parse(s: &str) -> Result<Self> {
-        Ok(match s.trim().to_ascii_lowercase().replace('-', "_").as_str() {
+        Ok(match s.trim().to_ascii_lowercase().as_str() {
             "approve" | "approved" => Self::Approve,
-            "read_only" | "readonly" => Self::ReadOnly,
             "reject" | "rejected" => Self::Reject,
-            o => bail!("unknown decision `{o}` (approve|read_only|reject)"),
+            o => bail!("unknown decision `{o}` (approve|reject)"),
         })
-    }
-    fn allows_activation(self) -> bool {
-        matches!(self, Self::Approve | Self::ReadOnly)
     }
 }
 
@@ -103,7 +113,6 @@ pub struct DecisionRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum GateSubject {
-    Adapter { slug: String, version: String, sha256: String },
     Call { toolkit: String, tool: String, args_sha256: String },
 }
 
@@ -270,8 +279,18 @@ impl<'a> Builder<'a> {
         Ok(self.store.slug_path(slug)?.join("reviews").join(format!("{}.json", safe(version)?)))
     }
 
-    fn approval_path(&self, slug: &str, version: &str) -> Result<PathBuf> {
-        Ok(self.store.slug_path(slug)?.join("approvals").join(format!("{}.json", safe(version)?)))
+    fn health_path(&self, slug: &str) -> Result<PathBuf> {
+        Ok(self.store.slug_path(slug)?.join("health.json"))
+    }
+
+    /// Passing live-test proof for exactly this installed text.
+    fn proof(&self, slug: &str, version: &str) -> Result<ReviewRecord> {
+        let sha = sha256_hex(self.store.version_text(slug, version).context("run a passing live_test first")?.as_bytes());
+        let review: ReviewRecord = read_json(&self.review_path(slug, version)?)?.ok_or_else(|| anyhow!("{slug} {version} has no live-test proof"))?;
+        if !review.passed || review.sha256 != sha {
+            bail!("the live-test proof does not match {slug} {version} (changed after the test)");
+        }
+        Ok(review)
     }
 
     fn require(&self, tool: Tool, risk: Option<Risk>) -> Result<()> {
@@ -294,14 +313,6 @@ impl<'a> Builder<'a> {
 
     fn gate_record(&self, id: &str) -> Result<GateRecord> {
         read_json(&self.gate_path(id)?)?.ok_or_else(|| anyhow!("unknown gate `{id}`"))
-    }
-
-    /// Decision for `slug@version`, if its gate was decided.
-    fn version_decision(&self, slug: &str, version: &str) -> Result<Option<(GateRecord, DecisionRecord)>> {
-        let Some(ptr) = read_json::<Value>(&self.approval_path(slug, version)?)? else { return Ok(None) };
-        let id = ptr["gate_id"].as_str().ok_or_else(|| anyhow!("approval pointer without gate id"))?;
-        let rec = self.gate_record(id)?;
-        Ok(rec.decision.clone().map(|d| (rec, d)))
     }
 
     // ---------------------------------------------------------------- read tools
@@ -381,17 +392,10 @@ impl<'a> Builder<'a> {
             let mut versions = Vec::new();
             for v in &s.versions {
                 let review: Option<ReviewRecord> = read_json(&self.review_path(&s.slug, v)?)?;
-                let gate = match read_json::<Value>(&self.approval_path(&s.slug, v)?)? {
-                    Some(p) => {
-                        let id = p["gate_id"].as_str().unwrap_or_default().to_string();
-                        let rec = self.gate_record(&id).ok();
-                        json!({"gate_id": id, "decision": rec.and_then(|r| r.decision).map(|d| d.decision)})
-                    }
-                    None => Value::Null,
-                };
-                versions.push(json!({"version": v, "tested": review.as_ref().map(|r| json!({"passed": r.passed, "at": r.tested_at})), "gate": gate}));
+                versions.push(json!({"version": v, "tested": review.as_ref().map(|r| json!({"passed": r.passed, "at": r.tested_at, "sha256": r.sha256}))}));
             }
-            out.push(json!({"slug": s.slug, "active": s.active, "versions": versions}));
+            let health: Option<Value> = read_json(&self.health_path(&s.slug)?)?;
+            out.push(json!({"slug": s.slug, "active": s.active, "versions": versions, "health": health}));
         }
         Ok(json!({"adapters": out}))
     }
@@ -411,14 +415,6 @@ impl<'a> Builder<'a> {
             Risk::Write => Permission::DataWrite,
             Risk::Destructive => Permission::ExternalApprove,
         })?;
-        if risk != Risk::Read && hub.is_spec_toolkit(&toolkit) {
-            let active = self.store.active(&toolkit)?.ok_or_else(|| anyhow!("{toolkit} is not active"))?;
-            match self.version_decision(&toolkit, &active.version)? {
-                Some((_, d)) if d.decision == Decision::Approve => {}
-                Some((_, d)) if d.decision == Decision::ReadOnly => bail!("read_only_approval: {toolkit} {} was approved for read actions only", active.version),
-                _ => bail!("not_approved: {toolkit} {} has no recorded approval", active.version),
-            }
-        }
         let args_sha = sha256_hex(serde_json::to_string(args)?.as_bytes());
         if risk == Risk::Destructive {
             match approval_gate {
@@ -431,7 +427,7 @@ impl<'a> Builder<'a> {
                     let id = self.gates.open(&req)?;
                     write_json(&self.gate_path(&id)?, &GateRecord { gate_id: id.clone(), subject: GateSubject::Call { toolkit: toolkit.clone(), tool: tool.clone(), args_sha256: args_sha.clone() }, submitted_by: self.who(), submitted_at: self.now(), decision: None })?;
                     self.audit(&toolkit, json!({"event": "approval_requested", "tool": tool, "gate_id": id, "args_sha256": args_sha}))?;
-                    return Ok(json!({"outcome": "approval_required", "gate_id": id, "message": "Ask the user in the supervisor chat, record the answer with `approve`, then call again with this gate."}));
+                    return Ok(json!({"outcome": "approval_required", "gate_id": id, "message": "Destructive call: the user approves this exact call; record it with `approve`, then call again with this gate."}));
                 }
                 Some(id) => {
                     let rec = self.gate_record(id)?;
@@ -451,6 +447,12 @@ impl<'a> Builder<'a> {
             }
         }
         let outcome = hub.execute(&self.project, &tool, args, account);
+        let failed = match &outcome {
+            Err(_) => true,
+            Ok(ToolOutcome::ProviderError { status, .. }) => *status >= 500 || matches!(*status, 400 | 410),
+            _ => false,
+        };
+        let auto_rollback = if hub.is_spec_toolkit(&toolkit) { self.record_health(&toolkit, failed)? } else { None };
         let (kind, status, value) = match outcome {
             Ok(ToolOutcome::Success { data }) => ("success", None, json!({"outcome": "success", "data": data})),
             Ok(ToolOutcome::ProviderError { status, data }) => ("provider_error", Some(status), json!({"outcome": "provider_error", "status": status, "data": data})),
@@ -460,11 +462,48 @@ impl<'a> Builder<'a> {
             }
             Err(e) => {
                 self.audit(&toolkit, json!({"event": "execute", "tool": tool, "risk": risk_str(risk), "result": "error", "args_sha256": args_sha}))?;
-                return Err(e);
+                return Err(match auto_rollback {
+                    Some(v) => e.context(format!("{toolkit} was rolled back to {v} after repeated failures")),
+                    None => e,
+                });
             }
         };
         self.audit(&toolkit, json!({"event": "execute", "tool": tool, "risk": risk_str(risk), "result": kind, "status": status, "args_sha256": args_sha}))?;
+        let mut value = value;
+        if let (Some(v), Some(o)) = (auto_rollback, value.as_object_mut()) {
+            o.insert("auto_rollback".into(), json!(v));
+        }
         Ok(value)
+    }
+
+    /// Count consecutive failures of the active version (drift: mapping errors,
+    /// 5xx, 400/410). After [`AUTO_ROLLBACK_AFTER`] it rolls back to the
+    /// previous version if one exists (never twice in a row); returns that version.
+    fn record_health(&self, slug: &str, failed: bool) -> Result<Option<String>> {
+        let Some(active) = self.store.active(slug)? else { return Ok(None) };
+        let path = self.health_path(slug)?;
+        let prev: Option<Value> = read_json(&path)?;
+        let mut n = match &prev {
+            Some(h) if h["version"] == json!(active.version) => h["consecutive_failures"].as_u64().unwrap_or(0) as u32,
+            _ => 0,
+        };
+        n = if failed { n + 1 } else { 0 };
+        if prev.is_some() || failed {
+            write_json(&path, &json!({"version": active.version, "consecutive_failures": n, "at": self.now()}))?;
+        }
+        if n < AUTO_ROLLBACK_AFTER {
+            return Ok(None);
+        }
+        // No ping-pong: a version that an auto-rollback restored is not rolled
+        // "back" to the broken one; the supervisor decides from here.
+        if active.actor == AUTO_ROLLBACK_ACTOR {
+            return Ok(None);
+        }
+        let Some(previous) = active.previous.clone() else { return Ok(None) };
+        let ptr = self.store.rollback(slug, AUTO_ROLLBACK_ACTOR)?;
+        self.audit(slug, json!({"event": "auto_rollback", "from": active.version, "to": previous, "consecutive_failures": n}))?;
+        let _ = ptr;
+        Ok(Some(previous))
     }
 
     // ---------------------------------------------------------------- build flow
@@ -487,7 +526,7 @@ impl<'a> Builder<'a> {
         Ok(json!({"slug": slug, "version": version, "sha256": sha256_hex(text.as_bytes()), "draft": path}))
     }
 
-    /// Draft a copy of a vetted catalog spec (it still goes through test and gate).
+    /// Draft a copy of a vetted catalog spec (it still needs validate and live_test).
     pub fn draft_from_catalog(&self, slug: &str) -> Result<Value> {
         let text = catalog::get(slug).ok_or_else(|| anyhow!("`{slug}` is not in the shipped catalog"))?;
         self.draft_spec(text)
@@ -583,59 +622,8 @@ impl<'a> Builder<'a> {
         Ok(json!({"passed": passed, "installed": passed, "review": review, "access_missing": access_missing}))
     }
 
-    /// Open the approval gate for a tested version.
-    pub fn submit_for_approval(&self, slug: &str, version: &str) -> Result<Value> {
-        self.require(Tool::Submit, None)?;
-        let text = self.store.version_text(slug, version).context("run a passing live_test first")?;
-        let sha = sha256_hex(text.as_bytes());
-        let review: ReviewRecord = read_json(&self.review_path(slug, version)?)?.ok_or_else(|| anyhow!("{slug} {version} has no live-test proof"))?;
-        if !review.passed || review.sha256 != sha {
-            bail!("the live-test proof does not match {slug} {version}");
-        }
-        if self.now().saturating_sub(review.tested_at) > REVIEW_MAX_AGE_SECS {
-            bail!("the live-test proof is older than 24 h; run live_test again");
-        }
-        if let Some(ptr) = read_json::<Value>(&self.approval_path(slug, version)?)? {
-            let id = ptr["gate_id"].as_str().unwrap_or_default();
-            let rec = self.gate_record(id)?;
-            return match rec.decision {
-                None => Ok(json!({"gate_id": id, "state": "pending", "existing": true})),
-                Some(d) if d.decision == Decision::Reject => bail!("{slug} {version} was rejected; change the spec and bump the version"),
-                Some(d) => Ok(json!({"gate_id": id, "state": "decided", "decision": d.decision})),
-            };
-        }
-        let adapter = SpecAdapter::from_json(&text)?;
-        let doc: Value = serde_json::from_str(&text)?;
-        let mut by_risk: std::collections::BTreeMap<&str, Vec<String>> = Default::default();
-        for t in &adapter.spec().tools {
-            by_risk.entry(adapter.risk(&t.slug).map(risk_str).unwrap_or("write")).or_default().push(format!("{} ({})", t.title.de, t.title.en));
-        }
-        let hosts = doc["allowed_hosts"].as_array().map(|a| a.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(", ")).unwrap_or_default();
-        let passed = review.results.iter().filter(|r| r.result == "pass").count();
-        let mut body = format!(
-            "DE: Neuer Dienst {name} (Version {version}). Er spricht nur mit: {hosts}. Live getestet: {passed} Aufrufe bestanden, {untested} Aktionen ungetestet.\nEN: New service {name} (version {version}). It only talks to: {hosts}. Live test: {passed} calls passed, {untested} actions untested.\n",
-            name = adapter.spec().name,
-            untested = review.untested.len()
-        );
-        for (r, list) in &by_risk {
-            let label = match *r { "read" => "Nur lesen / read", "write" => "Ändern / write", _ => "Löschen, nicht umkehrbar / destructive" };
-            body.push_str(&format!("\n{label} ({}):\n- {}\n", list.len(), list.join("\n- ")));
-        }
-        body.push_str("\nAntworten / reply: approve | read_only | reject\n");
-        let req = GateRequest {
-            title: format!("Neuer Adapter: {} {version} / New adapter", adapter.spec().name),
-            body,
-            metadata: json!({"source": "toolhub", "kind": "adapter", "slug": slug, "version": version, "sha256": sha, "dedupe_key": format!("toolhub-adapter:{slug}:{version}:{sha}")}),
-        };
-        let id = self.gates.open(&req)?;
-        write_json(&self.gate_path(&id)?, &GateRecord { gate_id: id.clone(), subject: GateSubject::Adapter { slug: slug.into(), version: version.into(), sha256: sha.clone() }, submitted_by: self.who(), submitted_at: self.now(), decision: None })?;
-        write_json(&self.approval_path(slug, version)?, &json!({"gate_id": id}))?;
-        self.audit(slug, json!({"event": "submit", "version": version, "sha256": sha, "gate_id": id}))?;
-        Ok(json!({"gate_id": id, "state": "pending", "title": req.title, "card_text": req.body}))
-    }
-
-    /// Record the user's decision (relayed by the supervisor); the host closes or
-    /// confirms the gate.
+    /// Record the user's decision on a per-call (destructive) gate; the host
+    /// closes or confirms the gate.
     pub fn approve(&self, gate_id: &str, decision: Decision, user_quote: &str) -> Result<Value> {
         self.require(Tool::Approve, None)?;
         self.policy.check(Permission::IntegrationsManage)?;
@@ -645,9 +633,6 @@ impl<'a> Builder<'a> {
         let mut rec = self.gate_record(gate_id)?;
         if rec.decision.is_some() {
             bail!("gate {gate_id} is already decided");
-        }
-        if decision == Decision::ReadOnly && matches!(rec.subject, GateSubject::Call { .. }) {
-            bail!("read_only only applies to adapter gates");
         }
         match self.gates.state(gate_id)?.as_deref() {
             Some("open") | Some("queued") | Some("publishing") => {}
@@ -660,35 +645,39 @@ impl<'a> Builder<'a> {
         self.gates.decide(gate_id, decision != Decision::Reject)?;
         rec.decision = Some(DecisionRecord { decision, by: self.who(), at: self.now(), user_quote: user_quote.chars().take(500).collect() });
         write_json(&self.gate_path(gate_id)?, &rec)?;
-        let slug = match &rec.subject {
-            GateSubject::Adapter { slug, .. } => slug.clone(),
-            GateSubject::Call { toolkit, .. } => toolkit.clone(),
-        };
-        self.audit(&slug, json!({"event": "decision", "gate_id": gate_id, "decision": decision}))?;
+        let GateSubject::Call { toolkit: slug, .. } = &rec.subject;
+        self.audit(slug, json!({"event": "decision", "gate_id": gate_id, "decision": decision}))?;
         Ok(json!({"gate_id": gate_id, "decision": decision}))
     }
 
-    /// Activate an approved version: the gate must be closed with a recorded
-    /// user decision whose sha256 matches the installed text.
-    pub fn activate(&self, slug: &str, version: &str) -> Result<Value> {
+    /// Activate a version autonomously. Needs: the installed text validates and
+    /// a passing live-test proof younger than 24 h for exactly that sha256.
+    /// Supervisor: always. Worker: only inside a builder mission for this slug.
+    pub fn activate(&self, slug: &str, version: &str, mission: Option<&str>) -> Result<Value> {
         self.require(Tool::Activate, None)?;
+        if self.role == AgentRole::Worker {
+            let id = mission.ok_or_else(|| anyhow!("delegate_to_supervisor: workers activate only inside a builder mission (--mission <work_id>)"))?;
+            match self.gates.builder_mission_service(id)? {
+                Some(service) if service == slug => {}
+                Some(service) => bail!("builder mission {id} is for `{service}`, not `{slug}`"),
+                None => bail!("{id} is not a live builder mission"),
+            }
+        }
         self.policy.check(Permission::IntegrationsManage)?;
-        let sha = sha256_hex(self.store.version_text(slug, version)?.as_bytes());
-        let (rec, d) = self.version_decision(slug, version)?.ok_or_else(|| anyhow!("{slug} {version} has no user decision; submit_for_approval and ask the user"))?;
-        if !d.decision.allows_activation() {
-            bail!("{slug} {version} was rejected");
+        let text = self.store.version_text(slug, version).context("run a passing live_test first")?;
+        let adapter = SpecAdapter::from_json(&text).context("the installed spec does not validate")?;
+        if adapter.spec().slug != slug || adapter.version() != version {
+            bail!("installed text declares {}@{}", adapter.spec().slug, adapter.version());
         }
-        match &rec.subject {
-            GateSubject::Adapter { sha256, .. } if *sha256 == sha => {}
-            _ => bail!("the approval does not match the installed {slug} {version} (changed after approval)"),
-        }
-        if self.gates.state(&rec.gate_id)?.as_deref() != Some("closed") {
-            bail!("gate {} is not closed", rec.gate_id);
+        let review = self.proof(slug, version)?;
+        if self.now().saturating_sub(review.tested_at) > REVIEW_MAX_AGE_SECS {
+            bail!("the live-test proof is older than 24 h; run live_test again");
         }
         let ptr = self.store.activate(slug, version, &self.who())?;
-        self.audit(slug, json!({"event": "activate_gate", "version": version, "gate_id": rec.gate_id, "mode": d.decision}))?;
+        let _ = std::fs::remove_file(self.health_path(slug)?);
+        self.audit(slug, json!({"event": "activate_proof", "version": version, "sha256": review.sha256, "tested_at": review.tested_at, "tested_by": review.tested_by, "mission": mission}))?;
         let reload = self.hub().map(|_| "ok").unwrap_or("failed");
-        Ok(json!({"active": ptr, "mode": d.decision, "reload": reload}))
+        Ok(json!({"active": ptr, "sha256": review.sha256, "reload": reload}))
     }
 
     pub fn deactivate(&self, slug: &str) -> Result<Value> {
@@ -702,10 +691,7 @@ impl<'a> Builder<'a> {
         self.policy.check(Permission::IntegrationsManage)?;
         let cur = self.store.active(slug)?.ok_or_else(|| anyhow!("{slug} has no active version"))?;
         let prev = cur.previous.clone().ok_or_else(|| anyhow!("{slug} has no previous version"))?;
-        match self.version_decision(slug, &prev)? {
-            Some((_, d)) if d.decision.allows_activation() => {}
-            _ => bail!("{slug} {prev} has no recorded approval; deactivate instead"),
-        }
+        self.proof(slug, &prev).with_context(|| format!("{slug} {prev} has no matching live-test proof; deactivate instead"))?;
         Ok(json!({"active": self.store.rollback(slug, &self.who())?}))
     }
 }

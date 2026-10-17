@@ -69,7 +69,6 @@ pub enum Tool {
     DraftSpec,
     Validate,
     LiveTest,
-    Submit,
     Approve,
     Activate,
     Deactivate,
@@ -111,11 +110,11 @@ pub fn allows(role: AgentRole, tool: Tool, risk: Option<Risk>) -> Result<(), Den
         (DraftSpec | Validate, _) => Ok(()),
         (LiveTest, Supervisor) => Ok(()),
         (LiveTest, Worker) => deny("delegate_to_supervisor", "write probes need the supervisor"),
-        (Submit, Supervisor | Worker) => Ok(()),
-        (Submit, OneShot) => deny("not_allowed", "one-shot workers return drafts to whoever started them"),
         (Approve | Activate | Deactivate | Rollback, Supervisor) => Ok(()),
-        (Approve | Activate | Deactivate | Rollback, Worker) => deny("delegate_to_supervisor", "only the supervisor may change active adapters"),
-        (Approve | Activate | Deactivate | Rollback, OneShot) => deny("not_allowed", "only the supervisor may change active adapters"),
+        // Checked again in `Builder::activate`: only inside a builder mission.
+        (Activate, Worker) => Ok(()),
+        (Approve | Deactivate | Rollback, Worker) => deny("delegate_to_supervisor", "only the supervisor may approve calls, deactivate or roll back"),
+        (Approve | Activate | Deactivate | Rollback, OneShot) => deny("not_allowed", "one-shot workers never change active adapters; return your draft and test result"),
     }
 }
 

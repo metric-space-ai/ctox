@@ -11,6 +11,9 @@ struct Mock {
 impl HttpTransport for Mock {
     fn send(&self, r: HttpRequest) -> anyhow::Result<HttpResponse> {
         self.calls.lock().unwrap().push(format!("{} {}", r.method, r.url));
+        if r.url.contains("/items/boom") {
+            return Ok(HttpResponse { status: 500, body: b"{}".to_vec(), session_id: None });
+        }
         let body = if r.url.contains("zippopotam.us/de/10115") {
             json!({"country": "Germany", "post code": "10115", "places": [{"place name": "Berlin"}]})
         } else {
@@ -23,6 +26,7 @@ impl HttpTransport for Mock {
 #[derive(Default)]
 struct Gates {
     states: RefCell<std::collections::BTreeMap<String, String>>,
+    missions: RefCell<std::collections::BTreeMap<String, String>>,
 }
 impl ApprovalGates for Gates {
     fn open(&self, _r: &GateRequest) -> Result<String> {
@@ -37,11 +41,8 @@ impl ApprovalGates for Gates {
         self.states.borrow_mut().insert(id.into(), if approved { "closed" } else { "failed" }.into());
         Ok(())
     }
-}
-impl Gates {
-    /// What the progressive-autonomy sweep does: close without a decision.
-    fn force_close(&self, id: &str) {
-        self.states.borrow_mut().insert(id.into(), "closed".into());
+    fn builder_mission_service(&self, work_id: &str) -> Result<Option<String>> {
+        Ok(self.missions.borrow().get(work_id).cloned())
     }
 }
 
@@ -102,22 +103,28 @@ const SVC: &str = r#"{
   ]
 }"#;
 
-fn approved_svc(e: &Env, decision: Decision) {
+fn active_svc(e: &Env) {
     let s = e.b(AgentRole::Supervisor, &Allow);
     s.draft_spec(SVC).unwrap();
+    assert_eq!(s.validate("testsvc", "1.0.0").unwrap()["ok"], json!(true));
     let probes = vec![
         Probe { tool: "TESTSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![] },
         Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "probe"}), cleanup: vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![] }] },
     ];
     let t = s.live_test("testsvc", "1.0.0", &probes, None).unwrap();
     assert_eq!(t["passed"], json!(true), "{t}");
-    let g = s.submit_for_approval("testsvc", "1.0.0").unwrap();
-    s.approve(g["gate_id"].as_str().unwrap(), decision, "Ja, freigeben").unwrap();
-    s.activate("testsvc", "1.0.0").unwrap();
+    s.activate("testsvc", "1.0.0", None).unwrap();
+}
+
+fn zip_tested(e: &Env, role: AgentRole) {
+    let b = e.b(role, &Allow);
+    b.draft_from_catalog("zippopotam").unwrap();
+    assert_eq!(b.validate("zippopotam", "1.0.0").unwrap()["ok"], json!(true));
+    assert_eq!(b.live_test("zippopotam", "1.0.0", &zip_probe(), None).unwrap()["passed"], json!(true));
 }
 
 #[test]
-fn end_to_end_draft_validate_test_submit_approve_activate_execute() {
+fn end_to_end_autonomous_draft_validate_test_activate_execute() {
     let e = env();
     let worker = e.b(AgentRole::Worker, &Allow);
     let d = worker.draft_from_catalog("zippopotam").unwrap();
@@ -126,22 +133,19 @@ fn end_to_end_draft_validate_test_submit_approve_activate_execute() {
     assert_eq!(v["ok"], json!(true), "{v}");
     assert_eq!(v["hosts"], json!(["api.zippopotam.us"]));
     assert!(worker.execute("ZIPPOPOTAM_LOOKUP_POSTAL_CODE", &json!({"country": "de", "postal_code": "10115"}), None, None).is_err());
+    assert!(worker.activate("zippopotam", "1.0.0", None).is_err(), "no proof yet, no mission");
     let t = worker.live_test("zippopotam", "1.0.0", &zip_probe(), None).unwrap();
     assert_eq!(t["passed"], json!(true), "{t}");
     assert_eq!(t["review"]["untested"], json!(["ZIPPOPOTAM_FIND_POSTAL_CODES"]));
-    let g = worker.submit_for_approval("zippopotam", "1.0.0").unwrap();
-    let gate = g["gate_id"].as_str().unwrap().to_string();
-    assert!(g["card_text"].as_str().unwrap().contains("api.zippopotam.us"));
-    assert_eq!(worker.submit_for_approval("zippopotam", "1.0.0").unwrap()["gate_id"], json!(gate));
-    assert!(worker.approve(&gate, Decision::Approve, "ok").unwrap_err().to_string().contains("delegate_to_supervisor"));
-    assert!(worker.activate("zippopotam", "1.0.0").is_err());
-    let sup = e.b(AgentRole::Supervisor, &Allow);
-    assert!(sup.activate("zippopotam", "1.0.0").unwrap_err().to_string().contains("no user decision"));
-    assert!(sup.approve(&gate, Decision::Approve, " ").is_err(), "quote required");
-    sup.approve(&gate, Decision::Approve, "Ja, Postleitzahlen freigeben").unwrap();
-    assert_eq!(e.gates.state(&gate).unwrap().as_deref(), Some("closed"));
-    let a = sup.activate("zippopotam", "1.0.0").unwrap();
+    // Worker: only inside a builder mission for this service.
+    assert!(worker.activate("zippopotam", "1.0.0", None).unwrap_err().to_string().contains("builder mission"));
+    assert!(worker.activate("zippopotam", "1.0.0", Some("self-work:internal:m1")).unwrap_err().to_string().contains("not a live builder mission"));
+    e.gates.missions.borrow_mut().insert("self-work:internal:m2".into(), "other".into());
+    assert!(worker.activate("zippopotam", "1.0.0", Some("self-work:internal:m2")).is_err());
+    e.gates.missions.borrow_mut().insert("self-work:internal:m1".into(), "zippopotam".into());
+    let a = worker.activate("zippopotam", "1.0.0", Some("self-work:internal:m1")).unwrap();
     assert_eq!(a["active"]["version"], json!("1.0.0"));
+    assert!(e.gates.states.borrow().is_empty(), "no approval gate for adapter setup");
     let one = e.b(AgentRole::OneShot, &Allow);
     let s = one.search("postal code", false, 10).unwrap();
     assert!(s["tools"].as_array().unwrap().iter().any(|t| t["tool"] == "ZIPPOPOTAM_LOOKUP_POSTAL_CODE"));
@@ -150,76 +154,56 @@ fn end_to_end_draft_validate_test_submit_approve_activate_execute() {
     assert_eq!(r["outcome"], json!("success"));
     assert_eq!(r["data"]["places"][0]["place name"], json!("Berlin"));
     let hist = std::fs::read_to_string(e.root.join("runtime/toolhub/adapter-specs/zippopotam/history.jsonl")).unwrap();
-    for ev in ["draft", "live_test", "submit", "decision", "activate", "activate_gate", "execute"] {
+    for ev in ["draft", "live_test", "activate", "activate_proof", "execute"] {
         assert!(hist.contains(&format!("\"event\":\"{ev}\"")), "missing {ev} in {hist}");
     }
+    assert!(hist.contains("self-work:internal:m1"), "mission recorded");
     assert!(!hist.contains("10115"), "no arguments in clear text");
-    assert_eq!(sup.list().unwrap()["adapters"][0]["versions"][0]["gate"]["decision"], json!("approve"));
+    let sup = e.b(AgentRole::Supervisor, &Allow);
+    assert_eq!(sup.list().unwrap()["adapters"][0]["versions"][0]["tested"]["passed"], json!(true));
     sup.deactivate("zippopotam").unwrap();
     assert!(one.execute("ZIPPOPOTAM_LOOKUP_POSTAL_CODE", &json!({"country": "de", "postal_code": "10115"}), None, None).is_err());
 }
 
 #[test]
-fn gate_closed_without_decision_does_not_activate() {
+fn oneshot_and_mcp_never_activate() {
     let e = env();
-    let sup = e.b(AgentRole::Supervisor, &Allow);
-    sup.draft_from_catalog("zippopotam").unwrap();
-    sup.live_test("zippopotam", "1.0.0", &zip_probe(), None).unwrap();
-    let gate = sup.submit_for_approval("zippopotam", "1.0.0").unwrap()["gate_id"].as_str().unwrap().to_string();
-    e.gates.force_close(&gate);
-    assert!(sup.activate("zippopotam", "1.0.0").unwrap_err().to_string().contains("no user decision"));
+    zip_tested(&e, AgentRole::Supervisor);
+    e.gates.missions.borrow_mut().insert("m".into(), "zippopotam".into());
+    assert!(e.b(AgentRole::OneShot, &Allow).activate("zippopotam", "1.0.0", Some("m")).unwrap_err().to_string().contains("not_allowed"));
+    assert!(e.b(AgentRole::Mcp, &Allow).activate("zippopotam", "1.0.0", Some("m")).is_err());
+    assert!(e.b(AgentRole::Supervisor, &DenyWrites).activate("zippopotam", "1.0.0", None).unwrap_err().to_string().contains("policy denied"));
 }
 
 #[test]
-fn rejected_version_cannot_be_activated_or_resubmitted() {
+fn changed_spec_after_test_is_refused() {
     let e = env();
-    let sup = e.b(AgentRole::Supervisor, &Allow);
-    sup.draft_from_catalog("zippopotam").unwrap();
-    sup.live_test("zippopotam", "1.0.0", &zip_probe(), None).unwrap();
-    let gate = sup.submit_for_approval("zippopotam", "1.0.0").unwrap()["gate_id"].as_str().unwrap().to_string();
-    sup.approve(&gate, Decision::Reject, "Nein").unwrap();
-    assert_eq!(e.gates.state(&gate).unwrap().as_deref(), Some("failed"));
-    assert!(sup.activate("zippopotam", "1.0.0").is_err());
-    assert!(sup.submit_for_approval("zippopotam", "1.0.0").unwrap_err().to_string().contains("rejected"));
-    assert!(sup.approve(&gate, Decision::Approve, "doch").is_err(), "decided once");
-}
-
-#[test]
-fn changed_spec_after_approval_is_refused() {
-    let e = env();
-    let sup = e.b(AgentRole::Supervisor, &Allow);
-    sup.draft_from_catalog("zippopotam").unwrap();
-    sup.live_test("zippopotam", "1.0.0", &zip_probe(), None).unwrap();
-    let gate = sup.submit_for_approval("zippopotam", "1.0.0").unwrap()["gate_id"].as_str().unwrap().to_string();
-    sup.approve(&gate, Decision::Approve, "ja").unwrap();
+    zip_tested(&e, AgentRole::Supervisor);
     let p = e.root.join("runtime/toolhub/adapter-specs/zippopotam/versions/1.0.0.json");
     let tampered = std::fs::read_to_string(&p).unwrap().replace("Look up postal code", "Look up postal codes");
     std::fs::write(&p, tampered).unwrap();
-    assert!(sup.activate("zippopotam", "1.0.0").unwrap_err().to_string().contains("changed after approval"));
+    assert!(e.b(AgentRole::Supervisor, &Allow).activate("zippopotam", "1.0.0", None).unwrap_err().to_string().contains("changed after the test"));
 }
 
 #[test]
-fn stale_or_missing_review_blocks_submit() {
+fn stale_or_missing_proof_blocks_activation() {
     let e = env();
     let sup = e.b(AgentRole::Supervisor, &Allow);
     sup.draft_from_catalog("zippopotam").unwrap();
-    assert!(sup.submit_for_approval("zippopotam", "1.0.0").is_err());
+    assert!(sup.activate("zippopotam", "1.0.0", None).is_err(), "not tested");
     sup.live_test("zippopotam", "1.0.0", &zip_probe(), None).unwrap();
     e.now.fetch_add(REVIEW_MAX_AGE_SECS + 1, Ordering::SeqCst);
-    assert!(sup.submit_for_approval("zippopotam", "1.0.0").unwrap_err().to_string().contains("24 h"));
+    assert!(sup.activate("zippopotam", "1.0.0", None).unwrap_err().to_string().contains("24 h"));
+    sup.live_test("zippopotam", "1.0.0", &zip_probe(), None).unwrap();
+    sup.activate("zippopotam", "1.0.0", None).unwrap();
 }
 
 #[test]
-fn read_only_approval_blocks_writes_and_destructive_calls_need_their_own_gate() {
+fn destructive_calls_still_need_their_own_gate() {
     let e = env();
-    approved_svc(&e, Decision::ReadOnly);
+    active_svc(&e);
     let sup = e.b(AgentRole::Supervisor, &Allow);
     assert_eq!(sup.execute("TESTSVC_GET_ITEM", &json!({"id": "1"}), None, None).unwrap()["outcome"], json!("success"));
-    assert!(sup.execute("TESTSVC_CREATE_ITEM", &json!({"name": "x"}), None, None).unwrap_err().to_string().contains("read_only_approval"));
-
-    let e = env();
-    approved_svc(&e, Decision::Approve);
-    let sup = e.b(AgentRole::Supervisor, &Allow);
     assert_eq!(sup.execute("TESTSVC_CREATE_ITEM", &json!({"name": "x"}), None, None).unwrap()["outcome"], json!("success"));
     assert!(e.b(AgentRole::Worker, &Allow).execute("TESTSVC_CREATE_ITEM", &json!({"name": "x"}), None, None).unwrap_err().to_string().contains("delegate_to_supervisor"));
     assert!(e.b(AgentRole::Supervisor, &DenyWrites).execute("TESTSVC_CREATE_ITEM", &json!({"name": "x"}), None, None).unwrap_err().to_string().contains("policy denied"));
@@ -230,10 +214,18 @@ fn read_only_approval_blocks_writes_and_destructive_calls_need_their_own_gate() 
     assert_eq!(e.mock.calls.lock().unwrap().len(), before, "nothing sent before approval");
     let gate = r["gate_id"].as_str().unwrap().to_string();
     assert!(sup.execute("TESTSVC_DELETE_ITEM", &args, None, Some(&gate)).is_err(), "undecided");
+    assert!(e.b(AgentRole::Worker, &Allow).approve(&gate, Decision::Approve, "ja").is_err());
+    assert!(sup.approve(&gate, Decision::Approve, " ").is_err(), "quote required");
     sup.approve(&gate, Decision::Approve, "ja, löschen").unwrap();
+    assert!(sup.approve(&gate, Decision::Approve, "nochmal").is_err(), "decided once");
     assert!(sup.execute("TESTSVC_DELETE_ITEM", &json!({"id": "8"}), None, Some(&gate)).is_err(), "other args");
     assert_eq!(sup.execute("TESTSVC_DELETE_ITEM", &args, None, Some(&gate)).unwrap()["outcome"], json!("success"));
     assert!(sup.execute("TESTSVC_DELETE_ITEM", &args, None, Some(&gate)).unwrap_err().to_string().contains("already used"));
+    // A rejected call gate never runs.
+    let r = sup.execute("TESTSVC_DELETE_ITEM", &json!({"id": "9"}), None, None).unwrap();
+    let g2 = r["gate_id"].as_str().unwrap().to_string();
+    sup.approve(&g2, Decision::Reject, "nein").unwrap();
+    assert!(sup.execute("TESTSVC_DELETE_ITEM", &json!({"id": "9"}), None, Some(&g2)).is_err());
 }
 
 #[test]
@@ -248,7 +240,6 @@ fn live_test_probe_rules() {
     assert!(sup.live_test("testsvc", "1.0.0", &[], None).is_err());
     let write = vec![Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "x"}), cleanup: vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![] }] }];
     assert!(e.b(AgentRole::Worker, &Allow).live_test("testsvc", "1.0.0", &write, None).unwrap_err().to_string().contains("delegate_to_supervisor"));
-    assert!(e.b(AgentRole::OneShot, &Allow).submit_for_approval("testsvc", "1.0.0").is_err());
     assert!(e.b(AgentRole::Mcp, &Allow).draft_spec(SVC).is_err());
 }
 
@@ -267,23 +258,48 @@ fn missing_access_answer_depends_on_role() {
     assert!(e.mock.calls.lock().unwrap().is_empty(), "no request without credentials");
 }
 
+fn svc_v2(e: &Env) {
+    let s = e.b(AgentRole::Supervisor, &Allow);
+    let v2 = SVC.replace("\"version\": \"1.0.0\"", "\"version\": \"1.0.1\"");
+    s.draft_spec(&v2).unwrap();
+    s.live_test("testsvc", "1.0.1", &[Probe { tool: "TESTSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![] }], None).unwrap();
+    s.activate("testsvc", "1.0.1", None).unwrap();
+}
+
 #[test]
-fn rollback_needs_approved_previous_version() {
+fn rollback_needs_tested_previous_version() {
     let e = env();
+    active_svc(&e);
+    svc_v2(&e);
     let sup = e.b(AgentRole::Supervisor, &Allow);
-    sup.draft_from_catalog("zippopotam").unwrap();
-    sup.live_test("zippopotam", "1.0.0", &zip_probe(), None).unwrap();
-    let g = sup.submit_for_approval("zippopotam", "1.0.0").unwrap()["gate_id"].as_str().unwrap().to_string();
-    sup.approve(&g, Decision::Approve, "ja").unwrap();
-    sup.activate("zippopotam", "1.0.0").unwrap();
-    let v2 = catalog::get("zippopotam").unwrap().replace("\"version\": \"1.0.0\"", "\"version\": \"1.0.1\"");
-    sup.draft_spec(&v2).unwrap();
-    sup.live_test("zippopotam", "1.0.1", &zip_probe(), None).unwrap();
-    let g2 = sup.submit_for_approval("zippopotam", "1.0.1").unwrap()["gate_id"].as_str().unwrap().to_string();
-    sup.approve(&g2, Decision::Approve, "ja").unwrap();
-    sup.activate("zippopotam", "1.0.1").unwrap();
-    assert_eq!(sup.rollback("zippopotam").unwrap()["active"]["version"], json!("1.0.0"));
-    assert!(e.b(AgentRole::Worker, &Allow).rollback("zippopotam").is_err());
+    assert!(e.b(AgentRole::Worker, &Allow).rollback("testsvc").is_err());
+    assert_eq!(sup.rollback("testsvc").unwrap()["active"]["version"], json!("1.0.0"));
+}
+
+#[test]
+fn repeated_failures_roll_back_automatically() {
+    let e = env();
+    active_svc(&e);
+    svc_v2(&e);
+    let one = e.b(AgentRole::OneShot, &Allow);
+    // A success in between resets the counter.
+    for _ in 0..(AUTO_ROLLBACK_AFTER - 1) {
+        assert_eq!(one.execute("TESTSVC_GET_ITEM", &json!({"id": "boom"}), None, None).unwrap()["outcome"], json!("provider_error"));
+    }
+    one.execute("TESTSVC_GET_ITEM", &json!({"id": "1"}), None, None).unwrap();
+    for _ in 0..(AUTO_ROLLBACK_AFTER - 1) {
+        one.execute("TESTSVC_GET_ITEM", &json!({"id": "boom"}), None, None).unwrap();
+    }
+    assert_eq!(e.b(AgentRole::Supervisor, &Allow).store().active("testsvc").unwrap().unwrap().version, "1.0.1");
+    let r = one.execute("TESTSVC_GET_ITEM", &json!({"id": "boom"}), None, None).unwrap();
+    assert_eq!(r["auto_rollback"], json!("1.0.0"));
+    assert_eq!(e.b(AgentRole::Supervisor, &Allow).store().active("testsvc").unwrap().unwrap().version, "1.0.0");
+    let hist = std::fs::read_to_string(e.root.join("runtime/toolhub/adapter-specs/testsvc/history.jsonl")).unwrap();
+    assert!(hist.contains("\"event\":\"auto_rollback\""));
+    // No ping-pong back to the broken version after an auto-rollback.
+    for _ in 0..(AUTO_ROLLBACK_AFTER + 1) {
+        assert!(one.execute("TESTSVC_GET_ITEM", &json!({"id": "boom"}), None, None).unwrap().get("auto_rollback").is_none());
+    }
 }
 
 #[test]
@@ -294,7 +310,8 @@ fn role_rules_come_from_one_source() {
         assert!(!t.contains("## role:"));
     }
     assert!(roles::role_rules(AgentRole::OneShot).contains("Zugang fehlt"));
-    assert!(roles::role_rules(AgentRole::Supervisor).contains("even for read-only"));
+    assert!(roles::role_rules(AgentRole::Supervisor).contains("no user approval to install or activate"));
+    assert!(roles::role_rules(AgentRole::Worker).contains("builder mission"));
 }
 
 #[test]

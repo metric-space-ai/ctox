@@ -75,10 +75,9 @@ const DEFS: &[Def] = &[
     Def { name: "ctox_toolhub_draft_spec", min_role: ToolhubRole::OneShot, description: "Store a draft adapter spec (ctox.adapter-spec/v1) or copy one from the vetted catalog. Drafts are inactive.", params: &[("spec_json", "Full spec as JSON string.", false), ("from_catalog", "Catalog slug instead of spec_json.", false)] },
     Def { name: "ctox_toolhub_validate", min_role: ToolhubRole::OneShot, description: "Validate a draft: schema, hosts, risk rules.", params: &[("slug", "Adapter slug.", true), ("version", "Version.", true)] },
     Def { name: "ctox_toolhub_live_test", min_role: ToolhubRole::OneShot, description: "Run probes against the real API and record the review proof. Write probes need cleanup; destructive actions are never probed.", params: &[("slug", "Adapter slug.", true), ("version", "Version.", true), ("probes_json", "JSON array of {tool,args,cleanup[]}.", true), ("account", "Connected account id.", false)] },
-    Def { name: "ctox_toolhub_submit_for_approval", min_role: ToolhubRole::Worker, description: "Open the user approval gate for a tested version (supervisor shows it).", params: &[("slug", "Adapter slug.", true), ("version", "Version.", true)] },
     Def { name: "ctox_toolhub_request_adapter", min_role: ToolhubRole::Worker, description: "Queue a builder mission (adapter-builder skill) for a service that has no adapter yet. One open mission per service.", params: &[("service", "Service name, e.g. pipedrive.", true), ("reason", "Why the task needs it.", false)] },
-    Def { name: "ctox_toolhub_approve", min_role: ToolhubRole::Supervisor, description: "Record the user's decision on a gate. Only with the user's own words in user_quote.", params: &[("gate", "Gate id.", true), ("decision", "approve | read_only | reject", true), ("user_quote", "The user's literal answer.", true)] },
-    Def { name: "ctox_toolhub_activate", min_role: ToolhubRole::Supervisor, description: "Activate an approved version.", params: &[("slug", "Adapter slug.", true), ("version", "Version.", true)] },
+    Def { name: "ctox_toolhub_approve", min_role: ToolhubRole::Supervisor, description: "Record the user's decision on a per-call gate of a destructive action. Only with the user's own words in user_quote.", params: &[("gate", "Gate id.", true), ("decision", "approve | reject", true), ("user_quote", "The user's literal answer.", true)] },
+    Def { name: "ctox_toolhub_activate", min_role: ToolhubRole::Worker, description: "Activate a version autonomously once validate passed and a live test passed within 24 h for exactly this version. Workers: only inside a builder mission (pass its work id as mission).", params: &[("slug", "Adapter slug.", true), ("version", "Version.", true), ("mission", "Builder mission work id (required for workers).", false)] },
     Def { name: "ctox_toolhub_deactivate", min_role: ToolhubRole::Supervisor, description: "Deactivate an adapter.", params: &[("slug", "Adapter slug.", true)] },
     Def { name: "ctox_toolhub_rollback", min_role: ToolhubRole::Supervisor, description: "Roll back to the previous approved version.", params: &[("slug", "Adapter slug.", true)] },
 ];
@@ -167,7 +166,6 @@ pub fn build_argv(tool: &str, args: &Value, role: ToolhubRole, session: Option<&
             v.extend(["live-test".into(), need(args, "slug")?, need(args, "version")?, "--probes-json".into(), need(args, "probes_json")?]);
             opt(&mut v, "--account", "account");
         }
-        "ctox_toolhub_submit_for_approval" => v.extend(["submit".into(), need(args, "slug")?, need(args, "version")?]),
         "ctox_toolhub_request_adapter" => {
             v.extend(["request-adapter".into(), need(args, "service")?]);
             opt(&mut v, "--reason", "reason");
@@ -175,7 +173,10 @@ pub fn build_argv(tool: &str, args: &Value, role: ToolhubRole, session: Option<&
         "ctox_toolhub_approve" => v.extend([
             "approve".into(), "--gate".into(), need(args, "gate")?, "--decision".into(), need(args, "decision")?, "--user-quote".into(), need(args, "user_quote")?,
         ]),
-        "ctox_toolhub_activate" => v.extend(["activate".into(), need(args, "slug")?, need(args, "version")?]),
+        "ctox_toolhub_activate" => {
+            v.extend(["activate".into(), need(args, "slug")?, need(args, "version")?]);
+            opt(&mut v, "--mission", "mission");
+        }
         "ctox_toolhub_deactivate" => v.extend(["deactivate".into(), need(args, "slug")?]),
         "ctox_toolhub_rollback" => v.extend(["rollback".into(), need(args, "slug")?]),
         _ => unreachable!(),
@@ -233,17 +234,20 @@ mod tests {
     #[test]
     fn tools_follow_role() {
         assert_eq!(tool_names(ToolhubRole::OneShot).len(), 7);
-        assert!(tool_names(ToolhubRole::Worker).contains(&"ctox_toolhub_submit_for_approval"));
+        assert!(tool_names(ToolhubRole::Worker).contains(&"ctox_toolhub_activate"));
+        assert!(!tool_names(ToolhubRole::OneShot).contains(&"ctox_toolhub_activate"));
         assert!(!tool_names(ToolhubRole::Worker).contains(&"ctox_toolhub_approve"));
-        assert_eq!(tool_names(ToolhubRole::Supervisor).len(), 13);
-        assert_eq!(ctox_toolhub_create_tools(ToolhubRole::Supervisor).len(), 13);
+        assert_eq!(tool_names(ToolhubRole::Supervisor).len(), 12);
+        assert_eq!(ctox_toolhub_create_tools(ToolhubRole::Supervisor).len(), 12);
     }
 
     #[test]
     fn role_comes_from_config_not_args() {
         let argv = build_argv("ctox_toolhub_execute", &json!({"tool": "X", "args_json": "{}", "as": "supervisor"}), ToolhubRole::OneShot, None).unwrap();
         assert_eq!(&argv[..3], &["toolhub", "--as", "oneshot"]);
-        assert!(build_argv("ctox_toolhub_activate", &json!({"slug": "a", "version": "1"}), ToolhubRole::Worker, None).is_err());
+        assert!(build_argv("ctox_toolhub_activate", &json!({"slug": "a", "version": "1"}), ToolhubRole::OneShot, None).is_err());
+        let argv = build_argv("ctox_toolhub_activate", &json!({"slug": "a", "version": "1", "mission": "w1"}), ToolhubRole::Worker, None).unwrap();
+        assert_eq!(&argv[3..], &["activate", "a", "1", "--mission", "w1"]);
         assert_eq!(ToolhubRole::resolve(Some("root")), ToolhubRole::OneShot);
         let argv = build_argv("ctox_toolhub_approve", &json!({"gate": "g", "decision": "approve", "user_quote": "ja"}), ToolhubRole::Supervisor, Some("tok")).unwrap();
         assert_eq!(argv, ["toolhub", "--as", "supervisor", "--command-session", "tok", "approve", "--gate", "g", "--decision", "approve", "--user-quote", "ja"]);
@@ -251,7 +255,7 @@ mod tests {
 
     #[test]
     fn rules_share_one_source() {
-        assert!(ctox_toolhub_role_rules(ToolhubRole::Supervisor).contains("even for read-only"));
+        assert!(ctox_toolhub_role_rules(ToolhubRole::Supervisor).contains("no user approval to install or activate"));
         assert!(ctox_toolhub_role_rules(ToolhubRole::OneShot).contains("Zugang fehlt"));
         assert!(!ctox_toolhub_role_rules(ToolhubRole::Worker).contains("## role:"));
     }
