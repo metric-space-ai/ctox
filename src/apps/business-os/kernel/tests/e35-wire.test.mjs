@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createKernel} from '../kernel.mjs';
 import {WebRTCKernelTransport} from '../transport-webrtc.mjs';
+import {publishNativePlatformCatalog} from './native-platform-catalog.mjs';
 import {protocolChannels,FakeNativePeer,offer,scopeFor} from './fake-native-peer.mjs';
 test('E35 native wire carries expected_revision only when supplied',async()=>{
  const pair=protocolChannels(),peer=new FakeNativePeer(pair.server),transport=new WebRTCKernelTransport({channels:pair.client,hello:offer('instance'),verifyPackage:async()=>true});
@@ -28,6 +29,8 @@ test('E35 native CAS rejection after metadata acceptance preserves code, reason 
    await k.ready;await transport.ready;
    const subscribedBy=Date.now()+2000;
    while(!peer.messages.some(m=>m.type==='subscribe'&&m.collection==='business_app_versions')){assert.ok(Date.now()<subscribedBy,'native subscriptions precede fixture pages');await new Promise(r=>setTimeout(r,2));}
+   await publishNativePlatformCatalog((collection,docs)=>peer.page(collection,docs));
+   while(!(await k.sim.inspect('business_app_versions','ctox-platform@platform-native'))?.data){assert.ok(Date.now()<subscribedBy,'native catalog applied before file metadata');await new Promise(r=>setTimeout(r,2));}
    await peer.page('business_apps',[{id:'notes',seq:peer.head,rev:'a',data:{id:'notes',active_ver:'1'}}]);
    await peer.page('business_app_versions',[{id:'notes@1',seq:peer.head,rev:'v',data:{id:'notes@1',app_id:'notes',manifest:{collections:{notes:{schema:{type:'object',properties:{id:{type:'string'}}}}}}}}]);
    const file=await k.appApi('notes','1').files.put({text:'native CAS bytes'},{id:'wire-file'});
