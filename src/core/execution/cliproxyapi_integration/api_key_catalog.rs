@@ -218,8 +218,7 @@ mod tests {
     use crate::execution::cliproxyapi_integration::{
         save_provider_integration_config, ApiKeyEndpoint, ProviderSecretRef,
     };
-    fn fixture() -> tempfile::TempDir {
-        let root = tempfile::tempdir().unwrap();
+    fn fixture(root: std::sync::Arc<tempfile::TempDir>) -> std::sync::Arc<tempfile::TempDir> {
         let mut config = load_provider_integration_config(root.path()).unwrap();
         crate::secrets::write_secret_record(
             root.path(),
@@ -252,151 +251,171 @@ mod tests {
     }
     #[test]
     fn api_catalog_same_bytes_new_generation_invalidates_received_models() {
-        let root = fixture();
-        let result = observe_with(
-            "xai",
-            || {
-                capture(
-                    root.path(),
-                    "verified-owner",
-                    None,
-                    "xai",
-                    "api-catalog-fixture",
-                )
-            },
-            |value| {
-                crate::secrets::write_secret_record(
-                    root.path(),
-                    "provider-api-keys",
-                    "catalog-key",
-                    "synthetic-catalog-key",
-                    None,
-                    serde_json::json!({}),
-                )
-                .unwrap();
-                observed(value)
-            },
-        )
-        .unwrap();
-        assert_eq!(result.failure.as_deref(), Some("account_changed"));
-        assert!(
-            result.models.is_none()
-                && result.http_status.is_none()
-                && result.private_binding.is_none()
-        );
-    }
-    #[test]
-    fn api_catalog_changed_before_io_never_invokes_transport() {
-        let root = fixture();
-        let mut reads = 0;
-        let result = observe_with(
-            "xai",
-            || {
-                reads += 1;
-                if reads == 2 {
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = fixture(owner_root);
+            let result = observe_with(
+                "xai",
+                || {
+                    capture(
+                        root.path(),
+                        "verified-owner",
+                        None,
+                        "xai",
+                        "api-catalog-fixture",
+                    )
+                },
+                |value| {
                     crate::secrets::write_secret_record(
                         root.path(),
                         "provider-api-keys",
                         "catalog-key",
-                        "synthetic-new-key",
+                        "synthetic-catalog-key",
                         None,
                         serde_json::json!({}),
                     )
                     .unwrap();
-                }
-                capture(
-                    root.path(),
-                    "verified-owner",
-                    None,
-                    "xai",
-                    "api-catalog-fixture",
-                )
-            },
-            |_| panic!("changed account must not issue request"),
-        )
-        .unwrap();
-        assert_eq!(result.failure.as_deref(), Some("account_changed"));
+                    observed(value)
+                },
+            )
+            .unwrap();
+            assert_eq!(result.failure.as_deref(), Some("account_changed"));
+            assert!(
+                result.models.is_none()
+                    && result.http_status.is_none()
+                    && result.private_binding.is_none()
+            );
+            Ok(())
+        })
+        .unwrap()
+    }
+    #[test]
+    fn api_catalog_changed_before_io_never_invokes_transport() {
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = fixture(owner_root);
+            let mut reads = 0;
+            let result = observe_with(
+                "xai",
+                || {
+                    reads += 1;
+                    if reads == 2 {
+                        crate::secrets::write_secret_record(
+                            root.path(),
+                            "provider-api-keys",
+                            "catalog-key",
+                            "synthetic-new-key",
+                            None,
+                            serde_json::json!({}),
+                        )
+                        .unwrap();
+                    }
+                    capture(
+                        root.path(),
+                        "verified-owner",
+                        None,
+                        "xai",
+                        "api-catalog-fixture",
+                    )
+                },
+                |_| panic!("changed account must not issue request"),
+            )
+            .unwrap();
+            assert_eq!(result.failure.as_deref(), Some("account_changed"));
+            Ok(())
+        })
+        .unwrap()
     }
     #[test]
     fn api_catalog_disabled_missing_or_foreign_provider_never_invokes_transport() {
-        let root = fixture();
-        assert!(capture(
-            root.path(),
-            "verified-owner",
-            None,
-            "kimi",
-            "api-catalog-fixture"
-        )
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = fixture(owner_root);
+            assert!(capture(
+                root.path(),
+                "verified-owner",
+                None,
+                "kimi",
+                "api-catalog-fixture"
+            )
+            .unwrap()
+            .is_none());
+            let mut config = load_provider_integration_config(root.path()).unwrap();
+            config.config.api_key_accounts[0].disabled = true;
+            save_provider_integration_config(root.path(), config.revision, &config.config).unwrap();
+            let result = observe_with(
+                "xai",
+                || {
+                    capture(
+                        root.path(),
+                        "verified-owner",
+                        None,
+                        "xai",
+                        "api-catalog-fixture",
+                    )
+                },
+                |_| panic!("disabled account must not issue request"),
+            )
+            .unwrap();
+            assert_eq!(result.failure.as_deref(), Some("account_disabled"));
+            Ok(())
+        })
         .unwrap()
-        .is_none());
-        let mut config = load_provider_integration_config(root.path()).unwrap();
-        config.config.api_key_accounts[0].disabled = true;
-        save_provider_integration_config(root.path(), config.revision, &config.config).unwrap();
-        let result = observe_with(
-            "xai",
-            || {
-                capture(
-                    root.path(),
-                    "verified-owner",
-                    None,
-                    "xai",
-                    "api-catalog-fixture",
-                )
-            },
-            |_| panic!("disabled account must not issue request"),
-        )
-        .unwrap();
-        assert_eq!(result.failure.as_deref(), Some("account_disabled"));
     }
     #[test]
     fn api_catalog_rejects_wrong_owner_and_adopted_binding_before_network() {
-        let root = fixture();
-        let binding = crate::execution::cliproxyapi_host::account_controls::account_binding(
-            root.path(),
-            "xai",
-            "api-catalog-fixture",
-        )
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = fixture(owner_root);
+            let binding = crate::execution::cliproxyapi_host::account_controls::account_binding(
+                root.path(),
+                "xai",
+                "api-catalog-fixture",
+            )
+            .unwrap()
+            .unwrap();
+            for (owner, expected) in [
+                ("foreign-owner", binding.as_str()),
+                ("verified-owner", "stale-adopted-binding"),
+            ] {
+                let result =
+                    observe(root.path(), owner, expected, "xai", "api-catalog-fixture").unwrap();
+                assert_eq!(result.failure.as_deref(), Some("account_unavailable"));
+                assert!(
+                    result.http_status.is_none()
+                        && result.models.is_none()
+                        && result.private_binding.is_none()
+                );
+            }
+            Ok(())
+        })
         .unwrap()
-        .unwrap();
-        for (owner, expected) in [
-            ("foreign-owner", binding.as_str()),
-            ("verified-owner", "stale-adopted-binding"),
-        ] {
-            let result =
-                observe(root.path(), owner, expected, "xai", "api-catalog-fixture").unwrap();
-            assert_eq!(result.failure.as_deref(), Some("account_unavailable"));
-            assert!(
-                result.http_status.is_none()
-                    && result.models.is_none()
-                    && result.private_binding.is_none()
-            );
-        }
     }
     #[test]
     fn api_catalog_actual_response_retains_binding_without_inference_claim() {
-        let root = fixture();
-        let before = load_provider_integration_config(root.path()).unwrap();
-        let result = observe_with(
-            "xai",
-            || {
-                capture(
-                    root.path(),
-                    "verified-owner",
-                    None,
-                    "xai",
-                    "api-catalog-fixture",
-                )
-            },
-            observed,
-        )
-        .unwrap();
-        assert_eq!(result.http_status, Some(200));
-        assert!(result.failure.is_none() && result.private_binding.is_some());
-        assert_eq!(
-            load_provider_integration_config(root.path()).unwrap(),
-            before
-        );
-        let public = serde_json::to_string(&result).unwrap();
-        assert!(!public.contains("synthetic-catalog-key"));
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = fixture(owner_root);
+            let before = load_provider_integration_config(root.path()).unwrap();
+            let result = observe_with(
+                "xai",
+                || {
+                    capture(
+                        root.path(),
+                        "verified-owner",
+                        None,
+                        "xai",
+                        "api-catalog-fixture",
+                    )
+                },
+                observed,
+            )
+            .unwrap();
+            assert_eq!(result.http_status, Some(200));
+            assert!(result.failure.is_none() && result.private_binding.is_some());
+            assert_eq!(
+                load_provider_integration_config(root.path()).unwrap(),
+                before
+            );
+            let public = serde_json::to_string(&result).unwrap();
+            assert!(!public.contains("synthetic-catalog-key"));
+            Ok(())
+        })
+        .unwrap()
     }
 }

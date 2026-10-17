@@ -487,67 +487,69 @@ fn policy_mutation_and_replay_receipt_share_one_transaction() -> Result<()> {
 
 #[test]
 fn api_adoption_keeps_unowned_and_foreign_accounts_private_and_replay_stable() -> Result<()> {
-    use crate::execution::cliproxyapi_integration::{
-        load_provider_integration_config, save_provider_integration_config, ApiKeyAccountConfig,
-        ApiKeyEndpoint, ProviderSecretRef,
-    };
-    let fixture = Fixture::new()?;
-    let mut config = load_provider_integration_config(fixture.root.path())?;
-    for (id, owner) in [
-        ("owned", Some("owner")),
-        ("foreign", Some("foreign-owner")),
-        ("legacy", None),
-    ] {
-        let secret = ProviderSecretRef::new("provider-api-keys", format!("fixture-{id}"));
-        crate::secrets::write_secret_record(
-            fixture.root.path(),
-            &secret.scope,
-            &secret.name,
+    crate::persistence::test_support::run(move |owner_root| {
+        use crate::execution::cliproxyapi_integration::{
+            load_provider_integration_config, save_provider_integration_config,
+            ApiKeyAccountConfig, ApiKeyEndpoint, ProviderSecretRef,
+        };
+        let fixture = Fixture::with_root(owner_root)?;
+        let mut config = load_provider_integration_config(fixture.root.path())?;
+        for (id, owner) in [
+            ("owned", Some("owner")),
+            ("foreign", Some("foreign-owner")),
+            ("legacy", None),
+        ] {
+            let secret = ProviderSecretRef::new("provider-api-keys", format!("fixture-{id}"));
+            crate::secrets::write_secret_record(
+                fixture.root.path(),
+                &secret.scope,
+                &secret.name,
+                "synthetic-private-api-key",
+                None,
+                json!({}),
+            )?;
+            config.config.api_key_accounts.push(ApiKeyAccountConfig {
+                id: id.into(),
+                endpoint: ApiKeyEndpoint::Xai,
+                api_key_secret: secret,
+                owner_user_id: owner.map(str::to_owned),
+                creation_operation: owner.map(|_| uuid::Uuid::new_v4().to_string()),
+                disabled: false,
+                priority: 0,
+                models: Vec::new(),
+            });
+        }
+        save_provider_integration_config(fixture.root.path(), config.revision, &config.config)?;
+        let accounts = owned_api_observations(fixture.root.path())?;
+        assert_eq!(accounts.len(), 2);
+        let accounts = accounts
+            .into_iter()
+            .filter_map(|(owner, account)| (owner == "owner").then_some(account))
+            .collect::<Vec<_>>();
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].local_account_id, "owned");
+        let before = fixture.adopt(&accounts)?;
+        let after = fixture.adopt(&accounts)?;
+        assert_eq!(before, after);
+        let public = after.to_string();
+        for private in [
             "synthetic-private-api-key",
-            None,
-            json!({}),
-        )?;
-        config.config.api_key_accounts.push(ApiKeyAccountConfig {
-            id: id.into(),
-            endpoint: ApiKeyEndpoint::Xai,
-            api_key_secret: secret,
-            owner_user_id: owner.map(str::to_owned),
-            creation_operation: owner.map(|_| uuid::Uuid::new_v4().to_string()),
-            disabled: false,
-            priority: 0,
-            models: Vec::new(),
-        });
-    }
-    save_provider_integration_config(fixture.root.path(), config.revision, &config.config)?;
-    let accounts = owned_api_observations(fixture.root.path())?;
-    assert_eq!(accounts.len(), 2);
-    let accounts = accounts
-        .into_iter()
-        .filter_map(|(owner, account)| (owner == "owner").then_some(account))
-        .collect::<Vec<_>>();
-    assert_eq!(accounts.len(), 1);
-    assert_eq!(accounts[0].local_account_id, "owned");
-    let before = fixture.adopt(&accounts)?;
-    let after = fixture.adopt(&accounts)?;
-    assert_eq!(before, after);
-    let public = after.to_string();
-    for private in [
-        "synthetic-private-api-key",
-        "fixture-owned",
-        "foreign-owner",
-        "legacy",
-    ] {
-        assert!(!public.contains(private));
-    }
-    assert_eq!(
-        fixture.conn.query_row(
-            "SELECT count(*) FROM business_provider_federation_accounts",
-            [],
-            |row| row.get::<_, i64>(0)
-        )?,
-        1
-    );
-    Ok(())
+            "fixture-owned",
+            "foreign-owner",
+            "legacy",
+        ] {
+            assert!(!public.contains(private));
+        }
+        assert_eq!(
+            fixture.conn.query_row(
+                "SELECT count(*) FROM business_provider_federation_accounts",
+                [],
+                |row| row.get::<_, i64>(0)
+            )?,
+            1
+        );
+        Ok(())
+    })
 }
 
 #[test]

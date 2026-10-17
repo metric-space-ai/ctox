@@ -5,8 +5,11 @@ use crate::execution::cliproxyapi_integration::{
     load_provider_integration_config, save_provider_integration_config, ApiKeyAccountConfig,
     ApiKeyEndpoint, ProviderSecretRef,
 };
-fn api_fixture(endpoint: ApiKeyEndpoint) -> Result<(Fixture, String)> {
-    let f = Fixture::new()?;
+fn api_fixture(
+    root: std::sync::Arc<tempfile::TempDir>,
+    endpoint: ApiKeyEndpoint,
+) -> Result<(Fixture, String)> {
+    let f = Fixture::with_root(root)?;
     let mut config = load_provider_integration_config(f.root.path())?;
     for local in ["private-api-one", "private-api-two"] {
         let reference = ProviderSecretRef::new("provider-api-keys", format!("{local}-key"));
@@ -70,189 +73,202 @@ fn api_controls_admitted_toggle_and_remove_preserve_other_accounts_and_no_key_ro
         ApiKeyEndpoint::ZaiPlatform,
         ApiKeyEndpoint::MiniMax,
     ] {
-        let (f, id) = api_fixture(endpoint)?;
-        let before = crate::secrets::secret_record_content_version(
-            f.root.path(),
-            "provider-api-keys",
-            "private-api-one-key",
-        )?;
-        for enabled in [false, true] {
-            let (cmd, admission, _) = admitted(&f, &id, Some(enabled), "owner")?;
+        crate::persistence::test_support::run(move |owner_root| {
+            let (f, id) = api_fixture(owner_root, endpoint)?;
+            let before = crate::secrets::secret_record_content_version(
+                f.root.path(),
+                "provider-api-keys",
+                "private-api-one-key",
+            )?;
+            for enabled in [false, true] {
+                let (cmd, admission, _) = admitted(&f, &id, Some(enabled), "owner")?;
+                let result = handle(f.root.path(), &cmd, "owner", Some(&admission))?;
+                let row = result["accounts"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|r| r["id"] == id)
+                    .unwrap();
+                assert_eq!(row["enabled"], enabled);
+                assert_eq!(row["credentialReady"], true);
+                assert_eq!(row["controls"], json!({"canEnable":true,"canRemove":true}));
+                let refreshed = refresh(&f)?;
+                assert_eq!(refreshed["revision"], result["revision"]);
+                assert_eq!(
+                    crate::secrets::secret_record_content_version(
+                        f.root.path(),
+                        "provider-api-keys",
+                        "private-api-one-key"
+                    )?,
+                    before
+                );
+            }
+            let config = load_provider_integration_config(f.root.path())?;
+            let (cmd, admission, hash) = admitted(&f, &id, None, "owner")?;
             let result = handle(f.root.path(), &cmd, "owner", Some(&admission))?;
-            let row = result["accounts"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|r| r["id"] == id)
-                .unwrap();
-            assert_eq!(row["enabled"], enabled);
-            assert_eq!(row["credentialReady"], true);
-            assert_eq!(row["controls"], json!({"canEnable":true,"canRemove":true}));
-            let refreshed = refresh(&f)?;
-            assert_eq!(refreshed["revision"], result["revision"]);
+            assert_eq!(result["accounts"].as_array().unwrap().len(), 1);
+            let current = load_provider_integration_config(f.root.path())?;
+            assert_eq!(current.config.api_key_accounts.len(), 1);
+            assert_eq!(current.config.api_key_accounts[0].id, "private-api-two");
+            assert!(crate::secrets::secret_record_content_version(
+                f.root.path(),
+                "provider-api-keys",
+                "private-api-one-key"
+            )?
+            .is_none());
+            assert!(crate::secrets::secret_record_content_version(
+                f.root.path(),
+                "provider-api-keys",
+                "private-api-two-key"
+            )?
+            .is_some());
             assert_eq!(
-                crate::secrets::secret_record_content_version(
-                    f.root.path(),
-                    "provider-api-keys",
-                    "private-api-one-key"
-                )?,
-                before
+                recover(f.root.path(), &cmd, &hash, "owner")?,
+                Some(result.clone())
             );
-        }
-        let config = load_provider_integration_config(f.root.path())?;
-        let (cmd, admission, hash) = admitted(&f, &id, None, "owner")?;
-        let result = handle(f.root.path(), &cmd, "owner", Some(&admission))?;
-        assert_eq!(result["accounts"].as_array().unwrap().len(), 1);
-        let current = load_provider_integration_config(f.root.path())?;
-        assert_eq!(current.config.api_key_accounts.len(), 1);
-        assert_eq!(current.config.api_key_accounts[0].id, "private-api-two");
-        assert!(crate::secrets::secret_record_content_version(
-            f.root.path(),
-            "provider-api-keys",
-            "private-api-one-key"
-        )?
-        .is_none());
-        assert!(crate::secrets::secret_record_content_version(
-            f.root.path(),
-            "provider-api-keys",
-            "private-api-two-key"
-        )?
-        .is_some());
-        assert_eq!(
-            recover(f.root.path(), &cmd, &hash, "owner")?,
-            Some(result.clone())
-        );
-        assert!(
-            save_provider_integration_config(f.root.path(), current.revision, &config.config)
-                .is_err()
-        );
-        for private in [
-            "synthetic-api-control-key",
-            "private-api-one",
-            "api-key:v1:",
-        ] {
-            assert!(!result.to_string().contains(private));
-        }
+            assert!(save_provider_integration_config(
+                f.root.path(),
+                current.revision,
+                &config.config
+            )
+            .is_err());
+            for private in [
+                "synthetic-api-control-key",
+                "private-api-one",
+                "api-key:v1:",
+            ] {
+                assert!(!result.to_string().contains(private));
+            }
+            Ok(())
+        })?;
     }
     Ok(())
 }
 #[test]
 fn api_controls_reject_foreign_and_changed_credentials_before_any_runtime_effect() -> Result<()> {
-    let (f, id) = api_fixture(ApiKeyEndpoint::Xai)?;
-    let before = load_provider_integration_config(f.root.path())?;
-    let (cmd, admission, _) = admitted(&f, &id, Some(false), "foreign")?;
-    assert!(handle(f.root.path(), &cmd, "foreign", Some(&admission)).is_err());
-    assert_eq!(load_provider_integration_config(f.root.path())?, before);
-    crate::secrets::write_secret_record(
-        f.root.path(),
-        "provider-api-keys",
-        "private-api-one-key",
-        "synthetic-replacement",
-        None,
-        json!({}),
-    )?;
-    let (cmd, admission, _) = admitted(&f, &id, None, "owner")?;
-    assert!(handle(f.root.path(), &cmd, "owner", Some(&admission)).is_err());
-    assert!(!holder::has_effect(
-        f.root.path(),
-        cmd.id.as_deref().unwrap()
-    )?);
-    assert_eq!(load_provider_integration_config(f.root.path())?, before);
-    Ok(())
+    crate::persistence::test_support::run(move |owner_root| {
+        let (f, id) = api_fixture(owner_root, ApiKeyEndpoint::Xai)?;
+        let before = load_provider_integration_config(f.root.path())?;
+        let (cmd, admission, _) = admitted(&f, &id, Some(false), "foreign")?;
+        assert!(handle(f.root.path(), &cmd, "foreign", Some(&admission)).is_err());
+        assert_eq!(load_provider_integration_config(f.root.path())?, before);
+        crate::secrets::write_secret_record(
+            f.root.path(),
+            "provider-api-keys",
+            "private-api-one-key",
+            "synthetic-replacement",
+            None,
+            json!({}),
+        )?;
+        let (cmd, admission, _) = admitted(&f, &id, None, "owner")?;
+        assert!(handle(f.root.path(), &cmd, "owner", Some(&admission)).is_err());
+        assert!(!holder::has_effect(
+            f.root.path(),
+            cmd.id.as_deref().unwrap()
+        )?);
+        assert_eq!(load_provider_integration_config(f.root.path())?, before);
+        Ok(())
+    })
 }
 #[test]
 fn api_removal_missing_secret_can_complete_but_never_deletes_a_late_replacement() -> Result<()> {
     for replace in [false, true] {
-        let (f, id) = api_fixture(ApiKeyEndpoint::Xai)?;
-        let version = crate::secrets::secret_record_content_version(
-            f.root.path(),
-            "provider-api-keys",
-            "private-api-one-key",
-        )?
-        .unwrap();
-        crate::secrets::delete_secret_records_if_versions(
-            f.root.path(),
-            &[(
-                "provider-api-keys".into(),
-                "private-api-one-key".into(),
-                version,
-            )],
-        )?;
-        refresh(&f)?;
-        let (cmd, _, hash) = admitted(&f, &id, None, "owner")?;
-        let pending = reserve(&f, &cmd, &hash)?;
-        execute_reserved(f.root.path(), &cmd, &hash, "owner", &pending)?;
-        assert!(holder::has_effect(
-            f.root.path(),
-            cmd.id.as_deref().unwrap()
-        )?);
-        if replace {
-            crate::secrets::write_secret_record(
+        crate::persistence::test_support::run(move |owner_root| {
+            let (f, id) = api_fixture(owner_root, ApiKeyEndpoint::Xai)?;
+            let version = crate::secrets::secret_record_content_version(
                 f.root.path(),
                 "provider-api-keys",
                 "private-api-one-key",
-                "synthetic-late-replacement",
-                None,
-                json!({}),
+            )?
+            .unwrap();
+            crate::secrets::delete_secret_records_if_versions(
+                f.root.path(),
+                &[(
+                    "provider-api-keys".into(),
+                    "private-api-one-key".into(),
+                    version,
+                )],
             )?;
-        }
-        let result = recover(f.root.path(), &cmd, &hash, "owner");
-        assert_eq!(result.is_ok(), !replace);
-        if replace {
-            assert_eq!(
-                crate::secrets::read_secret_value(
+            refresh(&f)?;
+            let (cmd, _, hash) = admitted(&f, &id, None, "owner")?;
+            let pending = reserve(&f, &cmd, &hash)?;
+            execute_reserved(f.root.path(), &cmd, &hash, "owner", &pending)?;
+            assert!(holder::has_effect(
+                f.root.path(),
+                cmd.id.as_deref().unwrap()
+            )?);
+            if replace {
+                crate::secrets::write_secret_record(
                     f.root.path(),
                     "provider-api-keys",
-                    "private-api-one-key"
-                )?,
-                "synthetic-late-replacement"
-            );
-        }
+                    "private-api-one-key",
+                    "synthetic-late-replacement",
+                    None,
+                    json!({}),
+                )?;
+            }
+            let result = recover(f.root.path(), &cmd, &hash, "owner");
+            assert_eq!(result.is_ok(), !replace);
+            if replace {
+                assert_eq!(
+                    crate::secrets::read_secret_value(
+                        f.root.path(),
+                        "provider-api-keys",
+                        "private-api-one-key"
+                    )?,
+                    "synthetic-late-replacement"
+                );
+            }
+            Ok(())
+        })?;
     }
     Ok(())
 }
 #[test]
 fn api_removal_interruption_recovers_exact_proof_and_refuses_replaced_generation() -> Result<()> {
     for replace in [false, true] {
-        let (f, id) = api_fixture(ApiKeyEndpoint::KimiPlatformGlobal)?;
-        let (cmd, _, hash) = admitted(&f, &id, None, "owner")?;
-        let pending = reserve(&f, &cmd, &hash)?;
-        execute_reserved(f.root.path(), &cmd, &hash, "owner", &pending)?;
-        assert!(holder::has_effect(
-            f.root.path(),
-            cmd.id.as_deref().unwrap()
-        )?);
-        assert_eq!(
-            load_provider_integration_config(f.root.path())?
-                .config
-                .api_key_accounts
-                .len(),
-            1
-        );
-        if replace {
-            crate::secrets::write_secret_record(
+        crate::persistence::test_support::run(move |owner_root| {
+            let (f, id) = api_fixture(owner_root, ApiKeyEndpoint::KimiPlatformGlobal)?;
+            let (cmd, _, hash) = admitted(&f, &id, None, "owner")?;
+            let pending = reserve(&f, &cmd, &hash)?;
+            execute_reserved(f.root.path(), &cmd, &hash, "owner", &pending)?;
+            assert!(holder::has_effect(
                 f.root.path(),
-                "provider-api-keys",
-                "private-api-one-key",
-                "synthetic-new-generation",
-                None,
-                json!({}),
-            )?;
-        }
-        assert_eq!(
-            recover(f.root.path(), &cmd, &hash, "owner").is_ok(),
-            !replace
-        );
-        if replace {
+                cmd.id.as_deref().unwrap()
+            )?);
             assert_eq!(
-                crate::secrets::read_secret_value(
+                load_provider_integration_config(f.root.path())?
+                    .config
+                    .api_key_accounts
+                    .len(),
+                1
+            );
+            if replace {
+                crate::secrets::write_secret_record(
                     f.root.path(),
                     "provider-api-keys",
-                    "private-api-one-key"
-                )?,
-                "synthetic-new-generation"
+                    "private-api-one-key",
+                    "synthetic-new-generation",
+                    None,
+                    json!({}),
+                )?;
+            }
+            assert_eq!(
+                recover(f.root.path(), &cmd, &hash, "owner").is_ok(),
+                !replace
             );
-        }
+            if replace {
+                assert_eq!(
+                    crate::secrets::read_secret_value(
+                        f.root.path(),
+                        "provider-api-keys",
+                        "private-api-one-key"
+                    )?,
+                    "synthetic-new-generation"
+                );
+            }
+            Ok(())
+        })?;
     }
     Ok(())
 }

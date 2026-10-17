@@ -149,161 +149,177 @@ async fn revoked_authority_denies_network_and_retires_received_results() {
 }
 #[test]
 fn commit_keeps_credentials_private_and_records_actual_endpoint_and_models() {
-    let root = tempfile::tempdir().unwrap();
-    let found = DiscoveredAccount {
-        endpoint: ApiKeyEndpoint::KimiPlatformGlobal,
-        models: vec![model_fixture()],
-        attempts: Vec::new(),
-    };
-    let receipt = commit_discovered(root.path(), KEY, found, || Ok(())).unwrap();
-    let stored = super::super::load_provider_integration_config(root.path()).unwrap();
-    assert_eq!(stored.config.api_key_accounts.len(), 1);
-    let account = &stored.config.api_key_accounts[0];
-    assert_eq!(account.id, receipt.id);
-    assert_eq!(account.endpoint, ApiKeyEndpoint::KimiPlatformGlobal);
-    assert_eq!(account.priority, 0);
-    assert_eq!(
-        crate::secrets::read_secret_value(
-            root.path(),
-            &account.api_key_secret.scope,
-            &account.api_key_secret.name
-        )
-        .unwrap(),
-        KEY
-    );
-    assert!(!serde_json::to_string(&stored.config).unwrap().contains(KEY));
-    assert!(!serde_json::to_string(&receipt).unwrap().contains(KEY));
+    crate::persistence::test_support::run(move |owner_root| {
+        let root = owner_root;
+        let found = DiscoveredAccount {
+            endpoint: ApiKeyEndpoint::KimiPlatformGlobal,
+            models: vec![model_fixture()],
+            attempts: Vec::new(),
+        };
+        let receipt = commit_discovered(root.path(), KEY, found, || Ok(())).unwrap();
+        let stored = super::super::load_provider_integration_config(root.path()).unwrap();
+        assert_eq!(stored.config.api_key_accounts.len(), 1);
+        let account = &stored.config.api_key_accounts[0];
+        assert_eq!(account.id, receipt.id);
+        assert_eq!(account.endpoint, ApiKeyEndpoint::KimiPlatformGlobal);
+        assert_eq!(account.priority, 0);
+        assert_eq!(
+            crate::secrets::read_secret_value(
+                root.path(),
+                &account.api_key_secret.scope,
+                &account.api_key_secret.name
+            )
+            .unwrap(),
+            KEY
+        );
+        assert!(!serde_json::to_string(&stored.config).unwrap().contains(KEY));
+        assert!(!serde_json::to_string(&receipt).unwrap().contains(KEY));
+        Ok(())
+    })
+    .unwrap()
 }
 #[test]
 fn revocation_before_config_commit_removes_only_the_new_secret() {
-    let root = tempfile::tempdir().unwrap();
-    crate::secrets::write_secret_record(
-        root.path(),
-        "provider-api-keys",
-        "retained-existing",
-        "synthetic-existing-credential",
-        None,
-        serde_json::json!({}),
-    )
-    .unwrap();
-    let checks = AtomicUsize::new(0);
-    let found = DiscoveredAccount {
-        endpoint: ApiKeyEndpoint::Xai,
-        models: vec![model_fixture()],
-        attempts: Vec::new(),
-    };
-    let id = uuid::Uuid::new_v4();
-    assert!(commit_discovered_with_id(
-        root.path(),
-        KEY,
-        found,
-        || {
-            anyhow::ensure!(checks.fetch_add(1, Ordering::SeqCst) < 2, "retired");
-            Ok(())
-        },
-        id,
-    )
-    .is_err());
-    assert!(super::super::load_provider_integration_config(root.path())
-        .unwrap()
-        .config
-        .api_key_accounts
-        .is_empty());
-    assert!(!crate::secrets::secret_exists(
-        root.path(),
-        "provider-api-keys",
-        &format!("api-key-{id}")
-    )
-    .unwrap());
-    assert_eq!(
-        crate::secrets::read_secret_value(root.path(), "provider-api-keys", "retained-existing")
-            .unwrap(),
-        "synthetic-existing-credential"
-    );
-}
-
-#[tokio::test]
-async fn owned_creation_replay_preserves_key_revision_and_rejects_changes() {
-    use sha2::{Digest, Sha256};
-    let root = tempfile::tempdir().unwrap();
-    let operation = uuid::Uuid::new_v4();
-    let mut hash = Sha256::new();
-    hash.update(b"verified-owner");
-    hash.update([0]);
-    hash.update(operation.to_string().as_bytes());
-    let id = format!("api-{:x}", hash.finalize());
-    let first = commit_discovered_record(
-        root.path(),
-        KEY,
-        DiscoveredAccount {
+    crate::persistence::test_support::run(move |owner_root| {
+        let root = owner_root;
+        crate::secrets::write_secret_record(
+            root.path(),
+            "provider-api-keys",
+            "retained-existing",
+            "synthetic-existing-credential",
+            None,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let checks = AtomicUsize::new(0);
+        let found = DiscoveredAccount {
             endpoint: ApiKeyEndpoint::Xai,
             models: vec![model_fixture()],
             attempts: Vec::new(),
-        },
-        || Ok(()),
-        id,
-        Some(("verified-owner", &operation.to_string())),
-    )
-    .unwrap();
-    let stored = super::super::load_provider_integration_config(root.path()).unwrap();
-    let account = &stored.config.api_key_accounts[0];
-    let generation = crate::secrets::secret_record_content_version(
-        root.path(),
-        &account.api_key_secret.scope,
-        &account.api_key_secret.name,
-    )
-    .unwrap();
-    let replay = install_api_key_account_owned_authorized(
-        root.path(),
-        "verified-owner",
-        operation,
-        ApiKeyProvider::Xai,
-        Zeroizing::new(KEY.into()),
-        || Ok(()),
-    )
-    .await
-    .unwrap();
-    assert_eq!(first.id, replay.id);
-    assert_eq!(first.revision, replay.revision);
-    assert_eq!(
-        generation,
-        crate::secrets::secret_record_content_version(
+        };
+        let id = uuid::Uuid::new_v4();
+        assert!(commit_discovered_with_id(
+            root.path(),
+            KEY,
+            found,
+            || {
+                anyhow::ensure!(checks.fetch_add(1, Ordering::SeqCst) < 2, "retired");
+                Ok(())
+            },
+            id,
+        )
+        .is_err());
+        assert!(super::super::load_provider_integration_config(root.path())
+            .unwrap()
+            .config
+            .api_key_accounts
+            .is_empty());
+        assert!(!crate::secrets::secret_exists(
+            root.path(),
+            "provider-api-keys",
+            &format!("api-key-{id}")
+        )
+        .unwrap());
+        assert_eq!(
+            crate::secrets::read_secret_value(
+                root.path(),
+                "provider-api-keys",
+                "retained-existing"
+            )
+            .unwrap(),
+            "synthetic-existing-credential"
+        );
+        Ok(())
+    })
+    .unwrap()
+}
+
+#[test]
+fn owned_creation_replay_preserves_key_revision_and_rejects_changes() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        use sha2::{Digest, Sha256};
+        let root = owner_root;
+        let operation = uuid::Uuid::new_v4();
+        let mut hash = Sha256::new();
+        hash.update(b"verified-owner");
+        hash.update([0]);
+        hash.update(operation.to_string().as_bytes());
+        let id = format!("api-{:x}", hash.finalize());
+        let first = commit_discovered_record(
+            root.path(),
+            KEY,
+            DiscoveredAccount {
+                endpoint: ApiKeyEndpoint::Xai,
+                models: vec![model_fixture()],
+                attempts: Vec::new(),
+            },
+            || Ok(()),
+            id,
+            Some(("verified-owner", &operation.to_string())),
+        )
+        .unwrap();
+        let stored = super::super::load_provider_integration_config(root.path()).unwrap();
+        let account = &stored.config.api_key_accounts[0];
+        let generation = crate::secrets::secret_record_content_version(
             root.path(),
             &account.api_key_secret.scope,
-            &account.api_key_secret.name
+            &account.api_key_secret.name,
         )
-        .unwrap()
-    );
-    for (provider, key) in [
-        (ApiKeyProvider::Xai, "changed-synthetic-key"),
-        (ApiKeyProvider::Kimi, KEY),
-    ] {
+        .unwrap();
+        let replay = install_api_key_account_owned_authorized(
+            root.path(),
+            "verified-owner",
+            operation,
+            ApiKeyProvider::Xai,
+            Zeroizing::new(KEY.into()),
+            || Ok(()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.id, replay.id);
+        assert_eq!(first.revision, replay.revision);
+        assert_eq!(
+            generation,
+            crate::secrets::secret_record_content_version(
+                root.path(),
+                &account.api_key_secret.scope,
+                &account.api_key_secret.name
+            )
+            .unwrap()
+        );
+        for (provider, key) in [
+            (ApiKeyProvider::Xai, "changed-synthetic-key"),
+            (ApiKeyProvider::Kimi, KEY),
+        ] {
+            assert!(install_api_key_account_owned_authorized(
+                root.path(),
+                "verified-owner",
+                operation,
+                provider,
+                Zeroizing::new(key.into()),
+                || Ok(())
+            )
+            .await
+            .is_err());
+        }
         assert!(install_api_key_account_owned_authorized(
             root.path(),
             "verified-owner",
             operation,
-            provider,
-            Zeroizing::new(key.into()),
-            || Ok(())
+            ApiKeyProvider::Xai,
+            Zeroizing::new(KEY.into()),
+            || anyhow::bail!("retired")
         )
         .await
         .is_err());
-    }
-    assert!(install_api_key_account_owned_authorized(
-        root.path(),
-        "verified-owner",
-        operation,
-        ApiKeyProvider::Xai,
-        Zeroizing::new(KEY.into()),
-        || anyhow::bail!("retired")
-    )
-    .await
-    .is_err());
-    assert_eq!(
-        super::super::load_provider_integration_config(root.path())
-            .unwrap()
-            .config
-            .api_key_accounts,
-        stored.config.api_key_accounts
-    );
+        assert_eq!(
+            super::super::load_provider_integration_config(root.path())
+                .unwrap()
+                .config
+                .api_key_accounts,
+            stored.config.api_key_accounts
+        );
+        Ok(())
+    })
+    .unwrap()
 }
