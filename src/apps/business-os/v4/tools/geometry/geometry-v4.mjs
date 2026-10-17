@@ -503,6 +503,8 @@ ${PORTED.map(({ id }) => `<section><h2>${esc(id)}</h2><div style="display:flex;g
 </body>`;
   writeFileSync(join(OUT, 'index.html'), gallery);
   console.log(`\n${results.filter((r) => r.ok).length}/${results.length} OK · Zonen-Fälle ${zoneCases.filter((z) => z.ok).length}/${zoneCases.length} · ${join(OUT, 'results.json')} · ${join(OUT, 'index.html')}`);
+  // Als CI-Gate (crew-ui v4-Linie) muss ein roter Befund den Lauf rot machen; bis 17.10. endete er immer mit 0.
+  process.exitCode = results.every((r) => r.ok) && zoneCases.every((z) => z.ok) ? 0 : 1;
 }
 
 if (IS_MAIN) main().catch((e) => { console.error(e); process.exit(1); });
