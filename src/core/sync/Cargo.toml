@@ -43,5 +43,6 @@ tokio-tungstenite = "0.28"
 [patch.crates-io]
 rtc-turn = { path = "../rxdb/patches/rtc-turn" }
 rtc-ice = { path = "../rxdb/patches/rtc-ice" }
+rtc-sctp = { path = "../rxdb/patches/rtc-sctp" }
 rtc = { path = "../rxdb/patches/rtc" }
 webrtc = { path = "../rxdb/patches/webrtc" }

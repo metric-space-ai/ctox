@@ -141,13 +141,15 @@ async fn turn_native_browser_reliable_tcp_tls() {
         .with_ice_transport_policy(RTCIceTransportPolicy::Relay)
         .with_ice_servers(client.ice_servers(&[]))
         .build();
-    let pc = PeerConnectionBuilder::new()
-        .with_configuration(configuration)
-        .with_handler(handler.clone())
-        .with_udp_addrs(vec!["127.0.0.1:0".to_owned()])
-        .build()
-        .await
-        .expect("native authenticated TURN allocation");
+    let pc: Arc<dyn PeerConnection> = Arc::new(
+        PeerConnectionBuilder::new()
+            .with_configuration(configuration)
+            .with_handler(handler.clone())
+            .with_udp_addrs(vec!["127.0.0.1:0".to_owned()])
+            .build()
+            .await
+            .expect("native authenticated TURN allocation"),
+    );
     let offer: RTCSessionDescription =
         serde_json::from_str(&wait_file(&root.join("offer.json")).await).unwrap();
     pc.set_remote_description(offer).await.unwrap();
@@ -192,6 +194,14 @@ async fn turn_native_browser_reliable_tcp_tls() {
     tokio::fs::rename(root.join("answer.tmp"), root.join("answer.json"))
         .await
         .unwrap();
+    if config["m4"].as_bool() == Some(true) {
+        run_m4(&pc, &root, &config, &messages).await;
+        pc.close().await.unwrap();
+        client.close().await;
+        server.abort();
+        let _ = server.await;
+        return;
+    }
     let result: serde_json::Value =
         serde_json::from_str(&wait_file(&root.join("browser-result.json")).await).unwrap();
     let ice_status = client.ice_configuration_status();
@@ -240,4 +250,177 @@ fn turn_relay_gatherer_wire_roundtrips_agent_parser() {
         );
         println!("TURN_GATHERER_BINARY_MARKER={NATIVE_TURN_GATHERER_MARKER} wire={raw}");
     }
+}
+
+// Reuses the same real Chromium/TURN allocation and SDP fixture above. The
+// benchmark deliberately targets P5/E14 transport, not an App API or enrollment.
+async fn run_m4(
+    pc: &Arc<dyn PeerConnection>,
+    root: &std::path::Path,
+    config: &serde_json::Value,
+    messages: &Arc<Mutex<Vec<String>>>,
+) {
+    use rxdb::plugins::replication_webrtc::index_mod::{
+        hello::{Codec, TransportSelection, WireSeq},
+        lanes::Lane,
+        scheduler::{
+            session_resume::{ReliableSession, SessionHello},
+            Incoming, NativeSendScheduler, SessionBinding, SessionPayload,
+        },
+    };
+    use rxdb::plugins::replication_webrtc::webrtc_types::WebRTCPublicationGuard;
+    struct FixtureAuthority;
+    impl WebRTCPublicationGuard for FixtureAuthority {
+        fn with_current(
+            &self,
+            f: &mut dyn FnMut() -> rxdb::rx_error::RxResult<()>,
+        ) -> rxdb::rx_error::RxResult<()> {
+            f()
+        }
+    }
+    let state = ReliableSession::<SessionPayload>::new(
+        "browser-m4".into(),
+        [
+            128 * 1024,
+            1024 * 1024,
+            128 * 1024,
+            4 * 1024 * 1024,
+            8 * 1024 * 1024,
+            16 * 1024 * 1024,
+        ],
+    )
+    .unwrap();
+    let hello = SessionHello {
+        session_id: "browser-m4".into(),
+        resume_from: std::array::from_fn(|_| WireSeq(0)),
+    };
+    let binding = SessionBinding::attach(state.clone(), &hello).unwrap();
+    let generation = binding.generation;
+    let scheduler = NativeSendScheduler::create_resumed(
+        pc,
+        TransportSelection {
+            codec: Codec::Gzip,
+            frame_bytes: webrtc::data_channel::sctp_data_payload_limit() as u32,
+            fragmentation: true,
+            reassembly: true,
+        },
+        binding,
+        |_, _, _| Ok(Arc::new(FixtureAuthority)),
+    )
+    .await
+    .unwrap();
+    let _ = wait_file(&root.join("m4-browser-ready.json")).await;
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut echoes = Vec::new();
+    for lane in [Lane::Control, Lane::Commands] {
+        let mut incoming = scheduler.take_incoming(Some(lane)).unwrap();
+        let sender = scheduler.clone();
+        echoes.push(tokio::spawn(async move {
+            for id in 0..64 {
+                let Some(Incoming::Reliable {
+                    bytes,
+                    delivery: Some(token),
+                    ..
+                }) = incoming.recv().await
+                else {
+                    panic!("M4 browser control missing")
+                };
+                token.acknowledge().unwrap();
+                sender
+                    .send(lane, WireSeq(id), &bytes, Some(Arc::new(FixtureAuthority)))
+                    .await
+                    .unwrap();
+            }
+        }));
+    }
+    let sender = scheduler.clone();
+    let stopping = stop.clone();
+    let payload = config["payload"].as_str().unwrap().to_owned();
+    let window = Arc::new(tokio::sync::Semaphore::new(16));
+    let permits = window.clone();
+    let producer = tokio::spawn(async move {
+        let mut id = 0;
+        let mut bytes = 0;
+        while !stopping.load(std::sync::atomic::Ordering::Relaxed) {
+            let permit = permits.acquire().await.unwrap();
+            if stopping.load(std::sync::atomic::Ordering::Relaxed) {
+                break;
+            }
+            permit.forget();
+            let message = serde_json::to_vec(
+                &serde_json::json!({"type":"bulk","ordinal":id,"payload":payload}),
+            )
+            .unwrap();
+            bytes += message.len();
+            sender
+                .send(
+                    Lane::Transfer,
+                    WireSeq(id),
+                    &message,
+                    Some(Arc::new(FixtureAuthority)),
+                )
+                .await
+                .unwrap();
+            id += 1;
+        }
+        (id, bytes)
+    });
+    // Browser returns one small delivery notice per object on the existing
+    // bootstrap channel. This bounds the fixture producer independently of E14.
+    let permits = window.clone();
+    let observations = messages.clone();
+    let stopping = stop.clone();
+    let notices = tokio::spawn(async move {
+        let mut seen = 0;
+        while !stopping.load(std::sync::atomic::Ordering::Relaxed) {
+            let current = observations
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|s| s.as_str() == "m4-bulk-delivered")
+                .count();
+            if current > seen {
+                permits.add_permits(current - seen);
+                seen = current;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(600), async {
+        loop {
+            if messages.lock().unwrap().iter().any(|s| s == "m4-stop") {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("M4 observation deadline");
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    window.add_permits(16);
+    let (bulk_sent, bulk_bytes) = producer.await.unwrap();
+    for echo in echoes {
+        echo.await.unwrap();
+    }
+    notices.await.unwrap();
+    let fully_drained = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if [Lane::Control, Lane::Commands, Lane::Transfer]
+                .iter()
+                .all(|lane| state.replay(generation, *lane).unwrap().is_empty())
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .is_ok();
+    let handoff = scheduler.handoff_counters();
+    tokio::fs::write(root.join("m4-native-result.json"),serde_json::to_vec(&serde_json::json!({"fully_drained":fully_drained,"pending_delivery":[state.replay(generation,Lane::Control).unwrap().len(),state.replay(generation,Lane::Commands).unwrap().len(),state.replay(generation,Lane::Transfer).unwrap().len()],"bulk_sent":bulk_sent,"bulk_bytes":bulk_bytes,"sctp_window":scheduler.handoff_counters().sctp_window,"buffer_peak":handoff.buffered_upper_bound_peak,"attempted":handoff.attempted,"handed_to_sctp":handoff.handed_to_sctp,"failed":handoff.failed})).unwrap()).await.unwrap();
+    let result: serde_json::Value =
+        serde_json::from_str(&wait_file(&root.join("browser-result.json")).await).unwrap();
+    scheduler.close_now();
+    assert!(fully_drained,"M4 bulk E14 delivery ACKs missing; see m4-native-result.json");
+    assert_eq!(result["pass"], true, "M4 Chromium fixture failed: {result}");
 }

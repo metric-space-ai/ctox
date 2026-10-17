@@ -10,6 +10,7 @@ use shared::error::Result;
 pub(crate) struct RTCDataChannelInternal {
     pub(crate) id: RTCDataChannelId,
     pub(crate) label: String,
+    pub(crate) priority: Option<u16>,
     pub(crate) ordered: bool,
     pub(crate) max_packet_life_time: Option<u16>,
     pub(crate) max_retransmits: Option<u16>,
@@ -27,6 +28,7 @@ impl Default for RTCDataChannelInternal {
         Self {
             id: 0,
             label: "".to_string(),
+            priority: None,
             ordered: false,
             max_packet_life_time: None,
             max_retransmits: None,
@@ -46,6 +48,7 @@ impl RTCDataChannelInternal {
         Self {
             id,
             label: params.label,
+            priority: params.priority,
             protocol: params.protocol,
             negotiated: params.negotiated.is_some(),
             ordered: params.ordered,
@@ -68,7 +71,10 @@ impl RTCDataChannelInternal {
 
         let config = ::datachannel::data_channel::DataChannelConfig {
             channel_type,
-            priority: ::datachannel::message::message_channel_open::CHANNEL_PRIORITY_NORMAL,
+            // ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc/src/data_channel/internal.rs:71
+            priority: self
+                .priority
+                .unwrap_or(::datachannel::message::message_channel_open::CHANNEL_PRIORITY_NORMAL),
             reliability_parameter,
             label: self.label.clone(),
             protocol: self.protocol.clone(),
@@ -111,6 +117,7 @@ impl RTCDataChannelInternal {
             stream_id,
             DataChannelParameters {
                 label: data_channel_config.label.clone(),
+                priority: Some(data_channel_config.priority),
                 protocol: data_channel_config.protocol.clone(),
                 ordered: !unordered,
                 max_packet_life_time: None,

@@ -1,6 +1,6 @@
 use super::super::super::{
     hello::{Codec, TransportSelection},
-    lanes::{ASSOCIATION_BUDGET, FRAME_BYTES, REALTIME_LABEL},
+    lanes::{ASSOCIATION_BUDGET, REALTIME_LABEL},
 };
 use super::super::{
     ADMISSION, AssociationBudget, Framer, Incoming, ReliableSession, SessionBinding,
@@ -84,14 +84,16 @@ fn lane4_packet_resume_and_budget_contract() {
         !budget.reserve(Lane::Transfer.index(), ASSOCIATION_BUDGET + 1),
         "budget overflow admitted"
     );
+    let physical = webrtc::data_channel::sctp_data_payload_limit();
     for lane in 0..7 {
-        assert!(budget.reserve(lane, FRAME_BYTES));
+        assert!(budget.reserve(lane, physical));
     }
+    while budget.reserve(Lane::Transfer.index(), physical) {}
     assert!(budget.buffered() <= ASSOCIATION_BUDGET);
-    assert!(!budget.reserve(Lane::Transfer.index(), FRAME_BYTES));
+    assert!(!budget.reserve(Lane::Transfer.index(), physical));
     budget.drained(Lane::Control.index());
     assert!(
-        budget.reserve(Lane::Control.index(), FRAME_BYTES),
+        budget.reserve(Lane::Control.index(), physical),
         "bulk blocked control credit"
     );
 }
@@ -102,6 +104,12 @@ struct Events {
 }
 #[async_trait]
 impl PeerConnectionEventHandler for Events {
+    async fn on_ice_connection_state_change(&self, state: webrtc::peer_connection::RTCIceConnectionState) {
+        eprintln!("Z3_ICE_STATE {}",serde_json::json!({"state":format!("{state:?}"),"ms":z3_elapsed_ms()}));
+    }
+    async fn on_connection_state_change(&self, state: webrtc::peer_connection::RTCPeerConnectionState) {
+        eprintln!("Z3_PC_STATE {}",serde_json::json!({"state":format!("{state:?}"),"ms":z3_elapsed_ms()}));
+    }
     async fn on_ice_candidate(&self, event: RTCPeerConnectionIceEvent) {
         if let Ok(candidate) = event.candidate.to_json() {
             let _ = self.candidates.send(candidate);
@@ -193,7 +201,7 @@ async fn lane4_real_webrtc_50mb_control_latency_and_verified_arrival() {
     );
     let mut tasks = tokio::task::JoinSet::new();
     let result = tokio::time::timeout(Duration::from_secs(420), async {
-        let transport = TransportSelection { codec: Codec::Zstd, frame_bytes: FRAME_BYTES as u32, fragmentation: true, reassembly: true };
+        let transport = TransportSelection { codec: Codec::Zstd, frame_bytes: webrtc::data_channel::sctp_data_payload_limit() as u32, fragmentation: true, reassembly: true };
         let sa = ReliableSession::new("lane4-50mb".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
         let sb = ReliableSession::new("lane4-50mb".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
         let binding_a = SessionBinding::attach(sa.clone(), &sb.hello()).unwrap();
@@ -304,28 +312,46 @@ impl PairFixture {
         sa: Arc<ReliableSession<super::super::SessionPayload>>,
         sb: Arc<ReliableSession<super::super::SessionPayload>>,
     ) -> Self {
+        Self::connect_on(sa, sb, "127.0.0.1:0").await
+    }
+    async fn connect_on(
+        sa: Arc<ReliableSession<super::super::SessionPayload>>,
+        sb: Arc<ReliableSession<super::super::SessionPayload>>,
+        bind: &str,
+    ) -> Self {
+        Self::connect_configured(sa, sb, bind, Default::default(), false).await
+    }
+    async fn connect_configured(
+        sa: Arc<ReliableSession<super::super::SessionPayload>>,
+        sb: Arc<ReliableSession<super::super::SessionPayload>>,
+        bind: &str,
+        configuration: [webrtc::peer_connection::RTCConfiguration; 2],
+        shaped: bool,
+    ) -> Self {
         let (atx, mut ac) = mpsc::unbounded_channel();
         let (btx, mut bc) = mpsc::unbounded_channel();
         let (unused, _discard) = mpsc::unbounded_channel();
         let (incoming, mut channels) = mpsc::unbounded_channel();
         let a: Arc<dyn PeerConnection> = Arc::new(
             PeerConnectionBuilder::new()
+                .with_configuration(configuration[0].clone())
                 .with_handler(Arc::new(Events {
                     candidates: atx,
                     channels: unused,
                 }))
-                .with_udp_addrs(vec!["127.0.0.1:0"])
+                .with_udp_addrs(vec![bind.to_owned()])
                 .build()
                 .await
                 .unwrap(),
         );
         let b: Arc<dyn PeerConnection> = Arc::new(
             PeerConnectionBuilder::new()
+                .with_configuration(configuration[1].clone())
                 .with_handler(Arc::new(Events {
                     candidates: btx,
                     channels: incoming,
                 }))
-                .with_udp_addrs(vec!["127.0.0.1:0"])
+                .with_udp_addrs(vec![bind.to_owned()])
                 .build()
                 .await
                 .unwrap(),
@@ -364,7 +390,7 @@ impl PairFixture {
         eprintln!("LANE4_RESUME stage=bootstrap-open");
         let transport = TransportSelection {
             codec: Codec::Zstd,
-            frame_bytes: FRAME_BYTES as u32,
+            frame_bytes: webrtc::data_channel::sctp_data_payload_limit() as u32,
             fragmentation: true,
             reassembly: true,
         };
@@ -376,7 +402,7 @@ impl PairFixture {
             for _ in 0..7 {
                 let channel = channels.recv().await.unwrap();
                 let label = channel.label().await.unwrap();
-                eprintln!("LANE4_CHANNEL {label}");
+                eprintln!("LANE4_CHANNEL {label} sid={:?}", channel.id());
                 let index = Lane::ALL
                     .iter()
                     .position(|l| l.label() == label)
@@ -386,13 +412,19 @@ impl PairFixture {
                     });
                 accepted[index] = Some(channel);
             }
-            NativeSendScheduler::from_channels_session(
+            let target = NativeSendScheduler::from_channels_session(
                 accepted.into_iter().map(Option::unwrap).collect(),
                 Framer::new(transport.clone()).unwrap(),
                 Some(bb),
             )
             .await
-            .unwrap()
+            .unwrap();
+            // This fixture owns both native endpoints. Resume the accepted
+            // endpoint too; create_resumed already does this for the opener.
+            target.replay_pending(&|_, _, _| {
+                Ok(Arc::new(Authorized) as Arc<dyn WebRTCPublicationGuard>)
+            }).await.unwrap();
+            target
         };
         let create = async {
             let result =
@@ -409,7 +441,7 @@ impl PairFixture {
         // Surface constructor failure immediately. join! used to hide it
         // behind the unrelated accept future until the fixture watchdog fired.
         let dynamic_started = Instant::now();
-        let (source, target) = tokio::time::timeout(Duration::from_secs(1), async {
+        let (source, target) = tokio::time::timeout(Duration::from_secs(if shaped {10} else {1}), async {
             tokio::try_join!(create, async {
                 Ok::<_, crate::rx_error::RxError>(accept.await)
             })
@@ -760,4 +792,477 @@ async fn lane4_dynamic_browser_channel_opens_after_handshake_within_one_second()
 mod e25_range_tests {
     use super::*;
     include!("../v4_session_tests.rs");
+}
+
+// Z3 uses the existing real SCTP pair, not a second mock transport.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn z3_p4_twenty_reconnects_preserve_every_application_delivery() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    tokio::time::timeout(Duration::from_secs(120), async {
+        let sa = ReliableSession::new("z3-reconnect".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let sb = ReliableSession::new("z3-reconnect".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let mut pair = PairFixture::connect(sa.clone(), sb.clone()).await;
+        let mut effects_a = Vec::new();
+        let mut effects_b = Vec::new();
+        let mut explicit_results = 0usize;
+        let mut replayed = 0usize;
+        let mut at = pair.source.take_incoming(Some(Lane::Commands)).unwrap();
+        let mut bt = pair.target.take_incoming(Some(Lane::Commands)).unwrap();
+        for cycle in 0..20u64 {
+            let mut uncommitted = Vec::new();
+            for index in 0..16u64 {
+                let id = cycle * 16 + index;
+                pair.source.send(Lane::Commands, WireSeq(id), &id.to_be_bytes(), Some(Arc::new(Authorized))).await.expect("explicit A send result");
+                pair.target.send(Lane::Commands, WireSeq(id), &id.to_be_bytes(), Some(Arc::new(Authorized))).await.expect("explicit B send result");
+                explicit_results += 2;
+                for (incoming, effects) in [(&mut at, &mut effects_a), (&mut bt, &mut effects_b)] {
+                    let Some(Incoming::Reliable { bytes, delivery: Some(token), .. }) = incoming.recv().await else { panic!("application message missing"); };
+                    assert_eq!(bytes, id.to_be_bytes());
+                    if index == 15 {
+                        // Channel loss before the application commits: no ACK.
+                        uncommitted.push(token);
+                    } else {
+                        effects.push(id);
+                        token.acknowledge().unwrap();
+                    }
+                }
+            }
+            pair.close().await;
+            drop(uncommitted);
+            pair = PairFixture::connect(sa.clone(), sb.clone()).await;
+            at = pair.source.take_incoming(Some(Lane::Commands)).unwrap();
+            bt = pair.target.take_incoming(Some(Lane::Commands)).unwrap();
+            let expected = cycle * 16 + 15;
+            for (incoming, effects) in [(&mut at, &mut effects_a), (&mut bt, &mut effects_b)] {
+                let replay = tokio::time::timeout(Duration::from_secs(2), incoming.recv()).await.expect("unacknowledged application message must replay after reconnect");
+                let Some(Incoming::Reliable { bytes, delivery: Some(token), .. }) = replay else { panic!("replay missing"); };
+                assert_eq!(bytes, expected.to_be_bytes());
+                effects.push(expected);
+                token.acknowledge().unwrap();
+                replayed += 1;
+            }
+            // ACK retirement is the delivery witness, separate from send admission.
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    let ga = pair.source.session.as_ref().unwrap().generation;
+                    let gb = pair.target.session.as_ref().unwrap().generation;
+                    if sa.replay(ga, Lane::Commands).unwrap().is_empty() && sb.replay(gb, Lane::Commands).unwrap().is_empty() { break; }
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            }).await.expect("every admitted send needs cumulative delivery acknowledgement");
+        }
+        let expected: Vec<_> = (0..320u64).collect();
+        assert_eq!(effects_a, expected, "A application lost/duplicated delivery");
+        assert_eq!(effects_b, expected, "B application lost/duplicated delivery");
+        pair.close().await;
+        eprintln!("Z3_P4_RECONNECT {}", serde_json::json!({"scenario":1,"forced_loss_reconnects":20,"additional_clean_rebinds":0,"sent":640,"explicit_send_results":explicit_results,"delivery_acknowledged":640,"replayed_after_loss":replayed,"lost":0,"duplicated":0,"transport":"native-native real WebRTC"}));
+    }).await.expect("twenty reconnects must finish within fixture deadline");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires isolated unshare -Urn with Z3_OWN_NETNS=1"]
+async fn z3_p4_netns_network_change() {
+    assert_eq!(std::env::var("Z3_OWN_NETNS").as_deref(), Ok("1"));
+    let links = std::process::Command::new("ip").args(["-j", "link", "show"]).output().unwrap();
+    let links: Vec<serde_json::Value> = serde_json::from_slice(&links.stdout).unwrap();
+    assert_eq!(links.len(), 1, "refusing interface fault outside an isolated namespace");
+    assert_eq!(links[0]["ifname"], "lo");
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    tokio::time::timeout(Duration::from_secs(40), async {
+        let sa = ReliableSession::new("z3-network".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let sb = ReliableSession::new("z3-network".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let mut pair = PairFixture::connect_on(sa.clone(), sb.clone(), "127.0.0.2:0").await;
+        let before = z3_candidate_endpoints(&pair.a).await;
+        assert!(before.iter().all(|(address, _, _)| address == "127.0.0.2"));
+        let mut received = Vec::new();
+        let mut incoming = pair.target.take_incoming(Some(Lane::Commands)).unwrap();
+        let mut held = None;
+        for id in 0..16u64 {
+            pair.source.send(Lane::Commands, WireSeq(id), &id.to_be_bytes(), Some(Arc::new(Authorized))).await.unwrap();
+            let Some(Incoming::Reliable {bytes, delivery:Some(token), ..}) = incoming.recv().await else {panic!("network prefix missing");};
+            assert_eq!(bytes, id.to_be_bytes());
+            if id == 15 {held = Some(token);} else {received.push(id); token.acknowledge().unwrap();}
+        }
+        // Flip the active interface while the final delivery is uncommitted.
+        assert!(std::process::Command::new("ip").args(["link", "set", "lo", "down"]).status().unwrap().success());
+        pair.close().await; drop(held);
+        assert!(std::process::Command::new("ip").args(["link", "set", "lo", "up"]).status().unwrap().success());
+        pair = PairFixture::connect_on(sa.clone(), sb, "127.0.0.3:0").await;
+        let after = z3_candidate_endpoints(&pair.a).await;
+        assert!(after.iter().all(|(address, _, _)| address == "127.0.0.3"));
+        assert_ne!(before, after, "network recovery retained the original candidates");
+        incoming = pair.target.take_incoming(Some(Lane::Commands)).unwrap();
+        for id in 15..32u64 {
+            if id != 15 {pair.source.send(Lane::Commands, WireSeq(id), &id.to_be_bytes(), Some(Arc::new(Authorized))).await.unwrap();}
+            let replay = tokio::time::timeout(Duration::from_secs(2), incoming.recv()).await.expect("network change must replay from prefix");
+            let Some(Incoming::Reliable {bytes, delivery:Some(token), ..}) = replay else {panic!("network suffix missing");};
+            assert_eq!(bytes, id.to_be_bytes()); received.push(id); token.acknowledge().unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !sa.replay(pair.source.session.as_ref().unwrap().generation, Lane::Commands).unwrap().is_empty() {tokio::time::sleep(Duration::from_millis(1)).await;}
+        }).await.expect("network suffix was not acknowledged");
+        assert_eq!(received, (0..32u64).collect::<Vec<_>>()); pair.close().await;
+        eprintln!("Z3_P4_NETWORK {}", serde_json::json!({"scenario":2,"interface":"lo","interface_flips":1,"candidates_before":before,"candidates_after":after,"sent":32,"explicit_send_results":32,"delivery_acknowledged":32,"replayed":1,"lost":0,"duplicated":0}));
+    }).await.expect("network change fixture deadline");
+}
+
+#[test]
+#[ignore = "launches existing PairFixture in fresh native processes"]
+fn z3_p4_process_restart_from_persisted_cursor() {
+    let root = tempfile::tempdir().unwrap();
+    let data: Vec<_> = (0..CHUNK_BYTES*16).map(|i| (i%251) as u8).collect();
+    std::fs::write(root.path().join("source"), &data).unwrap();
+    let reference = format!("{:x}", Sha256::digest(&data));
+    let executable = std::env::current_exe().unwrap(); let mut pids = Vec::new();
+    for phase in ["prefix", "suffix"] {
+        let mut child = std::process::Command::new(&executable).args(["z3_p4_restart_child", "--ignored", "--nocapture", "--test-threads=1"])
+            .env("Z3_RESTART_ROOT", root.path()).env("Z3_RESTART_PHASE", phase).spawn().unwrap();
+        pids.push(child.id()); assert!(child.wait().unwrap().success(), "peer process restart must recover persisted cursor");
+    }
+    assert_ne!(pids[0], pids[1]);
+    let effects: Vec<usize> = std::fs::read_to_string(root.path().join("effects")).unwrap().lines().map(|n| n.parse().unwrap()).collect();
+    assert_eq!(effects, (0..data.len()).step_by(CHUNK_BYTES).collect::<Vec<_>>(), "persisted cursor replay lost or duplicated an application effect");
+    Cas::open(root.path().join("target")).unwrap().verified(&reference, data.len() as u64).unwrap();
+    eprintln!("Z3_P4_RESTART {}", serde_json::json!({"scenario":4,"pids":pids,"process_restarts":1,"endpoints_recreated":2,"session_reset":true,"cursor":"CAS durable byte prefix","resume_offset":data.len()/2,"bytes":data.len(),"sent":16,"explicit_send_results":16,"delivery_acknowledged":16,"lost":0,"duplicated":0,"sha256_verified":true}));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "subprocess helper for persisted cursor restart fixture"]
+async fn z3_p4_restart_child() {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let root = std::path::PathBuf::from(std::env::var_os("Z3_RESTART_ROOT").expect("restart fixture root"));
+    let phase = std::env::var("Z3_RESTART_PHASE").unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        let data = std::fs::read(root.join("source")).unwrap(); let reference = format!("{:x}", Sha256::digest(&data));
+        let target = Cas::open(root.join("target")).unwrap();
+        let mut sink = ArtifactReceiver::open(&target, &"f".repeat(64), &reference, data.len() as u64).unwrap();
+        let offset = sink.offset().unwrap() as usize;
+        assert_eq!(offset, if phase == "prefix" {0} else {data.len()/2}, "persisted cursor was not recovered after process restart");
+        let id = format!("restart-{phase}");
+        let sa = ReliableSession::new(id.clone(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let sb = ReliableSession::new(id, ADMISSION[..6].try_into().unwrap()).unwrap();
+        assert_eq!(sa.hello().resume_from, [WireSeq(0);6], "new process must not invent old E14 delivery state");
+        let pair = PairFixture::connect(sa.clone(), sb).await;
+        let mut cursor = pair.source.take_incoming(Some(Lane::Commands)).unwrap();
+        pair.target.send(Lane::Commands, WireSeq(0), &(offset as u64).to_be_bytes(), Some(Arc::new(Authorized))).await.unwrap();
+        let Some(Incoming::Reliable {bytes, delivery:Some(token), ..}) = cursor.recv().await else {panic!("durable cursor response missing");};
+        let resume = u64::from_be_bytes(bytes.try_into().unwrap()) as usize; token.acknowledge().unwrap();
+        let mut incoming = pair.target.take_incoming(Some(Lane::Transfer)).unwrap();
+        let end = if phase == "prefix" {data.len()/2} else {data.len()};
+        let mut effects = std::fs::OpenOptions::new().create(true).append(true).open(root.join("effects")).unwrap();
+        for next in (resume..end).step_by(CHUNK_BYTES) {
+            let payload = packet(&reference, data.len() as u64, next as u64, &data[next..next+CHUNK_BYTES]).unwrap();
+            pair.source.send(Lane::Transfer, WireSeq(next as u64), &payload, Some(Arc::new(Authorized))).await.unwrap();
+            let Some(Incoming::Reliable {bytes, delivery:Some(token), ..}) = incoming.recv().await else {panic!("restart suffix missing");};
+            let (header, _) = decode(&bytes).unwrap(); assert_eq!(header.offset, WireSeq(next as u64));
+            let (updated, _) = sink.deliver(bytes, token).await.unwrap(); sink = updated;
+            writeln!(effects, "{next}").unwrap(); effects.sync_all().unwrap();
+        }
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !sa.replay(pair.source.session.as_ref().unwrap().generation, Lane::Transfer).unwrap().is_empty() {tokio::time::sleep(Duration::from_millis(1)).await;}
+        }).await.expect("restart suffix needs cumulative delivery acknowledgement");
+        assert_eq!(sink.offset().unwrap(), end as u64); pair.close().await;
+    }).await.expect("restart child deadline");
+}
+
+
+async fn z3_candidate_endpoints(pc: &Arc<dyn PeerConnection>) -> Vec<(String, u16, String)> {
+    let description = pc.local_description().await.unwrap();
+    let candidates: Vec<_> = description.sdp.lines().filter(|line| line.starts_with("a=candidate:")).map(|line| {
+        let fields: Vec<_> = line.split_whitespace().collect();
+        (fields[4].to_owned(), fields[5].parse().unwrap(), fields[7].to_owned())
+    }).collect();
+    assert!(!candidates.is_empty(), "connected peer must publish actual candidates");
+    candidates
+}
+
+/// Network shaping sits on the TURN datagram path, not on application sends.
+/// A frame crosses two 37.5-ms shims per direction: nominal end-to-end RTT 150ms.
+struct Z3UdpShape {
+    port: u16,
+    task: tokio::task::JoinHandle<()>,
+    packets: Arc<std::sync::atomic::AtomicU64>,
+    drops: Arc<std::sync::atomic::AtomicU64>,
+    drop_next_data: Arc<std::sync::atomic::AtomicBool>,
+    injected: Arc<std::sync::atomic::AtomicU64>,
+}
+impl Z3UdpShape {
+    // Inspect only public TURN/DTLS record headers, never decrypted content.
+    // RFC8656: ChannelData has a 4-byte header; SEND uses the DATA TLV (0x0013).
+    fn is_dtls_application(packet: &[u8]) -> bool {
+        if packet.first().is_some_and(|byte| byte & 0xc0 == 0x40) {
+            return packet.get(4) == Some(&23); // DTLS application_data, not ICE STUN.
+        }
+        if !packet.starts_with(&[0, 0x16]) || packet.len() < 20 {
+            return false;
+        }
+        let mut offset = 20;
+        while let Some(header) = packet.get(offset..offset + 4) {
+            let kind = u16::from_be_bytes([header[0], header[1]]);
+            let len = u16::from_be_bytes([header[2], header[3]]) as usize;
+            let Some(data) = packet.get(offset + 4..offset + 4 + len) else {
+                return false;
+            };
+            if kind == 0x0013 {
+                return data.first() == Some(&23);
+            }
+            offset += 4 + len.div_ceil(4) * 4;
+        }
+        false
+    }
+    async fn start(server: std::net::SocketAddr, rtt_ms: u64, drop_every: u64) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        let front = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let back = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        back.connect(server).await.unwrap();
+        let port = front.local_addr().unwrap().port();
+        let packets = Arc::new(AtomicU64::new(0));
+        let drops = Arc::new(AtomicU64::new(0));
+        let seen = packets.clone();
+        let lost = drops.clone();
+        let drop_next_data = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let injected = Arc::new(AtomicU64::new(0));
+        let armed = drop_next_data.clone();
+        let forced_drops = injected.clone();
+        let task = tokio::spawn(async move {
+            let mut from_native = vec![0; 65536];
+            let mut from_turn = vec![0; 65536];
+            let mut native = None;
+            let mut delayed: futures::stream::FuturesUnordered<
+                futures::future::BoxFuture<'static, (bool, Vec<u8>)>,
+            > = futures::stream::FuturesUnordered::new();
+            loop {
+                let packet = tokio::select! {
+                    received = front.recv_from(&mut from_native), if delayed.len() < 128 => {
+                        let (n, addr) = received.unwrap(); native = Some(addr);
+                        (true, from_native[..n].to_vec())
+                    }
+                    received = back.recv(&mut from_turn), if delayed.len() < 128 => {
+                        let n = received.unwrap(); (false, from_turn[..n].to_vec())
+                    }
+                    Some((outbound, bytes)) = delayed.next(), if !delayed.is_empty() => {
+                        if outbound {back.send(&bytes).await.unwrap();} else {front.send_to(&bytes, native.unwrap()).await.unwrap();}
+                        continue;
+                    }
+                };
+                let n = seen.fetch_add(1, Ordering::Relaxed) + 1;
+                // Only TURN ChannelData / SEND indications carry the encrypted
+                // peer datagram. Allocation, binding and consent STUN stay intact.
+                let forced = packet.0
+                    && armed.load(Ordering::SeqCst)
+                    && Self::is_dtls_application(&packet.1)
+                    && armed.swap(false, Ordering::SeqCst);
+                if forced {
+                    forced_drops.fetch_add(1, Ordering::Relaxed);
+                }
+                if forced || (drop_every > 0 && n % drop_every == 0) {
+                    lost.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                delayed.push(Box::pin(async move {
+                    tokio::time::sleep(Duration::from_micros(rtt_ms * 1000 / 4)).await;
+                    packet
+                }));
+            }
+        });
+        Self {
+            port,
+            task,
+            packets,
+            drops,
+            drop_next_data,
+            injected,
+        }
+    }
+}
+impl Drop for Z3UdpShape {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+static Z3_CLOCK: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+fn z3_elapsed_ms() -> f64 {
+    Z3_CLOCK.get_or_init(Instant::now).elapsed().as_secs_f64() * 1000.0
+}
+fn z3_app_timeline(id: u64, event: &str) {
+    eprintln!(
+        "SCTP_APP {}",
+        serde_json::json!({"id":id,"event":event,"ms":z3_elapsed_ms()})
+    );
+}
+struct Z3SctpLogger;
+static Z3_SCTP_LOGGER: Z3SctpLogger = Z3SctpLogger;
+impl log::Log for Z3SctpLogger {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        metadata.target() == "ctox_sctp_timeline" || metadata.level() <= log::Level::Warn
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        if self.enabled(record.metadata()) {
+            let prefix = if record.target() == "ctox_sctp_timeline" {
+                "SCTP_TIMELINE"
+            } else {
+                "TURN_TRANSPORT_WARNING"
+            };
+            eprintln!(
+                "{prefix} {}",
+                serde_json::json!({"ms":z3_elapsed_ms(),"target":record.target(),"message":record.args().to_string()})
+            );
+        }
+    }
+    fn flush(&self) {}
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "isolated coturn UDP listener and unprivileged netns required"]
+async fn z3_p4_turn_loss_rtt() {
+    use std::sync::atomic::Ordering;
+    use webrtc::peer_connection::{RTCConfigurationBuilder, RTCIceServer, RTCIceTransportPolicy};
+    assert_eq!(std::env::var("Z3_OWN_NETNS").as_deref(), Ok("1"));
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = log::set_logger(&Z3_SCTP_LOGGER);
+    log::set_max_level(log::LevelFilter::Trace);
+    let rtt_ms = std::env::var("Z3_RTT_MS")
+        .unwrap_or_else(|_| "150".into())
+        .parse::<u64>()
+        .unwrap();
+    assert!([20, 150, 600].contains(&rtt_ms));
+    // Separate deterministic runtime mutation probe, not the M4 1%-loss gate.
+    // Dropping a quiescent control flight makes the RTO dependency observable
+    // without relying on a random loss falling into the p95 sample.
+    let rto_proof = std::env::var("Z3_RTO_PROOF").as_deref() == Ok("1");
+    if rto_proof {
+        assert_eq!(rtt_ms, 20);
+    }
+    let drop_every = if rto_proof { 0 } else { 100 };
+    // This benchmark serializes three application roundtrips per probe. A
+    // 600-ms bulk path needs a longer observation window, not a runtime timeout.
+    let observation_seconds = if rtt_ms == 600 { 600 } else { 180 };
+    // Full acceptance always defaults to 64. A smaller explicitly tagged sample
+    // can diagnose a high-RTT path within a bounded task; it cannot pass the gate.
+    let probes = std::env::var("Z3_PROBE_COUNT")
+        .map(|value| value.parse::<u64>().unwrap())
+        .unwrap_or(64);
+    assert!([16, 64].contains(&probes));
+    tokio::time::timeout(Duration::from_secs(observation_seconds), async {
+        let bulk_enabled = std::env::var("Z3_TURN_BULK").as_deref() == Ok("1");
+        let server: std::net::SocketAddr = std::env::var("Z3_TURN_LISTENER").unwrap().parse().unwrap();
+        assert!(!rto_proof || !bulk_enabled, "RTO proof must isolate a sparse control flight");
+        // A packet crosses both TURN control legs. Drop on A only so the
+        // end-to-end path sees 1%, rather than 1% independently on each leg.
+        let a = Z3UdpShape::start(server,rtt_ms,drop_every).await;
+        let b = Z3UdpShape::start(server,rtt_ms,0).await;
+        let configuration = |port| RTCConfigurationBuilder::new()
+            .with_ice_transport_policy(RTCIceTransportPolicy::Relay)
+            .with_ice_servers(vec![RTCIceServer {urls:vec![format!("turn:127.0.0.1:{port}?transport=udp")],username:"z3-fixture".into(),credential:"z3-fixture-only".into()}]).build();
+        let sa = ReliableSession::new("z3-turn".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let sb = ReliableSession::new("z3-turn".into(), ADMISSION[..6].try_into().unwrap()).unwrap();
+        let pair = PairFixture::connect_configured(sa.clone(),sb.clone(),"127.0.0.1:0",[configuration(a.port),configuration(b.port)],true).await;
+        let candidates_a = z3_candidate_endpoints(&pair.a).await;
+        let candidates_b = z3_candidate_endpoints(&pair.b).await;
+        assert!(candidates_a.iter().chain(&candidates_b).all(|(_,_,kind)| kind == "relay"), "TURN-only fixture published a host/srflx candidate");
+        let mut ac = pair.source.take_incoming(Some(Lane::Commands)).unwrap();
+        let mut bc = pair.target.take_incoming(Some(Lane::Commands)).unwrap();
+        let mut control = pair.target.take_incoming(Some(Lane::Control)).unwrap();
+        let mut replies = pair.source.take_incoming(Some(Lane::Control)).unwrap();
+        let mut bulk = pair.target.take_incoming(Some(Lane::Transfer)).unwrap();
+        let bulk_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let bulk_received = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let window = Arc::new(tokio::sync::Semaphore::new(16));
+        let mut seed = 0x6a09e667f3bcc909u64;
+        // Larger than one SCTP frame: the latency mutation must exercise chunking.
+        const BULK_BYTES: usize = 64_000;
+        let mut payload = vec![0;BULK_BYTES];
+        for byte in &mut payload {seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; *byte=seed as u8;}
+        let expected = payload.clone(); let count = bulk_received.clone(); let permits = window.clone();
+        let receive_bulk = tokio::spawn(async move {
+            while let Some(Incoming::Reliable{id,bytes,delivery:Some(token),..})=bulk.recv().await {
+                assert_eq!(id.0,count.load(Ordering::Relaxed)+1,"bulk session gap or duplicate");
+                assert_eq!(bytes,expected);token.acknowledge().unwrap();count.fetch_add(1,Ordering::Relaxed);permits.add_permits(1);
+            }
+        });
+        let send_bulk = pair.source.clone(); let stop = bulk_stop.clone(); let permits = window.clone();
+        let bulk_clock = Instant::now();
+        let produce_bulk = tokio::spawn(async move {
+            let mut count=0u64;
+            while bulk_enabled && !stop.load(Ordering::Relaxed) {
+                let permit = permits.acquire().await.unwrap();
+                if stop.load(Ordering::Relaxed) {break;}
+                permit.forget();
+                send_bulk.send(Lane::Transfer,WireSeq(count),&payload,Some(Arc::new(Authorized))).await.unwrap();count+=1;
+            }
+            count
+        });
+        let mut latency = Vec::new(); let mut command_latency = Vec::new(); let mut effects_a=Vec::new(); let mut effects_b=Vec::new();
+        for id in 0..probes {
+            let command_clock = Instant::now();
+            pair.source.send(Lane::Commands,WireSeq(id),&id.to_be_bytes(),Some(Arc::new(Authorized))).await.unwrap();
+            // A real request/reply: do not send the response before receiving
+            // the request (two independent simultaneous deliveries undercount RTT).
+            let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=bc.recv().await else {panic!("TURN command request missing");};
+            assert_eq!(bytes,id.to_be_bytes()); effects_b.push(id); token.acknowledge().unwrap();
+            pair.target.send(Lane::Commands,WireSeq(id),&id.to_be_bytes(),Some(Arc::new(Authorized))).await.unwrap();
+            let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=ac.recv().await else {panic!("TURN command reply missing");};
+            assert_eq!(bytes,id.to_be_bytes()); effects_a.push(id); token.acknowledge().unwrap();
+            command_latency.push(command_clock.elapsed().as_secs_f64()*1000.0);
+            if rto_proof {
+                tokio::time::timeout(Duration::from_secs(5),async {
+                    loop {
+                        if [(&sa,&pair.source),(&sb,&pair.target)].iter().all(|(session,scheduler)|
+                            [Lane::Commands,Lane::Control].iter().all(|lane|
+                                session.replay(scheduler.session.as_ref().unwrap().generation,*lane).unwrap().is_empty())) {break;}
+                        tokio::time::sleep(Duration::from_millis(5)).await;
+                    }
+                }).await.expect("quiescent control flight must drain earlier E14 delivery");
+                // Flush SCTP SACKs too; there is no bulk in this proof. The next
+                // outgoing TURN peer datagram is the single-frame control probe.
+                tokio::time::sleep(Duration::from_millis(2*rtt_ms+50)).await;
+                if id % 8 == 0 {
+                    a.drop_next_data.store(true,Ordering::SeqCst);
+                    z3_app_timeline(id,"drop_armed");
+                }
+            }
+            let clock=Instant::now();
+            let probe = [b"PROB".as_slice(),id.to_be_bytes().as_slice()].concat();
+            z3_app_timeline(id,"send");
+            pair.source.send(Lane::Control,WireSeq(id),&probe,Some(Arc::new(Authorized))).await.unwrap();
+            let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=control.recv().await else {panic!("TURN control missing");};
+            assert_eq!(bytes,probe);z3_app_timeline(id,"deliver_request");token.acknowledge().unwrap();
+            pair.target.send(Lane::Control,WireSeq(id),&probe,Some(Arc::new(Authorized))).await.unwrap();
+            let Some(Incoming::Reliable{bytes,delivery:Some(token),..})=replies.recv().await else {panic!("TURN control reply missing");};
+            assert_eq!(bytes,probe);z3_app_timeline(id,"deliver_reply");token.acknowledge().unwrap();latency.push(clock.elapsed().as_secs_f64()*1000.0);
+        }
+        bulk_stop.store(true,Ordering::Relaxed);
+        let bulk_sent = produce_bulk.await.unwrap();
+        let bulk_drained = tokio::time::timeout(Duration::from_secs(20),async {while bulk_received.load(Ordering::Relaxed)!=bulk_sent {tokio::time::sleep(Duration::from_millis(5)).await;}}).await.is_ok();
+        let bulk_delivered = bulk_received.load(Ordering::Relaxed);
+        receive_bulk.abort();let _=receive_bulk.await;
+        let bulk_seconds=bulk_clock.elapsed().as_secs_f64();
+        let delivery_acked = tokio::time::timeout(Duration::from_secs(5),async {
+            loop {
+                if [(&sa,&pair.source),(&sb,&pair.target)].iter().all(|(session,scheduler)| [Lane::Commands,Lane::Control,Lane::Transfer].iter().all(|lane| session.replay(scheduler.session.as_ref().unwrap().generation,*lane).unwrap().is_empty())) {break;}
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }).await.is_ok();
+        assert_eq!(effects_a,(0..probes).collect::<Vec<_>>());assert_eq!(effects_b,effects_a);
+        let packets=a.packets.load(Ordering::Relaxed)+b.packets.load(Ordering::Relaxed);
+        let drops=a.drops.load(Ordering::Relaxed)+b.drops.load(Ordering::Relaxed);
+        assert!(drops>0,"loss shaper must drop actual network datagrams");
+        let injected = a.injected.load(Ordering::Relaxed)+b.injected.load(Ordering::Relaxed);
+        if rto_proof {
+            assert_eq!(injected,probes/8,"each armed control flight must lose one actual TURN datagram");
+            assert_eq!(drops,injected,"RTO proof has no background random loss");
+        }
+        latency.sort_by(f64::total_cmp);let p95=latency[(latency.len()*95/100).min(latency.len()-1)];
+        let p99=latency[(latency.len()*99/100).min(latency.len()-1)];
+        command_latency.sort_by(f64::total_cmp);
+        let command_p95=command_latency[(command_latency.len()*95/100).min(command_latency.len()-1)];
+        let command_p99=command_latency[(command_latency.len()*99/100).min(command_latency.len()-1)];
+        let sctp_window = pair.source.handoff_counters().sctp_window;
+        pair.close().await;
+        eprintln!("Z3_P4_TURN {}",serde_json::json!({"scenario":3,"relay_only":true,"candidates_a":candidates_a,"candidates_b":candidates_b,"shim":"UDP at TURN control legs","nominal_rtt_ms":rtt_ms,"drop_every":drop_every,"loss_placement":"source TURN leg, both directions","rto_proof":rto_proof,"injected_datagrams":injected,"datagrams":packets,"dropped_datagrams":drops,"probes":probes,"full_workload":probes==64,"sent":2*probes,"explicit_send_results":2*probes,"delivery_acknowledged":2*probes,"lost":if bulk_drained {Some(0u64)} else {None},"pending_bulk_at_deadline":bulk_sent-bulk_delivered,"fully_drained":bulk_drained&&delivery_acked,"duplicated":0,"control_p95_ms":p95,"control_p99_ms":p99,"command_p95_ms":command_p95,"command_p99_ms":command_p99,"command_metric":"request/reply roundtrip","command_roundtrip_ms":command_latency,"control_roundtrip_ms":latency,"sctp_window":sctp_window,"bulk_enabled":bulk_enabled,"bulk_bytes":bulk_delivered*BULK_BYTES as u64,"bulk_admitted_bytes":bulk_sent*BULK_BYTES as u64,"bulk_seconds":bulk_seconds,"bulk_mb_s":bulk_delivered as f64*BULK_BYTES as f64/bulk_seconds/1_000_000.0}));
+        // Preserve failed measurements; keep the original bounded-drain gates red.
+        assert!(bulk_drained,"bulk admission lost delivery within the bounded drain; see Z3_P4_TURN");
+        assert!(delivery_acked,"TURN application delivery acknowledgements missing; see Z3_P4_TURN");
+    }).await.expect("TURN loss RTT fixture deadline");
 }

@@ -1,20 +1,20 @@
 //! One V4 sender per association, with strict 0–2 priority and byte DRR 8:3:1.
 //! No producer writes a V4 DataChannel directly. Session admission means bounded
 //! retention until delivery ACK; handoff counters report SCTP separately.
-use super::super::connection_handler_rs::send_result::{MessageClass, transport_diagnostics};
+use super::super::connection_handler_rs::send_result::{transport_diagnostics, MessageClass};
 use super::super::connection_handler_rs::send_under_publication;
 use super::super::webrtc_types::WebRTCPublicationGuard;
-use super::framing::{Framer, MAX_MESSAGE, Reassembler};
+use super::framing::{Framer, Reassembler, MAX_MESSAGE};
 use super::hello::{TransportSelection, WireSeq};
-use super::lanes::{ASSOCIATION_BUDGET, BULK_WEIGHTS, FRAME_BYTES, Lane, REALTIME_LABEL};
-use crate::rx_error::{RxError, RxResult, new_rx_error};
+use super::lanes::{Lane, ASSOCIATION_BUDGET, BULK_WEIGHTS, SCTP_FRAME_BYTES as FRAME_BYTES, REALTIME_LABEL};
+use crate::rx_error::{new_rx_error, RxError, RxResult};
 use crate::rxjs_compat::{RxStream, RxSubject};
-use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
+use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Semaphore};
 use webrtc::data_channel::{DataChannel, DataChannelEvent, RTCDataChannelInit};
 use webrtc::peer_connection::PeerConnection;
 #[path = "v4_scheduler/lane_artifacts.rs"]
@@ -194,12 +194,15 @@ impl<T> SendQueue<T> {
 
 // Leave one physical frame for DCEP/association overhead. Each strict-priority
 // lane keeps a first frame of credit that lower-priority traffic cannot spend.
-const DATA_BUDGET: usize = ASSOCIATION_BUDGET - FRAME_BYTES;
+// The bootstrap channel is outside the seven V4 channels and can retain a
+// complete unfragmented Hello while those channels open. Keep its original
+// 16-KiB allowance instead of shrinking it with the new 1200-byte DATA size.
+const DATA_BUDGET: usize = ASSOCIATION_BUDGET - super::hello::MAX_HELLO_BYTES;
 fn channel_window(channel: usize) -> usize {
     if channel < 3 || channel == 6 {
         2 * FRAME_BYTES
     } else {
-        4 * FRAME_BYTES
+        DATA_BUDGET - 3 * FRAME_BYTES
     }
 }
 fn channel_low(channel: usize) -> usize {
@@ -212,12 +215,22 @@ fn channel_low(channel: usize) -> usize {
 #[derive(Default)]
 pub struct AssociationBudget {
     outstanding: [usize; 7],
+    rtt_ms: u64,
 }
 impl AssociationBudget {
+    fn observe_rtt(&mut self, rtt_ms: u64) { self.rtt_ms = rtt_ms; }
+    fn window(&self, channel: usize) -> usize {
+        if channel < 3 || channel == 6 { return channel_window(channel); }
+        // 5 MB/s application payload plus framing/RTT headroom; never borrow
+        // strict credit. The association ceiling remains authoritative.
+        let bdp = (self.rtt_ms.max(20) as u128 * 6_000).min(usize::MAX as u128) as usize;
+        bdp.div_ceil(FRAME_BYTES).saturating_mul(FRAME_BYTES).min(channel_window(channel))
+    }
+
     pub fn reserve(&mut self, channel: usize, bytes: usize) -> bool {
         if channel >= 7
             || bytes > FRAME_BYTES
-            || self.outstanding[channel].saturating_add(bytes.max(1)) > channel_window(channel)
+            || self.outstanding[channel].saturating_add(bytes.max(1)) > self.window(channel)
             || self.buffered().saturating_add(bytes.max(1)) > self.ceiling(channel)
         {
             return false;
@@ -232,10 +245,11 @@ impl AssociationBudget {
             .sum();
         DATA_BUDGET - reserved
     }
-    pub fn ready(&self, channel: usize) -> bool {
+    pub fn ready(&self, channel: usize) -> bool { self.ready_bytes(channel, FRAME_BYTES) }
+    fn ready_bytes(&self, channel: usize, bytes: usize) -> bool {
         channel < 7
-            && self.outstanding[channel] + FRAME_BYTES <= channel_window(channel)
-            && self.buffered() + FRAME_BYTES <= self.ceiling(channel)
+            && self.outstanding[channel].saturating_add(bytes) <= self.window(channel)
+            && self.buffered().saturating_add(bytes) <= self.ceiling(channel)
     }
     pub fn drained(&mut self, channel: usize) {
         self.observe(channel, 0);
@@ -322,6 +336,7 @@ struct Counters {
     handed_to_sctp: [std::sync::atomic::AtomicU64; 2],
     failed: [std::sync::atomic::AtomicU64; 2],
     buffered_upper_bound_peak: std::sync::atomic::AtomicU64,
+    sctp_window: [std::sync::atomic::AtomicU64; 4],
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HandoffCounters {
@@ -329,6 +344,7 @@ pub struct HandoffCounters {
     pub handed_to_sctp: [u64; 2],
     pub failed: [u64; 2],
     pub buffered_upper_bound_peak: u64,
+    pub sctp_window: [u64; 4],
 }
 impl Counters {
     fn snapshot(&self) -> HandoffCounters {
@@ -338,6 +354,7 @@ impl Counters {
             handed_to_sctp: std::array::from_fn(|i| self.handed_to_sctp[i].load(Relaxed)),
             failed: std::array::from_fn(|i| self.failed[i].load(Relaxed)),
             buffered_upper_bound_peak: self.buffered_upper_bound_peak.load(Relaxed),
+            sctp_window: std::array::from_fn(|i| self.sctp_window[i].load(Relaxed)),
         }
     }
 }
@@ -361,6 +378,15 @@ fn failure(message: &str) -> RxError {
         Some(serde_json::json!({"message": message, "transport": "v4"})),
     )
 }
+// E53: this is the physical SCTP-message bound, independent of the
+// 128-KiB object/association contract. All reliable lanes and realtime share it.
+fn enforce_sctp_message_limit(bytes: usize) -> RxResult<()> {
+    if bytes > FRAME_BYTES {
+        return Err(failure("V4 SCTP message exceeds path MTU DATA payload"));
+    }
+    Ok(())
+}
+
 impl NativeSendScheduler {
     /// The host must authenticate the same session and retire the old sender
     /// before calling this. Every replay is freshly authorized; stale generation
@@ -370,8 +396,8 @@ impl NativeSendScheduler {
         transport: TransportSelection,
         session: SessionBinding,
         authorize: impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Arc<dyn WebRTCPublicationGuard>>
-        + Send
-        + Sync,
+            + Send
+            + Sync,
     ) -> RxResult<Self> {
         tokio::time::timeout(SEND_TIMEOUT, async {
             let scheduler = Self::create_inner(pc, transport, Some(session)).await?;
@@ -386,9 +412,9 @@ impl NativeSendScheduler {
     }
     async fn replay_pending(
         &self,
-        authorize: &(
-             impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Arc<dyn WebRTCPublicationGuard>> + Send + Sync
-         ),
+        authorize: &(impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Arc<dyn WebRTCPublicationGuard>>
+              + Send
+              + Sync),
     ) -> RxResult<()> {
         let binding = self
             .session
@@ -443,6 +469,13 @@ impl NativeSendScheduler {
             let realtime = label == REALTIME_LABEL;
             let init = RTCDataChannelInit {
                 ordered: !realtime,
+                // Carry strict lane priority into SCTP, before its TSN assignment.
+                priority: Some(match label {
+                    "ctox-v4-control" => 1024,
+                    "ctox-v4-commands" => 768,
+                    "ctox-v4-interactive" => 512,
+                    _ => 256,
+                }),
                 max_retransmits: realtime.then_some(0),
                 ..Default::default()
             };
@@ -871,6 +904,13 @@ async fn run(
                 for channel in &channels { channel.set_buffered_amount_low_threshold(0).await.map_err(|e| failure(&e.to_string()))?; }
                 armed_low = [0; 7];
             }
+            if let Some((payload, rtt, cwnd, rwnd)) = channels[0].sctp_send_window().await.map_err(|e| failure(&e.to_string()))? {
+                if framer.frame_bytes() > payload { return Err(failure("V4 negotiated frame exceeds path MTU DATA payload")); }
+                budget.observe_rtt(rtt);
+                for (counter, value) in counters.sctp_window.iter().zip([payload as u64, rtt, cwnd as u64, rwnd as u64]) {
+                    counter.store(value, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
             // Read exact stream occupancy before admitting more data. Small
             // messages may never cross LOW, so no crossing event is guaranteed.
             for (index, channel) in channels.iter().enumerate() {
@@ -916,12 +956,14 @@ async fn run(
                     Err(_) => break,
                 }
             }
-            let ready = |lane: Lane| open[lane.index()] && initial_drain[lane.index()] && budget.ready(lane.index());
+            let needed: [usize; 6] = std::array::from_fn(|i| queue.queues[i].front().map_or(0, |entry| entry.bytes));
+            let ready = |lane: Lane| open[lane.index()] && initial_drain[lane.index()] && budget.ready_bytes(lane.index(), needed[lane.index()]);
             let selected = queue.pop_ready(|l| l.index() < 3 && ready(l)).map(|(lane, frame)| (lane.index(), frame))
                 .or_else(|| (open[6] && initial_drain[6] && budget.ready(6)).then(|| realtime.pop_front()).flatten().map(|frame| (6, frame)))
                 .or_else(|| queue.pop_ready(ready).map(|(lane, frame)| (lane.index(), frame)));
             if let Some((index, item)) = selected {
                 if item.completion.lock().cancelled() { continue; }
+                enforce_sctp_message_limit(item.bytes.len())?;
                 if !budget.reserve(index, item.bytes.len()) { return Err(failure("V4 association budget invariant")); }
                 counters.buffered_upper_bound_peak.fetch_max(budget.buffered() as u64, std::sync::atomic::Ordering::Relaxed);
                 drain_deadlines[index] = Some(tokio::time::Instant::now() + SEND_TIMEOUT);
@@ -1123,33 +1165,37 @@ mod tests {
         assert_eq!(counts, [160, 30, 10]);
     }
     fn v4_scheduler_association_budget_covers_all_channels_and_waits_for_low() {
+        assert_eq!(FRAME_BYTES, webrtc::data_channel::sctp_data_payload_limit());
         let mut reserved = AssociationBudget::default();
-        assert!(reserved.reserve(Lane::Live.index(), FRAME_BYTES));
-        assert!(reserved.reserve(Lane::InitialSync.index(), FRAME_BYTES));
-        for _ in 0..2 {
-            assert!(reserved.reserve(Lane::Transfer.index(), FRAME_BYTES));
-        }
-        assert!(
-            !reserved.reserve(Lane::Transfer.index(), 1),
-            "bulk consumed strict-priority reserve"
-        );
+        // The window must hold 20 ms of actual encoded application payload,
+        // not merely 100 KB of physical frames (which include frame headers).
+        let mut seed = 0x1234_5678u32;
+        let payload: Vec<u8> = (0..100_000).map(|_| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 24) as u8
+        }).collect();
+        let required: usize = Framer::new(TransportSelection {
+            codec: super::super::hello::Codec::Zstd,
+            frame_bytes: FRAME_BYTES as u32,
+            fragmentation: true,
+            reassembly: true,
+        }).unwrap().encode(Lane::Transfer, WireSeq(1), &payload)
+            .unwrap().iter().map(Vec::len).sum();
+        assert!(reserved.window(5) >= required, "20-ms BDP must include application framing");
+        let startup = reserved.window(5);
+        reserved.observe_rtt(600);
+        assert!(reserved.window(5) >= startup);
+        while reserved.reserve(5, FRAME_BYTES) {}
         for lane in [Lane::Control, Lane::Commands, Lane::Interactive] {
-            assert!(
-                reserved.reserve(lane.index(), FRAME_BYTES),
-                "bulk blocked a strict-priority first frame"
-            );
+            assert!(reserved.reserve(lane.index(), FRAME_BYTES), "bulk consumed strict-lane credit");
         }
-        let mut budget = AssociationBudget::default();
-        for i in 0..7 {
-            assert!(budget.reserve(i, FRAME_BYTES));
-        }
-        assert_eq!(budget.buffered(), 112 * 1024);
-        assert!(!budget.reserve(0, 1));
-        assert!(!budget.reserve(7, 1));
-        budget.drained(0);
-        assert!(budget.reserve(0, FRAME_BYTES));
-        assert!(budget.buffered() <= ASSOCIATION_BUDGET);
+        assert!(reserved.buffered() + super::super::hello::MAX_HELLO_BYTES <= ASSOCIATION_BUDGET);
+        assert!(!reserved.reserve(5, ASSOCIATION_BUDGET + 1));
+        assert!(!reserved.reserve(7, 1));
+        reserved.drained(5);
+        assert!(reserved.reserve(5, FRAME_BYTES));
     }
+
     fn v4_scheduler_blocked_lane_does_not_block_other_channels() {
         let mut q = SendQueue::default();
         q.push(Lane::Control, FRAME_BYTES, 0).unwrap();
@@ -1216,12 +1262,10 @@ mod native_tests {
             )
             .await
             .unwrap();
-            assert!(
-                sender
-                    .send(Lane::Commands, WireSeq(98), &vec![0; MAX_MESSAGE + 1], None)
-                    .await
-                    .is_err()
-            );
+            assert!(sender
+                .send(Lane::Commands, WireSeq(98), &vec![0; MAX_MESSAGE + 1], None)
+                .await
+                .is_err());
             assert!(
                 state
                     .replay(first.generation, Lane::Commands)
@@ -1248,15 +1292,13 @@ mod native_tests {
             )
             .await
             .unwrap();
-            assert!(
-                resumed
-                    .replay_pending(&|_, _, _| Err(new_rx_error(
-                        "ctox_webrtc_publication_denied",
-                        None
-                    )))
-                    .await
-                    .is_err()
-            );
+            assert!(resumed
+                .replay_pending(&|_, _, _| Err(new_rx_error(
+                    "ctox_webrtc_publication_denied",
+                    None
+                )))
+                .await
+                .is_err());
             assert!(
                 channels[1].sent.lock().is_empty(),
                 "replay requires fresh publication authority"
@@ -1770,12 +1812,10 @@ mod native_tests {
             !draining.is_finished(),
             "drain cannot acknowledge bytes still owned by SCTP"
         );
-        assert!(
-            scheduler
-                .send(Lane::Commands, WireSeq(2), b"too-late", None)
-                .await
-                .is_err()
-        );
+        assert!(scheduler
+            .send(Lane::Commands, WireSeq(2), b"too-late", None)
+            .await
+            .is_err());
         channels[0].drain();
         tokio::time::timeout(Duration::from_secs(2), draining)
             .await
@@ -1811,19 +1851,15 @@ mod native_tests {
             .await
             .unwrap();
         scheduler.close_now();
-        assert!(
-            retained
-                .send(Lane::Control, WireSeq(2), b"stale-clone", None)
-                .await
-                .is_err()
-        );
-        assert!(
-            tokio::time::timeout(Duration::from_secs(2), pending)
-                .await
-                .unwrap()
-                .unwrap()
-                .is_err()
-        );
+        assert!(retained
+            .send(Lane::Control, WireSeq(2), b"stale-clone", None)
+            .await
+            .is_err());
+        assert!(tokio::time::timeout(Duration::from_secs(2), pending)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
         assert!(channels[5].sent.lock().is_empty());
     }
     struct DeniedAfterCallback;
@@ -1844,17 +1880,15 @@ mod native_tests {
         )
         .await
         .unwrap();
-        assert!(
-            scheduler
-                .send(
-                    Lane::Commands,
-                    WireSeq(1),
-                    b"handed-before-revocation",
-                    Some(Arc::new(DeniedAfterCallback))
-                )
-                .await
-                .is_err()
-        );
+        assert!(scheduler
+            .send(
+                Lane::Commands,
+                WireSeq(1),
+                b"handed-before-revocation",
+                Some(Arc::new(DeniedAfterCallback))
+            )
+            .await
+            .is_err());
         assert_eq!(channels[1].sent.lock().len(), 1);
         assert_eq!(scheduler.handoff_counters().attempted, [1, 0]);
         assert_eq!(scheduler.handoff_counters().handed_to_sctp, [1, 0]);
@@ -1878,17 +1912,15 @@ mod native_tests {
         )
         .await
         .unwrap();
-        assert!(
-            scheduler
-                .send(
-                    Lane::Commands,
-                    WireSeq(1),
-                    b"revoked",
-                    Some(Arc::new(Denied))
-                )
-                .await
-                .is_err()
-        );
+        assert!(scheduler
+            .send(
+                Lane::Commands,
+                WireSeq(1),
+                b"revoked",
+                Some(Arc::new(Denied))
+            )
+            .await
+            .is_err());
         assert!(channels[1].sent.lock().is_empty());
         scheduler
             .send(Lane::Control, WireSeq(2), b"still-live", None)
@@ -2162,5 +2194,17 @@ mod loopback_tests {
         let _ = a.close().await;
         let _ = b.close().await;
         result.expect("real WebRTC loopback must retire channel/data credits within 12 seconds");
+    }
+}
+
+#[cfg(test)]
+mod e53_message_bound {
+    use super::*;
+    #[test]
+    fn every_lane_rejects_an_oversized_physical_message() {
+        // Same function used immediately before every DataChannel::send.
+        assert!(enforce_sctp_message_limit(FRAME_BYTES).is_ok());
+        assert!(enforce_sctp_message_limit(FRAME_BYTES + 1).is_err());
+        assert_eq!(ASSOCIATION_BUDGET, 128 * 1024);
     }
 }

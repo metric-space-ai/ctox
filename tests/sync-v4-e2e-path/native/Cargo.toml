@@ -21,3 +21,4 @@ rtc-turn = { path = "../../../src/core/rxdb/patches/rtc-turn" }
 rtc-ice = { path = "../../../src/core/rxdb/patches/rtc-ice" }
 rtc = { path = "../../../src/core/rxdb/patches/rtc" }
 webrtc = { path = "../../../src/core/rxdb/patches/webrtc" }
+rtc-sctp = { path = "../../../src/core/rxdb/patches/rtc-sctp" }

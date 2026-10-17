@@ -78,6 +78,7 @@ tempfile = "3"
 
 # Cargo ignores dependency patches; standalone tests must mirror the host.
 [patch.crates-io]
+rtc-sctp = { path = "patches/rtc-sctp" }
 rtc-turn = { path = "patches/rtc-turn" }
 rtc-ice = { path = "patches/rtc-ice" }
 rtc = { path = "patches/rtc" }

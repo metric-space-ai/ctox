@@ -2,6 +2,9 @@
 use serde::{Deserialize, Serialize};
 
 pub const FRAME_BYTES: usize = 16 * 1024;
+// ref: webrtc-rs/rtc@b808b74f712ed379312a114b848ede133880d58a/rtc-sctp/src/config.rs:10-14,118-125.
+// Same configured path MTU as the native endpoint, minus SCTP/DATA headers.
+pub const SCTP_FRAME_BYTES: usize = 1228 - 12 - 16;
 pub const ASSOCIATION_BUDGET: usize = 128 * 1024;
 pub const BULK_WEIGHTS: [usize; 3] = [8, 3, 1];
 

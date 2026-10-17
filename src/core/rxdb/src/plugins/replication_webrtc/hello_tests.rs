@@ -61,14 +61,17 @@ fn v4_hello_selects_api_codec_capabilities_and_bounded_frame() {
     let selected = policy().negotiate(&hello()).unwrap();
     assert_eq!(selected.app_api_ver, "4.1");
     assert_eq!(selected.transport.codec, Codec::Gzip);
-    assert_eq!(selected.transport.frame_bytes, 8192);
+    assert_eq!(selected.transport.frame_bytes, native_frame_limit());
+    let advertised = serde_json::to_value(policy().transport).unwrap();
+    assert_eq!(MAX_FRAME_BYTES, native_frame_limit());
+    assert_eq!(advertised["max_frame_bytes"], native_frame_limit());
     assert_eq!(selected.capabilities, ["terminal", "worktree"]);
     let mut peer = hello();
     peer.bootstrap_ver = 3;
     peer.transport.max_frame_bytes = u32::MAX;
     assert_eq!(
         policy().negotiate(&peer).unwrap().transport.frame_bytes,
-        MAX_FRAME_BYTES
+        native_frame_limit()
     );
 }
 #[test]
@@ -143,10 +146,11 @@ fn v4_hello_decode_bounds_and_proof_challenge_are_strict_and_redacted() {
 #[test]
 fn v4_hello_native_initiator_rejects_unoffered_server_selections() {
     let fixture: Value = serde_json::from_str(include_str!("hello_fixture.json")).unwrap();
-    let response: HelloOk = match serde_json::from_value(fixture["hello_ok"].clone()).unwrap() {
+    let mut response: HelloOk = match serde_json::from_value(fixture["hello_ok"].clone()).unwrap() {
         HelloFrame::HelloOk(ok) => ok,
         _ => panic!("fixture type"),
     };
+    response.transport.frame_bytes = native_frame_limit();
     hello()
         .validate_response(&response, &["terminal".into()])
         .unwrap();

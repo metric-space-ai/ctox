@@ -7,8 +7,15 @@ pub const PROTOCOL_VERSION: u16 = 4;
 // Bootstrap control messages precede fragmentation negotiation, so they must
 // fit one uncompressed frame. They cannot assume the selected codec yet.
 pub const MAX_HELLO_BYTES: usize = 16 * 1024;
-pub const MAX_FRAME_BYTES: u32 = 16 * 1024;
+// Native defaults are bounded BEFORE the issuer signs the complete Hello.
+pub const MAX_FRAME_BYTES: u32 = super::lanes::SCTP_FRAME_BYTES as u32;
+// Preserve the lossless N-1 wire grammar, including larger incoming offers.
+pub const MAX_WIRE_FRAME_BYTES: u32 = 16 * 1024;
 pub const MIN_FRAME_BYTES: u32 = 1024;
+
+fn native_frame_limit() -> u32 {
+    webrtc::data_channel::sctp_data_payload_limit() as u32
+}
 
 /// Never passes a sequence through a JSON number (including above JS 2^53).
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
@@ -131,6 +138,7 @@ pub struct HelloOk {
     pub rights_ver: WireSeq,
 }
 impl Hello {
+
     /// Native initiator counterpart of the browser's hello_ok validation. The
     /// transport must already be bound to the paired Core's trusted identity.
     pub fn validate_response(
@@ -184,7 +192,7 @@ impl Hello {
         }
         let transport = &response.transport;
         if !self.transport.codecs.contains(&transport.codec)
-            || !(MIN_FRAME_BYTES..=MAX_FRAME_BYTES.min(self.transport.max_frame_bytes))
+            || !(MIN_FRAME_BYTES..=MAX_FRAME_BYTES.min(self.transport.max_frame_bytes).min(native_frame_limit()))
                 .contains(&transport.frame_bytes)
             || !self.transport.fragmentation
             || !self.transport.reassembly
@@ -295,7 +303,7 @@ impl HelloFrame {
                     && api_version(&ok.app_api_ver).is_some()
                     && bounded_names(&ok.capabilities)
                     && ok.scope_tokens.iter().all(|token| !token.trim().is_empty())
-                    && (MIN_FRAME_BYTES..=MAX_FRAME_BYTES).contains(&ok.transport.frame_bytes)
+                    && (MIN_FRAME_BYTES..=MAX_WIRE_FRAME_BYTES).contains(&ok.transport.frame_bytes)
                     && ok.transport.fragmentation
                     && ok.transport.reassembly
             }
@@ -420,7 +428,7 @@ impl HelloPolicy {
                 frame_bytes: local
                     .max_frame_bytes
                     .min(remote.max_frame_bytes)
-                    .min(MAX_FRAME_BYTES),
+                    .min(MAX_FRAME_BYTES).min(native_frame_limit()),
                 fragmentation: true,
                 reassembly: true,
             },
