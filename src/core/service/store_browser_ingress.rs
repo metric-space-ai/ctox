@@ -153,23 +153,30 @@ impl BrowserIngress {
             .map_err(|_| StoreError::AlreadyOwned)?;
         let owner = self.clone();
         *self.task.lock().map_err(|_| StoreError::Closed)? = Some(runtime.spawn(async move {
-            // Bounded owner-owned retries; HTTP neither starts nor waits for them.
-            for attempt in 0..3 {
+            // Network availability is not a lifetime limit: a DNS/signaling
+            // outage must recover without restarting the owner. Bound the delay
+            // (and retain one task), not the number of network attempts. Local
+            // identity/configuration/storage failures retain three attempts, then fail.
+            let mut attempt = 0u32;
+            loop {
                 if owner.state.load(Ordering::Acquire) != 1 { return; }
                 match owner.start().await {
                     Ok(()) => {
+                        *owner.failure.lock().unwrap_or_else(|p| p.into_inner()) = None;
                         let _ = owner.state.compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire);
                         owner.changed.notify_waiters();
                         return;
                     }
                     Err(error) => {
-                        eprintln!("[ctox v4] browser ingress attempt={} {error}", attempt + 1);
+                        attempt = attempt.saturating_add(1);
+                        eprintln!("[ctox v4] browser ingress attempt={attempt} {error}");
+                        let retry_signaling = error.stage == "signaling";
                         *owner.failure.lock().unwrap_or_else(|p| p.into_inner()) = Some(error);
-                        if attempt == 2 { break; }
+                        if !retry_signaling && attempt >= 3 { break; }
                         let changed = owner.changed.notified();
                         if owner.state.load(Ordering::Acquire) != 1 { return; }
                         tokio::select! {
-                            _ = tokio::time::sleep(Duration::from_millis(if attempt == 0 {250} else {1000})) => (),
+                            _ = tokio::time::sleep(Duration::from_millis((250u64 << attempt.saturating_sub(1).min(5)).min(5000))) => (),
                             _ = changed => (),
                         }
                     }

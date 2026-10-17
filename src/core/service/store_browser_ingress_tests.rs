@@ -368,6 +368,18 @@ fn startup_failure_retains_typed_cause_without_logging_parameters() {
 /// server relays only signaling; it never supplies Core data or admission.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn owner_signaling_precedes_http_and_launch_context_meets_budget() -> anyhow::Result<()> {
+    signaling_http_fixture(0).await
+}
+
+/// Exercise real failed TCP/WebSocket connections, not a mocked retry closure.
+/// Three failures exceed the old three-attempt lifetime; HTTP must stay 503
+/// until the same foreground owner admits its fourth, healthy connection.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn signaling_outage_recovers_without_daemon_restart() -> anyhow::Result<()> {
+    signaling_http_fixture(3).await
+}
+
+async fn signaling_http_fixture(fail_connections: usize) -> anyhow::Result<()> {
     use futures_util::SinkExt;
     use tokio_tungstenite::tungstenite::{
         handshake::server::{Request, Response},
@@ -376,13 +388,26 @@ async fn owner_signaling_precedes_http_and_launch_context_meets_budget() -> anyh
     let _scope = isolate_test_roots().await;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;
+    let rejected = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let rejected_server = rejected.clone();
+    let healthy = Arc::new(tokio::sync::Semaphore::new(usize::from(
+        fail_connections == 0,
+    )));
+    let healthy_server = healthy.clone();
     let server = tokio::spawn(async move {
         let mut connections = tokio::task::JoinSet::new();
         loop {
             tokio::select! {
                 accepted = listener.accept() => {
                     let Ok((tcp, _)) = accepted else { break; };
+                    if rejected_server.load(std::sync::atomic::Ordering::Acquire) < fail_connections {
+                        rejected_server.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+                        drop(tcp); // Real connection failure before WebSocket admission.
+                        continue;
+                    }
+                    let healthy = healthy_server.clone();
                     connections.spawn(async move {
+                        let _permit = healthy.acquire().await.unwrap();
                         let id = Arc::new(std::sync::Mutex::new(None::<String>));
                         let capture = id.clone();
                         let ws = tokio_tungstenite::accept_hdr_async(tcp, move |request: &Request, response: Response| {
@@ -419,7 +444,9 @@ async fn owner_signaling_precedes_http_and_launch_context_meets_budget() -> anyh
         }
     }
     let _server = Server(server);
-    let (root, mut initial, _, _) = write_fixture().await?;
+    // Startup/HTTP needs canonical owners and metadata, not an already
+    // authenticated P8 write client (which has an independent ticket contract).
+    let (root, mut initial, _) = fixture().await?;
     let config_root = root.path().to_owned();
     crate::persistence::run_core_sync(move || {
         crate::inference::runtime_env::set_runtime_env_value(
@@ -453,23 +480,6 @@ async fn owner_signaling_precedes_http_and_launch_context_meets_budget() -> anyh
         ingress.owner_started(),
         "HTTP was published before owner signaling start"
     );
-    let ready = tokio::time::timeout(Duration::from_secs(55), async {
-        loop {
-            let changed = ingress.changed.notified();
-            if ingress.ready().is_ok() {
-                return Ok::<_, std::io::Error>(());
-            }
-            if ingress.state.load(std::sync::atomic::Ordering::Acquire) == 3 {
-                return ingress.wait_failed().await;
-            }
-            changed.await;
-        }
-    })
-    .await?;
-    if let Err(error) = ready {
-        owner.shutdown().await?;
-        return Err(error.into());
-    }
     let request = ctox_store::ipc::Request {
         request_id: 19,
         kind: ctox_store::ipc::JobKind::Read,
@@ -486,6 +496,71 @@ async fn owner_signaling_precedes_http_and_launch_context_meets_budget() -> anyh
         .as_str()
         .unwrap()
         .to_owned();
+    let recovery_at = Instant::now();
+    if fail_connections > 0 {
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while rejected.load(std::sync::atomic::Ordering::Acquire) < fail_connections {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("signaling owner stopped retrying during the outage");
+        let url = format!("http://{address}/api/business-os/launch-context");
+        let status = tokio::task::spawn_blocking(move || {
+            match ureq::get(&url).timeout(Duration::from_secs(3)).call() {
+                Ok(response) => response.status(),
+                Err(ureq::Error::Status(code, _)) => code,
+                Err(_) => 0,
+            }
+        })
+        .await?;
+        assert_eq!(
+            status, 503,
+            "launch must be unavailable during signaling outage"
+        );
+        eprintln!(
+            "C11_OUTAGE_METRICS {}",
+            serde_json::json!({
+                "failed_connections": rejected.load(std::sync::atomic::Ordering::Acquire),
+                "http": status,
+            })
+        );
+        healthy.add_permits(1);
+    }
+    let ready = tokio::time::timeout(
+        Duration::from_secs(if fail_connections > 0 { 10 } else { 55 }),
+        async {
+            loop {
+                let changed = ingress.changed.notified();
+                if ingress.ready().is_ok() {
+                    return Ok::<_, std::io::Error>(());
+                }
+                if ingress.state.load(std::sync::atomic::Ordering::Acquire) == 3 {
+                    return ingress.wait_failed().await;
+                }
+                changed.await;
+            }
+        },
+    )
+    .await?;
+    if let Err(error) = ready {
+        owner.shutdown().await?;
+        return Err(anyhow::Error::new(error).context("signaling startup did not recover"));
+    }
+    if fail_connections > 0 {
+        assert!(
+            ingress.failure.lock().unwrap().is_none(),
+            "recovered owner retained stale failure"
+        );
+        eprintln!(
+            "C11_RECOVERY_METRICS {}",
+            serde_json::json!({
+                "failed_connections": rejected.load(std::sync::atomic::Ordering::Acquire),
+                "recovery_ms": recovery_at.elapsed().as_secs_f64() * 1000.0,
+                "before_http": 503, "ready": true, "daemon_restart": false,
+            })
+        );
+    }
     let measured = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<f64>> {
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(3))
@@ -529,8 +604,10 @@ async fn readiness_accessor_never_starts_browser_ingress() -> anyhow::Result<()>
         .tempdir_in("/tmp")?;
     let root = fixture.path();
     std::fs::create_dir_all(root.join("runtime"))?;
-    let mut owner =
-        DaemonStores::start(queue_store::endpoint(root), tokio::runtime::Handle::current())?;
+    let mut owner = DaemonStores::start(
+        queue_store::endpoint(root),
+        tokio::runtime::Handle::current(),
+    )?;
     owner
         .register(
             "core",
