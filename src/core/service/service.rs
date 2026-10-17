@@ -16115,8 +16115,30 @@ fn build_review_feedback_retry_prompt(
         ""
     };
     let clipped_prior_reply = clip_text(prior_reply.trim(), REVIEW_FEEDBACK_PRIOR_REPLY_MAX_CHARS);
+    // Lead research: a rework round used to re-run the whole research and
+    // produce a new report with new slips, so ten researches needed 7-15
+    // attempts each and four exhausted the review budget (customer tenant,
+    // 15.10.2026). The research is stored; rework only fixes the findings.
+    // A missing writeback has nothing stored yet and keeps its own path.
+    let lead_research_rework =
+        review::is_lead_research_task(job.suggested_skill.as_deref(), &job.prompt)
+            && !outcome
+                .failed_gates
+                .iter()
+                .any(|gate| gate == "business_command_writeback_missing");
+    let (opening, closing) = if lead_research_rework {
+        (
+            "The external CTOX Review Gate checked your last result and found that it is not complete yet. Do not research this lead again and do not restart the research; do not create a subtask, queue task, or self-rework item.",
+            "Now fix only the review findings above: read the stored lead with the MCP tool business_os.get_record, correct exactly the items named in the findings through business_os.execute_writeback, and leave every other field and contact as stored. Then read the lead again with business_os.get_record and write the closing report strictly from that re-read stored record; claim no value, status or count it does not show.",
+        )
+    } else {
+        (
+            "The external CTOX Review Gate checked your last result and found that it is not complete yet. Continue the same task now; do not create a subtask, queue task, or self-rework item.",
+            "Now continue the task. Produce the corrected artifact or perform the required CTOX command yourself. Do not describe completion unless the durable artifact exists.",
+        )
+    };
     format!(
-        "The external CTOX Review Gate checked your last result and found that it is not complete yet. Continue the same task now; do not create a subtask, queue task, or self-rework item.\n\n\
+        "{opening}\n\n\
 Review summary: {}\n\n\
 What is wrong:\n\
 {}\n\n\
@@ -16131,7 +16153,7 @@ Your previous result is below. Treat it as a draft, not as proof of completion.\
 ==== previous result ====\n\
 {}\n\
 ==== end previous result ====\n\n\
-Now continue the task. Produce the corrected artifact or perform the required CTOX command yourself. Do not describe completion unless the durable artifact exists.",
+{closing}",
         clip_text(&outcome.summary, 280),
         failed_gates_block,
         evidence_block,
@@ -40430,6 +40452,76 @@ Business OS command:
         assert!(feedback_prompt.contains('…'));
         assert!(!feedback_prompt.contains("TAIL_MARKER_SHOULD_NOT_SURVIVE"));
         assert!(feedback_prompt.len() < REVIEW_FEEDBACK_PRIOR_REPLY_MAX_CHARS + 3_000);
+    }
+
+    #[test]
+    fn review_feedback_retry_for_lead_research_fixes_findings_without_new_research() {
+        let job_for = |prompt: &str, skill: Option<&str>| QueuedPrompt {
+            queue_task_metadata: Value::Null,
+            prompt: prompt.to_string(),
+            goal: "Lead research".to_string(),
+            preview: "Lead research".to_string(),
+            source_label: "queue".to_string(),
+            suggested_skill: skill.map(str::to_string),
+            leased_message_keys: vec!["queue:system::lead-rework".to_string()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("queue/lead-rework".to_string()),
+            workspace_root: None,
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let mut outcome = review::ReviewOutcome::skipped("report contradicts stored lead");
+        outcome.required = true;
+        outcome.verdict = review::ReviewVerdict::Fail;
+        outcome.failed_gates = vec!["Report names an e-mail that is not stored.".to_string()];
+
+        let lead_prompts = [
+            job_for(
+                "[outbound-lead-generation] Neurecherche für X GmbH [lead_abc] (Auftrag leadgen-lead-research-1)",
+                None,
+            ),
+            job_for(
+                "Recherchiere den Lead.",
+                Some("outbound-lead-generation-research"),
+            ),
+        ]
+        .map(|job| build_review_feedback_retry_prompt(&job, &outcome, "Fertig."));
+        for prompt in &lead_prompts {
+            assert!(prompt.contains("Do not research this lead again"));
+            assert!(prompt.contains("business_os.get_record"));
+            assert!(prompt.contains("business_os.execute_writeback"));
+            assert!(prompt.contains("strictly from that re-read stored record"));
+            assert!(!prompt.contains("Continue the same task now"));
+            assert!(prompt.contains("Report names an e-mail that is not stored."));
+        }
+
+        let generic = build_review_feedback_retry_prompt(
+            &job_for("Create /tmp/result.txt and verify it.", None),
+            &outcome,
+            "Done.",
+        );
+        assert!(generic.starts_with(
+            "The external CTOX Review Gate checked your last result and found that it is not complete yet. Continue the same task now; do not create a subtask, queue task, or self-rework item."
+        ));
+        assert!(generic.ends_with(
+            "Now continue the task. Produce the corrected artifact or perform the required CTOX command yourself. Do not describe completion unless the durable artifact exists."
+        ));
+        assert!(!generic.contains("Do not research this lead again"));
+        assert!(!generic.contains("business_os.get_record"));
+
+        // Nothing is stored yet when the writeback itself is missing; that
+        // path keeps its own "write back the assembled result" instruction.
+        let missing_writeback = build_review_feedback_retry_prompt(
+            &job_for(
+                "Recherchiere den Lead.",
+                Some("outbound-lead-generation-research"),
+            ),
+            &missing_writeback_review_outcome("Business command writeback failed: no successful x"),
+            "Fertig.",
+        );
+        assert!(missing_writeback.contains("Continue the same task now"));
+        assert!(!missing_writeback.contains("Do not research this lead again"));
     }
 
     #[test]

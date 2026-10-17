@@ -887,9 +887,15 @@ fn assess_review_requirement(
 }
 
 fn is_lead_research_review(request: &CompletionReviewRequest) -> bool {
-    request.bound_skill.as_deref().map(str::trim) == Some("outbound-lead-generation-research")
-        || (request.task_prompt.contains("[outbound-lead-generation]")
-            && request.task_prompt.contains("leadgen-lead-research-"))
+    is_lead_research_task(request.bound_skill.as_deref(), &request.task_prompt)
+}
+
+/// Lead research task detection shared with the service's rework prompt, so
+/// review gate and retry prompt always agree on which tasks are lead research.
+pub(crate) fn is_lead_research_task(bound_skill: Option<&str>, task_prompt: &str) -> bool {
+    bound_skill.map(str::trim) == Some("outbound-lead-generation-research")
+        || (task_prompt.contains("[outbound-lead-generation]")
+            && task_prompt.contains("leadgen-lead-research-"))
 }
 
 fn lead_id_from_task_prompt(task_prompt: &str) -> Option<&str> {
@@ -1238,6 +1244,9 @@ Outbound lead research completion gate (replaces required review work steps 1-6 
 - spot-check at most three verified company fields in the quote table: the quote must name the value; open the source URL with ctox_web_read only if the quote is ambiguous\n\
 - quality: a verified register field (name, address, management, revenue, employees, WZ code) backed by a single source without a `single source:` reason is a finding (rework), not a FAIL by itself\n\
 - no_match is acceptable only with attempts listing the sources asked; a field left open after a source failure must be action_required\n\
+- the lead snapshot in the task prompt (`lead_snapshot`) is the state before this run, not the baseline: judge only against the stored read-back, never fail a difference between snapshot and stored lead as a regression\n\
+- removing fields or contacts that the owner workflow in the task prompt excludes (e.g. Prokura: neither as a field nor as a contact) is correct; do not fail it as lost data\n\
+- report wording that adds attempt or delivery detail is not a FAIL reason; FAIL only when the report claims a stored value, status or count that the read-back contradicts\n\
 - finish within about five tool calls; do not read skill files, workspaces, queue, mission, continuity, communication or meeting state for this task\n\
 "
     } else {
@@ -2461,6 +2470,36 @@ mod tests {
         };
         let rendered = build_review_prompt(&other, &["durable_queue_or_ticket_work".to_string()]);
         assert!(!rendered.contains("Outbound lead research completion gate"));
+    }
+
+    #[test]
+    fn lead_research_review_judges_against_readback_not_snapshot_or_excluded_fields() {
+        let lead = CompletionReviewRequest {
+            source_label: "queue".to_string(),
+            task_prompt: "[outbound-lead-generation] Neurecherche für X GmbH [lead_abc] (Auftrag leadgen-lead-research-1)".to_string(),
+            ..CompletionReviewRequest::default()
+        };
+        let rendered = build_review_prompt(&lead, &["durable_queue_or_ticket_work".to_string()]);
+        assert!(rendered.contains("is the state before this run, not the baseline"));
+        assert!(rendered.contains("judge only against the stored read-back"));
+        assert!(
+            rendered.contains("that the owner workflow in the task prompt excludes (e.g. Prokura")
+        );
+        assert!(rendered
+            .contains("report wording that adds attempt or delivery detail is not a FAIL reason"));
+        assert!(rendered.contains("FAIL on a claimed value or status that is not stored"));
+        let other = CompletionReviewRequest {
+            source_label: "queue".to_string(),
+            task_prompt: "Write the quarterly summary".to_string(),
+            ..CompletionReviewRequest::default()
+        };
+        let rendered = build_review_prompt(&other, &["durable_queue_or_ticket_work".to_string()]);
+        assert!(!rendered.contains("not the baseline"));
+        assert!(is_lead_research_task(
+            Some(" outbound-lead-generation-research "),
+            ""
+        ));
+        assert!(!is_lead_research_task(None, "Write the quarterly summary"));
     }
 
     #[test]
