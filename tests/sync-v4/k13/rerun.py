@@ -6,7 +6,7 @@ P=argparse.ArgumentParser();P.add_argument('--revision',required=True);P.add_arg
 ROOT=Path(__file__).resolve().parents[3];HERE=Path(__file__).resolve().parent
 assert os.environ.get('BUILD_LANE_BIN') and os.environ.get('CARGO_TARGET_DIR'),'canonical lane required'
 OUT=Path(os.environ['CARGO_TARGET_DIR'])/('p6-k-rerun-'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime()));OUT.mkdir()
-ENV=dict(os.environ,CARGO_BUILD_JOBS='2',RUST_TEST_THREADS='2',TOKIO_WORKER_THREADS='2',CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS='1',CMAKE_BUILD_PARALLEL_LEVEL='2')
+ENV=dict(os.environ,CARGO_BUILD_JOBS='2',RUST_TEST_THREADS='2',TOKIO_WORKER_THREADS='2',CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS='1',CMAKE_BUILD_PARALLEL_LEVEL='2',CARGO_PROFILE_DEV_DEBUG='0',CARGO_PROFILE_TEST_DEBUG='0')
 ACTIVE=None;steps=[];results={'expected_revision':a.revision,'steps':steps};artifacts=[]
 def hash_file(p):
  h=hashlib.sha256()
