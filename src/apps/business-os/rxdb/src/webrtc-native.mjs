@@ -798,8 +798,22 @@ export class CtoxWebRtcNativePeer {
         if (entry.sentAtMs || this.pending.get(id) !== entry) return;
         entry.sentAtMs = Date.now();
         clearTimeout(queueWaitTimer);
-        entry.timer = setTimeout(() => {
+        const onResponseDeadline = () => {
           if (this.pending.get(id) !== entry) return;
+          // A large answer (e.g. a lead initial-replication batch) can take
+          // longer than the request budget to stream over a slow relay. While
+          // a framed transfer from this peer that started after our send keeps
+          // making progress, the answer is arriving: extend instead of
+          // discarding ~1 MB of received chunks and re-requesting the same
+          // batch from zero (field incident 17.10.2026). Bounded overall.
+          const now = Date.now();
+          if (
+            now - entry.sentAtMs < responseProgressExtensionCapMs(timeoutMs)
+            && this.incomingTransferProgressing(requestPeerId, entry.sentAtMs, timeoutMs, now)
+          ) {
+            entry.timer = setTimeout(onResponseDeadline, timeoutMs);
+            return;
+          }
           this.pending.delete(id);
           const error = new Error(`Timed out waiting for WebRTC response ${method}`);
           const peerId = requestPeerId;
@@ -812,7 +826,8 @@ export class CtoxWebRtcNativePeer {
             }
           }
           reject(error);
-        }, timeoutMs);
+        };
+        entry.timer = setTimeout(onResponseDeadline, timeoutMs);
       };
       const hooks = {
         onSent: armResponseTimer,
@@ -850,6 +865,15 @@ export class CtoxWebRtcNativePeer {
         reject(error);
       });
     });
+  }
+
+  incomingTransferProgressing(peerId, sinceMs, windowMs, now = Date.now()) {
+    for (const entry of this.incomingFrames?.values?.() || []) {
+      if (entry?.peerId !== peerId) continue;
+      if (Number(entry.createdAt || 0) < Number(sinceMs || 0)) continue;
+      if (now - Number(entry.lastProgressAt || 0) < windowMs) return true;
+    }
+    return false;
   }
 
   async requestAuxiliary(remotePeerId, label, method, params = [], timeoutMs = 15000) {
@@ -3018,6 +3042,12 @@ function nextHighPriorityInlineSend(queue) {
   const item = queue.high.splice(index, 1)[0] || null;
   if (item) queue.queuedBytes = Math.max(0, queue.queuedBytes - Number(item.byteLength || 0));
   return item;
+}
+
+// Upper bound for extending a response deadline while its framed answer is
+// still streaming in.
+function responseProgressExtensionCapMs(timeoutMs) {
+  return Math.max(8 * Number(timeoutMs || 0), 120_000);
 }
 
 function sendItemCancelled(item) {
