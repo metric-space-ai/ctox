@@ -590,9 +590,9 @@ async fn p6_shell_boot_preference_cursor_uses_real_p8_and_e55_reader() {
     // Cold shared-lane scheduling must not turn an authorization assertion into
     // a timing assertion. Keep the real reader/writer with an explicit budget.
     let writer = f.store.writer();
-    let readers = ctox_store::ReadPool::for_database(
+    let readers = ctox_store::read_pool::ReadPool::for_database(
         writer.db_id(), writer.generation(), Default::default(),
-        ctox_store::AdmissionBudget {
+        ctox_store::config::AdmissionBudget {
             wait: std::time::Duration::from_secs(2),
             execution: std::time::Duration::from_secs(2),
             ..Default::default()
