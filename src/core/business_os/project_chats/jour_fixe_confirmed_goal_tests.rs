@@ -4,7 +4,7 @@ use super::*;
 use crate::mission::{plan, schedule};
 
 fn fixture() -> anyhow::Result<TempDir> {
-    fixture_with_root(tempfile::tempdir()?)
+    fixture_with_root(crate::persistence::test_support::fixture_tempdir()?)
 }
 fn fixture_with_root(root: TempDir) -> anyhow::Result<TempDir> {
     let root = super::jour_fixe_owner::fixture_with_root("review", root)?;
@@ -669,7 +669,7 @@ fn concurrent_owner_confirmations_linearize_to_one_goal_for_one_proposal() -> an
 fn failed_plan_step_reaches_supervisor_turn_and_thread_then_clears_on_retry() -> anyhow::Result<()>
 {
     crate::business_os::project_chats::plan_state::run_contract(move |root| {
-        let root = fixture_with_root(root)?;
+        let root = fixture_with_root(root.into())?;
         let accepted = send(
             root.path(),
             "confirmed-failure",
@@ -779,7 +779,7 @@ fn failed_plan_step_reaches_supervisor_turn_and_thread_then_clears_on_retry() ->
 fn planned_steps_projection_is_current_read_only_and_never_crosses_projects() -> anyhow::Result<()>
 {
     crate::business_os::project_chats::plan_state::run_contract(move |root| {
-        let root = fixture_with_root(root)?;
+        let root = fixture_with_root(root.into())?;
         let result = send(
             root.path(),
             "confirm-projection",

@@ -961,6 +961,13 @@ pub fn merge_owner_profile_settings(
 ) -> Result<()> {
     let db_path = resolve_db_path(root, None);
     let conn = open_channel_db(&db_path)?;
+    merge_owner_profile_settings_in_connection(&conn, settings)
+}
+
+fn merge_owner_profile_settings_in_connection(
+    conn: &Connection,
+    settings: &mut BTreeMap<String, String>,
+) -> Result<()> {
     let mut stmt = conn.prepare(
         r#"
         SELECT owner_key, metadata_json
@@ -1658,9 +1665,7 @@ pub(crate) fn pipeline_status(
 
     // Mission state for the conversation that owns this thread.
     let mission_state = if let Some(conv_id) = conversation_id {
-        crate::lcm::LcmEngine::open(&db_path, crate::lcm::LcmConfig::default())
-            .ok()
-            .and_then(|engine| engine.stored_mission_state(conv_id).ok().flatten())
+        crate::lcm::LcmClient::attach(&db_path)?.stored_mission_state(conv_id)?
     } else {
         None
     };
@@ -6429,6 +6434,7 @@ pub(crate) fn ack_owned_in_transaction(
     tx: &Transaction<'_>,
     request: &crate::service::queue_store::AckRequest,
     grant: Option<TerminalPolicyGrant>,
+    policy_settings: Option<&BTreeMap<String, String>>,
 ) -> Result<usize> {
     let request_json = serde_json::to_string(request)?;
     let receipt: Option<(String, usize)> = tx
@@ -6452,10 +6458,10 @@ pub(crate) fn ack_owned_in_transaction(
                 .failure
                 .as_deref()
                 .is_some_and(|s| !s.trim().is_empty()),
-            "failed queue acknowledgement requires a failure reason"
+            "failed queue ack requires a non-empty failure reason"
         );
     }
-    guard_founder_handled_ack(root, tx, &request.keys, status.as_str())?;
+    outbound_review::guard_founder_handled_ack_with_settings(tx, &request.keys, status.as_str(), policy_settings)?;
     if let Some(attempt) = request.attempt.as_deref() {
         let applied: Option<Option<String>>=tx.query_row("SELECT queue_effects_applied_at FROM worker_attempt_finalizations WHERE attempt_id=?1",[attempt],|r|r.get(0)).optional()?;
         let applied = applied

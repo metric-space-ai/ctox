@@ -7,7 +7,7 @@ use crate::business_os::store_projections::tests::create_repair_rxdb_tables;
 use crate::business_os::store_workjet_projects::tests::create_workjet_rxdb_projection_tables;
 use rusqlite::Connection;
 use serde_json::json;
-use tempfile::TempDir;
+type TempDir = std::sync::Arc<tempfile::TempDir>;
 
 fn command() -> BusinessCommand {
     BusinessCommand {
@@ -27,7 +27,7 @@ fn document(command: &BusinessCommand) -> Value {
 }
 
 fn fixture(applied: bool) -> anyhow::Result<(TempDir, BusinessCommand)> {
-    let root = tempfile::tempdir()?;
+    let root = crate::persistence::test_support::fixture_tempdir()?;
     drop(create_repair_rxdb_tables(root.path())?);
     create_workjet_rxdb_projection_tables(root.path())?;
     let command = command();

@@ -457,10 +457,11 @@ async fn provider_commands_use_owned_writers_and_preserve_typed_failures() {
         .unwrap();
     assert_eq!(preparing["status"], "preparing");
     let effect_command = recover.clone();
+    let effect_policy_store = f.writer.db_id().path().to_owned();
     let committed = secret_db
         .writer
         .submit(WriteJob::new(JobOptions::default(), move |tx| {
-            commands::delete_tts_key(tx, &admin(), &effect_command)
+            commands::delete_tts_key(tx, &effect_policy_store, &admin(), &effect_command)
         }))
         .unwrap()
         .await
@@ -468,10 +469,11 @@ async fn provider_commands_use_owned_writers_and_preserve_typed_failures() {
     assert_eq!(committed["deleted"], 1);
     let mut forged = recover.clone();
     forged.app_id = "different-calling-app".into();
+    let effect_policy_store = f.writer.db_id().path().to_owned();
     let conflict = secret_db
         .writer
         .submit(WriteJob::new(JobOptions::default(), move |tx| {
-            commands::delete_tts_key(tx, &admin(), &forged)
+            commands::delete_tts_key(tx, &effect_policy_store, &admin(), &forged)
         }))
         .unwrap()
         .await

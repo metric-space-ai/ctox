@@ -2519,6 +2519,11 @@ fn dispatch_business_command(
         | "ctox.mailserver.delete_user" => {
             handle_mailserver_command(root, command).map(BusinessCommandDispatchOutcome::Returned)
         }
+        "ctox.workjet.remote_worker.admit"
+        | "ctox.maintenance.restart"
+        | "instance.providers.models.check" => {
+            anyhow::bail!("canonical_platform_feed_required")
+        }
         _ => {
             // Legacy native dispatch: these types are outside EXACT_CONTROL_TYPES
             // but still execute immediately and return before record_command.
@@ -2901,7 +2906,7 @@ mod tests {
     use serde_json::json;
     use std::collections::BTreeSet;
     use std::time::{Duration, Instant};
-    use tempfile::tempdir;
+    use crate::persistence::test_support::scoped_tempdir as tempdir;
 
     #[test]
     fn intake_stamps_verified_identity_and_preserves_claimed_actor_evidence() -> anyhow::Result<()>
@@ -3069,11 +3074,9 @@ mod tests {
             .find("match command.command_type.as_str()")
             .map(|offset| function_start + offset)
             .expect("command dispatcher match must exist");
-        let fallback = source[match_start..]
-            .find("        _ => {")
-            .map(|offset| match_start + offset)
-            .expect("command dispatcher fallback must exist");
-        let classifier = &source[match_start..fallback];
+        // A nested handler may have its own fallback; only the dispatcher
+        // match's top-level fallback ends this inventory.
+        let classifier = &source[match_start..];
         let mut lines = classifier.lines();
         let match_line = lines
             .next()
@@ -3084,6 +3087,7 @@ mod tests {
 
         for line in lines {
             let trimmed = line.trim();
+            if brace_depth == 1 && trimmed.starts_with("_ =>") { break; }
             if brace_depth == 1 && (trimmed.starts_with('"') || !arm_pattern.is_empty()) {
                 if !arm_pattern.is_empty() {
                     arm_pattern.push(' ');

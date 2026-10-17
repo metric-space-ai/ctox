@@ -7,8 +7,8 @@ use super::super::store::{
 use super::super::store_projections::tests::create_repair_rxdb_tables;
 use super::accept_rxdb_business_command_with_guest_runtime;
 use super::*;
+use crate::persistence::test_support::scoped_tempdir as tempdir;
 use serde_json::json;
-use tempfile::tempdir;
 
 fn seed_guest_command_users(root: &std::path::Path) -> anyhow::Result<()> {
     drop(create_repair_rxdb_tables(root)?);

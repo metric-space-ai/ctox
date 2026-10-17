@@ -55,19 +55,18 @@ fn begin(root: &Path, turn: &Value, worker: &str, attempt: &str) -> anyhow::Resu
         None,
         "actual worker fixture started"
     )?);
-    let engine = crate::lcm::LcmEngine::open(
+    crate::lcm::run_begin_worker_attempt_finalization(
         &crate::paths::core_db(root),
-        crate::lcm::LcmConfig::default(),
+        crate::lcm::WorkerAttemptFinalizationInput {
+            attempt_id: attempt,
+            work_key: task(turn),
+            conversation_id: 42,
+            source_label: "queue",
+            agent_outcome: crate::lcm::AgentOutcome::Success,
+            reply_text: "A bounded test slice",
+            error_text: None,
+        },
     )?;
-    engine.begin_worker_attempt_finalization(crate::lcm::WorkerAttemptFinalizationInput {
-        attempt_id: attempt,
-        work_key: task(turn),
-        conversation_id: 42,
-        source_label: "queue",
-        agent_outcome: crate::lcm::AgentOutcome::Success,
-        reply_text: "A bounded test slice",
-        error_text: None,
-    })?;
     Ok(())
 }
 fn passed(root: &Path, turn: &Value) -> anyhow::Result<()> {

@@ -2,7 +2,7 @@
 // License: AGPL-3.0-only
 use super::*;
 
-fn fixture(jour_fixe: Value) -> anyhow::Result<tempfile::TempDir> {
+fn fixture(jour_fixe: Value) -> anyhow::Result<std::sync::Arc<tempfile::TempDir>> {
     let root = super::weekly_reports::fixture()?;
     let conn = open_store(root.path())?;
     let mut project = outbound_load_record(&conn, "workjet_projects", "project")?.unwrap();

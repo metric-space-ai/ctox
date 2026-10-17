@@ -3,7 +3,7 @@
 use super::*;
 const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
 pub(super) fn fixture(state: &str) -> anyhow::Result<TempDir> {
-    fixture_with_root(state, tempfile::tempdir()?)
+    fixture_with_root(state, crate::persistence::test_support::fixture_tempdir()?)
 }
 pub(super) fn fixture_with_root(state: &str, root: TempDir) -> anyhow::Result<TempDir> {
     let root = super::supervisor_turns::fixture_with_root("owner", root)?;

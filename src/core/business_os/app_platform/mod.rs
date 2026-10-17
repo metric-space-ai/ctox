@@ -365,8 +365,9 @@ impl Platform {
         };
         let current_actor = actor.clone();
         let secret_command = command.clone();
+        let policy_store = self.writer.db_id().path().to_owned();
         let deleted = match secrets.submit(WriteJob::new(JobOptions::default(), move |tx| {
-            commands::delete_tts_key(tx, &current_actor, &secret_command)
+            commands::delete_tts_key(tx, &policy_store, &current_actor, &secret_command)
         })) {
             Ok(job) => match job.await {
                 Ok(value) => value,

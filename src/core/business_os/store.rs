@@ -18836,9 +18836,12 @@ pub(super) fn verified_capability_claims(
     if token.is_empty() {
         return None;
     }
-    let secret = capability_signing_secret(root).ok()?;
     let now = now_ms() as i64;
-    let claims = super::capability::verify_capability_token(&secret, token, now)?;
+    // Preparatory authentication borrows one committed issuer snapshot; effect
+    // publication still revalidates under the current issuer fence.
+    let claims = with_webrtc_capability_signer_snapshot(root, |secret| {
+        Ok(super::capability::verify_capability_token(secret, token, now))
+    }).ok()??;
     validate_capability_claims_against_store(root, claims)
 }
 
@@ -18897,8 +18900,9 @@ pub(super) fn verified_webrtc_capability_claims(
     {
         return validate_capability_claims_against_store(root, claims);
     }
-    let secret = capability_signing_secret(root).ok()?;
-    let claims = super::capability::verify_capability_token_allow_expired(&secret, token)?;
+    let claims = with_webrtc_capability_signer_snapshot(root, |secret| {
+        Ok(super::capability::verify_capability_token_allow_expired(secret, token))
+    }).ok()??;
     if !super::mobile_invites::is_active_paired_device_user(root, &claims.user_id) {
         return None;
     }

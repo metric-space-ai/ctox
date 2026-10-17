@@ -298,9 +298,17 @@ fn provider_id(value: &str) -> bool {
             .bytes()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, b'-' | b'_'))
 }
-fn provider_permission(actor: &BusinessOsActor, right: BusinessOsPermission) -> bool {
-    actor.id.as_deref().is_some_and(|id| !id.is_empty())
-        && policy::evaluate(actor, right, &BusinessOsScope::workspace()).allowed
+fn provider_permission(
+    policy_store: &std::path::Path,
+    actor: &BusinessOsActor,
+    right: BusinessOsPermission,
+) -> Result<bool, StoreError> {
+    if actor.id.as_deref().is_none_or(str::is_empty) {
+        return Ok(false);
+    }
+    policy::evaluate_for_store_path(policy_store, actor, right, &BusinessOsScope::workspace())
+        .map(|decision| decision.allowed)
+        .map_err(|error| StoreError::Invalid(format!("provider rights unavailable: {error}")))
 }
 fn provider_projection(tx: &Transaction<'_>) -> Result<Value, StoreError> {
     Ok(get(tx,"ctox_runtime_settings","instance.providers")?.unwrap_or_else(||
@@ -338,7 +346,14 @@ fn provider_command(
     let permitted = if command.command_type == "instance.providers.models.check" {
         model_check::permitted(tx, actor)
     } else {
-        provider_permission(actor, right)
+        provider_permission(
+            std::path::Path::new(
+                tx.path()
+                    .ok_or_else(|| invalid("policy store path missing"))?,
+            ),
+            actor,
+            right,
+        )?
     };
     if !permitted {
         return reject(
@@ -472,6 +487,7 @@ fn provider_command(
 /// It never opens a database, decrypts a key, logs a value or touches keychains.
 pub(super) fn delete_tts_key(
     tx: &Transaction<'_>,
+    policy_store: &std::path::Path,
     actor: &BusinessOsActor,
     command: &CommandDocument,
 ) -> Result<Value, StoreError> {
@@ -544,7 +560,7 @@ pub(super) fn delete_tts_key(
                 .map_err(|_| invalid("invalid native secret receipt"));
         }
     }
-    if !provider_permission(actor, BusinessOsPermission::SecretsManage) {
+    if !provider_permission(policy_store, actor, BusinessOsPermission::SecretsManage)? {
         return Ok(failure(
             "rejected",
             "forbidden",
@@ -813,10 +829,38 @@ fn execute_with_context(
     worker_binding: &crate::business_os::machine_enrollment::DeviceEnrollmentResolution,
     publication: Option<&(dyn Fn() -> Result<(), StoreError> + Send + Sync)>,
 ) -> Result<Value, StoreError> {
-    ctox_store::change_log::subscription::write_contract::routes::validate_persisted_input(
+    if ctox_store::change_log::subscription::write_contract::routes::validate_persisted_input(
         &json!({"type":command.command_type,"payload":command.payload}),
     )
-    .map_err(|_| invalid("invalid: credential_ref_required"))?;
+    .is_err()
+    {
+        if !command.id.is_empty()
+            && !command.app_id.is_empty()
+            && matches!(
+                command.command_type.as_str(),
+                "instance.providers.account.create"
+                    | "instance.providers.models.check"
+                    | "speech.tts.key.delete"
+            )
+        {
+            // Keep the rejected receipt, using record's explicit public-field
+            // allowlist. The rejected credential itself is never persisted.
+            return record(
+                tx,
+                actor,
+                command,
+                failure(
+                    "rejected",
+                    "invalid",
+                    "credential_ref_required",
+                    "payload",
+                    "Use an official credential reference.",
+                ),
+                now,
+            );
+        }
+        return Err(invalid("invalid: credential_ref_required"));
+    }
     if !handles(&command.command_type) || command.id.is_empty() || command.app_id.is_empty() {
         return Err(invalid("invalid platform command document"));
     }

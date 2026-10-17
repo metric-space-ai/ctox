@@ -437,10 +437,10 @@ pub(super) fn fixture() -> anyhow::Result<TempDir> {
 }
 
 fn fixture_for_owner(owner: &str) -> anyhow::Result<TempDir> {
-    fixture_with_root(owner, tempfile::tempdir()?)
+    fixture_with_root(owner, crate::persistence::test_support::fixture_tempdir()?)
 }
 pub(super) fn fixture_with_root(owner: &str, root: TempDir) -> anyhow::Result<TempDir> {
-    let root = project_fixture_with_root(root)?;
+    let root = project_fixture_with_root(root.into())?;
     let conn = open_store(root.path())?;
     let mut project = outbound_load_record(&conn, "workjet_projects", "project")?.unwrap();
     project["owner_user_id"] = json!(owner);

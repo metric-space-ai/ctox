@@ -3,8 +3,9 @@
 use super::*;
 use crate::business_os::store::CommandOrigin;
 use crate::business_os::{mcp_channel, store, threads, worker_profile_bindings};
+use crate::persistence::test_support::fixture_tempdir as tempdir;
 use std::sync::{Arc, Barrier};
-use tempfile::{tempdir, TempDir};
+type TempDir = std::sync::Arc<tempfile::TempDir>;
 
 #[path = "jour_fixe_confirmed_goal_tests.rs"]
 mod jour_fixe_confirmed_goal;

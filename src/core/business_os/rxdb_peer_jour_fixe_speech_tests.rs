@@ -2,7 +2,7 @@
 // License: AGPL-3.0-only
 use super::*;
 async fn fixture() -> anyhow::Result<(
-    tempfile::TempDir,
+    Arc<tempfile::TempDir>,
     Arc<Registry<u64>>,
     Arc<Session>,
     String,
