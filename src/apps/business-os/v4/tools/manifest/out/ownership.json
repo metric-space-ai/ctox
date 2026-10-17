@@ -200,7 +200,7 @@
     },
     "app_catalog": {
       "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [],
       "no_defining_app": true,
       "owner": "ctox-platform",
@@ -650,7 +650,7 @@
     },
     "coding_turns": {
       "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [],
       "no_defining_app": true,
       "owner": "ctox-platform",
@@ -1127,7 +1127,7 @@
     },
     "devices": {
       "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [],
       "no_defining_app": true,
       "owner": "ctox-platform",
@@ -1414,7 +1414,7 @@
     },
     "machine_enrollments": {
       "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
-      "in_contract": false,
+      "in_contract": true,
       "json_definers": [],
       "no_defining_app": true,
       "owner": "ctox-platform",

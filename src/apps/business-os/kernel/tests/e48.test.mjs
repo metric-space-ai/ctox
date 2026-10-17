@@ -76,3 +76,14 @@ test('E48.1 reload retires only unconfirmed client bootstrap; confirmed native b
   await kernel.close();
  }
 });
+
+
+test('E61 platform schemas exactly match native command, file and queue contracts',async()=>{
+ const {readFile}=await import('node:fs/promises');const {PLATFORM_MANIFEST}=await import('../platform-manifest.generated.mjs');
+ const wire=JSON.parse(await readFile(new URL('../../../../core/rxdb/tests/fixtures/business-command-document-v4.json',import.meta.url),'utf8'));
+ const native=JSON.parse(await readFile(new URL('../../../../core/business_os/business_os_schema_contract.json',import.meta.url),'utf8'));
+ assert.deepEqual(PLATFORM_MANIFEST.collections.business_commands.schema,wire,'E61 canonical V4 command schema; regenerate the platform manifest');
+ const generated=JSON.parse(await readFile(new URL('../../v4/schemas/ctox-platform.collections.schema.json',import.meta.url),'utf8'));assert.deepEqual(generated.collections.business_commands.schema,wire,'regenerate the native platform schema input');
+ const {nativePlatformCatalog}=await import('./native-platform-catalog.mjs');assert.deepEqual(nativePlatformCatalog.business_app_versions[0].manifest,PLATFORM_MANIFEST,'test peer must not replace production schemas');
+ for(const name of ['files','ctox_queue_tasks'])assert.deepEqual(PLATFORM_MANIFEST.collections[name].schema,native[name],name+' must match its native document contract');
+});

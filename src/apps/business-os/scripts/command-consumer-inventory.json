@@ -23,6 +23,7 @@
   ],
   "projection_readers": [
     "app.js",
+    "kernel/tests/e61-mutation-proof.mjs",
     "modules/appsec-pentest/index.js",
     "modules/documents/index.js",
     "modules/mail/index.js",

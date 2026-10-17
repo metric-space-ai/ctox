@@ -52,7 +52,7 @@ function ownerOf(name) {
 }
 
 // Plattformmanifest des Kerns (nur gelesen): Schemata der v4-eigenen Plattform-Collections (app_activations, …).
-const PLATFORM_MANIFEST_PATH = path.join(os.homedir(), '.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json');
+const PLATFORM_MANIFEST_PATH = path.resolve(BOS, '../../core/business_os/v4/ctox-platform.manifest.json');
 const platformManifest = fs.existsSync(PLATFORM_MANIFEST_PATH) ? readJson(PLATFORM_MANIFEST_PATH) : { collections: {} };
 
 const manifests = {};
@@ -208,6 +208,10 @@ const LEGACY_JS_STEPS = {
   browser_input_events: { steps: [1], ev: 'modules/browser/schema.js:241 @4794af03d' },
   browser_sessions: { steps: [1], ev: 'modules/browser/schema.js:238 @4794af03d' },
   browser_tabs: { steps: [1], ev: 'modules/browser/schema.js:239 @4794af03d' },
+  // E61: the platform catalog advertises the V4 command document (fixture business-command-document-v4.json, v3).
+  // The native registry already binds V3 (src/core/store/schema.rs bind_platform_command_schema); V2 bodies are
+  // refused by validate_migrated_command (command_schema_migration_required), never relabelled. Step 3 is identity.
+  business_commands: { steps: [3], ev: 'src/core/store/schema.rs bind_platform_command_schema; src/core/store/command_contract.rs validate_migrated_command (E61)' },
 };
 
 // ---------------------------------------------------------------- Aufbau
@@ -227,10 +231,10 @@ for (const name of [...allNames].sort()) {
   let schema = ownerJson?.collections?.[name];
   let source = owner === PLATFORM ? apps.ctox.src : apps[owner]?.src;
   let strategies = ownerJson?.migration_strategies?.[name];
-  if (!schema && owner === PLATFORM && platformManifest.collections?.[name]?.schema) {
+  if ((!schema || name === 'business_commands') && owner === PLATFORM && platformManifest.collections?.[name]?.schema) {
     const { _note, schema: ps, ...pmeta } = platformManifest.collections[name];
     schema = { schema: ps, ...pmeta };
-    source = '~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json';
+    source = 'src/core/business_os/v4/ctox-platform.manifest.json';
     target.report.push({ collection: name, field: '(Collection)', old: 'fehlt (v4-Plattform-Collection)', next: 'aus dem Plattformmanifest übernommen (Schema + class/rights/client_limit/byte_budget)', ev: `${source} collections.${name}`, src: 'ownership.json platform; Kern §16.17', kind: 'kompatibel (neue Collection)' });
   }
   if (!schema) {

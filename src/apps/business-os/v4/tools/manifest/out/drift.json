@@ -108,6 +108,10 @@
       "proposed_owner": "ctox-platform"
     },
     {
+      "collection": "app_catalog",
+      "proposed_owner": "ctox-platform"
+    },
+    {
       "collection": "app_drafts",
       "proposed_owner": "ctox-platform"
     },
@@ -132,6 +136,10 @@
       "proposed_owner": "ctox-platform"
     },
     {
+      "collection": "coding_turns",
+      "proposed_owner": "ctox-platform"
+    },
+    {
       "collection": "ctox_queue_tasks",
       "proposed_owner": "ctox-platform"
     },
@@ -140,7 +148,15 @@
       "proposed_owner": "ctox-platform"
     },
     {
+      "collection": "devices",
+      "proposed_owner": "ctox-platform"
+    },
+    {
       "collection": "files",
+      "proposed_owner": "ctox-platform"
+    },
+    {
+      "collection": "machine_enrollments",
       "proposed_owner": "ctox-platform"
     },
     {
