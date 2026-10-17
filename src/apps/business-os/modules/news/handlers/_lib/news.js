@@ -418,6 +418,39 @@ export function generatePayload(topic, sources, issueId, issueDate, window = nul
 
 const LANGUAGE_LABEL = (language) => (language === 'en' ? 'Englisch' : 'Deutsch');
 
+// ---------------------------------------------------------------- Laufvertrag (d86fb3ac8 / 9f6ad058a)
+
+export const MAX_SOURCES_PER_RUN = 12;
+export const UNUSABLE_SOURCE_STATES = ['failed', 'needs_auth', 'auth_requested'];
+
+// ref: select_run_sources – Quellen, die nicht liefern koennen, fallen weg; der Rest ist gedeckelt.
+export function selectRunSources(sources) {
+  const usable = [];
+  const skipped = [];
+  for (const source of sources) {
+    const label = str(source?.label) ?? '';
+    const status = str(source?.status) ?? '';
+    if (UNUSABLE_SOURCE_STATES.includes(status)) skipped.push({ label, reason: status });
+    else if (usable.length >= MAX_SOURCES_PER_RUN) skipped.push({ label, reason: 'limit' });
+    else usable.push(source);
+  }
+  return { usable, skipped };
+}
+
+// ref: issue_run_prompt_block – haengt an jede news.issue.generate-Anweisung (Knopf und Planer). Die Zwischenstand-
+// Datei (runtime/news/checkpoints/<issue>.json) entfaellt: Handler kennen kein Dateisystem und keinen State-Root.
+export function issueRunContract(usable, skipped) {
+  const lines = ['News-Laufvertrag (verbindlich):'];
+  if (skipped.length) {
+    lines.push(usable.length
+      ? `- Nur diese Quellen lesen: ${usable.map((s) => str(s.label)).filter(Boolean).join('; ')}.`
+      : '- Keine nutzbare Quelle: nutze die Websuche.');
+    lines.push(`- Überspringen: ${skipped.map((s) => `${s.label} (${s.reason})`).join('; ')}.`);
+  }
+  lines.push('- Höchstens zwei Abrufe pro Quelle, keine Quelle zweimal lesen; sobald genug Beiträge belegt sind, nicht weiter suchen, sondern das Ergebnis liefern.');
+  return lines.join('\n');
+}
+
 /**
  * Template aus prompts/<name>.md laden und streng fuellen (ctox:shared/prompt-template.js). Eine Zeile entfaellt,
  * wenn sie einen der `optional` genannten Platzhalter enthaelt und dessen Wert '' ist – das bildet
@@ -452,7 +485,7 @@ export function issuePromptValues(command, previousIssue = null) {
   const payload = command.payload ?? {};
   const snapshot = isObject(payload.record_snapshot) ? payload.record_snapshot : {};
   const topic = isObject(snapshot.topic) ? snapshot.topic : {};
-  const sources = (Array.isArray(snapshot.sources) ? snapshot.sources : []).filter(isObject);
+  const { usable: sources, skipped } = selectRunSources((Array.isArray(snapshot.sources) ? snapshot.sources : []).filter(isObject));
   const signedIn = sources.some((s) => str(s.auth_source) || accountAuthSource(str(s.kind)));
   return {
     topic_title: str(topic.title) ?? '',
@@ -464,6 +497,7 @@ export function issuePromptValues(command, previousIssue = null) {
     source_line: sources.map((s) => `${str(s.kind) ?? 'web'}:${str(s.label) ?? ''}`).join('; ') || 'keine konfiguriert, nutze die Websuche',
     signed_in_task_id: signedIn ? command.id : '',
     previous_issue_date: str(previousIssue?.issue_date) ?? '',
+    run_contract: issueRunContract(sources, skipped),
     window_start: Number.isInteger(payload.window_start_ms) && payload.window_start_ms > 0 ? rfc3339(payload.window_start_ms) : '',
     context_json: contextJson({
       command_id: command.id,
@@ -477,6 +511,7 @@ export function issuePromptValues(command, previousIssue = null) {
         covered_urls: (Array.isArray(payload.covered_urls) ? payload.covered_urls : []).filter((u) => typeof u === 'string').slice(0, MAX_COVERED_URLS),
       } : {}),
       output_contract: NEWS_ISSUE_CONTRACT,
+      ...(skipped.length ? { skipped_sources: skipped } : {}),
       record_snapshot: snapshot,
     }),
   };

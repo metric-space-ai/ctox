@@ -66,6 +66,7 @@ const labels = {
     titleRequired: 'Gib dem Thema einen Namen.',
     deadlineRequired: 'Wähle einen Stichtag.',
     saveFailed: 'Speichern fehlgeschlagen',
+    drawerUndo: 'Rückgängig',
     commandFailed: 'Auftrag konnte nicht an CTOX übergeben werden',
     deleteConfirm: 'Nochmal klicken: „{0}“ mit allen Ausgaben löschen',
     deleteTopic: 'Thema löschen',
@@ -125,6 +126,7 @@ const labels = {
     titleRequired: 'Give the topic a name.',
     deadlineRequired: 'Pick a deadline.',
     saveFailed: 'Saving failed',
+    drawerUndo: 'Undo',
     commandFailed: 'Could not hand the task to CTOX',
     deleteConfirm: 'Click again: delete “{0}” with all issues',
     deleteTopic: 'Delete topic',
@@ -197,6 +199,7 @@ const state = {
   renderTimer: 0,
   disposed: false,
   commandWatches: new Map(),
+  drawerUndoTimer: 0,
 };
 const els = {};
 
@@ -220,7 +223,7 @@ function resetState() {
     topics: [], sources: [], issues: [], posts: [], selectedTopicId: '', selectedIssueId: '',
     leftGrammar: { search: '', band: 'active', filters: {} }, centerGrammar: { search: '', band: 'all', filters: {} },
     leftView: 'cards', centerView: 'cards', expandedPosts: new Set(), drawer: null, renderTimer: 0, disposed: false,
-    commandWatches: new Map(),
+    commandWatches: new Map(), drawerUndoTimer: 0,
   });
   for (const key of Object.keys(els)) delete els[key];
 }
@@ -262,6 +265,7 @@ export async function mount(root, api, { restored } = {}) {
   return {
     unmount() {
       clearTimeout(state.renderTimer);
+      clearTimeout(state.drawerUndoTimer);
       for (const off of disposers.splice(0)) {
         try { off(); } catch (error) { console.warn('[news] unsubscribe failed', error); }
       }
@@ -474,6 +478,12 @@ function wireEvents() {
   els.host.addEventListener('click', onClick);
   els.form?.addEventListener('submit', (event) => { event.preventDefault(); saveTopic(); });
   els.form?.querySelector('[name="cadence"]')?.addEventListener('change', syncCadenceFields);
+  // Sofort speichern (9f6ad058a): jede abgeschlossene Feldänderung eines gespeicherten Themas wird geschrieben.
+  els.form?.addEventListener('change', (event) => {
+    if (event.target?.dataset?.action === 'toggle-source') return;
+    if (event.target === els.newSourceKind || event.target === els.newSourceValue) return;
+    instantSave();
+  });
   els.newSourceKind?.addEventListener('change', syncSourcePlaceholder);
   els.newSourceValue?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') { event.preventDefault(); addDraftSource(); }
@@ -512,6 +522,7 @@ function onClick(event) {
     'mobile-back': () => els.root?.classList.remove('is-detail'),
     'close-drawer': closeDrawer,
     'save-topic': saveTopic,
+    'drawer-undo': undoDrawerChange,
     'delete-topic': deleteTopic,
     'drawer-tab': () => setDrawerTab(target.dataset.tab),
     'add-source': addDraftSource,
@@ -522,7 +533,10 @@ function onClick(event) {
     'remove-source': () => removeDraftSource(target.dataset.sourceId),
     'source-adapter': () => runSourceCommand(target.dataset.sourceId, 'adapter'),
     'source-auth': () => runSourceCommand(target.dataset.sourceId, 'auth'),
-    'toggle-category': () => target.setAttribute('aria-pressed', String(target.getAttribute('aria-pressed') !== 'true')),
+    'toggle-category': () => {
+      target.setAttribute('aria-pressed', String(target.getAttribute('aria-pressed') !== 'true'));
+      instantSave();
+    },
     'expand-post': () => toggleExpand(target.dataset.postId),
     'bookmark-post': () => toggleBookmark(target.dataset.postId),
     'copy-post-link': () => copyPostLink(target.dataset.postId),
@@ -992,7 +1006,25 @@ function openDrawer(topic) {
   const migrated = migrateLegacyRedditSources(state.drawer.sources, draft.id);
   state.drawer.sources = migrated.sources;
   migrated.removedIds.forEach((id) => state.drawer.removed.add(id));
+  state.drawer.saved = drawerSnapshot();
   els.drawerTitle.textContent = persisted ? draft.title : t('newTopic');
+  syncDrawerFoot();
+  hideDrawerUndo();
+  fillDrawerForm(draft);
+  const deleteButton = els.host.querySelector('[data-action="delete-topic"]');
+  deleteButton.hidden = !persisted;
+  deleteButton.classList.remove('is-danger');
+  deleteButton.setAttribute('title', t('deleteTopic'));
+  deleteButton.setAttribute('aria-label', t('deleteTopic'));
+  syncSourcePlaceholder();
+  setDrawerTab('topic');
+  renderSourceGroups();
+  els.scrim.hidden = false;
+  els.drawer.hidden = false;
+  els.form.elements.title.focus();
+}
+
+function fillDrawerForm(draft) {
   const form = els.form;
   form.elements.title.value = draft.title || '';
   form.elements.prompt.value = draft.prompt || '';
@@ -1006,21 +1038,11 @@ function openDrawer(topic) {
   els.drawer.querySelectorAll('[data-category]').forEach((chip) => {
     chip.setAttribute('aria-pressed', String((draft.categories || CATEGORIES).includes(chip.dataset.category)));
   });
-  const deleteButton = els.host.querySelector('[data-action="delete-topic"]');
-  deleteButton.hidden = !persisted;
-  deleteButton.classList.remove('is-danger');
-  deleteButton.setAttribute('title', t('deleteTopic'));
-  deleteButton.setAttribute('aria-label', t('deleteTopic'));
   syncCadenceFields();
-  syncSourcePlaceholder();
-  setDrawerTab('topic');
-  renderSourceGroups();
-  els.scrim.hidden = false;
-  els.drawer.hidden = false;
-  form.elements.title.focus();
 }
 
 function closeDrawer() {
+  hideDrawerUndo();
   state.drawer = null;
   if (els.drawer) els.drawer.hidden = true;
   if (els.scrim) els.scrim.hidden = true;
@@ -1124,6 +1146,7 @@ function addDraftSource() {
   }
   els.newSourceValue.value = '';
   renderSourceGroups();
+  instantSave();
 }
 
 function addPreset(kind) {
@@ -1132,17 +1155,20 @@ function addPreset(kind) {
     const merged = redditPresetSource(state.drawer.sources, state.drawer.topic.id);
     state.drawer.sources = [...state.drawer.sources.filter((source) => source.id !== merged.id), merged];
     renderSourceGroups();
+    instantSave();
     return;
   }
   const preset = kind === 'lab' ? LAB_PRESET : COMMUNITY_PRESET;
   state.drawer.sources.push(...presetSources(state.drawer.topic.id, preset, kind, state.drawer.sources));
   renderSourceGroups();
+  instantSave();
 }
 
 function toggleDraftSource(sourceId) {
   const source = state.drawer?.sources.find((item) => item.id === sourceId);
   if (!source) return;
   source.enabled = source.enabled === false;
+  instantSave();
 }
 
 function removeDraftSource(sourceId) {
@@ -1150,6 +1176,7 @@ function removeDraftSource(sourceId) {
   state.drawer.sources = state.drawer.sources.filter((source) => source.id !== sourceId);
   state.drawer.removed.add(sourceId);
   renderSourceGroups();
+  instantSave();
 }
 
 function readTopicForm() {
@@ -1183,24 +1210,108 @@ async function saveTopic() {
     return;
   }
   state.api?.status.clear('news.topic.invalid');
+  if (!(await persistDrawer(topic))) return;
+  closeDrawer();
+  state.selectedTopicId = topic.id;
+  scheduleRender();
+}
+
+// Thema + Quellen schreiben und den Zeitplan neu senden, wenn er sich geändert hat. Gemeinsam für „Thema anlegen“,
+// Sofort-Speichern und Rückgängig (9f6ad058a). Nur api.put/remove, Befehl über api.command (dispatch).
+async function persistDrawer(topic, sourceList = state.drawer?.sources || [], removed = state.drawer?.removed || new Set()) {
   const now = Date.now();
+  const previous = state.topics.find((item) => item.id === topic.id);
   const writes = [write('put', COLLECTIONS.topics, topic)];
-  for (const source of state.drawer.sources) {
+  for (const source of sourceList) {
     writes.push(write('put', COLLECTIONS.sources, { ...source, topic_id: topic.id, updated_at_ms: now }));
   }
-  for (const sourceId of state.drawer.removed) {
+  for (const sourceId of removed) {
     if (readOne(COLLECTIONS.sources, sourceId)) writes.push(write('remove', COLLECTIONS.sources, sourceId));
   }
-  if (!(await Promise.all(writes)).every(Boolean)) return;
-  const previous = state.topics.find((item) => item.id === topic.id);
+  if (!(await Promise.all(writes)).every(Boolean)) return false;
   const scheduleChanged = !previous
     || previous.cron_expr !== topic.cron_expr
     || previous.enabled !== topic.enabled
     || previous.title !== topic.title;
-  closeDrawer();
-  state.selectedTopicId = topic.id;
   if (scheduleChanged) dispatch(buildScheduleCommand(topic));
-  scheduleRender();
+  return true;
+}
+
+// --- Sofort speichern + Rückgängig (8 s) ------------------------------------
+
+const DRAWER_UNDO_MS = 8000;
+
+function syncDrawerFoot() {
+  const foot = els.drawer?.querySelector('[data-drawer-create-foot]');
+  if (foot) foot.hidden = Boolean(state.drawer?.persisted);
+  const create = foot?.querySelector('[data-action="save-topic"]');
+  if (create) create.textContent = t('createTopic');
+  const undo = els.drawer?.querySelector('[data-action="drawer-undo"]');
+  if (undo) undo.textContent = t('drawerUndo');
+}
+
+function drawerSnapshot() {
+  return {
+    topic: { ...state.drawer.topic },
+    sources: state.drawer.sources.map((source) => ({ ...source })),
+  };
+}
+
+// Ein neues Thema entsteht einmal mit „Thema anlegen“; Halbgültiges wird nicht gespeichert (Fehler → Zone).
+async function instantSave() {
+  const drawer = state.drawer;
+  if (!drawer?.persisted) return;
+  const topic = readTopicForm();
+  const problem = validateTopic(topic);
+  if (problem) {
+    notify('error', t(problem), '', 'topic.invalid');
+    return;
+  }
+  state.api?.status.clear('news.topic.invalid');
+  const before = drawer.saved || drawerSnapshot();
+  const removed = new Set(drawer.removed);
+  if (!(await persistDrawer(topic, drawer.sources, removed))) return;
+  if (state.drawer !== drawer) return;
+  drawer.removed.clear();
+  drawer.topic = topic;
+  drawer.saved = drawerSnapshot();
+  els.drawerTitle.textContent = topic.title;
+  showDrawerUndo(before);
+}
+
+function showDrawerUndo(before) {
+  const bar = els.drawer?.querySelector('[data-drawer-undo]');
+  if (!bar || !state.drawer) return;
+  bar.hidden = false;
+  // Rückgängig führt auf den Stand vor der ersten Änderung dieser Folge zurück.
+  if (!state.drawer.undo) state.drawer.undo = before;
+  clearTimeout(state.drawerUndoTimer);
+  state.drawerUndoTimer = setTimeout(hideDrawerUndo, DRAWER_UNDO_MS);
+}
+
+function hideDrawerUndo() {
+  clearTimeout(state.drawerUndoTimer);
+  const bar = els.drawer?.querySelector('[data-drawer-undo]');
+  if (bar) bar.hidden = true;
+  if (state.drawer) state.drawer.undo = null;
+}
+
+async function undoDrawerChange() {
+  const drawer = state.drawer;
+  const snapshot = drawer?.undo;
+  if (!snapshot) return;
+  const keep = new Set(snapshot.sources.map((source) => source.id));
+  const added = new Set(drawer.sources.filter((source) => !keep.has(source.id)).map((source) => source.id));
+  if (!(await persistDrawer(snapshot.topic, snapshot.sources, added))) return;
+  if (state.drawer !== drawer) return;
+  drawer.topic = { ...snapshot.topic };
+  drawer.sources = snapshot.sources.map((source) => ({ ...source }));
+  drawer.saved = drawerSnapshot();
+  drawer.removed.clear();
+  hideDrawerUndo();
+  els.drawerTitle.textContent = drawer.topic.title;
+  fillDrawerForm(drawer.topic);
+  renderSourceGroups();
 }
 
 async function deleteTopic() {

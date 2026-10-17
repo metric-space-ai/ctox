@@ -524,3 +524,8 @@
   [data-app="news"] .ctox-pane-titles { min-width: 0; }
   [data-app="news"] .ctox-pane-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; hyphens: manual; overflow-wrap: normal; }
 }
+
+/* Sofort speichern: ein Rückgängig-Knopf unter dem Formular, 8 s sichtbar (Nachport 9f6ad058a). */
+[data-app="news"] .news-drawer .news-undo { display: flex; justify-content: flex-end; padding: 8px 14px; border-top: 1px solid var(--news-line); }
+[data-app="news"] .news-drawer .news-undo[hidden],
+[data-app="news"] .news-drawer .news-drawer-foot[hidden] { display: none; }

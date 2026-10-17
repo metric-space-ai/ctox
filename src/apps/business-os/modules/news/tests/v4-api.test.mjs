@@ -233,6 +233,45 @@ test('snapshot/restored: offener Themen-Drawer mit Eingabe und Auswahl überlebe
   assert.deepEqual(page.__errors, []);
 });
 
+test('Themen-Dialog: Änderungen eines gespeicherten Themas sofort per api.put, 8-s-Rückgängig stellt den Stand davor her', async () => {
+  await page.evaluate(() => document.querySelector('[data-topic-id="topic_ai"]')?.click());
+  await settle();
+  await page.click('[data-action="configure-topic"]');
+  await settle();
+  const foot = await page.evaluate(() => ({
+    createHidden: document.querySelector('[data-drawer-create-foot]').hidden,
+    undoHidden: document.querySelector('[data-drawer-undo]').hidden,
+    cancel: [...document.querySelectorAll('[data-topic-drawer] footer [data-action="close-drawer"]')].length,
+  }));
+  assert.deepEqual(foot, { createHidden: true, undoHidden: true, cancel: 0 }, 'gespeichertes Thema: kein Anlegen/Abbrechen, Rückgängig verborgen');
+  await page.evaluate(() => {
+    const field = document.querySelector('[data-topic-form] [name="max_posts"]');
+    field.value = '7';
+    field.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await settle();
+  await page.evaluate(() => document.querySelector('[data-action="toggle-source"][data-source-id="src_1"]').click());
+  await settle();
+  let topic = await page.evaluate(() => window.__rows('news_topics').find((tp) => tp.id === 'topic_ai'));
+  assert.equal(topic.max_posts, 7);
+  assert.equal((await page.evaluate(() => window.__rows('news_sources').find((src) => src.id === 'src_1'))).enabled, false);
+  const bar = await page.evaluate(() => {
+    const el = document.querySelector('[data-drawer-undo]');
+    return { hidden: el.hidden, text: el.textContent.trim(), inDrawer: Boolean(el.closest('[data-topic-drawer]')) };
+  });
+  assert.deepEqual(bar, { hidden: false, text: 'Rückgängig', inDrawer: true }, 'nur der Knopf, im App-Fenster');
+  await page.evaluate(() => document.querySelector('[data-action="drawer-undo"]').click());
+  await settle();
+  topic = await page.evaluate(() => window.__rows('news_topics').find((tp) => tp.id === 'topic_ai'));
+  assert.equal(topic.max_posts, 12, 'Rückgängig führt vor die erste Änderung der Folge zurück');
+  assert.equal((await page.evaluate(() => window.__rows('news_sources').find((src) => src.id === 'src_1'))).enabled, true);
+  assert.equal(await page.evaluate(() => document.querySelector('[data-topic-form] [name="max_posts"]').value), '12');
+  assert.equal(await page.evaluate(() => document.querySelector('[data-drawer-undo]').hidden), true);
+  await page.evaluate(() => document.querySelector('[data-action="close-drawer"]')?.click());
+  await settle();
+  assert.deepEqual(page.__errors, []);
+});
+
 test('FIX9a: laufende Ausgabe zeigt die letzte fertige (Status nur Zone + Punkt); leere Kategoriereiter und leere Trend-Spalte ausgeblendet', async () => {
   const ts = Date.now();
   await page.evaluate((ts) => window.__k.sim.push('news_issues', { id: 'issue_run', topic_id: 'topic_ai', title: 'KI-Labs', issue_date: '2099-01-01', status: 'running', command_id: 'cmd-run', task_id: '', post_count: 0, generated_at_ms: 0, error: '', payload: {}, created_at_ms: ts + 5000, updated_at_ms: ts + 5000 }), ts);
