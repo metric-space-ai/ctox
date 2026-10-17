@@ -422,12 +422,47 @@ async fn run_native_proof(proof: Proof) -> Result<()> {
     }
     assert!(
         proof.is_ok()
-            && (shutdown_errors.is_empty()
-                || matches!(&proof, Ok(value) if value["stale_receipt_denied"] == true)),
+            && native_shutdown_matches_lease_revocation(
+                matches!(&proof, Ok(value) if value["stale_receipt_denied"] == true),
+                &shutdown_errors,
+            ),
         "productive native hot-plug failed: {proof:?}; shutdown: {shutdown_errors:?}"
     );
     println!("APP_PLATFORM_NATIVE_PROOF {}", proof?);
+
     Ok(())
+}
+
+fn native_shutdown_matches_lease_revocation(stale_receipt_denied: bool, errors: &[String]) -> bool {
+    errors.is_empty()
+        || (stale_receipt_denied
+            && errors == [r#"Invalid("unavailable: app runtime drain failed")"#])
+}
+
+#[test]
+fn native_shutdown_allows_only_expected_lease_revocation_error() {
+    let expected = r#"Invalid("unavailable: app runtime drain failed")"#.to_owned();
+    assert!(native_shutdown_matches_lease_revocation(false, &[]));
+    assert!(native_shutdown_matches_lease_revocation(
+        true,
+        &[expected.clone()]
+    ));
+    assert!(!native_shutdown_matches_lease_revocation(
+        false,
+        &[expected.clone()]
+    ));
+    assert!(!native_shutdown_matches_lease_revocation(
+        true,
+        &["Panicked".into()]
+    ));
+    assert!(!native_shutdown_matches_lease_revocation(
+        true,
+        &[expected.clone(), "Closed".into()]
+    ));
+    assert!(!native_shutdown_matches_lease_revocation(
+        true,
+        &[expected.clone(), expected]
+    ));
 }
 
 mod routing_proof {
