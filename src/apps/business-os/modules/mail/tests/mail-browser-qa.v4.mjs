@@ -429,23 +429,32 @@ mailQa: try {
     await visibleContent.waitFor({ state: 'visible', timeout: 5000 });
   });
   await step('editor.undo-redo', 'L582-L587', async () => {
+    // Auf die Wirkung warten statt auf feste Zeiten (CI 17.10.: Verlauf asynchron). Jede Station wird protokolliert und
+    // steht im Fehlertext, damit ein Rot auf dem Runner ohne Rätselraten lesbar ist.
+    const texts = () => editorFrame.locator('[contenteditable="true"]').evaluateAll((els) => els.map((e) => (e.innerText || '').trim().slice(0, 60)));
+    const full = async () => (await texts()).some((t) => t.includes('Echter visueller Kampagneninhalt'));
+    const log = [];
+    const note = async (label) => log.push(`${label}: ${JSON.stringify(await texts())}`);
+    const fail = (what) => { throw new Error(`${what} – Verlauf ${log.join(' | ')}`); };
     await page.locator('[data-mail-content-title]').click();
     await page.waitForTimeout(500);
-    // Auf die Wirkung warten statt auf feste Zeiten: der Verlauf des Editors läuft asynchron, auf dem langsameren
-    // CI-Runner kam „redo“ nach 300 ms vor dem fertigen „undo“ an (17.10.2026, Inhalt blieb bei „…Echter“).
-    const editableText = () => editorFrame.locator('[contenteditable="true"]:visible').first().innerText();
-    const before = await editableText();
-    // Der Formularverlauf von EasyEmail übernimmt das Getippte asynchron; ein undo, das davor ankommt, ist ein Leerlauf
-    // (CI 17.10.: Inhalt blieb 10 s unverändert). Deshalb undo wiederholen, bis es wirkt – höchstens 5 Versuche.
+    await note('vorher');
+    if (!(await full())) fail('getippter Text fehlt schon vor undo');
     let undone = false;
-    for (let attempt = 0; attempt < 5 && !undone; attempt++) {
+    for (let attempt = 1; attempt <= 5 && !undone; attempt++) {
       await page.locator('[data-mail-editor-history="undo"]').click();
-      undone = await expectEventually(async () => (await editableText()) !== before, 'undo ändert den Inhalt', 3000).then(() => true, () => false);
+      undone = await expectEventually(async () => !(await full()), 'undo', 3000).then(() => true, () => false);
+      await note(`undo ${attempt}`);
     }
-    assert.ok(undone, `undo ändert den Inhalt nicht (vorher: ${JSON.stringify(before.slice(0, 80))})`);
-    await page.locator('[data-mail-editor-history="redo"]').click();
-    await expectEventually(async () => (await editableText()) === before, 'redo stellt den Inhalt wieder her');
-    await visibleContent.waitFor({ state: 'visible' });
+    if (!undone) fail('undo nimmt den getippten Text nicht zurück');
+    let redone = false;
+    for (let attempt = 1; attempt <= 5 && !redone; attempt++) {
+      await page.locator('[data-mail-editor-history="redo"]').click();
+      redone = await expectEventually(full, 'redo', 3000).then(() => true, () => false);
+      await note(`redo ${attempt}`);
+    }
+    if (!redone) fail('redo stellt den getippten Text nicht wieder her');
+    await visibleContent.waitFor({ state: 'visible', timeout: 5000 }).catch(async () => { await note('sichtbar?'); fail('getippter Text nicht sichtbar'); });
   });
   await step('editor.preview-viewports', 'L588-L594', async () => {
     await page.locator('[data-mail-editor-viewport="desktop"]').click();
