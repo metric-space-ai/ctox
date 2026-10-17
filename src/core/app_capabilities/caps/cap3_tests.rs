@@ -2030,3 +2030,56 @@ fn app_capabilities_cap3_process_untrusted_contract() {
         );
     });
 }
+
+#[test]
+fn app_capabilities_e20_network_grant_is_checked_before_effect() {
+    with_core_owners(|f| {
+        let host = Host::new("network-app", "staff");
+        let set = |key, value: Value| {
+            assert!(crate::inference::runtime_env::set_runtime_env_value(
+                f.root.path(),
+                key,
+                &value.to_string()
+            )
+            .is_ok());
+        };
+        set(
+            process::ALLOWLIST_KEY,
+            json!({"net-tool":{"program":"/bin/true","net_from_call":true}}),
+        );
+        set(
+            sandbox::SANDBOX_KEY,
+            json!({"bwrap":"/missing/e20-bwrap","sandbox_exec":"/missing/e20-sandbox"}),
+        );
+        let run = || {
+            f.call(
+                &host,
+                "process",
+                "run",
+                json!({"program":"net-tool","net_domains":["example.com"]}),
+            )
+        };
+        assert_eq!(code(run()), ErrorCode::Forbidden);
+        assert!(
+            !process::workspace(f.root.path(), &host.ctx).exists(),
+            "effect before network grant"
+        );
+        for grant in [
+            json!({"other":{"1":{"net-tool":["example.com"]}}}),
+            json!({"network-app":{"2":{"net-tool":["example.com"]}}}),
+            json!({"network-app":{"1":{"net-tool":["example.org"]}}}),
+        ] {
+            set(ctox_process_network::grants::CONFIG_KEY, grant);
+            assert_eq!(code(run()), ErrorCode::Forbidden);
+        }
+        set(
+            ctox_process_network::grants::CONFIG_KEY,
+            json!({"network-app":{"1":{"net-tool":["example.com"]}}}),
+        );
+        assert_eq!(
+            code(run()),
+            ErrorCode::Unavailable,
+            "approved call reaches mandatory sandbox probe"
+        );
+    });
+}

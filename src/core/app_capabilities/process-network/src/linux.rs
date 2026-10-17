@@ -39,10 +39,10 @@ fn host(raw: &str) -> Result<()> {
     config.network.enable_socks5 = false;
     config.network.enable_socks5_udp = false;
     let state = build_config_state(config, NetworkProxyConstraints::default())?;
-    let state = Arc::new(NetworkProxyState::with_reloader(
-        state.clone(),
-        Arc::new(Fixed(state)),
-    ));
+    let state = Arc::new(
+        NetworkProxyState::with_reloader(state.clone(), Arc::new(Fixed(state)))
+            .with_public_destinations_only(),
+    );
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
