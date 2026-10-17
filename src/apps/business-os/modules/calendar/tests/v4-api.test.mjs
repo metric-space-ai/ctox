@@ -1,7 +1,7 @@
 // calendar gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium.
 // Muster: modules/knowledge/tests/v4-api.test.mjs. Stub-Pfad aus CTOX_APP_API_STUB (Pflicht-Pin
-// ~/.local/state/shell-v4/stub-pins/68b83a3), read-only unter /__stub/ ausgeliefert.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/calendar/tests/v4-api.test.mjs
+// ~/.local/state/shell-v4/stub-pins/64acc2c), read-only unter /__stub/ ausgeliefert.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node --test src/apps/business-os/modules/calendar/tests/v4-api.test.mjs
 // Playwright: aus PLAYWRIGHT_MODULE, sonst ~/Documents/ctox/src/apps/business-os/node_modules/playwright.
 // Screenshots (1280 und 420) landen in tests/shots/.
 import { test, before, after } from 'node:test';
@@ -14,7 +14,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 
 const APP = 'calendar';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);

@@ -21,7 +21,7 @@ const countArg = process.argv.indexOf('--catalogue-size');
 const catalogueSize = countArg < 0 ? 3 : Number(process.argv[countArg + 1]);
 assert.ok(Number.isInteger(catalogueSize) && catalogueSize >= 3 && catalogueSize <= 48, 'catalogue-size must be 3..48');
 // v4: Kern-Stub (gepinnt, CTOX_APP_API_STUB) unter /__stub/; ctox:shared/ wird wie vom Service Worker umgeschrieben.
-const stubDir = path.resolve(process.env.CTOX_APP_API_STUB || path.join(process.env.HOME || '', '.local/state/shell-v4/stub-pins/8265bd7'));
+const stubDir = path.resolve(process.env.CTOX_APP_API_STUB || path.join(process.env.HOME || '', '.local/state/shell-v4/stub-pins/64acc2c'));
 // PIN-ALL (E48): echte Routen/Fremd-Collections aus v4/manifests/app-store.manifest.json; ohne aktive app-store-Version
 // liefert der Kern business_apps/business_app_versions nicht an die App.
 const routes = realManifestRoutes('app-store');

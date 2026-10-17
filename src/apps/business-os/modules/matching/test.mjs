@@ -1,6 +1,6 @@
 // matching – Datenfassade und Quelltext-Wächter auf dem App-API-4.0-Vertrag (V4-PORT.md).
 // Lauf: node --test src/apps/business-os/modules/matching/test.mjs
-// Kern-Stub: CTOX_APP_API_STUB (Pin), sonst ~/.local/state/shell-v4/stub-pins/8265bd7.
+// Kern-Stub: CTOX_APP_API_STUB (Pin), sonst ~/.local/state/shell-v4/stub-pins/64acc2c.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
@@ -11,7 +11,7 @@ import { afterEach, test } from 'node:test';
 import { getContactsCollection, setMatchingDataApi, disposeMatchingData } from './ui/businessOsDataSource.js';
 import { realManifestRoutes } from '../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const { createStubKernel } = await import(pathToFileURL(join(STUB, 'ctox-app-api-stub.mjs')).href);
 
 const ROUTES = realManifestRoutes('matching');

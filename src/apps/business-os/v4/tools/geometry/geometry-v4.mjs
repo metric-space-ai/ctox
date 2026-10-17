@@ -61,7 +61,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '..', '..', '..'));
 const MODULES = join(BOS, 'modules');
 const MANIFESTS = join(BOS, 'v4', 'manifests');
-const STUB = normalize(process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7'));
+const STUB = normalize(process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c'));
 const VOCAB = JSON.parse(readFileSync(join(BOS, 'v4', 'tools', 'guards', 'vocabulary.json'), 'utf8')).entries;
 
 const args = process.argv.slice(2);
@@ -74,7 +74,8 @@ const BASE_W = 1280;
 const HEIGHT = { 1280: 800, 900: 800, 420: 860 };
 const vh = (w) => HEIGHT[w] || (w <= 480 ? 860 : 800);
 
-const require = createRequire(join(homedir(), 'Documents/ctox/src/apps/business-os/package.json'));
+// Playwright aus dem eigenen Paket (src/apps/business-os), nicht aus einem festen Checkout – sonst findet die CI es nicht.
+const require = createRequire(join(HERE, '../../../package.json'));
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const EXE = join(homedir(), 'Library/Caches/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell');
 
@@ -503,6 +504,8 @@ ${PORTED.map(({ id }) => `<section><h2>${esc(id)}</h2><div style="display:flex;g
 </body>`;
   writeFileSync(join(OUT, 'index.html'), gallery);
   console.log(`\n${results.filter((r) => r.ok).length}/${results.length} OK · Zonen-Fälle ${zoneCases.filter((z) => z.ok).length}/${zoneCases.length} · ${join(OUT, 'results.json')} · ${join(OUT, 'index.html')}`);
+  // Als CI-Gate (crew-ui v4-Linie) muss ein roter Befund den Lauf rot machen; bis 17.10. endete er immer mit 0.
+  process.exitCode = results.every((r) => r.ok) && zoneCases.every((z) => z.ok) ? 0 : 1;
 }
 
 if (IS_MAIN) main().catch((e) => { console.error(e); process.exit(1); });

@@ -1,5 +1,5 @@
 // Gemeinsamer Prüfstand der threads-v4-Tests: statischer Server (ctox:shared/ → /shared/ wie der Service Worker,
-// §16.15), Chromium headless, Kern-Stub aus dem Pflicht-Pin (CTOX_APP_API_STUB, sonst stub-pins/8265bd7).
+// §16.15), Chromium headless, Kern-Stub aus dem Pflicht-Pin (CTOX_APP_API_STUB, sonst stub-pins/64acc2c).
 // Muster: modules/knowledge/tests/v4-api.test.mjs. Playwright aus PLAYWRIGHT_MODULE bzw. ~/Documents/ctox.
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
@@ -11,7 +11,7 @@ import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 export const APP = 'threads';
 export const HERE = dirname(fileURLToPath(import.meta.url));
-export const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
+export const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/playwright'));

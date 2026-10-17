@@ -14,7 +14,7 @@ import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 // Pin 8265bd7: E48 – der Stub veröffentlicht ctox-platform selbst; Fremdlesen braucht die eigene Deklaration (echtes Manifest).
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const BOS = normalize(join(dirname(fileURLToPath(import.meta.url)), '../../..'));
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/playwright'));

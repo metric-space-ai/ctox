@@ -9,7 +9,7 @@
 //    Antwortanzeige in der App-Fläche. Gegenproben: Esc im Eingabeblatt sendet nichts; Rechtsklick ohne Datensatz
 //    sendet ohne record_ref.
 //
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node --test src/apps/business-os/modules/buchhaltung/tests/kontext-chat.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node --test src/apps/business-os/modules/buchhaltung/tests/kontext-chat.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
 
-process.env.CTOX_APP_API_STUB ||= join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
+process.env.CTOX_APP_API_STUB ||= join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const { appConfig, configs, resolveLabPath, labBinding, labBody } = await import('../../../v4/tools/geometry/geometry-v4.mjs');
 const { realManifestRoutes } = await import('../../../v4/tools/port/real-manifest.mjs');
 

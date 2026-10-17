@@ -1,6 +1,6 @@
 // Messwerkzeug (kein Test): welche Kern-Befehlstypen sendet die Workjet-Brücke je freigeschalteter Aktion wirklich?
 // Lauf: node src/apps/business-os/v4/shell/workjet/tests/measure-command-types.mjs
-//   Stub-Pfad: CTOX_APP_API_STUB, sonst ~/.local/state/shell-v4/stub-pins/b6624eb.
+//   Stub-Pfad: CTOX_APP_API_STUB, sonst ~/.local/state/shell-v4/stub-pins/64acc2c.
 //   Ausgabe:   ~/.local/state/shell-v4/analysis/wjb-command-types.json (Liste, je Aktion ein Eintrag)
 //              ~/.local/state/shell-v4/analysis/wjb-command-types.txt  (typ<TAB>aktionen, sortiert)
 //
@@ -21,7 +21,7 @@ import { createV2Compat } from '../v2-compat.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const WJ = path.resolve(HERE, '..');
-const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
+const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const OUT_DIR = path.join(os.homedir(), '.local/state/shell-v4/analysis');
 const OUT_JSON = path.join(OUT_DIR, 'wjb-command-types.json');
 const OUT_TXT = path.join(OUT_DIR, 'wjb-command-types.txt');

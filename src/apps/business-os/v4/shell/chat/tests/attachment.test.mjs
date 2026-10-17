@@ -19,7 +19,7 @@ import { SEED, openDock } from './drive.mjs';
 import { realManifestRoutes } from '../../../tools/port/real-manifest.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const { startServer } = await import('../../../frame/lab/serve.mjs');
 const require = createRequire(path.join(os.homedir(), 'Documents/ctox/src/apps/business-os/package.json'));
 const { chromium } = require('playwright');

@@ -16,7 +16,7 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | handlers_total | 116 |
 | apps_with_handlers | 15 |
 | legacy_total | 0 |
-| capabilities_distinct | 41 |
+| capabilities_distinct | 40 |
 | triggers_total | 10 |
 | command_rights_entries | 42 |
 | foreign_declarations | 297 |
