@@ -1,5 +1,6 @@
 // One bounded entry point for the E37.2 signed-main private rehearsal.
 import fs from 'node:fs';
+import {createHash} from 'node:crypto';
 import {join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {verifiedBuild} from '../../sync-v4-e2e/native.mjs';
@@ -17,6 +18,17 @@ const out=resolve(dest),allowed=resolve(process.env.BUILD_LANE_BIN,'../artifacts
 if(!out.startsWith(allowed+'/')||fs.existsSync(out))throw Error('New private artifact output required');
 if(Buffer.byteLength(join(out,'rehearsal/tenant-m7/runtime/store/store.sock'))>103)throw Error('Choose a shorter private output prefix for Unix store IPC');
 fs.mkdirSync(out,{mode:0o700});
+if(extraRecovery){
+ const checks=[];
+ for(const name of ['sandbox.mjs','m7-manager-probe.py']){
+  const file=new URL('./'+name,import.meta.url).pathname;
+  const args=name.endsWith('.mjs')?['--check',file]:['-c',"from pathlib import Path;compile(Path(__import__('sys').argv[1]).read_text(),__import__('sys').argv[1],'exec')",file];
+  const checked=spawnSync(name.endsWith('.mjs')?process.execPath:'python3',args,{encoding:'utf8',timeout:10000});
+  checks.push({name,exit:checked.status,sha256:createHash('sha256').update(fs.readFileSync(file)).digest('hex')});
+  if(checked.status!==0)throw Error('Private loader syntax failed: '+name);
+ }
+ fs.writeFileSync(join(out,'loader-source-check.json'),JSON.stringify({checks,atMs:Date.now()},null,2),{mode:0o600});
+}
 if(archive){
  const tarSha=opt('artifact-sha256'),binSha=opt('binary-sha256');
  if(!tarSha||!binSha||!mainSha)throw Error('Published archive/binary checksums and main source SHA required');

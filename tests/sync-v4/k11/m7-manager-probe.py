@@ -153,7 +153,7 @@ def setup(config, delegated=False):
             Path(config).write_text(json.dumps(c))
             os.chown(config, c['uid'], c['gid'])
             child = spawn('installer', [c['node'], c['runner'], config])
-            result['installerExit'] = child.wait(timeout=540)
+            result['installerExit'] = child.wait(timeout=720 if (c.get('dressSmoke') or {}).get('extraRecoveryRoundtrip') else 540)
             result['pass'] = result['installerExit'] == 0
     finally:
         if 'manager' in locals() and manager.poll() is None:
