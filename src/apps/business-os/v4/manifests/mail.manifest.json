@@ -62,7 +62,7 @@
     "assets/icon@512.jpg": "b28e6689b705dbd7761ae1534195c79a13a18e687fa3b2f62f1019b601ebf480",
     "collections.schema.json": "a2acbbe2ca2d41d9e4a8b208a759e4d3d63935498dae9667da73cd2b26a6ba2b",
     "editor/README.md": "65589c645a2888fa383a3668f3151a517ab60880e1ca98f7a1dc9d2d8801fea6",
-    "editor/editor.css": "0a93414872b1bb7d0a14751c1e78d7e5a3590ccee0e2002440ff916d9e25ff81",
+    "editor/editor.css": "e90f48299852a5cdf4e54c99ae1931db3eb4902044c61f5904516926f0d7083f",
     "editor/logic-editor-v1.mjs": "5c683141ad7a6ca18b7ff580c324a97f1dba5020dfb36a243b59e1558d51a8fa",
     "editor/mail-content-editor.mjs": "36ca4c68b7a9346ea00d617a18bd3fcf90b3ffa85fe260c139d3fb05d7d76f85",
     "handlers/_base.js": "9150293c4a852db693ac102df849ffdad84fcd36c6f1d93aa25a083706263d69",
@@ -412,7 +412,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "518176574120d27b804bc1a2d576a8c58887f1d46bbfa3d5ec84e30b839ab7f2",
+    "base_hash": "3c11cd25fcf30aaa6f9cea7eca25cf7a81b6ef856de08fd2e38223b1bf2110ff",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

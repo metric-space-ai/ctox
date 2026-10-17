@@ -431,9 +431,14 @@ mailQa: try {
   await step('editor.undo-redo', 'L582-L587', async () => {
     await page.locator('[data-mail-content-title]').click();
     await page.waitForTimeout(500);
+    // Auf die Wirkung warten statt auf feste Zeiten: der Verlauf des Editors läuft asynchron, auf dem langsameren
+    // CI-Runner kam „redo“ nach 300 ms vor dem fertigen „undo“ an (17.10.2026, Inhalt blieb bei „…Echter“).
+    const editableText = () => editorFrame.locator('[contenteditable="true"]:visible').first().innerText();
+    const before = await editableText();
     await page.locator('[data-mail-editor-history="undo"]').click();
-    await page.waitForTimeout(300);
+    await expectEventually(async () => (await editableText()) !== before, 'undo ändert den Inhalt');
     await page.locator('[data-mail-editor-history="redo"]').click();
+    await expectEventually(async () => (await editableText()) === before, 'redo stellt den Inhalt wieder her');
     await visibleContent.waitFor({ state: 'visible' });
   });
   await step('editor.preview-viewports', 'L588-L594', async () => {
@@ -891,3 +896,12 @@ for (const [lines, check, reason] of NO_V4) console.log(`ohne v4-Gegenstück  V2
 for (const [id, list] of Object.entries(KNOWN_FINDINGS)) console.log(`Befund (streng gemessen) ${id}: ${list.join('; ')}`);
 console.log(`Mail browser QA v4: ${steps.length} Schritte portiert, ${NO_V4.length} V2-Prüfgruppen ohne v4-Gegenstück; Screenshots: ${shots.join(', ')}`);
 process.exitCode = exitCode;
+
+async function expectEventually(probe, what, timeoutMs = 10000) {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    if (await probe()) return;
+    if (Date.now() > until) throw new Error(`nicht eingetreten: ${what}`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}

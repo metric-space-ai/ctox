@@ -74,7 +74,8 @@ const BASE_W = 1280;
 const HEIGHT = { 1280: 800, 900: 800, 420: 860 };
 const vh = (w) => HEIGHT[w] || (w <= 480 ? 860 : 800);
 
-const require = createRequire(join(homedir(), 'Documents/ctox/src/apps/business-os/package.json'));
+// Playwright aus dem eigenen Paket (src/apps/business-os), nicht aus einem festen Checkout – sonst findet die CI es nicht.
+const require = createRequire(join(HERE, '../../../package.json'));
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const EXE = join(homedir(), 'Library/Caches/ms-playwright/chromium_headless_shell-1223/chrome-headless-shell-mac-arm64/chrome-headless-shell');
 

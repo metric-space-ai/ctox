@@ -9,7 +9,7 @@
 #   bash src/apps/business-os/v4/debt/apply-s9.sh --stage 1 [--apply]   # nur Stufe 1 (Kern E37.3, 17.10.2026)
 #
 # Stufen (E37.3): Stufe 1 direkt nach dem v4→main-Merge, Stufe 2 (STAGE2 unten: die am 17.10. von V2-Gegenstellen
-# blockierten Dateien) erst nach dem V2-Ende, wenn THESEN auf v4 ist. In Stufe 1 gehören die Stufe-2-Dateien NICHT
+# blockierten Dateien) erst nach dem V2-Ende, wenn die produktive Kundeninstanz auf v4 ist. In Stufe 1 gehören die Stufe-2-Dateien NICHT
 # zur Löschmenge: ein Verweis aus einer Stufe-2-Datei blockiert also auch eine Stufe-1-Datei (sonst bräche z. B.
 # shell-generation.test.mjs, wenn shell-generation.js vorher ginge). Die Regel je Datei bleibt unverändert hart.
 #
