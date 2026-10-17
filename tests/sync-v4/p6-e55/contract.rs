@@ -655,7 +655,7 @@ async fn p6_revoked_preference_write_keeps_its_journaled_reason() {
         write_contract::OrderedWriter,
         WriteAuthority, WritePermission,
     };
-    struct Revoked;
+    struct Revoked(AtomicBool);
     impl WriteAuthority for Revoked {
         fn authorize(
             &self,
@@ -663,7 +663,7 @@ async fn p6_revoked_preference_write_keeps_its_journaled_reason() {
             _: &str,
             _: &Write,
         ) -> rusqlite::Result<WritePermission> {
-            Ok(WritePermission::Reject("revoked".into()))
+            Ok(if self.0.load(Ordering::Acquire) { WritePermission::Reject("revoked".into()) } else { WritePermission::Permit })
         }
         fn validate_document(
             &self,
@@ -692,17 +692,27 @@ async fn p6_revoked_preference_write_keeps_its_journaled_reason() {
         &hex[20..]
     );
     let write:OrderedWrite=serde_json::from_value(json!({"client_seq":"1","op_id":op,"collection":"app_user_preferences","id":"shell/alice/layout","gen":1,"schema_ver":1,"app_ver":"1","op":"put","body":{"id":"shell/alice/layout","app_id":"shell","user_id":"alice","key":"layout","value":7}})).unwrap();
-    let batch = OrderedWriter::new(f.store.writer(), Arc::new(Revoked))
-        .submit("device".into(), write, now)
-        .await
-        .unwrap();
+    let authority = Arc::new(Revoked(AtomicBool::new(false)));
+    let writer = OrderedWriter::new(f.store.writer(), authority.clone());
+    // Arrival was authorized, but client_seq=2 waits for its predecessor.
+    // Revoke before draining it: this must exercise apply_write's CURRENT
+    // authority, not only the early ingest rejection path.
+    let mut pending = write.clone();
+    pending.client_seq = ctox_store::change_log::subscription::protocol::Seq(2);
+    let waiting = writer.submit("device".into(), pending, now).await.unwrap();
+    assert!(waiting.results.is_empty(), "gap write did not remain pending");
+    authority.0.store(true, Ordering::Release);
+    let mut predecessor = write;
+    predecessor.write.op_id.replace_range(35..36, "0");
+    let batch = writer.submit("device".into(), predecessor, now).await.unwrap();
+    let drained = batch.results.iter().find(|r| r.client_seq.0 == 2).expect("pending write was not drained");
     assert_eq!(
-        batch.results[0].result.reason.as_deref(),
+        drained.result.reason.as_deref(),
         Some("revoked"),
         "revoked preference rejection lost its reason"
     );
     f.store.readers().read(|tx|{
-        let stored:String=tx.query_row("SELECT result_json FROM _write_results WHERE participant='device' AND client_seq=1",[],|r|r.get(0))?;
+        let stored:String=tx.query_row("SELECT result_json FROM _write_results WHERE participant='device' AND client_seq=2",[],|r|r.get(0))?;
         assert_eq!(serde_json::from_str::<Value>(&stored).unwrap()["reason"],"revoked","durable E14 journal lost revocation");
         assert_eq!(tx.query_row("SELECT COUNT(*) FROM c_app_user_preferences",[],|r|r.get::<_,u64>(0))?,0);
         Ok(())
