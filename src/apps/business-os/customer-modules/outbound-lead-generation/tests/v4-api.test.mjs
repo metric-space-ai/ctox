@@ -1,6 +1,6 @@
 // outbound-lead-generation gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium.
 // Muster: modules/knowledge/tests/v4-api.test.mjs. Stub-Pin: CTOX_APP_API_STUB (Pflicht laut Port-Auftrag).
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac \
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c \
 //   node --test src/apps/business-os/customer-modules/outbound-lead-generation/tests/v4-api.test.mjs
 // Bildschirmfotos (1280/420) landen in tests/shots/.
 import { test, before, after } from 'node:test';
@@ -13,7 +13,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const APP = '/customer-modules/outbound-lead-generation';

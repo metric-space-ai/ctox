@@ -66,7 +66,7 @@ test('Gleichlauf mit Kern-Stub classifyCollections', async () => {
   const { homedir } = await import('node:os');
   const { join } = await import('node:path');
   const { pathToFileURL } = await import('node:url');
-  const pin = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+  const pin = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
   const stub = await import(pathToFileURL(join(pin, 'ctox-app-api-stub.mjs')).href);
   const variants = [];
   const v = (f) => { const b = clone(base); f(b); variants.push(b); };

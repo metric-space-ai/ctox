@@ -1,6 +1,6 @@
 // Workjet-Brücke gegen den echten Kern-Stub (Stub-Pin 8489b4e, In-Memory-Speicher): Adapter + Router + Vertrag.
 // Lauf: node --test src/apps/business-os/v4/shell/workjet/tests/bridge.test.mjs
-//   Stub-Pfad: CTOX_APP_API_STUB, sonst ~/.local/state/shell-v4/stub-pins/4b0d0ac.
+//   Stub-Pfad: CTOX_APP_API_STUB, sonst ~/.local/state/shell-v4/stub-pins/64acc2c.
 import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,7 +12,7 @@ import { createV2Compat, isUnsupported } from '../v2-compat.js';
 import { CHECKERS, checkResponse } from './contract-checkers.mjs';
 import { PROJECT_ACTIONS } from '../actions/project.js';
 
-const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
 
 let n = 0;

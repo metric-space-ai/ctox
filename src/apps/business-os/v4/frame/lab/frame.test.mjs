@@ -11,7 +11,7 @@ import { realManifestRoutes } from '../../tools/port/real-manifest.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // Stub-Pin 8265bd7 (abweichend per CTOX_APP_API_STUB); vor dem Laden von serve.mjs, das den Pfad beim Import liest.
-process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const { startServer } = await import('./serve.mjs');
 const { chatCss } = await import('./extract-desktop-css.mjs');
 const require = createRequire(path.join(os.homedir(), 'Documents/ctox/src/apps/business-os/package.json'));
@@ -613,7 +613,7 @@ async function fr6b() {
 // Eigene Seite, nur gegen den Kern-Stub (braucht kernel.source). Ab Stub-Pin 51b1e33 bildet der Stub §16.44 ab
 // (ctox.coding.turn/cancel mit exakten Ablehnungen, coding_turns, CAS-Rückschreiben, Patch files/coding-patch:<turn_id>,
 // draft.info().rev); die Shell spricht ihn über ihre App-API (v4/source/coding-port.js). Ältere Pins: nur AG-0.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac AG_ONLY=1 node …/frame.test.mjs stub
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c AG_ONLY=1 node …/frame.test.mjs stub
 // AG_MUTATE=<name> liefert eine mutierte Datei aus (Mutationsbeleg: der zugehörige Fall muss rot werden).
 const AG_MUTATIONS = {
   enter: ['agent-panel.js', "if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }", ''],

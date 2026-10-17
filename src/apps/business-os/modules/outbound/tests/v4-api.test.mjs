@@ -1,6 +1,6 @@
 // outbound gegen den App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium – Muster modules/knowledge.
-// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/4b0d0ac), read-only unter /__stub/.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac node --test src/apps/business-os/modules/outbound/tests/v4-api.test.mjs
+// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/64acc2c), read-only unter /__stub/.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node --test src/apps/business-os/modules/outbound/tests/v4-api.test.mjs
 // Screenshots (1280/420) nach tests/shots/, wenn OUTBOUND_SHOTS=1. #win trägt den Fenster-Container der Shell
 // (business-app-window), auf den index.css seine Schmal-Regeln stützt.
 import { test, before, after } from 'node:test';
@@ -13,7 +13,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);

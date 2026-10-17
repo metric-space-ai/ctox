@@ -1,7 +1,7 @@
 // coding-agents (Strang AGENT: Übersicht aller Agent-Läufe aus coding_turns, Klick → Code-Ansicht der App) gegen den
 // verbindlichen App-API-4.0-Stub des Kerns (createStubKernel, Stub-Pin, read-only unter /__stub/) in echtem Chromium.
 // coding_turns simuliert kein Stub-Pin als Kern-Collection; die Zeilen kommen per sim.push (Form wie draft_turn.rs).
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac \
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c \
 //       node --test src/apps/business-os/modules/coding-agents/tests/v4-api.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +13,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const BOS = normalize(join(dirname(fileURLToPath(import.meta.url)), '../../..'));
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/playwright'));

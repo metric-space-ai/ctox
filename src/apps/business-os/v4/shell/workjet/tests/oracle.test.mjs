@@ -276,7 +276,7 @@ async function waitForSyncBridgeReady() {}
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse } = await import('./contract-checkers.mjs');
   const HERE = path.dirname(fileURLToPath(import.meta.url));
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   const FIX = path.resolve(HERE, '../../../../../../core/rxdb/tests/fixtures');
   const fixture = (name) => JSON.parse(fs.readFileSync(path.join(FIX, name), 'utf8'));
@@ -702,7 +702,7 @@ async function waitForSyncBridgeReady() {}
   const { adaptKernel } = await import('../../kernel-adapter.js');
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse } = await import('./contract-checkers.mjs');
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   let nC = 0;
   const mkC = async () => {
@@ -896,7 +896,7 @@ async function waitForSyncBridgeReady() {}
   const { createWorkjetBridges } = await import('../index.js');
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse } = await import('./contract-checkers.mjs');
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   let seq = 0;
   async function withKernel(fn) {
@@ -1279,7 +1279,7 @@ function isStaleDataPlaneGeneration() {}
   const { createWorkjetBridges, installWorkjetBridges, INVENTORY, inventoryList } = await import('../index.js');
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse, CHECKERS, sessionTransferEventD } = await import('./contract-checkers.mjs');
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   const WORKJET_UNSUPPORTED = /(?:unsupported|unknown)\s+(?:workjet\s+)?(?:project[- ]control\s+)?action/i;
   const docOf = (r) => r?.doc ?? r?.value ?? r?.data ?? r;
@@ -1732,7 +1732,7 @@ function isStaleDataPlaneGeneration() {}
   const { adaptKernel } = await import('../../kernel-adapter.js');
   const { createV2Compat } = await import('../v2-compat.js');
   const { checkResponse } = await import('./contract-checkers.mjs');
-  const STUB_DIR_CC = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+  const STUB_DIR_CC = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR_CC, 'ctox-app-api-stub.mjs')).href);
   test('[v4] Kalender verbinden über die Brücke: Kern-Befehl ctox.workjet.calendar.connect.v1, Fehler als Code', async () => {
     const k = createStubKernel({ instanceId: `wjbcc-${process.pid}`, userId: 'owner-1', latencyMs: 2, storage: 'memory',
@@ -1862,7 +1862,7 @@ async function waitForSyncBridgeReady() {}
   const { createV2Compat, isUnsupported } = await import('../v2-compat.js');
   const { checkResponse, correlateR } = await import('./contract-checkers.mjs');
   const { readStoredFileFromDemandChunks, sha256Hex } = await import('../../../../shared/file-integrity.js');
-  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+  const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
   const { createStubKernel } = await import(pathToFileURL(path.join(STUB_DIR, 'ctox-app-api-stub.mjs')).href);
   const workjetRegex = /(?:unsupported|unknown)\s+(?:workjet\s+)?(?:project[- ]control\s+)?action/i;
   const OWNER = 'owner-1';

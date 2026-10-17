@@ -1,5 +1,5 @@
 // Screenshots der App gegen den Kern-Stub (Pin 8265bd7) in 1280 und 420 Breite → tests/shots/.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac node src/apps/business-os/modules/research/tests/v4-shots.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node src/apps/business-os/modules/research/tests/v4-shots.mjs
 import { fileURLToPath } from 'node:url';
 import { chromium, startServer, seedKernel, pageHtml } from './v4-fixture.mjs';
 

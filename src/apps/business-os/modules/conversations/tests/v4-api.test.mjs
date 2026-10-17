@@ -1,6 +1,6 @@
 // conversations gegen den eingefrorenen App-API-4.0-Kern-Stub (Pin 9fa9948, read-only unter /__stub/) in echtem
 // Chromium. Eigene Attrappe (v4/tools/port/test-api.mjs) nur für den Abo-Zähler.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac \
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c \
 //       node --test src/apps/business-os/modules/conversations/tests/v4-api.test.mjs
 // Playwright: aus PLAYWRIGHT_MODULE, sonst ~/Documents/ctox/src/apps/business-os/node_modules/playwright.
 import { test, before, after } from 'node:test';
@@ -14,7 +14,7 @@ import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const BOS = normalize(join(HERE, '../../..'));
 const SHOTS = join(HERE, 'shots');
 const require = createRequire(import.meta.url);

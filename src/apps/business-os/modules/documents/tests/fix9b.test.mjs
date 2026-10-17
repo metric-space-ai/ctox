@@ -1,6 +1,6 @@
 // FIX9b (Shell v4): Word-Dokument sofort als Lesevorschau, Editor (ctox:lib/ctox-office) startet dahinter;
 // Zeilenaktion „Weitere Aktionen“ statt Sonnensymbol; Suchplatzhalter passt.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac \
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c \
 //       node --import ./v4/tools/node/ctox-shared.mjs --test --test-force-exit modules/documents/tests/fix9b.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const BOS = normalize(join(dirname(fileURLToPath(import.meta.url)), '../../..'));
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/playwright'));

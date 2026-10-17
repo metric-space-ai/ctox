@@ -1,7 +1,7 @@
 // tickets gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium.
-// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/4b0d0ac), read-only unter /__stub/.
+// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/64acc2c), read-only unter /__stub/.
 // Eigene Attrappe (v4/tools/port/test-api.mjs) nur für den Abo-Zähler. Muster: modules/knowledge/tests/v4-api.test.mjs.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac node --test src/apps/business-os/modules/tickets/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node --test src/apps/business-os/modules/tickets/tests/v4-api.test.mjs
 // Screenshots (1280 / 420) landen in modules/tickets/tests/shots/.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +13,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const SHOTS = join(HERE, 'shots');

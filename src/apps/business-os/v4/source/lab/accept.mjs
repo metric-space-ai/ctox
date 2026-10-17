@@ -1,6 +1,6 @@
 // Abnahme Quelltext-Modus (Strang Q): node src/apps/business-os/v4/source/lab/accept.mjs [--editor auto|textarea]
 // Playwright aus ~/Documents/ctox/src/apps/business-os/node_modules, Chromium headless-shell 1223.
-// Stub: CTOX_APP_API_STUB (Default Pin ~/.local/state/shell-v4/stub-pins/4b0d0ac), Quelltext-API des Kerns ohne Attrappe.
+// Stub: CTOX_APP_API_STUB (Default Pin ~/.local/state/shell-v4/stub-pins/64acc2c), Quelltext-API des Kerns ohne Attrappe.
 // Reihenfolge: 1–5, 8 (getrennte Entwürfe), 9 (rebase/discard), 10 (Dateien), 11 (Manifest-Schutzfeld),
 // 12 (umbenannter Handler über zwei Veröffentlichungen), 13 (Verweis auf gelöschte Datei), 6 (Upload).
 // Ergebnis: results.json (+ shots/*.png). Ein Tab-Verbund (ein Browser-Kontext, eine Stub-DB = „ein Core“):
@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import os from 'node:os';
 // Default-Pin dieses Laufs vor dem Laden von server.mjs setzen (dessen eigener Default gilt für andere Labore).
-process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const { startServer, STUB } = await import('./server.mjs');
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));

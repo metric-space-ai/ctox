@@ -1,6 +1,6 @@
 // shiftflow gegen den App-API-4.0-Kern-Stub (createStubKernel, read-only unter /__stub/) in echtem Chromium.
-// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/4b0d0ac), sonst ~/.local/state/ctox-sync-v4/stub.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac node --test src/apps/business-os/modules/shiftflow/tests/v4-api.test.mjs
+// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/64acc2c), sonst ~/.local/state/ctox-sync-v4/stub.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node --test src/apps/business-os/modules/shiftflow/tests/v4-api.test.mjs
 // Screenshots (1280/420) nach tests/shots/ mit SHIFTFLOW_SHOTS=1.
 // shiftflow hat keine Befehlstypen (V4-PORT.md): der Befehlsfall entfällt; Meldungen gehen in die Zone.
 import { test, before, after } from 'node:test';

@@ -8,7 +8,7 @@
 //   (c) ohne ctox/Chatleiste → direkter Weg, genau ein Befehl, kein Fehler-/navigate-Eintrag in der Zone
 //   (d) Entwurf byte-gleich zur Anweisung, die der Handler research.systematic.run aus dem gesendeten Befehl rendert
 // Exit 0 = alles grün, sonst 1 (auch in der Gegenprobe; dort ist Exit 1 das erwartete Ergebnis).
-// Umgebung: CTOX_APP_API_STUB (Standard ~/.local/state/shell-v4/stub-pins/4b0d0ac), PLAYWRIGHT_MODULE_PATH,
+// Umgebung: CTOX_APP_API_STUB (Standard ~/.local/state/shell-v4/stub-pins/64acc2c), PLAYWRIGHT_MODULE_PATH,
 // RCH2_SHOTS (Bildordner, Standard v4/shell/chat/tests/shots).
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
@@ -20,7 +20,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BOS = path.resolve(here, '../../../..');
 const RESEARCH = path.join(BOS, 'modules/research');
-process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 // ctox:shared/ für den Handler in Node (wie --import v4/tools/node/ctox-shared.mjs), vor dem Laden von enqueue.js.
 await import(pathToFileURL(path.join(BOS, 'v4/tools/node/ctox-shared.mjs')).href);
 const { enqueueSystematicRun } = await import(pathToFileURL(path.join(RESEARCH, 'handlers/_lib/enqueue.js')).href);

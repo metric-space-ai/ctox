@@ -16,7 +16,7 @@ import { realManifestRoutes } from '../port/real-manifest.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BOS = path.resolve(HERE, '../../..');
-const STUB = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+const STUB = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const COUNTER = process.argv[2] === 'counter';
 const require = createRequire(path.join(os.homedir(), 'Documents/ctox/src/apps/business-os/package.json'));
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');

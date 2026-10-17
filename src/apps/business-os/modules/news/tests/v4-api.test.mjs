@@ -1,6 +1,6 @@
 // news gegen den App-API-4.0-Kern-Stub (createStubKernel, read-only unter /__stub/) in echtem Chromium.
-// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/4b0d0ac), sonst ~/.local/state/ctox-sync-v4/stub.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac node --test src/apps/business-os/modules/news/tests/v4-api.test.mjs
+// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/64acc2c), sonst ~/.local/state/ctox-sync-v4/stub.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node --test src/apps/business-os/modules/news/tests/v4-api.test.mjs
 // Screenshots (1280/420) nach tests/shots/ mit NEWS_SHOTS=1.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,7 +13,7 @@ import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 // Gemeinsamer Pin 4b0d0acb (Kern M7-FINISH): der Stub veröffentlicht das ctox-platform-Manifest selbst (aus der Repo-Datei).
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);

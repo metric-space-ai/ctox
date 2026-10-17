@@ -1,6 +1,6 @@
 // research gegen den verbindlichen App-API-4.0-Stub des Kerns (createStubKernel, Pin 67229d2, read-only unter
 // /__stub/) in echtem Chromium. Muster: modules/knowledge/tests/v4-api.test.mjs.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac \
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c \
 //       node --test src/apps/business-os/modules/research/tests/v4-api.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';

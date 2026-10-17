@@ -1,5 +1,5 @@
 // threads gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel, Pin 67229d2) in echtem Chromium.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac node --test src/apps/business-os/modules/threads/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node --test src/apps/business-os/modules/threads/tests/v4-api.test.mjs
 // Daten: tests/fixtures/ops-fixture.mjs (Ops-Ansicht mit Kennungs-Titeln, workjet#594). Screenshots → tests/shots/.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
