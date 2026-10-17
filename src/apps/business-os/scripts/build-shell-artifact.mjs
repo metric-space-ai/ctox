@@ -16,6 +16,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { posix as pathPosix, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deflateRawSync } from 'node:zlib';
+import { SHELL_BOOT_ENTRIES, describeMissing, importClosure } from './shell-import-closure.mjs';
 
 export const SHELL_SCHEMA = 'ctox.business-os-shell.v1';
 export const ROOT_RUNTIME_FILES = Object.freeze([
@@ -107,6 +108,10 @@ export async function manifestReferencedFiles(root) {
   }
   return out;
 }
+// M7: Dateien im statischen Import-Abschluss der Boot-Einstiege (scripts/shell-import-closure.mjs) sind Laufzeitinhalt,
+// gleich wie sie heißen – die Namensregel für Build-/Release-/Cache-Artefakte traf kernel/cache.mjs (Boot 404).
+// Wird in collectRuntimePayload aus dem Quellbaum gesetzt; außerhalb (z. B. gen-manifest) leer.
+let BOOT_REACHABLE = new Set();
 // E31.3: Pflichtdatei unter v4/tools, die trotz Ausschluss von v4/tools in den Slot gehört.
 export const V4_REQUIRED_TOOL_FILES = new Set(['v4/tools/manifest/out/ownership.json']);
 const EXCLUDED_UNWIRED_RUNTIME_PREFIXES = Object.freeze([
@@ -204,6 +209,7 @@ export function isExcludedRuntimePath(relativePath, { directory = false } = {}) 
   // Von einem v4-App-Manifest referenzierte Dateien sind Laufzeitinhalt, auch wenn ihr Name „build“, „release“ oder
   // „test“ enthält (z. B. handlers/ctox.queue.release.js); siehe manifestReferencedFiles.
   if (!directory && MANIFEST_REFERENCED.has(relativePath)) return false;
+  if (!directory && BOOT_REACHABLE.has(relativePath)) return false;
   if (!directory && (TEST_FILE_TOKEN.test(basename) || GENERATED_FILE_TOKEN.test(basename))) return true;
   return false;
 }
@@ -411,6 +417,7 @@ async function collectTree(sourceRoot, relativeDirectory, directories, files, bu
 export async function collectRuntimePayload(sourceRoot) {
   const absoluteSourceRoot = resolve(sourceRoot);
   MANIFEST_REFERENCED = await manifestReferencedFiles(absoluteSourceRoot);
+  BOOT_REACHABLE = await sourceBootClosure(absoluteSourceRoot);
   await assertDirectoryNoSymlink(absoluteSourceRoot, absoluteSourceRoot);
   const directories = [];
   const files = [];
@@ -450,8 +457,44 @@ export async function collectRuntimePayload(sourceRoot) {
     for (const relativePath of V4_ENTRY_FILES) {
       if (!payloadPaths.has(relativePath)) throw new Error(`Required runtime file is missing: ${relativePath}`);
     }
+    await assertPayloadImportClosure(files);
   }
   return { directories, files };
+}
+
+const TEXT_EXTENSION = /\.(?:m?js|html|css)$/i;
+
+// Import-Abschluss über den Quellbaum (nur Dateien unterhalb der Shell-Wurzel, keine Symlinks).
+async function sourceBootClosure(absoluteSourceRoot) {
+  const read = async (relativePath) => {
+    try {
+      validateRelativePath(relativePath);
+      const absolutePath = resolve(absoluteSourceRoot, ...relativePath.split('/'));
+      const details = await lstat(absolutePath);
+      if (!details.isFile()) return null;
+      return TEXT_EXTENSION.test(relativePath) ? await readFile(absolutePath, 'utf8') : '';
+    } catch {
+      return null;
+    }
+  };
+  if ((await read('v4/index.html')) == null) return new Set();
+  return (await importClosure(read)).reachable;
+}
+
+// Wächter (M7): jede Datei, die der Browser ab v4/index.html und kernel/boot.mjs statisch lädt, liegt in der Nutzlast.
+export async function payloadImportClosure(files, entries = SHELL_BOOT_ENTRIES) {
+  const byPath = new Map(files.map((file) => [file.path, file.data]));
+  return importClosure((path) => {
+    if (!byPath.has(path)) return null;
+    return TEXT_EXTENSION.test(path) ? Buffer.from(byPath.get(path)).toString('utf8') : '';
+  }, entries);
+}
+
+async function assertPayloadImportClosure(files) {
+  const { missing } = await payloadImportClosure(files);
+  if (missing.length) {
+    throw new Error(`Shell import closure is incomplete in the runtime payload (${missing.length}): ${describeMissing(missing)}`);
+  }
 }
 
 export function assertNoCustomerReleaseContent(files) {
