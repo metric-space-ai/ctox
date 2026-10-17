@@ -4063,9 +4063,11 @@ impl App {
             self.runtime_switch_in_flight = true;
             self.runtime_switch_rx = Some(rx);
             thread::spawn(move || {
-                let result =
-                    apply_runtime_model_selection(&root, &model, preset.as_deref(), context)
-                        .map_err(|err| err.to_string());
+                let work = root.clone();
+                let result = crate::persistence::run_core_blocking_at(&root, move || {
+                    apply_runtime_model_selection(&work, &model, preset.as_deref(), context)
+                })
+                .map_err(|err| err.to_string());
                 let _ = tx.send(result);
             });
             self.status_line = format!(
@@ -6256,72 +6258,77 @@ mod tests {
 
     #[test]
     fn app_defaults_to_model_settings_view_and_openai_key_visibility_follows_provider() {
-        let root = temp_root("visibility");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut env_map = BTreeMap::new();
-        env_map.insert(
-            "CTOX_CHAT_MODEL".to_string(),
-            "openai/gpt-oss-120b".to_string(),
-        );
-        env_map.insert("CTOX_API_PROVIDER".to_string(), "local".to_string());
-        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let db_path = root.join("runtime/test.sqlite3");
+            let mut env_map = BTreeMap::new();
+            env_map.insert(
+                "CTOX_CHAT_MODEL".to_string(),
+                "openai/gpt-oss-120b".to_string(),
+            );
+            env_map.insert("CTOX_API_PROVIDER".to_string(), "local".to_string());
+            runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
 
-        let mut app = App::new(root.clone(), db_path);
-        app.ensure_settings_items_loaded();
-        assert_eq!(app.settings_view, SettingsView::Model);
+            let mut app = App::new(root.clone(), db_path);
+            app.ensure_settings_items_loaded();
+            assert_eq!(app.settings_view, SettingsView::Model);
 
-        let openai_key_row = app
-            .settings_items
-            .iter()
-            .find(|item| item.key == "OPENAI_API_KEY")
-            .unwrap()
-            .clone();
-        assert!(!app.setting_visible(&openai_key_row));
+            let openai_key_row = app
+                .settings_items
+                .iter()
+                .find(|item| item.key == "OPENAI_API_KEY")
+                .unwrap()
+                .clone();
+            assert!(!app.setting_visible(&openai_key_row));
 
-        let openai_auth_row = app
-            .settings_items
-            .iter()
-            .find(|item| item.key == "CTOX_OPENAI_AUTH_MODE")
-            .unwrap()
-            .clone();
-        assert!(!app.setting_visible(&openai_auth_row));
-        let openai_web_search_row = app
-            .settings_items
-            .iter()
-            .find(|item| item.key == "CTOX_WEB_SEARCH_OPENAI_MODE")
-            .unwrap()
-            .clone();
-        assert!(!app.setting_visible(&openai_web_search_row));
+            let openai_auth_row = app
+                .settings_items
+                .iter()
+                .find(|item| item.key == "CTOX_OPENAI_AUTH_MODE")
+                .unwrap()
+                .clone();
+            assert!(!app.setting_visible(&openai_auth_row));
+            let openai_web_search_row = app
+                .settings_items
+                .iter()
+                .find(|item| item.key == "CTOX_WEB_SEARCH_OPENAI_MODE")
+                .unwrap()
+                .clone();
+            assert!(!app.setting_visible(&openai_web_search_row));
 
-        let mut app = App::new(root.clone(), root.join("runtime/test-subscription.sqlite3"));
-        app.ensure_settings_items_loaded();
-        let provider_idx = app
-            .settings_items
-            .iter()
-            .position(|item| item.key == "CTOX_API_PROVIDER")
-            .unwrap();
-        let auth_idx = app
-            .settings_items
-            .iter()
-            .position(|item| item.key == "CTOX_OPENAI_AUTH_MODE")
-            .unwrap();
-        app.settings_items[provider_idx].value = "openai".to_string();
-        app.settings_items[auth_idx].value = "chatgpt_subscription".to_string();
-        app.refresh_dynamic_setting_choices();
-        let openai_key_row = app
-            .settings_items
-            .iter()
-            .find(|item| item.key == "OPENAI_API_KEY")
-            .unwrap()
-            .clone();
-        assert!(!app.setting_visible(&openai_key_row));
-        let openai_web_search_row = app
-            .settings_items
-            .iter()
-            .find(|item| item.key == "CTOX_WEB_SEARCH_OPENAI_MODE")
-            .unwrap()
-            .clone();
-        assert!(app.setting_visible(&openai_web_search_row));
+            let mut app = App::new(root.clone(), root.join("runtime/test-subscription.sqlite3"));
+            app.ensure_settings_items_loaded();
+            let provider_idx = app
+                .settings_items
+                .iter()
+                .position(|item| item.key == "CTOX_API_PROVIDER")
+                .unwrap();
+            let auth_idx = app
+                .settings_items
+                .iter()
+                .position(|item| item.key == "CTOX_OPENAI_AUTH_MODE")
+                .unwrap();
+            app.settings_items[provider_idx].value = "openai".to_string();
+            app.settings_items[auth_idx].value = "chatgpt_subscription".to_string();
+            app.refresh_dynamic_setting_choices();
+            let openai_key_row = app
+                .settings_items
+                .iter()
+                .find(|item| item.key == "OPENAI_API_KEY")
+                .unwrap()
+                .clone();
+            assert!(!app.setting_visible(&openai_key_row));
+            let openai_web_search_row = app
+                .settings_items
+                .iter()
+                .find(|item| item.key == "CTOX_WEB_SEARCH_OPENAI_MODE")
+                .unwrap()
+                .clone();
+            assert!(app.setting_visible(&openai_web_search_row));
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -6430,196 +6437,211 @@ mod tests {
 
     #[test]
     fn visible_model_settings_follow_requested_minimal_flow() {
-        let root = temp_root("minimal-flow");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut env_map = BTreeMap::new();
-        env_map.insert("CTOX_CHAT_SOURCE".to_string(), "local".to_string());
-        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let db_path = root.join("runtime/test.sqlite3");
+            let mut env_map = BTreeMap::new();
+            env_map.insert("CTOX_CHAT_SOURCE".to_string(), "local".to_string());
+            runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
 
-        let mut app = App::new(root.clone(), db_path);
-        app.ensure_settings_items_loaded();
-        let local_keys = app
-            .visible_setting_indices()
-            .into_iter()
-            .map(|idx| app.settings_items[idx].key)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            local_keys,
-            vec![
-                "CTOX_SERVICE_TOGGLE",
-                "CTOX_WORK_HOURS_ENABLED",
-                "CTOX_WORK_HOURS_START",
-                "CTOX_WORK_HOURS_END",
-                "CTOX_API_PROVIDER",
-                "CTOX_CHAT_MODEL",
-                "CTOX_CHAT_LOCAL_PRESET",
-                "CTOX_CHAT_MODEL_MAX_CONTEXT",
-                "CTOX_CHAT_SKILL_PRESET",
-                "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
-                "CTOX_AUTONOMY_LEVEL",
-                "CTOX_CTO_OPERATING_MODE_PROMPT",
-                "CTOX_CHAT_MODEL_BOOST",
-                "CTOX_BOOST_DEFAULT_MINUTES",
-                "CTOX_EMBEDDING_MODEL",
-                "CTOX_STT_MODEL",
-                "CTOX_TTS_MODEL",
-                "CTOX_USE_DIRECT_SESSION",
-                "CTOX_COMPACT_TRIGGER",
-                "CTOX_COMPACT_MODE",
-                "CTOX_COMPACT_FIXED_INTERVAL",
-                "CTOX_COMPACT_ADAPTIVE_THRESHOLD",
-            ]
-        );
+            let mut app = App::new(root.clone(), db_path);
+            app.ensure_settings_items_loaded();
+            let local_keys = app
+                .visible_setting_indices()
+                .into_iter()
+                .map(|idx| app.settings_items[idx].key)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                local_keys,
+                vec![
+                    "CTOX_SERVICE_TOGGLE",
+                    "CTOX_WORK_HOURS_ENABLED",
+                    "CTOX_WORK_HOURS_START",
+                    "CTOX_WORK_HOURS_END",
+                    "CTOX_API_PROVIDER",
+                    "CTOX_CHAT_MODEL",
+                    "CTOX_CHAT_LOCAL_PRESET",
+                    "CTOX_CHAT_MODEL_MAX_CONTEXT",
+                    "CTOX_CHAT_SKILL_PRESET",
+                    "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
+                    "CTOX_AUTONOMY_LEVEL",
+                    "CTOX_CTO_OPERATING_MODE_PROMPT",
+                    "CTOX_CHAT_MODEL_BOOST",
+                    "CTOX_BOOST_DEFAULT_MINUTES",
+                    "CTOX_EMBEDDING_MODEL",
+                    "CTOX_STT_MODEL",
+                    "CTOX_TTS_MODEL",
+                    "CTOX_USE_DIRECT_SESSION",
+                    "CTOX_COMPACT_TRIGGER",
+                    "CTOX_COMPACT_MODE",
+                    "CTOX_COMPACT_FIXED_INTERVAL",
+                    "CTOX_COMPACT_ADAPTIVE_THRESHOLD",
+                ]
+            );
 
-        let provider_idx = app
-            .settings_items
-            .iter()
-            .position(|item| item.key == "CTOX_API_PROVIDER")
-            .unwrap();
-        let token_idx = app
-            .settings_items
-            .iter()
-            .position(|item| item.key == "OPENAI_API_KEY")
-            .unwrap();
-        app.settings_items[provider_idx].value = "openai".to_string();
-        app.settings_items[token_idx].value = "sk-test".to_string();
-        app.refresh_dynamic_setting_choices();
-        let api_keys = app
-            .visible_setting_indices()
-            .into_iter()
-            .map(|idx| app.settings_items[idx].key)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            api_keys,
-            vec![
-                "CTOX_SERVICE_TOGGLE",
-                "CTOX_WORK_HOURS_ENABLED",
-                "CTOX_WORK_HOURS_START",
-                "CTOX_WORK_HOURS_END",
-                "CTOX_API_PROVIDER",
-                "CTOX_OPENAI_AUTH_MODE",
-                "CTOX_WEB_SEARCH_OPENAI_MODE",
-                "OPENAI_API_KEY",
-                "CTOX_CHAT_MODEL",
-                "CTOX_CHAT_LOCAL_PRESET",
-                "CTOX_CHAT_MODEL_MAX_CONTEXT",
-                "CTOX_CHAT_SKILL_PRESET",
-                "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
-                "CTOX_AUTONOMY_LEVEL",
-                "CTOX_CTO_OPERATING_MODE_PROMPT",
-                "CTOX_CHAT_MODEL_BOOST",
-                "CTOX_BOOST_DEFAULT_MINUTES",
-                "CTOX_EMBEDDING_MODEL",
-                "CTOX_STT_MODEL",
-                "CTOX_TTS_MODEL",
-                "CTOX_USE_DIRECT_SESSION",
-                "CTOX_COMPACT_TRIGGER",
-                "CTOX_COMPACT_MODE",
-                "CTOX_COMPACT_FIXED_INTERVAL",
-                "CTOX_COMPACT_ADAPTIVE_THRESHOLD",
-            ]
-        );
+            let provider_idx = app
+                .settings_items
+                .iter()
+                .position(|item| item.key == "CTOX_API_PROVIDER")
+                .unwrap();
+            let token_idx = app
+                .settings_items
+                .iter()
+                .position(|item| item.key == "OPENAI_API_KEY")
+                .unwrap();
+            app.settings_items[provider_idx].value = "openai".to_string();
+            app.settings_items[token_idx].value = "sk-test".to_string();
+            app.refresh_dynamic_setting_choices();
+            let api_keys = app
+                .visible_setting_indices()
+                .into_iter()
+                .map(|idx| app.settings_items[idx].key)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                api_keys,
+                vec![
+                    "CTOX_SERVICE_TOGGLE",
+                    "CTOX_WORK_HOURS_ENABLED",
+                    "CTOX_WORK_HOURS_START",
+                    "CTOX_WORK_HOURS_END",
+                    "CTOX_API_PROVIDER",
+                    "CTOX_OPENAI_AUTH_MODE",
+                    "CTOX_WEB_SEARCH_OPENAI_MODE",
+                    "OPENAI_API_KEY",
+                    "CTOX_CHAT_MODEL",
+                    "CTOX_CHAT_LOCAL_PRESET",
+                    "CTOX_CHAT_MODEL_MAX_CONTEXT",
+                    "CTOX_CHAT_SKILL_PRESET",
+                    "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
+                    "CTOX_AUTONOMY_LEVEL",
+                    "CTOX_CTO_OPERATING_MODE_PROMPT",
+                    "CTOX_CHAT_MODEL_BOOST",
+                    "CTOX_BOOST_DEFAULT_MINUTES",
+                    "CTOX_EMBEDDING_MODEL",
+                    "CTOX_STT_MODEL",
+                    "CTOX_TTS_MODEL",
+                    "CTOX_USE_DIRECT_SESSION",
+                    "CTOX_COMPACT_TRIGGER",
+                    "CTOX_COMPACT_MODE",
+                    "CTOX_COMPACT_FIXED_INTERVAL",
+                    "CTOX_COMPACT_ADAPTIVE_THRESHOLD",
+                ]
+            );
 
-        let base_idx = app
-            .settings_items
-            .iter()
-            .position(|item| item.key == "CTOX_CHAT_MODEL")
-            .unwrap();
-        app.settings_items[base_idx].value = "gpt-5.4-mini".to_string();
-        app.refresh_dynamic_setting_choices();
-        let api_base_keys = app
-            .visible_setting_indices()
-            .into_iter()
-            .map(|idx| app.settings_items[idx].key)
-            .collect::<Vec<_>>();
-        assert_eq!(
-            api_base_keys,
-            vec![
-                "CTOX_SERVICE_TOGGLE",
-                "CTOX_WORK_HOURS_ENABLED",
-                "CTOX_WORK_HOURS_START",
-                "CTOX_WORK_HOURS_END",
-                "CTOX_API_PROVIDER",
-                "CTOX_OPENAI_AUTH_MODE",
-                "CTOX_WEB_SEARCH_OPENAI_MODE",
-                "OPENAI_API_KEY",
-                "CTOX_CHAT_MODEL",
-                "CTOX_CHAT_LOCAL_PRESET",
-                "CTOX_CHAT_SKILL_PRESET",
-                "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
-                "CTOX_AUTONOMY_LEVEL",
-                "CTOX_CTO_OPERATING_MODE_PROMPT",
-                "CTOX_CHAT_MODEL_BOOST",
-                "CTOX_BOOST_DEFAULT_MINUTES",
-                "CTOX_EMBEDDING_MODEL",
-                "CTOX_STT_MODEL",
-                "CTOX_TTS_MODEL",
-                "CTOX_USE_DIRECT_SESSION",
-                "CTOX_COMPACT_TRIGGER",
-                "CTOX_COMPACT_MODE",
-                "CTOX_COMPACT_FIXED_INTERVAL",
-                "CTOX_COMPACT_ADAPTIVE_THRESHOLD",
-            ]
-        );
+            let base_idx = app
+                .settings_items
+                .iter()
+                .position(|item| item.key == "CTOX_CHAT_MODEL")
+                .unwrap();
+            app.settings_items[base_idx].value = "gpt-5.4-mini".to_string();
+            app.refresh_dynamic_setting_choices();
+            let api_base_keys = app
+                .visible_setting_indices()
+                .into_iter()
+                .map(|idx| app.settings_items[idx].key)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                api_base_keys,
+                vec![
+                    "CTOX_SERVICE_TOGGLE",
+                    "CTOX_WORK_HOURS_ENABLED",
+                    "CTOX_WORK_HOURS_START",
+                    "CTOX_WORK_HOURS_END",
+                    "CTOX_API_PROVIDER",
+                    "CTOX_OPENAI_AUTH_MODE",
+                    "CTOX_WEB_SEARCH_OPENAI_MODE",
+                    "OPENAI_API_KEY",
+                    "CTOX_CHAT_MODEL",
+                    "CTOX_CHAT_LOCAL_PRESET",
+                    "CTOX_CHAT_SKILL_PRESET",
+                    "CTOX_REFRESH_OUTPUT_BUDGET_PCT",
+                    "CTOX_AUTONOMY_LEVEL",
+                    "CTOX_CTO_OPERATING_MODE_PROMPT",
+                    "CTOX_CHAT_MODEL_BOOST",
+                    "CTOX_BOOST_DEFAULT_MINUTES",
+                    "CTOX_EMBEDDING_MODEL",
+                    "CTOX_STT_MODEL",
+                    "CTOX_TTS_MODEL",
+                    "CTOX_USE_DIRECT_SESSION",
+                    "CTOX_COMPACT_TRIGGER",
+                    "CTOX_COMPACT_MODE",
+                    "CTOX_COMPACT_FIXED_INTERVAL",
+                    "CTOX_COMPACT_ADAPTIVE_THRESHOLD",
+                ]
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn cto_contract_setting_opens_editor_and_persists_to_runtime_store() {
-        let root = temp_root("cto-contract-editor");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut app = App::new(root.clone(), db_path);
-        app.ensure_settings_items_loaded();
-        app.page = Page::Settings;
-        let idx = app
-            .settings_items
-            .iter()
-            .position(|item| item.key == "CTOX_CTO_OPERATING_MODE_PROMPT")
-            .unwrap();
-        app.settings_selected = idx;
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let db_path = root.join("runtime/test.sqlite3");
+            let mut app = App::new(root.clone(), db_path);
+            app.ensure_settings_items_loaded();
+            app.page = Page::Settings;
+            let idx = app
+                .settings_items
+                .iter()
+                .position(|item| item.key == "CTOX_CTO_OPERATING_MODE_PROMPT")
+                .unwrap();
+            app.settings_selected = idx;
 
-        app.handle_settings_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .unwrap();
-        assert!(app.settings_text_editor.is_some());
+            app.handle_settings_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .unwrap();
+            assert!(app.settings_text_editor.is_some());
 
-        {
-            let editor = &mut app.settings_text_editor.as_mut().unwrap().editor;
-            *editor = TextEditor::scratch("## CTO Operating Mode\n\nCustom.\n");
-        }
-        app.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL))
-            .unwrap();
+            {
+                let editor = &mut app.settings_text_editor.as_mut().unwrap().editor;
+                *editor = TextEditor::scratch("## CTO Operating Mode\n\nCustom.\n");
+            }
+            app.handle_key_event(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::CONTROL))
+                .unwrap();
 
-        assert!(app.settings_text_editor.is_none());
-        let saved = runtime_env::load_runtime_env_map(&root).unwrap();
-        assert_eq!(
-            saved
-                .get("CTOX_CTO_OPERATING_MODE_PROMPT")
-                .map(String::as_str),
-            Some("## CTO Operating Mode\n\nCustom.")
-        );
+            assert!(app.settings_text_editor.is_none());
+            let saved = runtime_env::load_runtime_env_map(&root).unwrap();
+            assert_eq!(
+                saved
+                    .get("CTOX_CTO_OPERATING_MODE_PROMPT")
+                    .map(String::as_str),
+                Some("## CTO Operating Mode\n\nCustom.")
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn communication_settings_show_remote_webrtc_fields_only_when_enabled() {
-        let root = temp_root("communication-remote-webrtc");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut env_map = BTreeMap::new();
-        env_map.insert(
-            "CTOX_REMOTE_BRIDGE_MODE".to_string(),
-            "remote-webrtc".to_string(),
-        );
-        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let db_path = root.join("runtime/test.sqlite3");
+            let mut env_map = BTreeMap::new();
+            env_map.insert(
+                "CTOX_REMOTE_BRIDGE_MODE".to_string(),
+                "remote-webrtc".to_string(),
+            );
+            runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
 
-        let mut app = App::new(root, db_path);
-        app.switch_settings_view(SettingsView::Communication);
-        let keys = app
-            .visible_setting_indices()
-            .into_iter()
-            .map(|idx| app.settings_items[idx].key)
-            .collect::<Vec<_>>();
-        assert!(keys.contains(&"CTOX_REMOTE_BRIDGE_MODE"));
-        assert!(keys.contains(&"CTOX_WEBRTC_SIGNALING_URL"));
-        assert!(keys.contains(&"CTOX_WEBRTC_ROOM"));
-        assert!(keys.contains(&"CTOX_WEBRTC_PASSWORD"));
+            let mut app = App::new(root, db_path);
+            app.switch_settings_view(SettingsView::Communication);
+            let keys = app
+                .visible_setting_indices()
+                .into_iter()
+                .map(|idx| app.settings_items[idx].key)
+                .collect::<Vec<_>>();
+            assert!(keys.contains(&"CTOX_REMOTE_BRIDGE_MODE"));
+            assert!(keys.contains(&"CTOX_WEBRTC_SIGNALING_URL"));
+            assert!(keys.contains(&"CTOX_WEBRTC_ROOM"));
+            assert!(keys.contains(&"CTOX_WEBRTC_PASSWORD"));
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -6638,117 +6660,122 @@ mod tests {
 
     #[test]
     fn api_estimate_keeps_aux_models_without_projecting_local_chat_gpu_load() {
-        let root = temp_root("api-estimate-aux");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut env_map = BTreeMap::new();
-        env_map.insert("CTOX_CHAT_SOURCE".to_string(), "local".to_string());
-        env_map.insert(
-            "CTOX_CHAT_MODEL".to_string(),
-            "openai/gpt-oss-120b".to_string(),
-        );
-        env_map.insert(
-            "CTOX_EMBEDDING_MODEL".to_string(),
-            "Qwen/Qwen3-Embedding-0.6B".to_string(),
-        );
-        env_map.insert(
-            "CTOX_STT_MODEL".to_string(),
-            "engineai/Voxtral-Mini-4B-Realtime-2602".to_string(),
-        );
-        env_map.insert(
-            "CTOX_TTS_MODEL".to_string(),
-            "engineai/Voxtral-4B-TTS-2603".to_string(),
-        );
-        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let db_path = root.join("runtime/test.sqlite3");
+            let mut env_map = BTreeMap::new();
+            env_map.insert("CTOX_CHAT_SOURCE".to_string(), "local".to_string());
+            env_map.insert(
+                "CTOX_CHAT_MODEL".to_string(),
+                "openai/gpt-oss-120b".to_string(),
+            );
+            env_map.insert(
+                "CTOX_EMBEDDING_MODEL".to_string(),
+                "Qwen/Qwen3-Embedding-0.6B".to_string(),
+            );
+            env_map.insert(
+                "CTOX_STT_MODEL".to_string(),
+                "engineai/Voxtral-Mini-4B-Realtime-2602".to_string(),
+            );
+            env_map.insert(
+                "CTOX_TTS_MODEL".to_string(),
+                "engineai/Voxtral-4B-TTS-2603".to_string(),
+            );
+            runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
 
-        let mut app = App::new(root, db_path);
-        app.ensure_settings_items_loaded();
-        app.gpu_cards = vec![
-            GpuCardState {
-                index: 0,
-                name: "RTX A4500".to_string(),
-                used_mb: 12_000,
-                total_mb: 20_480,
-                utilization: 0,
-                allocations: vec![
-                    GpuModelUsage {
+            let mut app = App::new(root, db_path);
+            app.ensure_settings_items_loaded();
+            app.gpu_cards = vec![
+                GpuCardState {
+                    index: 0,
+                    name: "RTX A4500".to_string(),
+                    used_mb: 12_000,
+                    total_mb: 20_480,
+                    utilization: 0,
+                    allocations: vec![
+                        GpuModelUsage {
+                            model: "openai/gpt-oss-120b".to_string(),
+                            short_label: "gpt-oss-120b".to_string(),
+                            used_mb: 8_386,
+                        },
+                        GpuModelUsage {
+                            model: "Qwen/Qwen3-Embedding-0.6B".to_string(),
+                            short_label: "embed".to_string(),
+                            used_mb: 1_100,
+                        },
+                        GpuModelUsage {
+                            model: "engineai/Voxtral-Mini-4B-Realtime-2602".to_string(),
+                            short_label: "stt".to_string(),
+                            used_mb: 1_400,
+                        },
+                        GpuModelUsage {
+                            model: "engineai/Voxtral-4B-TTS-2603".to_string(),
+                            short_label: "tts".to_string(),
+                            used_mb: 1_100,
+                        },
+                    ],
+                },
+                GpuCardState {
+                    index: 1,
+                    name: "RTX A4500".to_string(),
+                    used_mb: 8_386,
+                    total_mb: 20_480,
+                    utilization: 0,
+                    allocations: vec![GpuModelUsage {
                         model: "openai/gpt-oss-120b".to_string(),
                         short_label: "gpt-oss-120b".to_string(),
                         used_mb: 8_386,
-                    },
-                    GpuModelUsage {
-                        model: "Qwen/Qwen3-Embedding-0.6B".to_string(),
-                        short_label: "embed".to_string(),
-                        used_mb: 1_100,
-                    },
-                    GpuModelUsage {
-                        model: "engineai/Voxtral-Mini-4B-Realtime-2602".to_string(),
-                        short_label: "stt".to_string(),
-                        used_mb: 1_400,
-                    },
-                    GpuModelUsage {
-                        model: "engineai/Voxtral-4B-TTS-2603".to_string(),
-                        short_label: "tts".to_string(),
-                        used_mb: 1_100,
-                    },
-                ],
-            },
-            GpuCardState {
-                index: 1,
-                name: "RTX A4500".to_string(),
-                used_mb: 8_386,
-                total_mb: 20_480,
-                utilization: 0,
-                allocations: vec![GpuModelUsage {
-                    model: "openai/gpt-oss-120b".to_string(),
-                    short_label: "gpt-oss-120b".to_string(),
-                    used_mb: 8_386,
-                }],
-            },
-        ];
+                    }],
+                },
+            ];
 
-        let source_idx = app
-            .settings_items
-            .iter()
-            .position(|item| item.key == "CTOX_CHAT_SOURCE")
-            .unwrap();
-        let provider_idx = app
-            .settings_items
-            .iter()
-            .position(|item| item.key == "CTOX_API_PROVIDER")
-            .unwrap();
-        let model_idx = app
-            .settings_items
-            .iter()
-            .position(|item| item.key == "CTOX_CHAT_MODEL")
-            .unwrap();
-        app.settings_items[source_idx].value = "api".to_string();
-        app.settings_items[provider_idx].value = "openai".to_string();
-        app.settings_items[model_idx].value = "gpt-5.4-mini".to_string();
-
-        app.refresh_dynamic_setting_choices();
-        app.refresh_header();
-
-        assert!(app.header.estimate_mode);
-        assert_eq!(app.header.chat_source, "api");
-        assert_eq!(app.header.model, "gpt-5.4-mini");
-        assert!(app.header.gpu_target_cards.iter().all(|card| {
-            card.allocations
+            let source_idx = app
+                .settings_items
                 .iter()
-                .all(|alloc| alloc.model != "openai/gpt-oss-120b")
-        }));
-        let allocations = app
-            .header
-            .gpu_target_cards
-            .iter()
-            .flat_map(|card| {
+                .position(|item| item.key == "CTOX_CHAT_SOURCE")
+                .unwrap();
+            let provider_idx = app
+                .settings_items
+                .iter()
+                .position(|item| item.key == "CTOX_API_PROVIDER")
+                .unwrap();
+            let model_idx = app
+                .settings_items
+                .iter()
+                .position(|item| item.key == "CTOX_CHAT_MODEL")
+                .unwrap();
+            app.settings_items[source_idx].value = "api".to_string();
+            app.settings_items[provider_idx].value = "openai".to_string();
+            app.settings_items[model_idx].value = "gpt-5.4-mini".to_string();
+
+            app.refresh_dynamic_setting_choices();
+            app.refresh_header();
+
+            assert!(app.header.estimate_mode);
+            assert_eq!(app.header.chat_source, "api");
+            assert_eq!(app.header.model, "gpt-5.4-mini");
+            assert!(app.header.gpu_target_cards.iter().all(|card| {
                 card.allocations
                     .iter()
-                    .map(|alloc| alloc.short_label.as_str())
-            })
-            .collect::<Vec<_>>();
-        assert!(allocations.contains(&"embed"));
-        assert!(allocations.contains(&"stt"));
-        assert!(allocations.contains(&"tts"));
+                    .all(|alloc| alloc.model != "openai/gpt-oss-120b")
+            }));
+            let allocations = app
+                .header
+                .gpu_target_cards
+                .iter()
+                .flat_map(|card| {
+                    card.allocations
+                        .iter()
+                        .map(|alloc| alloc.short_label.as_str())
+                })
+                .collect::<Vec<_>>();
+            assert!(allocations.contains(&"embed"));
+            assert!(allocations.contains(&"stt"));
+            assert!(allocations.contains(&"tts"));
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -6873,28 +6900,33 @@ mod tests {
 
     #[test]
     fn refresh_header_ignores_stale_local_active_model_when_chat_source_is_api() {
-        let root = temp_root("api-header");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut env_map = BTreeMap::new();
-        env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
-        env_map.insert("CTOX_CHAT_MODEL".to_string(), "gpt-5.4-mini".to_string());
-        env_map.insert(
-            "CTOX_CHAT_MODEL_BASE".to_string(),
-            "gpt-5.4-mini".to_string(),
-        );
-        env_map.insert(
-            "CTOX_ACTIVE_MODEL".to_string(),
-            "Qwen/Qwen3.5-35B-A3B".to_string(),
-        );
-        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let db_path = root.join("runtime/test.sqlite3");
+            let mut env_map = BTreeMap::new();
+            env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
+            env_map.insert("CTOX_CHAT_MODEL".to_string(), "gpt-5.4-mini".to_string());
+            env_map.insert(
+                "CTOX_CHAT_MODEL_BASE".to_string(),
+                "gpt-5.4-mini".to_string(),
+            );
+            env_map.insert(
+                "CTOX_ACTIVE_MODEL".to_string(),
+                "Qwen/Qwen3.5-35B-A3B".to_string(),
+            );
+            runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
 
-        let mut app = App::new(root, db_path);
-        app.ensure_settings_items_loaded();
-        app.refresh_header();
+            let mut app = App::new(root, db_path);
+            app.ensure_settings_items_loaded();
+            app.refresh_header();
 
-        assert_eq!(app.header.chat_source, "api");
-        assert_eq!(app.header.model, "gpt-5.4-mini");
-        assert_eq!(app.header.base_model, "gpt-5.4-mini");
+            assert_eq!(app.header.chat_source, "api");
+            assert_eq!(app.header.model, "gpt-5.4-mini");
+            assert_eq!(app.header.base_model, "gpt-5.4-mini");
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -6931,126 +6963,146 @@ mod tests {
 
     #[test]
     fn load_skill_catalog_classifies_curated_codex_and_personal_skills() {
-        let root = temp_root("skills-classes");
-        let curated_dir = root.join("skills/packs/demo-pack");
-        fs::create_dir_all(&curated_dir).unwrap();
-        fs::write(
-            curated_dir.join("SKILL.md"),
-            "---\nname: demo-pack\ndescription: demo pack\n---\n",
-        )
-        .unwrap();
-
-        let external_root = root.join("sandbox/managed-skills");
-        let generated_root = root.join("runtime/generated-skills");
-        let mut env_map = BTreeMap::new();
-        env_map.insert(
-            "CTOX_SKILLS_ROOT".to_string(),
-            external_root.display().to_string(),
-        );
-        env_map.insert(
-            "CTOX_GENERATED_SKILLS_ROOT".to_string(),
-            generated_root.display().to_string(),
-        );
-        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
-
-        let authored_dir = external_root.join("authored/openai-docs");
-        fs::create_dir_all(&authored_dir).unwrap();
-        fs::write(
-            authored_dir.join("SKILL.md"),
-            "---\nname: openai-docs\ndescription: docs\n---\n",
-        )
-        .unwrap();
-
-        let personal_dir = generated_root.join("note-helper");
-        fs::create_dir_all(&personal_dir).unwrap();
-        fs::write(
-            personal_dir.join("SKILL.md"),
-            "---\nname: note-helper\ndescription: personal helper\n---\n",
-        )
-        .unwrap();
-
-        let catalog = load_skill_catalog(&root);
-
-        let curated = catalog
-            .iter()
-            .find(|entry| entry.name == "demo-pack")
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let curated_dir = root.join("skills/packs/demo-pack");
+            fs::create_dir_all(&curated_dir).unwrap();
+            fs::write(
+                curated_dir.join("SKILL.md"),
+                "---\nname: demo-pack\ndescription: demo pack\n---\n",
+            )
             .unwrap();
-        assert_eq!(curated.class, SkillClass::InstalledPacks);
-        assert_eq!(curated.state, SkillState::Stable);
 
-        let authored = catalog
-            .iter()
-            .find(|entry| entry.name == "openai-docs" && entry.class == SkillClass::Personal)
-            .unwrap();
-        assert_eq!(authored.state, SkillState::Authored);
+            let external_root = root.join("sandbox/managed-skills");
+            let generated_root = root.join("runtime/generated-skills");
+            let mut env_map = BTreeMap::new();
+            env_map.insert(
+                "CTOX_SKILLS_ROOT".to_string(),
+                external_root.display().to_string(),
+            );
+            env_map.insert(
+                "CTOX_GENERATED_SKILLS_ROOT".to_string(),
+                generated_root.display().to_string(),
+            );
+            runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
 
-        let personal = catalog
-            .iter()
-            .find(|entry| entry.name == "note-helper")
+            let authored_dir = external_root.join("authored/openai-docs");
+            fs::create_dir_all(&authored_dir).unwrap();
+            fs::write(
+                authored_dir.join("SKILL.md"),
+                "---\nname: openai-docs\ndescription: docs\n---\n",
+            )
             .unwrap();
-        assert_eq!(personal.class, SkillClass::Personal);
-        assert_eq!(personal.state, SkillState::Generated);
+
+            let personal_dir = generated_root.join("note-helper");
+            fs::create_dir_all(&personal_dir).unwrap();
+            fs::write(
+                personal_dir.join("SKILL.md"),
+                "---\nname: note-helper\ndescription: personal helper\n---\n",
+            )
+            .unwrap();
+
+            let catalog = load_skill_catalog(&root);
+
+            let curated = catalog
+                .iter()
+                .find(|entry| entry.name == "demo-pack")
+                .unwrap();
+            assert_eq!(curated.class, SkillClass::InstalledPacks);
+            assert_eq!(curated.state, SkillState::Stable);
+
+            let authored = catalog
+                .iter()
+                .find(|entry| entry.name == "openai-docs" && entry.class == SkillClass::Personal)
+                .unwrap();
+            assert_eq!(authored.state, SkillState::Authored);
+
+            let personal = catalog
+                .iter()
+                .find(|entry| entry.name == "note-helper")
+                .unwrap();
+            assert_eq!(personal.class, SkillClass::Personal);
+            assert_eq!(personal.state, SkillState::Generated);
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn setup_wizard_arms_only_while_no_chat_backend_is_usable() {
-        let root = temp_root("wizard-need");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut app = App::new(root.clone(), db_path);
-        // Fresh root, no GPU, no credentials: the wizard is needed.
-        // (local_gpu_available is probed per root; a host with CUDA would
-        // flip this, so force the api source for determinism.)
-        let mut env_map = BTreeMap::new();
-        env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
-        env_map.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
-        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
-        assert!(app.setup_wizard_needed());
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let db_path = root.join("runtime/test.sqlite3");
+            let mut app = App::new(root.clone(), db_path);
+            // Fresh root, no GPU, no credentials: the wizard is needed.
+            // (local_gpu_available is probed per root; a host with CUDA would
+            // flip this, so force the api source for determinism.)
+            let mut env_map = BTreeMap::new();
+            env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
+            env_map.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
+            runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
+            assert!(app.setup_wizard_needed());
 
-        // A configured credential satisfies the backend check.
-        secrets::set_credential(&root, "OPENAI_API_KEY", "sk-wizard").unwrap();
-        app.settings_items.clear();
-        assert!(!app.setup_wizard_needed());
+            // A configured credential satisfies the backend check.
+            secrets::set_credential(&root, "OPENAI_API_KEY", "sk-wizard").unwrap();
+            app.settings_items.clear();
+            assert!(!app.setup_wizard_needed());
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn setup_wizard_skip_is_persisted() {
-        let root = temp_root("wizard-skip");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut app = App::new(root.clone(), db_path);
-        let mut env_map = BTreeMap::new();
-        env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
-        env_map.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
-        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
-        assert!(app.setup_wizard_needed());
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let db_path = root.join("runtime/test.sqlite3");
+            let mut app = App::new(root.clone(), db_path);
+            let mut env_map = BTreeMap::new();
+            env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
+            env_map.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
+            runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
+            assert!(app.setup_wizard_needed());
 
-        app.setup_wizard = Some(SetupWizardState::default());
-        app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
-            .unwrap();
-        assert!(app.setup_wizard.is_none());
-        assert!(!app.setup_wizard_needed());
+            app.setup_wizard = Some(SetupWizardState::default());
+            app.handle_key_event(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+                .unwrap();
+            assert!(app.setup_wizard.is_none());
+            assert!(!app.setup_wizard_needed());
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn setup_wizard_enter_deep_links_into_the_credential_row() {
-        let root = temp_root("wizard-jump");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut env_map = BTreeMap::new();
-        env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
-        env_map.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
-        runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
-        let mut app = App::new(root, db_path);
-        app.ensure_settings_items_loaded();
-        app.setup_wizard = Some(SetupWizardState { selected: 1 });
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let db_path = root.join("runtime/test.sqlite3");
+            let mut env_map = BTreeMap::new();
+            env_map.insert("CTOX_CHAT_SOURCE".to_string(), "api".to_string());
+            env_map.insert("CTOX_API_PROVIDER".to_string(), "openai".to_string());
+            runtime_env::save_runtime_env_map(&root, &env_map).unwrap();
+            let mut app = App::new(root, db_path);
+            app.ensure_settings_items_loaded();
+            app.setup_wizard = Some(SetupWizardState { selected: 1 });
 
-        app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            .unwrap();
-        assert!(app.setup_wizard.is_none());
-        assert_eq!(app.page, Page::Settings);
-        assert_eq!(app.settings_view, SettingsView::Model);
-        assert_eq!(
-            app.settings_items[app.settings_selected].key,
-            "OPENAI_API_KEY"
-        );
+            app.handle_key_event(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .unwrap();
+            assert!(app.setup_wizard.is_none());
+            assert_eq!(app.page, Page::Settings);
+            assert_eq!(app.settings_view, SettingsView::Model);
+            assert_eq!(
+                app.settings_items[app.settings_selected].key,
+                "OPENAI_API_KEY"
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -7102,133 +7154,169 @@ mod tests {
 
     #[test]
     fn secrets_view_saves_back_into_encrypted_store() {
-        let root = temp_root("secret-save");
-        let db_path = root.join("runtime/test.sqlite3");
-        secrets::set_credential(&root, "OPENAI_API_KEY", "sk-old").unwrap();
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let db_path = root.join("runtime/test.sqlite3");
+            secrets::set_credential(&root, "OPENAI_API_KEY", "sk-old").unwrap();
 
-        let mut app = App::new(root.clone(), db_path);
-        app.switch_settings_view(SettingsView::Secrets);
-        let idx = app
-            .secret_items
-            .iter()
-            .position(|item| item.scope == "credentials" && item.name == "OPENAI_API_KEY")
-            .unwrap();
-        app.secrets_selected = idx;
-        app.current_secret_mut().unwrap().value = "sk-new".to_string();
-        app.save_current_secret().unwrap();
+            let mut app = App::new(root.clone(), db_path);
+            app.switch_settings_view(SettingsView::Secrets);
+            let idx = app
+                .secret_items
+                .iter()
+                .position(|item| item.scope == "credentials" && item.name == "OPENAI_API_KEY")
+                .unwrap();
+            app.secrets_selected = idx;
+            app.current_secret_mut().unwrap().value = "sk-new".to_string();
+            app.save_current_secret().unwrap();
 
-        assert_eq!(
-            secrets::get_credential(&root, "OPENAI_API_KEY").as_deref(),
-            Some("sk-new")
-        );
+            assert_eq!(
+                secrets::get_credential(&root, "OPENAI_API_KEY").as_deref(),
+                Some("sk-new")
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn save_settings_mirrors_chat_model_to_base_model() {
-        let root = temp_root("boost-save");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut app = App::new(root.clone(), db_path);
-        app.ensure_settings_items_loaded();
-        let provider_idx = app
-            .settings_items
-            .iter()
-            .position(|item| item.key == "CTOX_API_PROVIDER")
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            // Pin a different prior model so the runtime-worker assertion cannot
+            // pass by silently skipping the asynchronous transition.
+            runtime_env::save_runtime_env_map(
+                &root,
+                &BTreeMap::from([
+                    ("CTOX_CHAT_SOURCE".into(), "api".into()),
+                    ("CTOX_API_PROVIDER".into(), "openai".into()),
+                    ("CTOX_CHAT_MODEL".into(), "gpt-5.4".into()),
+                ]),
+            )
             .unwrap();
-        let chat_idx = app
-            .settings_items
-            .iter()
-            .position(|item| item.key == "CTOX_CHAT_MODEL")
-            .unwrap();
-        app.settings_items[provider_idx].value = "openai".to_string();
-        app.settings_items[chat_idx].value = "gpt-5.4-mini".to_string();
-        app.save_settings().unwrap();
-        if let Some(rx) = app.runtime_switch_rx.take() {
-            let result = rx
-                .recv_timeout(Duration::from_secs(5))
-                .expect("runtime switch result");
-            assert!(result.is_ok(), "runtime switch failed: {result:?}");
-        }
+            let db_path = root.join("runtime/test.sqlite3");
+            let mut app = App::new(root.clone(), db_path);
+            app.ensure_settings_items_loaded();
+            let provider_idx = app
+                .settings_items
+                .iter()
+                .position(|item| item.key == "CTOX_API_PROVIDER")
+                .unwrap();
+            let chat_idx = app
+                .settings_items
+                .iter()
+                .position(|item| item.key == "CTOX_CHAT_MODEL")
+                .unwrap();
+            app.settings_items[provider_idx].value = "openai".to_string();
+            app.settings_items[chat_idx].value = "gpt-5.4-mini".to_string();
+            app.save_settings().unwrap();
+            assert!(
+                app.runtime_switch_rx.is_some(),
+                "model fixture must exercise the admitted runtime worker"
+            );
+            if let Some(rx) = app.runtime_switch_rx.take() {
+                let result = rx
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("runtime switch result");
+                assert!(result.is_ok(), "runtime switch failed: {result:?}");
+            }
 
-        let saved = runtime_env::load_runtime_env_map(&root).unwrap();
-        assert_eq!(
-            saved.get("CTOX_CHAT_MODEL_BASE").map(String::as_str),
-            Some("gpt-5.4-mini")
-        );
+            let saved = runtime_env::load_runtime_env_map(&root).unwrap();
+            assert_eq!(
+                saved.get("CTOX_CHAT_MODEL_BASE").map(String::as_str),
+                Some("gpt-5.4-mini")
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn save_settings_persists_openai_token_only_in_secret_store() {
-        let root = temp_root("settings-openai-secret");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut app = App::new(root.clone(), db_path);
-        app.ensure_settings_items_loaded();
-        let token_idx = app
-            .settings_items
-            .iter()
-            .position(|item| item.key == "OPENAI_API_KEY")
-            .unwrap();
-        app.settings_items[token_idx].value = "sk-secret-store".to_string();
-        app.save_settings().unwrap();
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let db_path = root.join("runtime/test.sqlite3");
+            let mut app = App::new(root.clone(), db_path);
+            app.ensure_settings_items_loaded();
+            let token_idx = app
+                .settings_items
+                .iter()
+                .position(|item| item.key == "OPENAI_API_KEY")
+                .unwrap();
+            app.settings_items[token_idx].value = "sk-secret-store".to_string();
+            app.save_settings().unwrap();
 
-        assert_eq!(
-            secrets::get_credential(&root, "OPENAI_API_KEY").as_deref(),
-            Some("sk-secret-store")
-        );
-        // The raw persisted kv table must stay clean; the merged view from
-        // load_runtime_env_map intentionally overlays the secret store.
-        let persisted_env = runtime_env::load_persisted_runtime_env_map(&root).unwrap_or_default();
-        assert!(
-            !persisted_env.contains_key("OPENAI_API_KEY"),
-            "token leaked into the runtime env store: {persisted_env:?}"
-        );
+            assert_eq!(
+                secrets::get_credential(&root, "OPENAI_API_KEY").as_deref(),
+                Some("sk-secret-store")
+            );
+            // The raw persisted kv table must stay clean; the merged view from
+            // load_runtime_env_map intentionally overlays the secret store.
+            let persisted_env =
+                runtime_env::load_persisted_runtime_env_map(&root).unwrap_or_default();
+            assert!(
+                !persisted_env.contains_key("OPENAI_API_KEY"),
+                "token leaked into the runtime env store: {persisted_env:?}"
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn save_settings_persists_azure_foundry_selection_and_secret() {
-        let root = temp_root("settings-azure-foundry");
-        let db_path = root.join("runtime/test.sqlite3");
-        let mut app = App::new(root.clone(), db_path);
-        app.ensure_settings_items_loaded();
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let db_path = root.join("runtime/test.sqlite3");
+            let mut app = App::new(root.clone(), db_path);
+            app.ensure_settings_items_loaded();
 
-        for (key, value) in [
-            ("CTOX_API_PROVIDER", "azure_foundry"),
-            (
-                AZURE_FOUNDRY_ENDPOINT_KEY,
-                "https://contoso.openai.azure.com",
-            ),
-            (AZURE_FOUNDRY_DEPLOYMENT_ID_KEY, "company-gpt-5"),
-            (AZURE_FOUNDRY_TOKEN_KEY, "azure-secret-token"),
-        ] {
-            app.settings_items
-                .iter_mut()
-                .find(|item| item.key == key)
+            for (key, value) in [
+                ("CTOX_API_PROVIDER", "azure_foundry"),
+                (
+                    AZURE_FOUNDRY_ENDPOINT_KEY,
+                    "https://contoso.openai.azure.com",
+                ),
+                (AZURE_FOUNDRY_DEPLOYMENT_ID_KEY, "company-gpt-5"),
+                (AZURE_FOUNDRY_TOKEN_KEY, "azure-secret-token"),
+            ] {
+                app.settings_items
+                    .iter_mut()
+                    .find(|item| item.key == key)
+                    .unwrap()
+                    .value = value.to_string();
+            }
+            app.refresh_dynamic_setting_choices();
+            app.save_settings().unwrap();
+            // save_settings spawns the runtime switch on a background thread;
+            // drain it before asserting or the test races the projection
+            // (observed as an order-dependent failure in full parallel runs).
+            if let Some(rx) = app.runtime_switch_rx.take() {
+                let result = rx
+                    .recv_timeout(Duration::from_secs(30))
+                    .expect("runtime switch result");
+                assert!(result.is_ok(), "runtime switch failed: {result:?}");
+            }
+
+            let state = runtime_state::load_or_resolve_runtime_state(&root)
                 .unwrap()
-                .value = value.to_string();
-        }
-        app.refresh_dynamic_setting_choices();
-        app.save_settings().unwrap();
-        // save_settings spawns the runtime switch on a background thread;
-        // drain it before asserting or the test races the projection
-        // (observed as an order-dependent failure in full parallel runs).
-        if let Some(rx) = app.runtime_switch_rx.take() {
-            let result = rx
-                .recv_timeout(Duration::from_secs(30))
-                .expect("runtime switch result");
-            assert!(result.is_ok(), "runtime switch failed: {result:?}");
-        }
+                .clone();
+            assert_eq!(state.source, runtime_state::InferenceSource::Api);
+            assert_eq!(state.base_model.as_deref(), Some("company-gpt-5"));
+            assert_eq!(
+                state.upstream_base_url.as_str(),
+                "https://contoso.openai.azure.com/openai/v1"
+            );
+            assert_eq!(
+                secrets::get_credential(&root, AZURE_FOUNDRY_TOKEN_KEY).as_deref(),
+                Some("azure-secret-token")
+            );
 
-        let state = runtime_state::load_or_resolve_runtime_state(&root)
-            .unwrap()
-            .clone();
-        assert_eq!(state.source, runtime_state::InferenceSource::Api);
-        assert_eq!(state.base_model.as_deref(), Some("company-gpt-5"));
-        assert_eq!(
-            state.upstream_base_url.as_str(),
-            "https://contoso.openai.azure.com/openai/v1"
-        );
-        assert_eq!(
-            secrets::get_credential(&root, AZURE_FOUNDRY_TOKEN_KEY).as_deref(),
-            Some("azure-secret-token")
-        );
+            Ok(())
+        })
+        .unwrap();
     }
 }

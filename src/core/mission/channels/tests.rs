@@ -2471,58 +2471,55 @@ fn attempt_ack_waits_for_a_concurrent_writer_instead_of_failing_locked() -> Resu
 
 #[test]
 fn tui_ingest_sanitizes_minimax_secret_before_persisting_message() -> Result<()> {
-    let root = std::env::temp_dir().join(format!(
-        "ctox-tui-secret-test-{}",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-    fs::create_dir_all(root.join("runtime"))?;
-    let db_path = resolve_db_path(&root, None);
-    let mut conn = open_channel_db(&db_path)?;
-    let fake_key = "sk-api-test_minimax_abcdefghijklmnopqrstuvwxyz0123456789";
+    crate::persistence::test_support::run(move |owner_root| {
+        let root = owner_root.path().to_path_buf();
+        fs::create_dir_all(root.join("runtime"))?;
+        let mut conn = open_channel_db(std::path::Path::new(":memory:"))?;
+        // The legacy borrowed message Connection is private in-memory input;
+        // Core remains exclusively owned, while Secrets uses the real file owner.
+        let fake_key = "sk-api-test_minimax_abcdefghijklmnopqrstuvwxyz0123456789";
 
-    let stored = ingest_tui_message(
-        &root,
-        &mut conn,
-        TuiIngestRequest {
-            account_key: "local".to_string(),
-            thread_key: "example-supervisor".to_string(),
-            body: format!(
+        let stored = ingest_tui_message(
+            &root,
+            &mut conn,
+            TuiIngestRequest {
+                account_key: "local".to_string(),
+                thread_key: "example-supervisor".to_string(),
+                body: format!(
                 "MiniMax API key fuer MiniMax M2.7: {fake_key}. Bitte mit Secret-Skill ablegen."
             ),
-            subject: "MiniMax key".to_string(),
-            sender_display: "Codex".to_string(),
-            sender_address: "tui:codex".to_string(),
-            metadata: json!({"source": "test"}),
-        },
-    )?;
-    let message_key = stored
-        .get("message_key")
-        .and_then(Value::as_str)
-        .context("missing stored message key")?;
-    let (body_text, preview, metadata_json): (String, String, String) = conn.query_row(
+                subject: "MiniMax key".to_string(),
+                sender_display: "Codex".to_string(),
+                sender_address: "tui:codex".to_string(),
+                metadata: json!({"source": "test"}),
+            },
+        )?;
+        let message_key = stored
+            .get("message_key")
+            .and_then(Value::as_str)
+            .context("missing stored message key")?;
+        let (body_text, preview, metadata_json): (String, String, String) = conn.query_row(
         "SELECT body_text, preview, metadata_json FROM communication_messages WHERE message_key = ?1",
         [message_key],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
-    let metadata: Value = serde_json::from_str(&metadata_json)?;
+        let metadata: Value = serde_json::from_str(&metadata_json)?;
 
-    assert!(!body_text.contains(fake_key));
-    assert!(!preview.contains(fake_key));
-    assert!(body_text.contains("[secret-ref:credentials/MINIMAX_API_KEY"));
-    assert_eq!(
-        secrets::read_secret_value(&root, "credentials", "MINIMAX_API_KEY")?,
-        fake_key
-    );
-    assert_eq!(
-        metadata.get("secret_sanitized").and_then(Value::as_bool),
-        Some(true)
-    );
+        assert!(!body_text.contains(fake_key));
+        assert!(!preview.contains(fake_key));
+        assert!(body_text.contains("[secret-ref:credentials/MINIMAX_API_KEY"));
+        assert_eq!(
+            secrets::read_secret_value(&root, "credentials", "MINIMAX_API_KEY")?,
+            fake_key
+        );
+        assert_eq!(
+            metadata.get("secret_sanitized").and_then(Value::as_bool),
+            Some(true)
+        );
 
-    let _ = fs::remove_dir_all(&root);
-    Ok(())
+        // Root cleanup follows owner shutdown.
+        Ok(())
+    })
 }
 
 #[test]
