@@ -10,9 +10,9 @@ const output=resolve(directory),allowed=resolve(process.env.BUILD_LANE_BIN,'../a
 if(!output.startsWith(allowed+'/'))throw Error('Private artifact output required');
 fs.mkdirSync(output,{recursive:false,mode:0o700});
 const here=fileURLToPath(new URL('.',import.meta.url));
-if(resume&&resume!=='resume-rolled-back')throw Error('Unknown recovery mode');
+if(resume&&!['resume-rolled-back','resume-slot'].includes(resume))throw Error('Unknown recovery mode');
 const privileged=process.env.M7_NAMESPACE_MODE==='privileged';
-const config={owner:'01a087a0-169a',oldReceipt,newReceipt,root:resolve(root),output,roundtrip:roundtrip==='yes',resumeRolledBack:resume==='resume-rolled-back',dressSmoke:dressConfig?JSON.parse(fs.readFileSync(dressConfig)):null,tmpdir:process.env.TMPDIR,path:process.env.PATH,laneBin:process.env.BUILD_LANE_BIN,node:process.execPath,uid:process.getuid(),gid:process.getgid(),mappedUser:!privileged,traceRollback:process.env.M7_TRACE_ROLLBACK==='1',runner:join(here,'upgrade-runner.mjs'),host:Object.fromEntries(['user','net','mnt','pid','cgroup'].map(n=>[n,fs.readlinkSync('/proc/self/ns/'+n)]))};
+const config={owner:'01a087a0-169a',oldReceipt,newReceipt,root:resolve(root),output,roundtrip:roundtrip==='yes',resumeRolledBack:resume==='resume-rolled-back',slotOnly:resume==='resume-slot',dressSmoke:dressConfig?JSON.parse(fs.readFileSync(dressConfig)):null,tmpdir:process.env.TMPDIR,path:process.env.PATH,laneBin:process.env.BUILD_LANE_BIN,node:process.execPath,uid:process.getuid(),gid:process.getgid(),mappedUser:!privileged,traceRollback:process.env.M7_TRACE_ROLLBACK==='1',runner:join(here,'upgrade-runner.mjs'),host:Object.fromEntries(['user','net','mnt','pid','cgroup'].map(n=>[n,fs.readlinkSync('/proc/self/ns/'+n)]))};
 const file=join(output,'sandbox.json');fs.writeFileSync(file,JSON.stringify(config,null,2),{mode:0o600});
 const ns=['--kill-child=SIGKILL','--net','--mount','--pid','--fork','--mount-proc',process.execPath,join(here,'sandbox.mjs'),file];
 if(config.dressSmoke)execFileSync('mkfifo',[join(output,'network-ack')]);
