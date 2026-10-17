@@ -291,14 +291,13 @@ export function atsCanonicalInvoice(id, invoiceType, partyId, lines, now, source
     is_deleted: false,
     created_at_ms: now,
     updated_at_ms: now,
-    _deleted: false,
     [sourceField]: sourceId,
   };
 }
 
-/** ref: store_projections.rs:1397 upsert_business_record – id/_deleted/updated_at_ms setzen, _rev vergibt der Kern. */
+/** ref: store_projections.rs:1397 upsert_business_record – id/updated_at_ms setzen; _rev und _deleted vergibt der Kern (E47, reserviert). */
 export async function upsertRecord(store, collection, id, now, payload) {
-  const doc = { ...payload, id, _deleted: false, updated_at_ms: now };
+  const doc = { ...payload, id, updated_at_ms: now };
   await store.put(collection, doc);
   return doc;
 }

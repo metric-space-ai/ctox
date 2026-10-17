@@ -1,61 +1,70 @@
+//! Generic task route contract, independent of daemon dependencies.
 use super::NativeRoute;
 use crate::app_capabilities::schema::PayloadShape;
-
+pub(super) const fn route(
+    cap: &'static str,
+    function: &'static str,
+    command: &'static str,
+    rust: &'static str,
+    source: &'static str,
+) -> NativeRoute {
+    NativeRoute::new(cap, function, command, rust, source, PayloadShape::Object)
+}
 pub(super) const ROUTES: &[NativeRoute] = &[
-    NativeRoute::new(
+    route(
         "agent.task",
-        "delegate",
-        "kundenpipeline.delegate",
-        "business_os::decision_hub::handle_command",
-        "src/core/business_os/decision_hub.rs:244",
-        PayloadShape::Object,
+        "enqueue",
+        "cap.task.enqueue",
+        "channels::claim_business_command_with_queue",
+        "src/core/mission/channels/command_saga.rs:52",
     ),
-    NativeRoute::new(
+    route(
         "agent.task",
-        "company.research",
-        "outbound.company.research",
-        "business_os::store::record_command → importer::outbound_company_research",
-        "src/core/business_os/store.rs:6753",
-        PayloadShape::Object,
+        "get",
+        "cap.task.get",
+        "channels::load_queue_task",
+        "src/core/mission/channels/mod.rs:3745",
     ),
-    NativeRoute::new(
+    route(
         "agent.task",
-        "contact_research",
-        "outbound.pipeline.contact_research",
-        "business_os::store::record_command → importer::outbound_contact_research",
-        "src/core/business_os/store.rs:6753",
-        PayloadShape::Object,
+        "find",
+        "cap.task.find",
+        "channels::load_queue_task",
+        "src/core/mission/channels/mod.rs:3745",
     ),
-    NativeRoute::new(
+    route(
         "agent.task",
-        "lead_qualification",
-        "outbound.pipeline.lead_qualification",
-        "business_os::store::record_command → importer::outbound_lead_qualification",
-        "src/core/business_os/store.rs:6753",
-        PayloadShape::Object,
+        "update",
+        "cap.task.update",
+        "channels::update_queue_task",
+        "src/core/mission/channels/mod.rs:3874",
     ),
-    NativeRoute::new(
+    route(
         "agent.task",
-        "report_bug",
-        "ctox.report.bug",
-        "business_os::store::record_report_command",
-        "src/core/business_os/store.rs:3949",
-        PayloadShape::Object,
+        "cancel",
+        "cap.task.cancel",
+        "channels::update_queue_task",
+        "src/core/mission/channels/mod.rs:3874",
     ),
-    NativeRoute::new(
+    route(
         "agent.task",
-        "request",
-        "threads.ai.request",
-        "business_os::threads::handle_business_command → create_ai_request",
-        "src/core/business_os/threads.rs:1090",
-        PayloadShape::Object,
+        "set_metadata",
+        "cap.task.set_metadata",
+        "channels::set_queue_task_metadata_value",
+        "src/core/mission/channels/mod.rs:4196",
     ),
-    NativeRoute::new(
+    route(
         "agent.task",
-        "approve",
-        "threads.ctox_approval.approve",
-        "business_os::threads::handle_business_command → approve_approval",
-        "src/core/business_os/threads.rs:1090",
-        PayloadShape::Object,
+        "workspace.read",
+        "cap.task.workspace.read",
+        "channels::load_queue_task",
+        "src/core/mission/channels/mod.rs:3745",
+    ),
+    route(
+        "agent.workspace",
+        "read",
+        "cap.task.workspace.read",
+        "channels::load_queue_task",
+        "src/core/mission/channels/mod.rs:3745",
     ),
 ];

@@ -29,17 +29,18 @@ mod model_check;
 pub(super) use model_check::{finish as finish_model_check, ModelCheckRequest};
 
 pub(crate) fn handles(kind: &str) -> bool {
-    matches!(
-        kind,
-        "ctox.app.publish"
-            | "ctox.app.update"
-            | "ctox.app.rollback"
-            | "ctox.app.release"
-            | "ctox.app.remove"
-            | "instance.providers.account.create"
-            | "instance.providers.models.check"
-            | "speech.tts.key.delete"
-    )
+    super::platform_routes::handles(kind)
+        || matches!(
+            kind,
+            "ctox.app.publish"
+                | "ctox.app.update"
+                | "ctox.app.rollback"
+                | "ctox.app.release"
+                | "ctox.app.remove"
+                | "instance.providers.account.create"
+                | "instance.providers.models.check"
+                | "speech.tts.key.delete"
+        )
 }
 
 #[derive(Deserialize)]
@@ -639,7 +640,7 @@ pub(super) fn finish_key_delete(
 fn result(code: &str) -> Value {
     json!({"status":"rejected", "code":code})
 }
-fn record(
+pub(super) fn record(
     tx: &Transaction<'_>,
     actor: &BusinessOsActor,
     command: &CommandDocument,
@@ -735,6 +736,10 @@ pub(super) fn execute(
           + Send
           + Sync),
 ) -> Result<Value, StoreError> {
+    ctox_store::change_log::subscription::write_contract::routes::validate_persisted_input(
+        &json!({"type":command.command_type,"payload":command.payload}),
+    )
+    .map_err(|_| invalid("invalid: credential_ref_required"))?;
     if !handles(&command.command_type) || command.id.is_empty() || command.app_id.is_empty() {
         return Err(invalid("invalid platform command document"));
     }
@@ -766,6 +771,9 @@ pub(super) fn execute(
             }
             return Ok(saved["result"].clone());
         }
+    }
+    if super::platform_routes::handles(&command.command_type) {
+        return super::platform_routes::execute(tx, actor, command, now);
     }
     if matches!(
         command.command_type.as_str(),

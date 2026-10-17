@@ -47,7 +47,7 @@
     "handlers/_base.js": "9150293c4a852db693ac102df849ffdad84fcd36c6f1d93aa25a083706263d69",
     "handlers/ctox.cv_print.apply_parse.done.js": "3c18dccf9a13c8dffdde4f02fa88318b7bd85599081ac4b89551c78738730caa",
     "handlers/ctox.cv_print.apply_parse.failed.js": "05c08ba37a2696ff75fd9594ee30ce1aff7bcca53e0b22adc7105bc9f56bd853",
-    "handlers/ctox.cv_print.apply_parse.js": "05d5bfec1284445d2efb99c6dd739084b5abbddae77c74b8f18aab2d3353db9e",
+    "handlers/ctox.cv_print.apply_parse.js": "de6f98a6f79542747635bc4e3307cc466ff3f828223908fb73a99ffaee857401",
     "icon.svg": "524bd59c6a35bc933c3cbea20b1b7ae2402ae6c21f8bad28c76e7510820f63cb",
     "index.css": "68c4e5bc98a6105da544cc64d03a4ca407c6408ab382ba06796ca4635d270667",
     "index.html": "e64a40fd4690c2272949dbb6319ad95988776c78ff3c93c4afd2bf46ac2de3a8",
@@ -143,7 +143,7 @@
         ],
         "code_write": [
           "handlers/ctox.cv_print.apply_parse.js:254",
-          "handlers/ctox.cv_print.apply_parse.js:309",
+          "handlers/ctox.cv_print.apply_parse.js:308",
           "index.js:1601"
         ],
         "declaration_basis": "modules/cv-print-builder/V4-HANDLERS.md „Fremdzugriffe (Manifest foreign_collections, für den Manifest-Generator)“; modules/cv-print-builder/V4-PORT.md OFFEN 2",
@@ -162,13 +162,13 @@
     "documents": {
       "_evidence": {
         "code_read": [
-          "handlers/ctox.cv_print.apply_parse.js:269",
-          "handlers/ctox.cv_print.apply_parse.js:310",
+          "handlers/ctox.cv_print.apply_parse.js:268",
+          "handlers/ctox.cv_print.apply_parse.js:309",
           "index.js:15"
         ],
         "code_write": [
-          "handlers/ctox.cv_print.apply_parse.js:279",
-          "handlers/ctox.cv_print.apply_parse.js:317",
+          "handlers/ctox.cv_print.apply_parse.js:278",
+          "handlers/ctox.cv_print.apply_parse.js:316",
           "index.js:1613"
         ],
         "declaration_basis": "modules/cv-print-builder/V4-HANDLERS.md „Fremdzugriffe (Manifest foreign_collections, für den Manifest-Generator)“; modules/cv-print-builder/V4-PORT.md OFFEN 2",
@@ -259,7 +259,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "e79141592cfdc9eb72674e844ed992022c4e7d88ce162b540a55b3642d45e918",
+    "base_hash": "e7e52f781f7e27c513e00e4aae166f3c0ea6e7a4473b790558c7d19f58f0e634",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

@@ -10,8 +10,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -52,11 +53,16 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400 && !/\.css$/.test(r.url())) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // E48 (Stub 8265bd7): Fremdlesen (business_commands, Eigentümer ctox-platform) braucht die veröffentlichte Deklaration
+  // aus dem echten Manifest (v4/manifests/matching.manifest.json).
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes('matching'));
   await page.evaluate(async () => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/matching/index.js');
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('matching', '1.0.2', { title: 'Matching', manifestExtra: window.__routes });
     await kernel.sim.push('matching_requirements', [
       { id: 'req-alpha', kind: 'requirement', title: 'Alpha Backend Engineer', status: 'active', updated_at_ms: 3,
         data: { source: { id: 'src-acme', name: 'Acme GmbH' }, requirement: { id: 'req-alpha', title: 'Alpha Backend Engineer', sourceId: 'src-acme' } } },

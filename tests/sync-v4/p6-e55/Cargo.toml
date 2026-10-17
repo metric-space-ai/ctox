@@ -1,0 +1,31 @@
+[package]
+name = "p6-e55-contract"
+version = "0.0.0"
+edition = "2021"
+publish = false
+[workspace]
+[lib]
+path = "lib.rs"
+test = false
+doctest = false
+[[test]]
+name = "contract"
+path = "contract.rs"
+[dependencies]
+ctox-store = { path = "../../../src/core/store" }
+rxdb = { package = "ctox-rxdb", path = "../../../src/core/rxdb" }
+base64 = "0.22"
+ring = "0.17"
+sha2 = "0.10"
+rusqlite = { version = "0.32", features = ["bundled", "hooks"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+[dev-dependencies]
+tempfile = "3"
+# Match the native data-plane crate's standalone dependency patches.
+[patch.crates-io]
+rtc-turn = { path = "../../../src/core/rxdb/patches/rtc-turn" }
+rtc-ice = { path = "../../../src/core/rxdb/patches/rtc-ice" }
+rtc = { path = "../../../src/core/rxdb/patches/rtc" }
+webrtc = { path = "../../../src/core/rxdb/patches/webrtc" }

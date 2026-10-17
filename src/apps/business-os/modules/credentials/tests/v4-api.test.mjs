@@ -1,7 +1,7 @@
 // credentials gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium.
 // Muster: modules/knowledge/tests/v4-api.test.mjs. Stub-Pfad aus CTOX_APP_API_STUB (Pflicht-Pin
-// ~/.local/state/shell-v4/stub-pins/f967baf), read-only unter /__stub/ ausgeliefert.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/credentials/tests/v4-api.test.mjs
+// ~/.local/state/shell-v4/stub-pins/8265bd7), read-only unter /__stub/ ausgeliefert.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node --test src/apps/business-os/modules/credentials/tests/v4-api.test.mjs
 // Playwright: aus PLAYWRIGHT_MODULE, sonst ~/Documents/ctox/src/apps/business-os/node_modules/playwright.
 // Screenshots (1280 und 420) landen in tests/shots/.
 import { test, before, after } from 'node:test';
@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'credentials';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -126,6 +126,9 @@ test('leer: keine Geheimnisse → kein Lade-/Leertext, keine Zone', async () => 
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     const k2 = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, instanceId: 'empty' });
     await k2.ready;
+    // FIXT-8265: auch der leere Kern braucht die veröffentlichte credentials-Version (business_commands ist dort deklariert).
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await k2.sim.inspect('business_apps', o.app))?.data?.active_ver) await k2.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await k2.sim.publishAppVersion(APP, '1', { title: 'Zugangsdaten', manifestExtra: window.__routes });
     k2.sim.onCommand('ctox.secret.list', () => ({ catalog: [], extra: [] }));
     const host = document.createElement('div');
     document.body.append(host);

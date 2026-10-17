@@ -1,5 +1,92 @@
 use super::*;
 #[tokio::test]
+async fn e49_secret_request_values_are_absent_from_every_persisted_cell() {
+    use sha2::{Digest, Sha256};
+    println!(
+        "E49_STORE_SOURCE_SHA256 {:x}",
+        Sha256::digest(include_bytes!("command_routes.rs"))
+    );
+    for kind in [
+        "ctox.secret.request.fulfill",
+        "ctox.secret.request.decline",
+        "ctox.secret.request.list",
+    ] {
+        let (_dir, writer, readers, ingress) = commands().await;
+        let before = readers.read(|tx| change_log::head(tx)).await.unwrap();
+        let mut results = Vec::new();
+        for seq in [2, 1] {
+            let mut w = command(seq, 810 + seq as u16, None, "queued", None, Value::Null);
+            let body = w.write.body.as_mut().unwrap();
+            body["type"] = json!(kind);
+            body["payload"] =
+                json!({"request_id":"request-a","value":"E49-SYNTHETIC-SECRET-CANARY"});
+            results.push(ingress.submit("alice".into(), w, NOW).await.unwrap());
+        }
+        readers
+            .read(|tx| {
+                let tables: Vec<String> = tx
+                    .prepare("SELECT name FROM sqlite_schema WHERE type='table'")?
+                    .query_map([], |r| r.get(0))?
+                    .collect::<rusqlite::Result<_>>()?;
+                for table in tables {
+                    let mut statement = tx.prepare(&format!(
+                        "SELECT * FROM {}",
+                        change_log::identifier(&table)?
+                    ))?;
+                    let columns = statement.column_count();
+                    let mut rows = statement.query([])?;
+                    while let Some(row) = rows.next()? {
+                        for column in 0..columns {
+                            if let rusqlite::types::ValueRef::Text(bytes)
+                            | rusqlite::types::ValueRef::Blob(bytes) = row.get_ref(column)?
+                            {
+                                assert!(
+                                    !bytes
+                                        .windows(b"E49-SYNTHETIC-SECRET-CANARY".len())
+                                        .any(|b| b == b"E49-SYNTHETIC-SECRET-CANARY"),
+                                    "secret entered {table} column {column}"
+                                );
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            })
+            .await
+            .unwrap();
+        for batch in results {
+            assert_eq!(batch.results[0].result.status, WriteStatus::Rejected);
+            assert_eq!(
+                batch.results[0].result.reason.as_deref(),
+                Some("credential_ref_required")
+            );
+        }
+        assert_eq!(
+            readers
+                .read(|tx| change_log::head(tx))
+                .await
+                .unwrap()
+                .head_seq,
+            before.head_seq
+        );
+        let mut safe = command(3, 900, None, "queued", None, Value::Null);
+        safe.write.body.as_mut().unwrap()["type"] = json!(kind);
+        safe.write.body.as_mut().unwrap()["payload"] = if kind.ends_with("list") {
+            json!({})
+        } else {
+            json!({"request_id":"request-a"})
+        };
+        assert_eq!(
+            send(&ingress, "alice", safe, NOW).await.status,
+            WriteStatus::Accepted,
+            "metadata input must remain usable"
+        );
+        readers.shutdown().await.unwrap();
+        writer.shutdown().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn e25_raw_secret_never_enters_order_buffer_or_command_history() {
     let (_dir, writer, readers, ingress) = commands().await;
     let before = readers.read(|tx| change_log::head(tx)).await.unwrap();

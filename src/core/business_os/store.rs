@@ -1436,6 +1436,65 @@ fn stamp_attached_canonical_mirror_versions(
     Ok(())
 }
 
+/// Called only inside the native queue writer transaction. Tombstones carry
+/// no previous payload; neither queue refresh nor command replay can revive it.
+pub(crate) fn delete_attached_queue_projections(
+    conn: &Connection,
+    task_id: &str,
+    command_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let now = now_ms() as i64;
+    for (collection, id) in std::iter::once(("ctox_queue_tasks", task_id))
+        .chain(command_id.map(|id| ("business_commands", id)))
+    {
+        let rev = format!("rev_{}", Uuid::new_v4());
+        let payload = serde_json::json!({"id":id,"_rev":rev,"_deleted":true,"updated_at_ms":now});
+        conn.execute(
+            "INSERT INTO business_os_projection.business_records
+             (collection,record_id,rev,deleted,updated_at_ms,payload_json)
+             VALUES (?1,?2,?3,1,?4,?5)
+             ON CONFLICT(collection,record_id) DO UPDATE SET
+             rev=excluded.rev,deleted=1,updated_at_ms=excluded.updated_at_ms,payload_json=excluded.payload_json",
+            params![collection,id,rev,now,serde_json::to_string(&payload)?],
+        )?;
+        if let Some(table) = attached_rxdb_collection_table(conn, collection)? {
+            let qualified_table = format!(
+                "business_os_rxdb_projection.{}",
+                sqlite_quote_identifier(&table)
+            );
+            let previous: Option<String> = conn
+                .query_row(
+                    &format!("SELECT data FROM {qualified_table} WHERE id=?1"),
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let previous = previous.and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+            let revision = next_direct_rxdb_revision(
+                previous
+                    .as_ref()
+                    .and_then(|v| v.get("_rev"))
+                    .and_then(Value::as_str),
+            );
+            let payload =
+                serde_json::json!({"id":id,"_rev":revision,"_deleted":true,"updated_at_ms":now});
+            business_store_adapter::write_legacy_projection(
+                conn,
+                business_store_adapter::LegacyProjection {
+                    qualified_table: &qualified_table,
+                    table_columns: &attached_rxdb_table_columns(conn, &table)?,
+                    id,
+                    payload: &payload,
+                    revision,
+                    write_time: now_ms() as f64,
+                    guard: None,
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn retain_owner_projection_extras(canonical: &mut Value, existing: &Value) {
     retain_noncanonical_queue_projection_fields(canonical, existing);
 }
@@ -8666,7 +8725,7 @@ pub(super) fn queue_command_policy_target(
     )
 }
 
-fn queue_command_native_authorization(
+pub(super) fn queue_command_native_authorization(
     root: &Path,
     command: &BusinessCommand,
     authenticated_session: Option<&BusinessOsSession>,
@@ -8803,10 +8862,37 @@ pub(crate) fn revalidate_business_command_execution_authorization(
     root: &Path,
     command_id: &str,
 ) -> anyhow::Result<Value> {
-    let conn = open_store(root)?;
-    let command = load_business_command(&conn, command_id)?;
-    let canonical = channels::business_command_projection(root, command_id)?;
+    // Authorization needs the immutable native snapshot, not presentation progress.
+    let lookup_id = command_id.to_owned();
+    let canonical = crate::persistence::read_core_snapshot_blocking(root, move |core| {
+        Ok(channels::business_command_projection_from_conn(
+            core, &lookup_id,
+        ))
+    })??;
     let native_authorization = canonical.get("native_authorization");
+    let command = if native_authorization.is_some() {
+        // Native tasks have no V3 business_commands shadow row.
+        BusinessCommand {
+            id: Some(command_id.to_owned()),
+            module: canonical["module"]
+                .as_str()
+                .context("native command module missing")?
+                .into(),
+            command_type: canonical["command_type"]
+                .as_str()
+                .context("native command type missing")?
+                .into(),
+            record_id: canonical["record_id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned),
+            payload: canonical["payload"].clone(),
+            client_context: canonical["client_context"].clone(),
+            origin: CommandOrigin::ReplicatedPeer,
+        }
+    } else {
+        load_business_command(&open_store(root)?, command_id)?
+    };
     let (session, native_policy_decision) = if let Some(authorization) = native_authorization {
         let (session, decision) =
             revalidate_queue_native_authorization(root, &command, authorization)?;
@@ -26753,6 +26839,17 @@ fn create_ctox_queue_task(
     command: &BusinessCommand,
     native_authorization: Option<&Value>,
 ) -> anyhow::Result<Option<channels::BusinessCommandQueueClaim>> {
+    create_native_target_queue_task(root, command_id, command, native_authorization, None)
+}
+
+/// The target is a server-authorized native argument, never a client_context field.
+pub(super) fn create_native_target_queue_task(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+    native_authorization: Option<&Value>,
+    native_crew_target: Option<&str>,
+) -> anyhow::Result<Option<channels::BusinessCommandQueueClaim>> {
     if !is_cv_print_parse_command(command) {
         command_instruction(command)?;
     }
@@ -26810,6 +26907,7 @@ fn create_ctox_queue_task(
                 "business_os_command_type": command.command_type,
                 "business_os_record_id": command.record_id,
                 "business_os_attachments": attachments,
+                "native_crew_target": native_crew_target,
                 "business_os_import_source_kind": import_source,
                 "client_context": policy_audit_client_context(command)
             })),

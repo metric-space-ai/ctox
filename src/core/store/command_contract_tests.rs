@@ -452,6 +452,9 @@ async fn kernel_component(e25: bool) {
     let mut measured = None;
     let mut reply_closed = false;
     let mut projection_us = Vec::new();
+    // Test-only stage trap; monotonic offsets within the Core process. No
+    // wall-clock subtraction between the JS and native process is required.
+    let mut stage_trace = Vec::<Value>::new();
     loop {
         line.clear();
         if output.read_line(&mut line).unwrap() == 0 {
@@ -462,6 +465,11 @@ async fn kernel_component(e25: bool) {
             // Preserve raw measurements even when a latency assertion makes
             // the child exit nonzero before the final enriched result is built.
             if e25 {
+                let mut trace = request.clone();
+                trace["core_stages"] = json!(stage_trace);
+                if let Ok(path) = std::env::var("E25_TRACE_OUT") {
+                    std::fs::write(path, serde_json::to_vec(&trace).unwrap()).unwrap();
+                }
                 println!("E25_KERNEL_COMPONENT_RAW {}", request);
             }
             measured = Some(request);
@@ -480,6 +488,8 @@ async fn kernel_component(e25: bool) {
             .as_millis() as u64;
         let value = match request["type"].as_str().unwrap() {
             "write" => {
+                let stage_start = std::time::Instant::now();
+                let mut stages = json!({"core_ingest_us":0});
                 let ClientMessage::Write(write) =
                     serde_json::from_value(request["message"].clone())
                         .expect("real Kernel wire must parse strict native Write")
@@ -490,6 +500,7 @@ async fn kernel_component(e25: bool) {
                 assert_eq!(write.write.app_ver, "platform-7");
                 let mut doc = write.write.body.clone().unwrap();
                 let id = write.write.id.clone();
+                stages["id"] = json!(id);
                 let completion_lane = if e25 {
                     Some(
                         routes::resolve(doc["type"].as_str().unwrap())
@@ -501,6 +512,7 @@ async fn kernel_component(e25: bool) {
                 };
                 let result = ingress.submit("alice".into(), write, now).await.unwrap();
                 assert_eq!(result.results.len(), 1);
+                stages["ingest_commit_us"] = json!(stage_start.elapsed().as_micros() as u64);
                 let receipt = result.results[0].clone();
                 if receipt.result.status == WriteStatus::Accepted {
                     let lease = ingress
@@ -508,6 +520,7 @@ async fn kernel_component(e25: bool) {
                         .await
                         .unwrap()
                         .unwrap();
+                    stages["dispatch_claim_us"] = json!(stage_start.elapsed().as_micros() as u64);
                     executor_seq += 1;
                     doc["status"] = json!("done");
                     doc["executor_fence"] = json!(lease.fence);
@@ -528,6 +541,8 @@ async fn kernel_component(e25: bool) {
                             .unwrap()
                             .await
                             .expect("E25 route must resolve instead of unknown_command");
+                        stages["handler_complete_us"] =
+                            json!(stage_start.elapsed().as_micros() as u64);
                         assert_eq!(complete.command_id, id);
                         doc["status"] = json!(complete.status);
                         doc["result"] = complete.result.unwrap();
@@ -566,6 +581,8 @@ async fn kernel_component(e25: bool) {
                             .await
                             .unwrap()
                     };
+                    stages["completion_commit_us"] =
+                        json!(stage_start.elapsed().as_micros() as u64);
                     assert_eq!(done.results[0].result.status, WriteStatus::Accepted);
                     if first.is_none() {
                         writer
@@ -597,7 +614,9 @@ async fn kernel_component(e25: bool) {
                     .next_page(100, Arc::new(Policy), &signer, || now)
                     .await
                     .unwrap();
-                json!({"receipt":CoreMessage::WriteResult(receipt),"page":page,"completion_lane":completion_lane})
+                stages["page_ready_us"] = json!(stage_start.elapsed().as_micros() as u64);
+                stage_trace.push(stages.clone());
+                json!({"receipt":CoreMessage::WriteResult(receipt),"page":page,"completion_lane":completion_lane,"core_stages":stages})
             }
             "subscribe" => {
                 let ClientMessage::Subscribe(sub) =
@@ -619,6 +638,14 @@ async fn kernel_component(e25: bool) {
                         .unwrap(),
                 )
                 .unwrap()
+            }
+            "trace" => {
+                let mut trace = request["measured"].clone();
+                trace["core_stages"] = json!(stage_trace);
+                if let Ok(path) = std::env::var("E25_TRACE_OUT") {
+                    std::fs::write(path, serde_json::to_vec(&trace).unwrap()).unwrap();
+                }
+                Value::Null
             }
             "first_command" => first.clone().unwrap(),
             "drain" => Value::Null,

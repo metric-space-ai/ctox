@@ -1,6 +1,6 @@
 // desktop gegen den eingefrorenen App-API-4.0-Stub (createStubKernel) in echtem Chromium.
-// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/68b83a3), Muster modules/knowledge.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/desktop/tests/v4-api.test.mjs
+// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/8265bd7), Muster modules/knowledge.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node --test src/apps/business-os/modules/desktop/tests/v4-api.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'desktop';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const SHOTS = join(HERE, 'shots');
@@ -192,6 +192,10 @@ test('Fläche wächst nach dem Mount (Öffnen-Animation): Icons liegen nicht üb
     await k.ready;
     const apps = Array.from({ length: 24 }, (_, i) => ({ id: `app-${String(i).padStart(2, '0')}`, title: `App ${i}` }));
     await k.sim.push('business_apps', [{ id: 'desktop', title: 'Desktop' }, ...apps]);
+    // E48: auch dieser Kern braucht die veröffentlichte desktop-Version (foreign_collections business_apps u. a.).
+    const { _ctox, ...routes } = window.__routes;
+    for (const o of routes._fixture_owners ?? []) if (!(await k.sim.inspect('business_apps', o.app))?.data?.active_ver) await k.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await k.sim.publishAppVersion('desktop', '1.0.0', { title: 'Desktop', manifestExtra: routes });
     await k.sim.settle();
     const host = document.createElement('div');
     host.style.cssText = 'position:fixed;left:0;top:0;width:40px;height:40px;container:business-app-window/inline-size;overflow:hidden';

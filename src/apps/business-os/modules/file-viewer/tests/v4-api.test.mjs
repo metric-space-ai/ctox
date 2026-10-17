@@ -1,6 +1,6 @@
 // file-viewer gegen den eingefrorenen App-API-4.0-Stub (createStubKernel) in echtem Chromium.
-// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/68b83a3), Muster modules/knowledge.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/file-viewer/tests/v4-api.test.mjs
+// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/8265bd7), Muster modules/knowledge.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node --test src/apps/business-os/modules/file-viewer/tests/v4-api.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'file-viewer';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const SHOTS = join(HERE, 'shots');
@@ -164,7 +164,22 @@ test('nur file_id: Metadaten kommen live aus `files` (Core-Push), dann wird gela
 });
 
 test('unbekannte ref: genau ein Zoneneintrag, kein Fehlerkasten im Inhalt', async () => {
-  await page.evaluate(() => window.__explorer.shell.navigate('file-viewer', { ref: 'deadbeef', name: 'weg.txt', mime: 'text/plain' }));
+  // E30 (Pin 8265bd7): navigate mit ref prüft schon beim Absender die Leseberechtigung; eine unlesbare ref wird mit
+  // forbidden abgelehnt und erreicht den Viewer nie (keine Route, kein Zoneneintrag im Viewer).
+  const nav = await page.evaluate(async () => {
+    const before = window.__k.sim.navigations.length;
+    let code = null;
+    try { await window.__explorer.shell.navigate('file-viewer', { ref: 'deadbeef', name: 'weg.txt', mime: 'text/plain' }); } catch (e) { code = e?.code ?? String(e); }
+    return { code, routed: window.__k.sim.navigations.length - before };
+  });
+  assert.deepEqual(nav, { code: 'forbidden', routed: 0 });
+  await settle();
+  assert.deepEqual(await page.evaluate(() => window.__zone()), []);
+  // Der Viewer sieht eine unlesbare ref nur noch über einen alten Fensterzustand (restored, Datei inzwischen weg).
+  await page.evaluate(async () => {
+    await window.__app.unmount();
+    window.__app = await window.__mod.mount(document.getElementById('win'), window.__c.api, { restored: { target: { ref: 'deadbeef', name: 'weg.txt', mime: 'text/plain' } } });
+  });
   await settle();
   const zone = await page.evaluate(() => window.__zone());
   assert.equal(zone.length, 1);

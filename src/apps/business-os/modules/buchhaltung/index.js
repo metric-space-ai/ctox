@@ -1482,9 +1482,10 @@ function selectReceipt(id) {
 }
 
 // =========================================================================
-// Belegkontierung (BUCH-3): Felder untereinander, Speichern je Änderung per api.patch. Die App-API 4.0 kennt kein
-// expected_revision; die Konfliktprüfung nutzt updated_at_ms des Belegs als Revision der App: beim Öffnen gemerkt,
-// vor jedem Speichern verglichen. Weicht sie ab, wird nichts geschrieben und der Grund steht in der Zone.
+// Belegkontierung (BUCH-3): Felder untereinander, Speichern je Änderung per api.patch. Konfliktprüfung über die
+// bestätigte Revision (E47 _rev, E35 expected_revision): beim Öffnen gemerkt, jedes Speichern sendet sie mit; der Core
+// lehnt eine veraltete Revision mit revision_conflict ab, dann steht der Grund in der Zone. Eigene Speichervorgänge je
+// Beleg laufen nacheinander, damit der nächste die vom Core bestätigte neue Revision trägt (BUCH-REV).
 // =========================================================================
 const RECEIPT_TAX_RATES = Object.freeze([19, 7, 0]);
 const RECEIPT_TEXT_FIELDS = Object.freeze(['supplier_name', 'invoice_number', 'invoice_date', 'suggested_account_id']);
@@ -1514,7 +1515,7 @@ function receiptFormMarkup(receipt, isPosted) {
   const text = (name, value, extra = '') => `<input class="ctox-input" name="${name}" value="${escapeHtml(value || '')}" autocomplete="off"${extra}${dis} />`;
   const amount = (name) => `<input class="ctox-input is-num" name="${name}" inputmode="decimal" value="${centsInputValue(receipt[name])}" autocomplete="off"${dis} />`;
   return `
-      <form class="fibu-receipt-form" data-receipt-form data-receipt-id="${escapeHtml(receipt.id)}" data-base-updated="${Number(receipt.updated_at_ms) || 0}" novalidate>
+      <form class="fibu-receipt-form" data-receipt-form data-receipt-id="${escapeHtml(receipt.id)}" data-base-rev="${escapeHtml(receipt._rev ?? '')}" data-base-updated="${Number(receipt.updated_at_ms) || 0}" novalidate>
         ${row('Lieferant', text('supplier_name', receipt.supplier_name))}
         ${row('Rechnungsnummer', text('invoice_number', receipt.invoice_number))}
         ${row('Belegdatum', `<input class="ctox-input" type="date" name="invoice_date" value="${escapeHtml(receipt.invoice_date || '')}"${dis} />`)}
@@ -1581,17 +1582,34 @@ function bindReceiptForm(form, receipt) {
 }
 
 // Speichert die geänderten Felder. false = nicht gespeichert (Konflikt, ungültig, Fehler); Grund in der Zone.
-async function saveReceiptForm(form) {
+const receiptSaveChains = new Map();
+// Je Beleg nacheinander: der nächste Speichervorgang startet erst, wenn der vorige vom Core bestätigt (neue _rev) oder
+// abgelehnt ist. Offen bleibende Eingaben stehen solange im Formular (dirty), Live-Daten überschreiben sie nicht.
+function saveReceiptForm(form) {
+  const id = form?.dataset.receiptId;
+  const prev = receiptSaveChains.get(id) || Promise.resolve();
+  const next = prev.catch(() => {}).then(() => saveReceiptFormNow(form));
+  receiptSaveChains.set(id, next);
+  return next;
+}
+
+function receiptConflict(current, id) {
+  fibuNotice('receipt.conflict', `${current?.filename || id}: Beleg wurde inzwischen geändert. Eingabe nicht gespeichert, Beleg neu öffnen.`, 'error');
+  return false;
+}
+
+async function saveReceiptFormNow(form) {
   const api = state.api;
   const id = form?.dataset.receiptId;
   if (!api || !id) return false;
   const current = api.get('accounting_receipts', id).get();
   if (!current || current.status === 'posted') return false;
-  const base = Number(form.dataset.baseUpdated) || 0;
-  if ((Number(current.updated_at_ms) || 0) !== base) {
-    fibuNotice('receipt.conflict', `${current.filename || id}: Beleg wurde inzwischen geändert. Eingabe nicht gespeichert, Beleg neu öffnen.`, 'error');
-    return false;
-  }
+  const baseRev = form.dataset.baseRev || '';
+  // Bestätigte Revision weicht ab: jemand anderes hat den Beleg geändert (ohne Schreibversuch).
+  if (baseRev && current._rev && current._rev !== baseRev) return receiptConflict(current, id);
+  // Kern ohne E47 (_rev fehlt): Rückfall auf updated_at_ms als Revision, wie vor BUCH-REV.
+  const legacyRevision = current._rev === undefined;
+  if (legacyRevision && (Number(current.updated_at_ms) || 0) !== (Number(form.dataset.baseUpdated) || 0)) return receiptConflict(current, id);
   const values = readReceiptForm(form);
   if (RECEIPT_AMOUNT_FIELDS.some((name) => Number.isNaN(values[name]))) {
     fibuNotice('receipt.invalid_amount', `${current.filename || id}: Betrag ungültig.`, 'warn');
@@ -1605,20 +1623,23 @@ async function saveReceiptForm(form) {
     if (empty ? had : current[name] !== value) patch[name] = empty ? null : value;
   }
   if (!Object.keys(patch).length) { delete form.dataset.dirty; return true; }
-  const now = Math.max(Date.now(), base + 1);
-  patch.updated_at_ms = now;
-  form.dataset.baseUpdated = String(now);
+  patch.updated_at_ms = Math.max(Date.now(), (Number(current.updated_at_ms) || 0) + 1);
+  if (legacyRevision) form.dataset.baseUpdated = String(patch.updated_at_ms);
+  let result;
   try {
-    const handle = api.patch('accounting_receipts', id, patch);
-    handle.result?.then?.((result) => {
-      if (result?.status === 'rejected') fibuNotice('receipt.save_rejected', `${current.filename || id}: Speichern abgelehnt (${result.reason || 'rejected'})`, 'error');
-    }, () => {});
+    const handle = api.patch('accounting_receipts', id, patch, baseRev ? { expected_revision: baseRev } : undefined);
     await handle.local;
+    result = await handle.result;
   } catch (error) {
-    form.dataset.baseUpdated = String(base);
     fibuNotice('receipt.save_failed', `${current.filename || id}: Speichern fehlgeschlagen (${error?.code || error?.message || error})`, 'error');
     return false;
   }
+  if (result?.status === 'rejected') {
+    if (result.code === 'revision_conflict') return receiptConflict(current, id);
+    fibuNotice('receipt.save_rejected', `${current.filename || id}: Speichern abgelehnt (${result.reason || result.code || 'rejected'})`, 'error');
+    return false;
+  }
+  if (result?.rev) form.dataset.baseRev = result.rev;
   delete form.dataset.dirty;
   api.status.clear('buchhaltung.receipt.conflict');
   api.status.clear('buchhaltung.receipt.save_failed');
@@ -1631,11 +1652,16 @@ function syncOpenReceiptForm() {
   const form = state.els.drawerContent?.querySelector('[data-receipt-form]');
   if (!form || form.dataset.dirty === '1') return;
   const doc = state.api?.get('accounting_receipts', form.dataset.receiptId).get();
-  if (!doc || (Number(doc.updated_at_ms) || 0) === (Number(form.dataset.baseUpdated) || 0)) return;
+  // Nur bestätigte fremde Stände übernehmen (eigene ausstehende Änderung: _pending, Revision noch die alte); ohne E47
+  // (_rev fehlt) wie früher über updated_at_ms.
+  if (!doc || doc._pending) return;
+  if (doc._rev === undefined ? (Number(doc.updated_at_ms) || 0) === (Number(form.dataset.baseUpdated) || 0)
+    : (doc._rev ?? '') === (form.dataset.baseRev || '')) return;
   if (form.contains(document.activeElement)) return;
   for (const name of RECEIPT_TEXT_FIELDS) if (form.elements[name]) form.elements[name].value = doc[name] || '';
   if (form.elements.tax_rate) form.elements.tax_rate.value = hasAmount(doc.tax_rate) ? String(Number(doc.tax_rate)) : '';
   for (const name of RECEIPT_AMOUNT_FIELDS) if (form.elements[name]) form.elements[name].value = centsInputValue(doc[name]);
+  form.dataset.baseRev = doc._rev ?? '';
   form.dataset.baseUpdated = String(Number(doc.updated_at_ms) || 0);
 }
 

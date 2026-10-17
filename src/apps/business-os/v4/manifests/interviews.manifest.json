@@ -170,12 +170,12 @@
     "collections.schema.json": "20474da8b366081cd9a8498dc1975ac02f69be94e97e6878fa8b0e7daf8eff52",
     "core/scheduling.js": "8723f48039479aaa26b86b947107b788eafff3d8518d640147357f9711d433d1",
     "core/scorecard.js": "1e426c60fed1a54dc811e1f01215c1cd82fbd3c9ccf8f49e69963db399e22a80",
-    "handlers/_ats.js": "9b61f67b398d511d68dcbca570b5c3a5c8056f5c9e147bca835c6274f4ba8c46",
+    "handlers/_ats.js": "106c6da0358fb3fad8885549b272cd91b6f6113ad1db0416a61c8791c3229988",
     "handlers/ats.interview.transcribe.js": "93abb692d07018adac8430ecd0476d83314d451a2e571e63f592d6c2fe169dab",
     "icon.svg": "1df8cdafb7fedf6d27b036a70cd78f5f5bd38637ff864da43d9f85efb4e2a4fe",
     "index.css": "ab805699115a3be43d9e47449ae7dae9d695219962133da0a44928c7e4cbe156",
     "index.html": "ddb09a541f0120260697c6b91f03a3415c6833f4b54e591039a7f70012057b15",
-    "index.js": "39a2c553810f293074f567a9004883b8dcac84565d2e3cd341b714941cc6fce4",
+    "index.js": "6ef75480ca688b8a58ce2efa4e9df5374895af58ff6e313f1ebaf2abcf90d6dc",
     "locales/de.json": "d5b48d83a96f380e0e491289e5978f2a5860b1d0ce9d6dacc8ffb887500301ec",
     "locales/en.json": "912e05a46f89804bc6bd36534cde85b510182786167224b20370ca83c9e3499b",
     "module.json": "22bc0aa5ce2d803084e4d07a3d954003577af271e98c3c0280526326b8998545",
@@ -435,7 +435,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "18941b8631447fe5c77371788c8e4771aad7be44aaf599a5eb936563b712d189",
+    "base_hash": "145251ba82af150b9221044e2191cb202cc8a238130e227c39e1a89729712308",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

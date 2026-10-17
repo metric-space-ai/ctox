@@ -19,7 +19,11 @@ fn put(tx: &Transaction<'_>, name: &str, doc: Value) {
     .unwrap();
 }
 fn rules(export: bool, mask: FieldMask) -> sync_rights::RightsSnapshot {
-    let exported = if export { json!({"desktop_files":["read"]}) } else { json!({}) };
+    let exported = if export {
+        json!({"desktop_files":["read"]})
+    } else {
+        json!({})
+    };
     let desktop = ManifestRules::from_manifest(
         "desktop",
         "v1",
@@ -63,7 +67,10 @@ fn rules(export: bool, mask: FieldMask) -> sync_rights::RightsSnapshot {
 #[test]
 fn e30_native_files_require_exported_row_or_visible_actual_reference() {
     use sha2::Digest;
-    println!("E30_SOURCE_SHA256 {:x}", sha2::Sha256::digest(include_bytes!("rxdb_peer_v4_files.rs")));
+    println!(
+        "E30_SOURCE_SHA256 {:x}",
+        sha2::Sha256::digest(include_bytes!("rxdb_peer_v4_files.rs"))
+    );
     let mut db = rusqlite::Connection::open_in_memory().unwrap();
     let tx = db.transaction().unwrap();
     schema::initialize(&tx).unwrap();
@@ -131,7 +138,7 @@ fn e30_native_files_require_exported_row_or_visible_actual_reference() {
         admit(&tx, &rules(false, FieldMask::All), &actor, "shell", &hash).is_err(),
         "removing the owner's read export revokes bytes"
     );
-    tx.execute(&format!("UPDATE {table} SET deleted=1"), [])
+    tx.execute(&format!("UPDATE {table} SET deleted=1,data=NULL"), [])
         .unwrap();
     put(
         &tx,

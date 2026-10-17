@@ -11,8 +11,10 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/ctox-sync-v4/stub');
+// Pin 8265bd7: E48 – der Stub veröffentlicht ctox-platform selbst; Fremdlesen braucht die eigene Deklaration (echtes Manifest).
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
 const BOS = normalize(join(dirname(fileURLToPath(import.meta.url)), '../../..'));
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/playwright'));
@@ -50,12 +52,16 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes('knowledge'));
   await page.evaluate(async () => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/knowledge/index.js');
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
     await kernel.sim.push('business_apps', [{ id: 'ctox', title: 'CTOX' }, { id: 'knowledge', title: 'Knowledge' }]);
+    // E48: echtes Manifest (foreign_collections business_commands) nach der business_apps-Zeile veröffentlichen.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('knowledge', '1.1.7', { title: 'Knowledge', manifestExtra: window.__routes });
     await kernel.sim.push('knowledge_items', [
       { id: 'skillbook:alpha', kind: 'skillbook', title: 'Alpha Skill', markdown: '# Alpha\n\nAlpha Inhalt', updated_at_ms: 2 },
       { id: 'skillbook:beta', kind: 'skillbook', title: 'Beta Skill', markdown: '# Beta\n\nBeta Inhalt', updated_at_ms: 1 },

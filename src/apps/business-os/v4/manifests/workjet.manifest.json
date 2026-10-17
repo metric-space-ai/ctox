@@ -1,0 +1,673 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/workjet/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": null,
+  "_source_dir": "src/apps/business-os/modules/workjet",
+  "_todo": [
+    "index.js exportiert kein mount(); Einstieg klären.",
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "workjet",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {
+    "workjet_luma_state": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/workjet.collections.schema.json",
+      "_schema_wrapper": {
+        "conflictStrategy": "field-merge"
+      },
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "execution": {},
+          "id": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "managedSystemPrompt": {},
+          "managerThreadReference": {},
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "telemetry": {},
+          "updatedAtMs": {
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "workerGraph": {}
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "workjet_mailbox_envelopes": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/workjet.collections.schema.json",
+      "_schema_wrapper": {
+        "conflictStrategy": "field-merge"
+      },
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": false,
+        "indexes": [
+          "target_environment_id",
+          "status",
+          [
+            "target_environment_id",
+            "status",
+            "created_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "consumed_at_ms": {
+            "type": "number"
+          },
+          "consumed_by": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "envelope_json": {
+            "maxLength": 65536,
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "payload_json": {
+            "maxLength": 262144,
+            "type": "string"
+          },
+          "source_environment_id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "source_workspace_id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "consumed"
+            ],
+            "type": "string"
+          },
+          "target_environment_id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "target_workspace_id": {
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "target_environment_id",
+          "created_at_ms",
+          "expires_at_ms",
+          "envelope_json",
+          "payload_json",
+          "status"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "workjet_worker_dispatch_intents": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/workjet.collections.schema.json",
+      "_schema_wrapper": {
+        "conflictStrategy": "field-merge"
+      },
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": false,
+        "indexes": [
+          "registration_id",
+          [
+            "owner_user_id",
+            "status",
+            "created_at_ms"
+          ],
+          [
+            "owner_user_id",
+            "source_environment_id",
+            "status",
+            "created_at_ms"
+          ],
+          [
+            "owner_user_id",
+            "project_id",
+            "created_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "command_id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "dispatch_key": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "intent": {
+            "additionalProperties": false,
+            "properties": {
+              "computerId": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "intentId": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "projectId": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "registrationId": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "registrationRevision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "sourceEnvironmentId": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "sourceSupervisorThreadId": {
+                "maxLength": 36,
+                "type": "string"
+              },
+              "task": {
+                "maxLength": 16384,
+                "type": "string"
+              },
+              "title": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "workerProfileId": {
+                "maxLength": 256,
+                "type": "string"
+              }
+            },
+            "required": [
+              "intentId",
+              "registrationId",
+              "registrationRevision",
+              "sourceEnvironmentId",
+              "sourceSupervisorThreadId",
+              "projectId",
+              "task"
+            ],
+            "type": "object"
+          },
+          "intent_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "owner_user_id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "project_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "registration_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "registration_revision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "request_digest": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "result": {
+            "additionalProperties": true,
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "source_environment_id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "completed"
+            ],
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "intent_id",
+          "registration_id",
+          "registration_revision",
+          "command_id",
+          "dispatch_key",
+          "request_digest",
+          "intent",
+          "result",
+          "owner_user_id",
+          "project_id",
+          "source_environment_id",
+          "status",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "workjet_worker_dispatch_outcomes": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/workjet.collections.schema.json",
+      "_schema_wrapper": {
+        "conflictStrategy": "field-merge"
+      },
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": false,
+        "indexes": [
+          [
+            "owner_user_id",
+            "project_id",
+            "supervisor_thread_id",
+            "accepted_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "accepted_at_ms": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "intent_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "owner_user_id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "project_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "receipt": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "registration_revision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "supervisor_thread_id": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "intent_id",
+          "owner_user_id",
+          "project_id",
+          "supervisor_thread_id",
+          "registration_revision",
+          "receipt",
+          "accepted_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "workjet_worker_dispatch_sources": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/workjet.collections.schema.json",
+      "_schema_wrapper": {
+        "conflictStrategy": "field-merge"
+      },
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": false,
+        "indexes": [
+          "owner_user_id",
+          [
+            "owner_user_id",
+            "project_id"
+          ],
+          [
+            "owner_user_id",
+            "source_environment_id",
+            "state"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "owner_user_id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "project_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "record": {
+            "additionalProperties": false,
+            "properties": {
+              "authorityEpoch": {
+                "type": "integer"
+              },
+              "contract": {
+                "maxLength": 64,
+                "type": "string"
+              },
+              "ownerUserId": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "projectId": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "registrationId": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "revision": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "sourceEnvironmentId": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "sourceInstanceId": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "sourceSupervisorThreadId": {
+                "maxLength": 36,
+                "type": "string"
+              },
+              "sourceWorkspaceId": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "state": {
+                "enum": [
+                  "active",
+                  "revoked"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "contract",
+              "registrationId",
+              "revision",
+              "sourceEnvironmentId",
+              "sourceSupervisorThreadId",
+              "sourceInstanceId",
+              "sourceWorkspaceId",
+              "projectId",
+              "ownerUserId",
+              "authorityEpoch",
+              "state"
+            ],
+            "type": "object"
+          },
+          "registration_id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source_environment_id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "active",
+              "revoked"
+            ],
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "owner_user_id",
+          "project_id",
+          "registration_id",
+          "record",
+          "state",
+          "revision",
+          "source_environment_id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {
+    "workjet.worker.dispatch": {
+      "_basis": "v4-manifest.json; mcp_workjet_worker_dispatch.rs:224-245 (CtoxTaskCreate Projekt + IntegrationsManage Workspace) und mcp_remote_worker.rs:444-461 (nur aktive chef/admin); der Handler prüft zusätzlich business_users.",
+      "_permission": "CtoxTaskCreate + IntegrationsManage (native Policy), Rollen chef/admin",
+      "assigned_users": false,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    }
+  },
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": null,
+  "exports": {},
+  "files": {
+    "collections.schema.json": "78f5ad8d2eec7924e872369d398f1639fda1a0f322f19d4dd2b38d1b523d979f",
+    "handlers/_lib/dispatch.js": "1fd912bdc8716c41f877d11feebff40f0849a0cdc13ca71c0a9fc0430ff5f42d",
+    "handlers/_lib/outcome-contract.js": "88089d05b3a507a7fa86af2df1413dad4cce1b4afbe4c03688c9171b01acc73f",
+    "handlers/_lib/sha256.js": "9d4ce8a6b54db463483dacb41bc782e242f7608fb2df2100b0aec5144926ba26",
+    "handlers/workjet.worker.dispatch.js": "4d9e2d41dae4482298f6c430faaa6bd5d44703a5bf67a72845d66662c26001ca",
+    "locales/de.json": "388e706fd07f371d2079d3760dcd4b8268fd8a8c7ca10d7af6be32cf5cd0152d",
+    "locales/en.json": "388e706fd07f371d2079d3760dcd4b8268fd8a8c7ca10d7af6be32cf5cd0152d",
+    "module.json": "51ff8aa33170f7e20d75ffb8f637b1ac76c579673788f00d94233d3454537036",
+    "v4-manifest.json": "ce9a8782401b61c5455813fd8daceeff983074d64d46875bff6b7954377d1c77"
+  },
+  "foreign_collections": {
+    "business_users": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/dispatch.js:16",
+          "handlers/_lib/dispatch.js:91"
+        ],
+        "code_write": [],
+        "declaration_basis": "Entscheidung E54.3b (16.10.2026): Projekt-/Supervisor-Bindung aus den ctox-eigenen workjet_projects (K-WJ-1-Export) und workjet_project_chats, Akteur-Autorität aus business_users (wie remote_worker::current_actor); ctox_task_approval_requests liest der Workjet-Client (packages/shared/src/ctoxV4AppData.ts readWorkjetDecision, E49.4).",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "ctox_task_approval_requests": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "declaration_basis": "Entscheidung E54.3b (16.10.2026): Projekt-/Supervisor-Bindung aus den ctox-eigenen workjet_projects (K-WJ-1-Export) und workjet_project_chats, Akteur-Autorität aus business_users (wie remote_worker::current_actor); ctox_task_approval_requests liest der Workjet-Client (packages/shared/src/ctoxV4AppData.ts readWorkjetDecision, E49.4).",
+        "sources": [
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "threads"
+    },
+    "workjet_project_chats": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/dispatch.js:15",
+          "handlers/_lib/dispatch.js:106",
+          "handlers/_lib/dispatch.js:293"
+        ],
+        "code_write": [],
+        "declaration_basis": "Entscheidung E54.3b (16.10.2026): Projekt-/Supervisor-Bindung aus den ctox-eigenen workjet_projects (K-WJ-1-Export) und workjet_project_chats, Akteur-Autorität aus business_users (wie remote_worker::current_actor); ctox_task_approval_requests liest der Workjet-Client (packages/shared/src/ctoxV4AppData.ts readWorkjetDecision, E49.4).",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "workjet_projects": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/dispatch.js:14",
+          "handlers/_lib/dispatch.js:106"
+        ],
+        "code_write": [],
+        "declaration_basis": "Entscheidung E54.3b (16.10.2026): Projekt-/Supervisor-Bindung aus den ctox-eigenen workjet_projects (K-WJ-1-Export) und workjet_project_chats, Akteur-Autorität aus business_users (wie remote_worker::current_actor); ctox_task_approval_requests liest der Workjet-Client (packages/shared/src/ctoxV4AppData.ts readWorkjetDecision, E49.4).",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    }
+  },
+  "handlers": {
+    "workjet.worker.dispatch": "handlers/workjet.worker.dispatch.js"
+  },
+  "layout": {
+    "_multi_instance_basis": "v4-manifest.json; Handler-only App ohne Fenster (E42.3 Nr. 2, E54.3b Nr. 6).",
+    "category": "System",
+    "icon_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-workjet\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" stroke=\"#4f46e5\" stroke-width=\"2\"></rect><path d=\"M7 9l3 3-3 3M12 15h5\" stroke=\"#4f46e5\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "multi_instance": false
+    }
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "8b1bcffc4e9a470b21c5340d81166ae7fba81b800dcba82fee566f347f9449b1",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [],
+  "title": "Workjet",
+  "triggers": [],
+  "version": "0.1.0"
+}
