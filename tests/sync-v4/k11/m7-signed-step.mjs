@@ -9,8 +9,8 @@ export async function performDressSmoke({config,root,output,env,cli,quiesce,phas
  try{
   let expectedRoot=join(current,'src/apps/business-os/v4/index.html');
   if(config.version){
-   const stage=await cli(['business-os','shell-update','stage','--version',config.version],{allowFailure:true});
-   result.signedSlot={status:stage.code===0?'staged':'fail',stageExit:stage.code,version:config.version};
+   const stage=config.verifiedActiveReceipt?{code:0,reused:true}:await cli(['business-os','shell-update','stage','--version',config.version],{allowFailure:true});
+   result.signedSlot={status:stage.code===0?'staged':'fail',stageExit:stage.reused?null:stage.code,version:config.version,...(stage.reused?{activationReusedFrom:config.verifiedActiveReceipt}:{})};
    if(stage.code===0){
     // The product CLI has already verified signature + inventory. Bind the
     // actual selected signed manifest to the main artifact, never same-name bytes.
@@ -20,8 +20,8 @@ export async function performDressSmoke({config,root,output,env,cli,quiesce,phas
     if(manifest.sourceCommit!==(config.slotSourceSha||config.mainSha)||manifest.version!==config.version)throw Error('Signed slot/main daemon source mismatch');
     result.signedSlot.sourceCommit=manifest.sourceCommit;result.signedSlot.artifactSha256=manifest.artifact.sha256;
     if(config.slotSha256&&manifest.artifact.sha256!==config.slotSha256)throw Error('Signed slot archive checksum differs from pinned official asset');
-    const active=await cli(['business-os','shell-update','activate'],{allowFailure:true});
-    result.signedSlot.activateExit=active.code;result.signedSlot.status=active.code===0?'pass':'fail';
+    const active=config.verifiedActiveReceipt?{code:0,reused:true}:await cli(['business-os','shell-update','activate'],{allowFailure:true});
+    result.signedSlot.activateExit=active.reused?null:active.code;result.signedSlot.status=active.code===0?'pass':'fail';
     if(active.code===0){
      const read=await cli(['business-os','shell-update','status'],{allowFailure:true});let state;try{const text=fs.readFileSync(read.log,'utf8');state=JSON.parse(text.slice(text.indexOf('{'),text.lastIndexOf('}')+1));}catch{}
      result.signedSlot.statusReadback={exit:read.code,activeVersion:state?.activeVersion,currentSlot:state?.currentSlot,recoveryShell:state?.recoveryShell,phase:state?.phase};

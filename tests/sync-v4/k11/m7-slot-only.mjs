@@ -2,7 +2,7 @@
 import fs from 'node:fs';
 import {join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
-const [prior,directory]=process.argv.slice(2),base=resolve(prior),out=resolve(directory);
+const [prior,directory,activeReceipt]=process.argv.slice(2),base=resolve(prior),out=resolve(directory);
 if(process.platform!=='linux'||!process.env.BUILD_LANE_BIN)throw Error('Canonical Linux lane required');
 const allowed=resolve(process.env.BUILD_LANE_BIN,'../artifacts');
 if(!base.startsWith(allowed+'/')||!out.startsWith(allowed+'/')||fs.existsSync(out))throw Error('Owned existing prior/new output required');
@@ -11,6 +11,12 @@ if(!controller.groupAbsent||!controller.network?.childTerminal||!manager.childre
 try{process.kill(-controller.pgid,0);throw Error('Prior sandbox still exists');}catch(e){if(e.code!=='ESRCH')throw e;}
 const c=JSON.parse(fs.readFileSync(join(previous,'sandbox.json')));
 const smoke={...JSON.parse(fs.readFileSync(join(base,'signed-smoke.json'))),dataReference:join(previous,'data-before.json')};
+if(activeReceipt){
+ const file=resolve(activeReceipt);if(!file.startsWith(allowed+'/'))throw Error('Private activation receipt required');
+ const r=JSON.parse(fs.readFileSync(file)),done=JSON.parse(fs.readFileSync(join(resolve(file,'..'),'probe/controller.json')));
+ if(r.prior!==base||r.signedSmoke?.signedSlot?.status!=='pass'||r.signedSmoke.signedSlot.artifactSha256!==smoke.slotSha256||r.signedSmoke.signedSlot.sourceCommit!==smoke.slotSourceSha||!done.groupAbsent||!done.network?.childTerminal)throw Error('Prior active slot or terminal controller custody differs');
+ smoke.verifiedActiveReceipt=file;
+}
 if(!smoke.version||!smoke.slotSha256)throw Error('Real signed slot config required');
 fs.mkdirSync(out,{mode:0o700});
 const config=join(out,'signed-smoke.json');fs.writeFileSync(config,JSON.stringify(smoke),{mode:0o600});

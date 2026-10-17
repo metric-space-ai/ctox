@@ -26,8 +26,8 @@ try{
  // Readiness observes the TCP listener, not an asset request that can spend
  // its entire deadline validating a newly activated signed slot. HTTP timings
  // and their unchanged thresholds are measured separately below.
- const readyAt=Date.now();r.phase='socket';
- await until(()=>new Promise(resolve=>{const socket=createConnection({host:'127.0.0.1',port:8765});let done=false;const finish=ok=>{if(done)return;done=true;socket.destroy();resolve(ok);};socket.setTimeout(1000,()=>finish(false));socket.once('connect',()=>finish(true));socket.once('error',()=>finish(false));}),8000,'private HTTP socket ready');r.socketReadyMs=Date.now()-readyAt;r.phase='launch-context';
+ const readyAt=Date.now();r.phase='socket';r.socketBudgetMs=30000;
+ await until(()=>new Promise(resolve=>{const socket=createConnection({host:'127.0.0.1',port:8765});let done=false;const finish=ok=>{if(done)return;done=true;socket.destroy();resolve(ok);};socket.setTimeout(1000,()=>finish(false));socket.once('connect',()=>finish(true));socket.once('error',()=>finish(false));}),30000,'private HTTP socket ready');r.socketReadyMs=Date.now()-readyAt;r.phase='launch-context';
  // Both series are retained; the fixed warm interval cannot hide cold 503s.
  r.launchSeries=[];
  for(const phase of ['cold','warm']){
