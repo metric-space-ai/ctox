@@ -63,8 +63,11 @@ if (
 ) {
   throw new Error('WebRTC RxDB protocol fixture constants drifted from the Browser runtime contract');
 }
+// The Rust fixture is the canonical schema hash registry; the Browser runtime must match it.
+const rustSchemaHashFixture = JSON.parse(readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../core/business_os/business_os_schema_hashes.json'), 'utf8'));
 if (
-  CTOX_BUSINESS_OS_SCHEMA_HASHES.business_commands !== '96b979f9e2e37ebffeffe9707e5f622b5a4c8d6009258a11ad934034917c5d2f'
+  CTOX_BUSINESS_OS_SCHEMA_HASHES.business_commands !== rustSchemaHashFixture.business_commands
+  || typeof rustSchemaHashFixture.business_commands !== 'string'
   || await schemaHash({ version: 99, primaryKey: 'id', properties: { id: { type: 'string', maxLength: 32 } } }, 'business_commands') !== CTOX_BUSINESS_OS_SCHEMA_HASHES.business_commands
   || schemaHashSource('business_commands') !== 'business-os-schema-hash-registry-v1'
 ) {
