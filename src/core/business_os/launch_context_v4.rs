@@ -31,6 +31,8 @@ pub(crate) struct V4LaunchContext {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Launch {
     pub instance_id: String,
+    #[serde(rename = "instance_display_name")]
+    pub instance_display_name: String,
     pub user_id: String,
     pub actor: Actor,
     pub signaling: Signaling,
@@ -85,6 +87,26 @@ pub(crate) struct PackageKey {
 struct Device {
     actor: Actor,
     peer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_pubkey: Option<String>,
+}
+
+/// Display metadata from the official persisted instance configuration only.
+/// No process environment, hostname inference or secret lookup is involved.
+pub(crate) async fn instance_display_name(owners: &Arc<StoreInputs>) -> Result<String> {
+    let fallback = owners.instance_signer()?.instance_id().to_owned();
+    let root = owners.root.clone();
+    let configured = crate::persistence::run_core_sync(move || {
+        crate::inference::runtime_env::try_get_runtime_env_value(
+            &root,
+            "CTOX_INSTANCE_DISPLAY_NAME",
+        )
+    })
+    .await?;
+    Ok(configured
+        .map(|s| s.trim().to_owned())
+        .filter(|s| !s.is_empty() && s.len() <= 128 && !s.chars().any(char::is_control))
+        .unwrap_or(fallback))
 }
 
 /// `user` is the route's authenticated principal, never a browser body. Its role
@@ -93,7 +115,22 @@ pub(crate) async fn build(
     owners: &Arc<StoreInputs>,
     user: &BusinessOsUser,
 ) -> Result<V4LaunchContext> {
-    build_principal(owners, user, false).await
+    build_principal(owners, user, false, None).await
+}
+/// E54.4: called only after the pairing owner verified the one-time proof.
+/// The device key is inside the instance-signed offer and E50's ticket digest;
+/// no alternate signer, ticket, peer role or admission path is introduced.
+pub(crate) async fn build_for_device(
+    owners: &Arc<StoreInputs>,
+    user: &BusinessOsUser,
+    device_pubkey: &str,
+) -> Result<V4LaunchContext> {
+    let raw = URL_SAFE_NO_PAD.decode(device_pubkey)?;
+    ensure!(
+        raw.len() == 32 && URL_SAFE_NO_PAD.encode(&raw) == device_pubkey,
+        "invalid paired device public key"
+    );
+    build_principal(owners, user, false, Some(device_pubkey)).await
 }
 /// E50: only the HTTP boundary may authenticate the implicit loopback admin.
 /// No persisted local-dev account or credential is created.
@@ -107,12 +144,13 @@ pub(crate) async fn build_local(owners: &Arc<StoreInputs>) -> Result<V4LaunchCon
         created_at_ms: 0,
         updated_at_ms: 0,
     };
-    build_principal(owners, &user, true).await
+    build_principal(owners, &user, true, None).await
 }
 async fn build_principal(
     owners: &Arc<StoreInputs>,
     user: &BusinessOsUser,
     local: bool,
+    device_pubkey: Option<&str>,
 ) -> Result<V4LaunchContext> {
     ensure!(
         user.active && !user.id.is_empty(),
@@ -160,6 +198,7 @@ async fn build_principal(
     let device = serde_json::to_string(&Device {
         actor: actor.clone(),
         peer: signaling.peer_id.clone(),
+        device_pubkey: device_pubkey.map(str::to_owned),
     })?;
     ensure!(
         device.len() <= 256,
@@ -207,6 +246,7 @@ async fn build_principal(
     let context = V4LaunchContext {
         v4: Launch {
             instance_id: signer.instance_id().into(),
+            instance_display_name: instance_display_name(owners).await?,
             user_id: actor.id.clone(),
             actor,
             signaling,
