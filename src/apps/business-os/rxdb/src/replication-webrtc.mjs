@@ -1857,12 +1857,18 @@ class CtoxWebRtcReplicationState {
     const maxAttempts = 3;
     let activePeerId = peerId;
     let lastError = null;
+    // A timed-out batch is retried SMALLER from the same checkpoint. Re-asking
+    // for the identical multi-hundred-KB batch over a slow relay never
+    // finished (lead initial replication, field incident 17.10.2026); half
+    // the batch can complete, the checkpoint advances and is persisted, and a
+    // later reconnect resumes from there instead of from zero.
+    let attemptBatchSize = Math.max(1, Math.floor(Number(batchSize) || 1));
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         const result = await this.peer.request(
           activePeerId,
           'masterChangesSince',
-          [checkpoint, batchSize],
+          [checkpoint, attemptBatchSize],
           timeoutMs,
           this.collection.name,
         );
@@ -1879,6 +1885,7 @@ class CtoxWebRtcReplicationState {
         activePeerId = await this.waitForOpenPeerId().catch(() => {
           throw error;
         });
+        attemptBatchSize = Math.max(1, Math.floor(attemptBatchSize / 2));
         await delay(250);
       }
     }

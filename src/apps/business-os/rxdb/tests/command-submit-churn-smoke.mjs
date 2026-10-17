@@ -54,6 +54,8 @@ function fakePeer() {
     pending: new Map(),
     connections: new Map([['native-1', connection]]),
     forceInitiatorPeers: new Set(),
+    incomingFrames: new Map(),
+    incomingTransferProgressing: CtoxWebRtcNativePeer.prototype.incomingTransferProgressing,
     removed: [],
     events: [],
     sent: [],
@@ -137,6 +139,75 @@ function answer(peer, id, result) {
   await CtoxWebRtcNativePeer.prototype.drainSendQueue.call(peer, connection);
   assert.deepEqual(sentTexts, ['inline'], 'a cancelled request frame is never put on the wire');
   assert.deepEqual(order, ['sent:inline', 'framed:big', 'sent:big'], 'onSent fires after the real hand-off');
+}
+
+// (7) Lead initial replication must make progress instead of restarting.
+// 7a. A framed answer that keeps streaming in past the request budget is
+// awaited, not discarded and re-requested from zero.
+{
+  const peer = fakePeer();
+  const result = peer.request('native-1', 'masterChangesSince', [null, 10], 40);
+  const { frame, hooks } = peer.sent[0];
+  hooks.onSent();
+  await delay(10);
+  const transfer = { peerId: 'native-1', createdAt: Date.now(), lastProgressAt: Date.now() };
+  peer.incomingFrames.set('t1', transfer);
+  const ticker = setInterval(() => { transfer.lastProgressAt = Date.now(); }, 10);
+  await delay(130); // > 3 x the 40 ms budget, answer still streaming
+  clearInterval(ticker);
+  peer.incomingFrames.delete('t1');
+  answer(peer, frame.id, { documents: [], checkpoint: { id: 'lead_9', lwt: 9 } });
+  assert.deepEqual((await result).checkpoint, { id: 'lead_9', lwt: 9 },
+    'a progressing framed answer must not time out');
+  assert.deepEqual(peer.removed, []);
+}
+// 7b. A stalled transfer (no progress) still times out.
+{
+  const peer = fakePeer();
+  const result = peer.request('native-1', 'masterChangesSince', [null, 10], 30);
+  peer.sent[0].hooks.onSent();
+  peer.incomingFrames.set('t1', { peerId: 'native-1', createdAt: Date.now(), lastProgressAt: Date.now() - 1_000 });
+  await assert.rejects(result, /Timed out waiting for WebRTC response masterChangesSince/);
+}
+// 7c. A timed-out pull batch is retried smaller from the SAME checkpoint.
+{
+  const { getReplicationStateClass } = replicationWebRtcTestInternals;
+  const calls = [];
+  const fake = {
+    cancelled: false,
+    collection: { name: 'outbound_lead_generation_leads' },
+    requestTimeoutMsFor: () => 15_000,
+    isTransientMasterChangesSinceError: () => true,
+    waitForOpenPeerId: async () => 'native-1',
+    peer: {
+      async request(_peerId, method, params) {
+        calls.push({ method, checkpoint: params[0], batchSize: params[1] });
+        if (calls.length < 3) throw new Error('Timed out waiting for WebRTC response masterChangesSince');
+        return { documents: [], checkpoint: params[0] };
+      },
+    },
+  };
+  const checkpoint = { id: 'lead_4', lwt: 4 };
+  const response = await getReplicationStateClass().prototype.requestMasterChangesSince
+    .call(fake, 'native-1', checkpoint, 10);
+  assert.deepEqual(calls.map((call) => call.batchSize), [10, 5, 2], 'retries shrink the batch');
+  assert.ok(calls.every((call) => call.checkpoint === checkpoint), 'retries resume from the same checkpoint');
+  assert.deepEqual(response.result.checkpoint, checkpoint);
+}
+// 7d. A partial (never completed) pull checkpoint retained across a reconnect
+// stays valid while the native head only moved forward.
+{
+  const { remoteCheckpointStillCovers } = replicationWebRtcTestInternals;
+  const retained = {
+    validityKey: 'gen-1|outbound_lead_generation_leads|schema-1|epoch-a',
+    pull: { id: 'lead_40', lwt: 40 },
+    firstPullCompletedAtMs: null,
+  };
+  assert.equal(remoteCheckpointStillCovers(
+    retained,
+    'gen-1|outbound_lead_generation_leads|schema-1|epoch-b',
+    { checkpoint: { latestLwt: 55 } },
+  ), true, 'reconnect resumes the partial initial pull instead of restarting from zero');
 }
 
 console.log('ctox-rxdb command submit churn smoke OK');
