@@ -736,7 +736,7 @@ pub(super) fn execute(
           + Send
           + Sync),
 ) -> Result<Value, StoreError> {
-    execute_with_publication(
+    execute_with_context(
         tx,
         actor,
         command,
@@ -744,6 +744,32 @@ pub(super) fn execute(
         secret_owner_available,
         signer,
         migrations,
+        &crate::business_os::machine_enrollment::DeviceEnrollmentResolution::Unavailable,
+        None,
+    )
+}
+
+pub(super) fn execute_with_worker_binding(
+    tx: &Transaction<'_>,
+    actor: &BusinessOsActor,
+    command: &CommandDocument,
+    now: u64,
+    secret_owner_available: bool,
+    signer: &dyn InstanceSigner,
+    migrations: &(dyn Fn(&CollectionDefinition, &CollectionDefinition, &Value) -> bool
+          + Send
+          + Sync),
+    worker_binding: &crate::business_os::machine_enrollment::DeviceEnrollmentResolution,
+) -> Result<Value, StoreError> {
+    execute_with_context(
+        tx,
+        actor,
+        command,
+        now,
+        secret_owner_available,
+        signer,
+        migrations,
+        worker_binding,
         None,
     )
 }
@@ -758,6 +784,33 @@ pub(super) fn execute_with_publication(
     migrations: &(dyn Fn(&CollectionDefinition, &CollectionDefinition, &Value) -> bool
           + Send
           + Sync),
+    publication: Option<&(dyn Fn() -> Result<(), StoreError> + Send + Sync)>,
+) -> Result<Value, StoreError> {
+    execute_with_context(
+        tx,
+        actor,
+        command,
+        now,
+        secret_owner_available,
+        signer,
+        migrations,
+        &crate::business_os::machine_enrollment::DeviceEnrollmentResolution::Unavailable,
+        publication,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn execute_with_context(
+    tx: &Transaction<'_>,
+    actor: &BusinessOsActor,
+    command: &CommandDocument,
+    now: u64,
+    secret_owner_available: bool,
+    signer: &dyn InstanceSigner,
+    migrations: &(dyn Fn(&CollectionDefinition, &CollectionDefinition, &Value) -> bool
+          + Send
+          + Sync),
+    worker_binding: &crate::business_os::machine_enrollment::DeviceEnrollmentResolution,
     publication: Option<&(dyn Fn() -> Result<(), StoreError> + Send + Sync)>,
 ) -> Result<Value, StoreError> {
     ctox_store::change_log::subscription::write_contract::routes::validate_persisted_input(
@@ -797,7 +850,13 @@ pub(super) fn execute_with_publication(
         }
     }
     if super::platform_routes::handles(&command.command_type) {
-        return super::platform_routes::execute(tx, actor, command, now);
+        return super::platform_routes::execute_with_binding(
+            tx,
+            actor,
+            command,
+            now,
+            worker_binding,
+        );
     }
     if matches!(
         command.command_type.as_str(),

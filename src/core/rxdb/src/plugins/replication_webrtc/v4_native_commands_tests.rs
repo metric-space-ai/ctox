@@ -38,7 +38,13 @@ fn command(method: &str) -> NativeCommand {
     NativeCommand {
         command_id: "command-e25".into(),
         kind: method.into(),
-        payload: json!({"action":"fixture"}),
+        payload: match method {
+            "ctox.secret.request.list" => json!({}),
+            "ctox.secret.request.fulfill" | "ctox.secret.request.decline" => {
+                json!({"request_id":"fixture-request"})
+            }
+            _ => json!({"action":"fixture"}),
+        },
         app_id: "sender-app".into(),
         actor_id: "alice".into(),
     }
@@ -121,9 +127,9 @@ async fn e25_revocation_between_execution_and_completion_cannot_publish() {
         .insert(peer.clone(), "admitted-token".into());
     let active = Arc::new(AtomicBool::new(true));
     let authority = Arc::new(CommandAuthority(active.clone()));
-    pool.register_auxiliary_request_handler(
+    pool.register_native_command_executor(
         routes::ROUTES[0].method,
-        Arc::new(|_, _, _| Box::pin(async { Ok(json!({"ok":true})) })),
+        Arc::new(|_, _, _, _| Box::pin(async { Ok(json!({"ok":true})) })),
     )
     .unwrap();
     for revoke_actor in [false, true] {
