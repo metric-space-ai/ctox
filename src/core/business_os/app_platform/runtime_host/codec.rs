@@ -57,7 +57,8 @@ impl RuntimeCodec {
         if actor_json(&a) != command["actor"] {
             return Err(invalid("revoked: actor changed"));
         }
-        let manifest = self.route(db, &saved)?;
+        let r = rights(db)?;
+        let manifest = self.route_with_rights(db, &saved, &r)?;
         let resolved = manifest["app_id"]
             .as_str()
             .ok_or_else(|| invalid("invalid: execution target"))?;
@@ -71,7 +72,6 @@ impl RuntimeCodec {
         {
             return Err(invalid("revoked: app version changed"));
         }
-        let r = rights(db)?;
         if command["id"] != parent {
             let kind = text(command, "type").map_err(sql_error)?;
             if !origin::core_only(&r, resolved, kind)? || !origin::native_event(db, &saved)? {
@@ -131,8 +131,9 @@ impl StoreCodec for RuntimeCodec {
         .map_err(|e| invalid(format!("{}: {}", e.code, e.reason)))
     }
     fn read(&self, db: &Connection, binding: &Value, name: &str) -> Result<Vec<Value>, StoreError> {
-        let a = self.check(db, binding)?;
-        let r = rights(db)?;
+        #[cfg(test)]
+        let _pressure = super::policy_pressure::enter(db, binding);
+        let (a, _, r) = self.checked_snapshot(db, binding)?;
         let app = ctox_app_runtime::execution_app(&binding["command"]).map_err(sql_error)?;
         // Authorize the collection even when it contains no rows.
         let scope = r

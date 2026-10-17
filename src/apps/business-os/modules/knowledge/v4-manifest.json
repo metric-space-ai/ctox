@@ -31,10 +31,14 @@
   "multi_instance": false,
   "row_filters": {
     "knowledge_table_rows": {
-      "actor_id": "$self"
+      "op": "eq",
+      "path": "/actor_id",
+      "value": { "kind": "actor_id" }
     },
     "knowledge_views": {
-      "actor_id": "$self"
+      "op": "eq",
+      "path": "/actor_id",
+      "value": { "kind": "actor_id" }
     }
   },
   "triggers": [

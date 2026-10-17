@@ -76,6 +76,15 @@ pub(super) fn known_target(db: &Connection, doc: &Value) -> Result<(), StoreErro
 
 impl RuntimeCodec {
     pub(super) fn route(&self, db: &Connection, doc: &Value) -> Result<Value, StoreError> {
+        self.route_with_rights(db, doc, &rights(db)?)
+    }
+    // The caller may reuse this policy only inside this same WAL callback.
+    pub(super) fn route_with_rights(
+        &self,
+        db: &Connection,
+        doc: &Value,
+        snapshot: &sync_rights::RightsSnapshot,
+    ) -> Result<Value, StoreError> {
         let source = text(doc, "app_id").map_err(sql_error)?;
         let kind = text(doc, "type").map_err(sql_error)?;
         let a = actor(db, text(doc, "actor_id").map_err(sql_error)?)?;
@@ -85,7 +94,7 @@ impl RuntimeCodec {
             }
             // Core routes never consult app handlers or commands_out.
             let manifest = self.manifest(db, source)?;
-            origin::delivery_permit(db, doc, &a)?;
+            origin::delivery_permit_with_rights(db, doc, &a, snapshot)?;
             return Ok(manifest);
         }
         if doc["runtime_completion"] == true {
@@ -96,12 +105,12 @@ impl RuntimeCodec {
                 self.version(db, source, text(doc, "native_version").map_err(sql_error)?)?
                     ["manifest"]
                     .clone();
-            origin::delivery_permit(db, doc, &a)?;
+            origin::delivery_permit_with_rights(db, doc, &a, snapshot)?;
             return Ok(manifest);
         }
         if origin::native_event(db, doc)? {
             let manifest = self.manifest(db, source)?;
-            origin::delivery_permit(db, doc, &a)?;
+            origin::delivery_permit_with_rights(db, doc, &a, snapshot)?;
             return Ok(manifest);
         }
         known_target(db, doc)?;
@@ -134,7 +143,7 @@ impl RuntimeCodec {
                 return Err(invalid("forbidden: receiver commands_in missing"));
             }
         }
-        origin::delivery_permit_for(db, doc, &a, &rights(db)?, target)?;
+        origin::delivery_permit_for(db, doc, &a, snapshot, target)?;
         Ok(receiver)
     }
 }

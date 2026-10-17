@@ -4,6 +4,8 @@ mod authority;
 mod codec;
 mod feed;
 mod origin;
+#[cfg(test)]
+mod policy_pressure;
 mod routing;
 #[cfg(test)]
 pub(super) use feed::check_model_fence;
@@ -171,6 +173,8 @@ pub(crate) fn document(db: &Connection, name: &str, id: &str) -> Result<Option<V
         .transpose()
 }
 pub(crate) fn rights(db: &Connection) -> Result<sync_rights::RightsSnapshot, StoreError> {
+    #[cfg(test)]
+    policy_pressure::before_snapshot();
     // Decode the existing P6 tables in the caller's already-open WAL snapshot.
     // Policy evaluation itself is the canonical policy.rs implementation.
     let rights_ver = db.query_row(
@@ -421,6 +425,12 @@ pub(super) fn publish_rights_with_fence(
             .map_err(sql_error)?;
     current.manifests.retain(|m| m.app_id() != app);
     current.manifests.push(rules);
+    // APP-PLATFORM registry preflight before suspension.
+    for manifest in &current.manifests {
+        manifest
+            .validate_registry(&current.manifests)
+            .map_err(sql_error)?;
+    }
     // Suspend the existing P6 router only for an actual rights write, after
     // validation. An unchanged/rejected/preparing request is not a revocation.
     if let Some(publication) = publication {

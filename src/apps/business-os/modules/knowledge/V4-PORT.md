@@ -151,8 +151,12 @@ const r = await ctx.cap.dataframe.window({ ref: 'knowledge-table:kdt-measured', 
 ```json
 {
   "collections": {
-    "knowledge_views":      { "class": "window", "row_filter": { "actor_id": "$self" }, "client_limit": 200 },
-    "knowledge_table_rows": { "class": "window", "row_filter": { "actor_id": "$self" }, "client_limit": 5000 }
+    "knowledge_views":      { "class": "window", "client_limit": 200 },
+    "knowledge_table_rows": { "class": "window", "client_limit": 5000 }
+  },
+  "row_filters": {
+    "knowledge_views":      { "op": "eq", "path": "/actor_id", "value": { "kind": "actor_id" } },
+    "knowledge_table_rows": { "op": "eq", "path": "/actor_id", "value": { "kind": "actor_id" } }
   },
   "triggers": [
     { "handler": "handlers/knowledge.view.window.js", "on": { "collection": "knowledge_views", "op": "insert" } },
@@ -164,6 +168,8 @@ const r = await ctx.cap.dataframe.window({ ref: 'knowledge-table:kdt-measured', 
 Schemas beider Collections stehen in `collections.schema.json` (Version 0). Klasse `window` + Zeilenfilter eigener
 Nutzer: beide Collections tragen `actor_id`; die Zeilen erbt der Handler vom View (`actor_id` des Views). Die
 `client_limit`-Werte sind Vorschlag (120 Zeilen × Tabellen je Nutzer); Byte-Budget legt der Kern fest.
+`row_filters` verwendet die native typisierte `RowFilter`-Grammatik. `ActorId` bindet der Kern an den authentifizierten
+Nutzer; `{ "actor_id": "$self" }` ist keine gültige Laufzeitregel und wird bei Veröffentlichung abgewiesen.
 
 **Tests**: `handlers/tests/knowledge.view.window.test.mjs` (9) gegen `handlers/tests/_ctx.mjs` (In-Memory-ctx mit
 Schema-Prüfung, `cursor`, `transaction`) und `handlers/tests/_dataframe-sim.mjs` (simulierte Fähigkeit, auch im

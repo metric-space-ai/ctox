@@ -143,7 +143,7 @@ pub(super) async fn submit(
         .await?;
     terminal(database, "business_commands", id).await
 }
-fn seed(tx: &rusqlite::Transaction<'_>) -> Result<(), StoreError> {
+fn seed(tx: &rusqlite::Transaction<'_>, platform_catalog: bool) -> Result<(), StoreError> {
     let names = [
         "business_apps",
         "business_app_versions",
@@ -172,11 +172,38 @@ fn seed(tx: &rusqlite::Transaction<'_>) -> Result<(), StoreError> {
         )?;
     }
     sync_rights::initialize(tx)?;
-    sync_rights::replace(
-        tx,
-        1,
-        &policy::base_release_rights(&names.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
-    )?;
+    if platform_catalog {
+        // Consume the actual Core collection/export catalog. Core commands keep
+        // their existing registry/permission authority, outside app command_rights.
+        let platform: Value =
+            serde_json::from_str(include_str!("../../v4/ctox-platform.manifest.json"))
+                .map_err(sql_error)?;
+        let owned = platform["collections"]
+            .as_object()
+            .ok_or_else(|| invalid("platform collections"))?
+            .keys()
+            .cloned()
+            .collect();
+        let core = sync_rights::manifest_rules::ManifestRules::from_manifest(
+            "ctox-platform",
+            "platform-1",
+            owned,
+            &json!({"exports":platform["exports"]}),
+        )
+        .map_err(sql_error)?;
+        sync_rights::replace_with_manifests(
+            tx,
+            1,
+            &policy::base_release_rights(&names.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+            &[core],
+        )?;
+    } else {
+        sync_rights::replace(
+            tx,
+            1,
+            &policy::base_release_rights(&names.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+        )?;
+    }
     super::super::commands::put(
         tx,
         "business_users",
@@ -192,6 +219,14 @@ async fn native_daemon_hotplug_roundtrip_and_change() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_daemon_e42_app_handlers() -> Result<()> {
     run_native_proof(Proof::E42).await
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_matching_policy_snapshot_survives_store_pressure() -> Result<()> {
+    run_native_proof(Proof::E42Pressure).await
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_knowledge_manifest_preserves_actor_row_filters() -> Result<()> {
+    run_native_proof(Proof::Knowledge).await
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_daemon_e39_routing_contracts() -> Result<()> {
@@ -211,6 +246,8 @@ enum Proof {
     E39,
     Platform,
     E42,
+    E42Pressure,
+    Knowledge,
     Lease,
 }
 async fn run_native_proof(proof: Proof) -> Result<()> {
@@ -232,7 +269,9 @@ async fn run_native_proof(proof: Proof) -> Result<()> {
             .inputs
             .sync
             .writer
-            .submit(WriteJob::new(Default::default(), seed))?
+            .submit(WriteJob::new(Default::default(), move |tx| {
+                seed(tx, proof == Proof::Knowledge)
+            }))?
             .await?;
         peers.insert(
             node,
@@ -364,6 +403,14 @@ async fn run_native_proof(proof: Proof) -> Result<()> {
         if proof == Proof::E42 {
             e42_proof::prove(database, &cas).await?;
             return Ok(json!({"e42_only":true}));
+        }
+        if proof == Proof::E42Pressure {
+            e42_proof::prove_under_policy_pressure(database, &cas).await?;
+            return Ok(json!({"matching_policy_pressure":true}));
+        }
+        if proof == Proof::Knowledge {
+            e42_proof::prove_knowledge(database, &cas).await?;
+            return Ok(json!({"knowledge_typed_row_filters":true}));
         }
         if proof == Proof::All {
             e25_binding::assert_native_workjet_route(database).await?;
