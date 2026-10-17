@@ -364,16 +364,24 @@ async fn kernel_component(e25: bool) {
     use std::process::Stdio;
     let (_dir, writer, readers) = runtime().await;
     let mut plan = command_release_fixture();
-    // E48: the published manifest is the wire version authority. The import
-    // fixture also includes a newer migration schema; do not silently mix its
-    // registry metadata with the unchanged platform manifest sent to Kernel.
-    let manifest_schema = plan
+    // E48: take the wire version from the repository platform manifest.
+    // Keep the release fixture's corrected V4 document shape: the legacy
+    // repository schema still requires command_id, absent from Kernel intents.
+    let platform: Value = serde_json::from_str(include_str!(
+        "../business_os/v4/ctox-platform.manifest.json"
+    ))
+    .unwrap();
+    let manifest_version = platform["collections"]["business_commands"]["schema"]["version"]
+        .as_u64()
+        .unwrap();
+    let schema_ver = u32::try_from(manifest_version).unwrap();
+    let published_schema = &mut plan
         .manifests
-        .iter()
+        .iter_mut()
         .find(|m| m["app_id"] == "ctox-platform")
-        .unwrap()["collections"]["business_commands"]["schema"]
-        .clone();
-    let schema_ver = u32::try_from(manifest_schema["version"].as_u64().unwrap()).unwrap();
+        .unwrap()["collections"]["business_commands"]["schema"];
+    published_schema["version"] = json!(schema_ver);
+    let manifest_schema = published_schema.clone();
     let definition = plan
         .collections
         .get_mut("ctox-platform")
