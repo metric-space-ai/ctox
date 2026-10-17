@@ -159,6 +159,21 @@
           </div>
         </div>
         <label class="news-check"><input type="checkbox" name="enabled" checked /> <span>Aktiv</span></label>
+        <fieldset class="news-digest" data-digest-field>
+          <label class="news-check" data-digest-hint title="Fasst die Tagesausgaben der Woche zu Top-Meldungen und Trends zusammen, ohne neue Recherche."><input type="checkbox" data-digest-input="enabled" /> <span data-digest-text="digestLabel">Wochenzusammenfassung</span></label>
+          <div class="news-field-grid" data-digest-schedule hidden>
+            <div>
+              <label class="ctox-field-label" for="news-digest-weekday" data-digest-text="digestWeekday">Wochentag</label>
+              <select class="ctox-select" id="news-digest-weekday" data-digest-input="weekday">
+                <option value="1">Montag</option><option value="2">Dienstag</option><option value="3">Mittwoch</option><option value="4">Donnerstag</option><option value="5">Freitag</option><option value="6">Samstag</option><option value="0">Sonntag</option>
+              </select>
+            </div>
+            <div>
+              <label class="ctox-field-label" for="news-digest-time" data-digest-text="digestTime">Uhrzeit</label>
+              <input class="ctox-input" id="news-digest-time" type="time" data-digest-input="run_time" value="17:00" />
+            </div>
+          </div>
+        </fieldset>
       </div>
 
       <div class="news-drawer-panel" data-panel="sources" hidden>

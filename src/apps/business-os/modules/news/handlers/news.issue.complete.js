@@ -9,7 +9,9 @@
 import {
   HOLD_STATUSES,
   NEWS_ISSUE_GENERATE,
+  DIGEST_MODE,
   callbackOrigin,
+  enforceDigestSources,
   enforceWindow,
   fail,
   firstStringField,
@@ -38,8 +40,13 @@ export async function applyIssueReply(original, reply, ctx) {
   // #799 (ref: apply_issue_reply → enforce_window): gilt fuer Befehle mit Zeitfenster (window_start_ms), d. h. alle,
   // die UI und Planer seit dem Nachport senden; aeltere Befehle ohne Fenster laufen wie bisher durch.
   let rejected = null;
+  const digestMode = firstStringField(payload, ['mode']) === DIGEST_MODE;
   const windowStart = Number.isInteger(payload.window_start_ms) && payload.window_start_ms > 0 ? payload.window_start_ms : 0;
-  if (windowStart) {
+  if (digestMode) {
+    // #800 (ref: enforce_digest_sources): nur Beitraege, deren Primaerlink eine Tagesausgabe der Woche trug.
+    const digestUrls = (Array.isArray(payload.digest_urls) ? payload.digest_urls : []).filter((u) => typeof u === 'string').map(normalizeStoryUrl);
+    rejected = enforceDigestSources(parsed, digestUrls);
+  } else if (windowStart) {
     const cadence = typeof payload.record_snapshot?.topic?.cadence === 'string' ? payload.record_snapshot.topic.cadence : 'daily';
     const history = await topicHistory(ctx, topicId, issueId);
     const window = windowFromHistory(history.issues, history.posts, cadence, now);
@@ -86,6 +93,7 @@ export async function applyIssueReply(original, reply, ctx) {
     });
     if (parsed.summary) issuePayload.summary = parsed.summary;
     if (rejected) issuePayload.rejected_posts = rejected;
+    if (digestMode) issuePayload.kind = DIGEST_MODE;
     Object.assign(issue, {
       status: 'ready',
       task_id: taskId,

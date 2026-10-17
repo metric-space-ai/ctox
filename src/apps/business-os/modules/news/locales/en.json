@@ -54,5 +54,11 @@
   "groupReddit": "Reddit",
   "addRedditPreset": "Add AI subreddits",
   "placeholderReddit": "r/subreddit",
-  "sourceConnect": "Connect account"
+  "sourceConnect": "Connect account",
+  "drawerUndo": "Undo",
+  "digestLabel": "Weekly digest",
+  "digestHint": "Sums up the week's daily issues into top stories and trends, without new research.",
+  "digestWeekday": "Weekday",
+  "digestTime": "Time",
+  "digestCadence": "{0} · week {1}"
 }

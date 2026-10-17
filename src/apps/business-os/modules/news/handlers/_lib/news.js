@@ -19,6 +19,10 @@ export const NEWS_ISSUE_FAILED = 'news.issue.failed';
 export const NEWS_SOURCE_ADAPTER_COMPLETE = 'news.source.adapter.complete';
 export const NEWS_SOURCE_ADAPTER_FAILED = 'news.source.adapter.failed';
 export const SCHEDULE_PREFIX = 'news:';
+/** Die Wochenzusammenfassung eines Themas hat einen eigenen Termin neben dem regulaeren (#800). */
+export const DIGEST_SCHEDULE_PREFIX = 'news-digest:';
+export const DIGEST_MODE = 'weekly_digest';
+export const MAX_DIGEST_POSTS = 80;
 export const ROUTE_MARKER = 'ctox-news-schedule:';
 export const MAX_POSTS = 40;
 export const MAX_TEXT = 8_000;
@@ -38,6 +42,9 @@ export function validRecordId(value) {
 }
 
 export const scheduleName = (topicId) => `${SCHEDULE_PREFIX}${topicId}`;
+export const digestScheduleName = (topicId) => `${DIGEST_SCHEDULE_PREFIX}${topicId}`;
+// ref: route_schedule_name
+export const routeScheduleName = (route) => (route?.mode === 'digest' ? digestScheduleName(route.topic_id) : scheduleName(route?.topic_id));
 export const topicThreadKey = (topicId) => `business-os/news/${topicId}`;
 
 // ref: store_news_commands.rs account_auth_source :107
@@ -369,6 +376,116 @@ export function enforceWindow(parsed, window, now) {
   return rejected;
 }
 
+// ---------------------------------------------------------------- Wochenzusammenfassung (#800, main 8b43f9e8d)
+
+// ref: digest_week_posts – Beitraege der fertigen Tagesausgaben der letzten 7 Tage, staerkste zuerst.
+export function digestWeekPosts(issues, posts, now) {
+  const generated = (issue) => (Number.isInteger(issue?.generated_at_ms) ? issue.generated_at_ms : 0);
+  const week = new Set(issues
+    .filter((i) => i.status === 'ready' && !isDigestIssue(i) && generated(i) > now - 7 * DAY_MS && generated(i) <= now)
+    .map((i) => i.id));
+  const score = (post) => (Number(post?.hype_score) || 0) * 1_000_000 + (Number(post?.discussion_count) || 0);
+  return posts.filter((post) => week.has(post?.issue_id)).sort((a, b) => score(b) - score(a)).slice(0, MAX_DIGEST_POSTS);
+}
+
+// ref: digest_post_snapshot
+export function digestPostSnapshot(post) {
+  const opt = (v) => (v === undefined ? null : v);
+  return {
+    post_id: opt(post.id),
+    issue_id: opt(post.issue_id),
+    category: opt(post.category),
+    author_name: opt(post.author_name),
+    author_handle: opt(post.author_handle),
+    author_kind: opt(post.author_kind),
+    intro: opt(post.intro),
+    body: clip(post.body, 1_200),
+    published_at_ms: opt(post.published_at_ms),
+    hype_score: opt(post.hype_score),
+    discussion_count: opt(post.discussion_count),
+    link_card: opt(post.link_card),
+    sources: opt(post.sources),
+  };
+}
+
+// ref: digest_payload – ohne `instruction`/`required_skills`: die Anweisung fuellt news.issue.generate aus
+// prompts/digest.md. Keine Quellen, keine neue Recherche.
+export function digestPayload(topic, weekPosts, issueId, issueDate, now) {
+  const field = (key) => str(topic?.[key]) ?? '';
+  const topicId = field('id');
+  const maxPosts = Math.min(Number.isInteger(topic?.max_posts) && topic.max_posts >= 0 ? topic.max_posts : 12, 10);
+  return {
+    topic_id: topicId,
+    issue_id: issueId,
+    issue_date: issueDate,
+    mode: DIGEST_MODE,
+    thread_key: topicThreadKey(topicId),
+    output_contract: NEWS_ISSUE_CONTRACT,
+    window_start: rfc3339(now - 7 * DAY_MS),
+    window_start_ms: now - 7 * DAY_MS,
+    digest_posts: weekPosts.map(digestPostSnapshot),
+    digest_urls: weekPosts.flatMap(allStoryUrls),
+    record_snapshot: {
+      topic: {
+        id: topicId,
+        title: field('title'),
+        prompt: field('prompt'),
+        cadence: field('cadence'),
+        language: field('language'),
+        categories: topic?.categories ?? [],
+        max_posts: maxPosts,
+      },
+      sources: [],
+    },
+  };
+}
+
+// ref: enforce_digest_sources – ein Beitrag, dessen Primaerlink keine Tagesausgabe der Woche trug, ist neue
+// Recherche und faellt weg.
+export function enforceDigestSources(parsed, digestUrls) {
+  const kept = [];
+  const indexMap = [];
+  const rejected = [];
+  for (const post of parsed.posts) {
+    const primary = primaryStoryUrl(post) ?? '';
+    if (digestUrls.includes(primary)) {
+      indexMap.push(kept.length);
+      kept.push(post);
+    } else {
+      indexMap.push(null);
+      rejected.push({ reason: 'not_in_week', url: primary, intro: clip(post.intro, 160) });
+    }
+  }
+  parsed.posts = kept;
+  parsed.dropped += rejected.length;
+  repointTrends(parsed, indexMap);
+  return rejected;
+}
+
+/** Werte fuer prompts/digest.md (ref: digest_payload instruction). */
+export function digestPromptValues(command) {
+  const payload = command.payload ?? {};
+  const topic = isObject(payload.record_snapshot?.topic) ? payload.record_snapshot.topic : {};
+  const posts = Array.isArray(payload.digest_posts) ? payload.digest_posts : [];
+  return {
+    topic_title: str(topic.title) ?? '',
+    post_count: posts.length,
+    max_posts: Number.isInteger(topic.max_posts) && topic.max_posts >= 0 ? topic.max_posts : 10,
+    context_json: contextJson({
+      command_id: command.id,
+      topic_id: str(payload.topic_id) ?? '',
+      issue_id: str(payload.issue_id) ?? '',
+      issue_date: str(payload.issue_date) ?? '',
+      mode: DIGEST_MODE,
+      output_contract: NEWS_ISSUE_CONTRACT,
+      window_start: str(payload.window_start) ?? '',
+      digest_posts: posts,
+      digest_urls: Array.isArray(payload.digest_urls) ? payload.digest_urls : [],
+      record_snapshot: payload.record_snapshot ?? {},
+    }),
+  };
+}
+
 // ref: :446 generate_payload – Payload der geplanten Ausgabe. Schluessel wie in Rust, ohne `instruction`/
 // `required_skills`: die Anweisung fuellt news.issue.generate aus prompts/issue.md (SKL-B1), `--task-id` = Befehls-ID.
 export function generatePayload(topic, sources, issueId, issueDate, window = null) {
@@ -527,7 +644,10 @@ export async function enqueueIssue(ctx, command) {
   if (!validRecordId(issueId)) fail('invalid', 'news issue command is missing issue_id');
   const previousId = firstStringField(payload, ['previous_issue_id']);
   const previous = previousId && validRecordId(previousId) ? await ctx.get('news_issues', previousId) : null;
-  const instruction = await renderPromptLines(ctx, 'issue', issuePromptValues(command, previous), ISSUE_OPTIONAL_FIELDS);
+  // #800: eine Wochenzusammenfassung liest keine Quellen; Laufvertrag und Zeitfenster-Zeile gelten nicht.
+  const instruction = payload.mode === DIGEST_MODE
+    ? await renderPromptLines(ctx, 'digest', digestPromptValues(command))
+    : await renderPromptLines(ctx, 'issue', issuePromptValues(command, previous), ISSUE_OPTIONAL_FIELDS);
   const task = await ctx.cap.agent.task.enqueue({
     title: taskTitle(command),
     instruction,

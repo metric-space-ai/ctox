@@ -12,6 +12,9 @@ import {
   buildGenerateCommand,
   buildScheduleCommand,
   categoryCounts,
+  digestActive,
+  digestOf,
+  withDigest,
   compactCount,
   domainOf,
   issueDateKey,
@@ -67,6 +70,11 @@ const labels = {
     deadlineRequired: 'Wähle einen Stichtag.',
     saveFailed: 'Speichern fehlgeschlagen',
     drawerUndo: 'Rückgängig',
+    digestLabel: 'Wochenzusammenfassung',
+    digestHint: 'Fasst die Tagesausgaben der Woche zu Top-Meldungen und Trends zusammen, ohne neue Recherche.',
+    digestWeekday: 'Wochentag',
+    digestTime: 'Uhrzeit',
+    digestCadence: '{0} · Woche {1}',
     commandFailed: 'Auftrag konnte nicht an CTOX übergeben werden',
     deleteConfirm: 'Nochmal klicken: „{0}“ mit allen Ausgaben löschen',
     deleteTopic: 'Thema löschen',
@@ -127,6 +135,11 @@ const labels = {
     deadlineRequired: 'Pick a deadline.',
     saveFailed: 'Saving failed',
     drawerUndo: 'Undo',
+    digestLabel: 'Weekly digest',
+    digestHint: "Sums up the week's daily issues into top stories and trends, without new research.",
+    digestWeekday: 'Weekday',
+    digestTime: 'Time',
+    digestCadence: '{0} · week {1}',
     commandFailed: 'Could not hand the task to CTOX',
     deleteConfirm: 'Click again: delete “{0}” with all issues',
     deleteTopic: 'Delete topic',
@@ -319,6 +332,7 @@ function newsSnapshot() {
       tab: state.drawer.tab,
       sources: structuredClone(state.drawer.sources),
       removed: [...state.drawer.removed],
+      digest: digestOf(state.drawer.topic),
       values,
     };
   }
@@ -355,6 +369,10 @@ function restoreDrawer(snap) {
   if (!snap.persisted && snap.topicId) state.drawer.topic.id = snap.topicId;
   if (Array.isArray(snap.sources)) state.drawer.sources = snap.sources;
   if (Array.isArray(snap.removed)) state.drawer.removed = new Set(snap.removed);
+  if (snap.digest && typeof snap.digest === 'object') {
+    state.drawer.topic = withDigest(state.drawer.topic, snap.digest);
+    renderDigestField();
+  }
   for (const el of els.form?.elements || []) {
     if (!el.name || !(el.name in (snap.values || {}))) continue;
     const v = snap.values[el.name];
@@ -480,6 +498,7 @@ function wireEvents() {
   els.form?.querySelector('[name="cadence"]')?.addEventListener('change', syncCadenceFields);
   // Sofort speichern (9f6ad058a): jede abgeschlossene Feldänderung eines gespeicherten Themas wird geschrieben.
   els.form?.addEventListener('change', (event) => {
+    if (event.target?.closest?.('[data-digest-field]')) { onDigestChange(); return; }
     if (event.target?.dataset?.action === 'toggle-source') return;
     if (event.target === els.newSourceKind || event.target === els.newSourceValue) return;
     instantSave();
@@ -573,6 +592,18 @@ function render() {
 }
 
 function cadenceLabel(topic) {
+  const base = baseCadenceLabel(topic);
+  if (!digestActive(topic)) return base;
+  const digest = digestOf(topic);
+  return t('digestCadence', base, `${weekdayName(digest.weekday, 'short')} ${digest.run_time}`);
+}
+
+function weekdayName(weekday, style = 'long') {
+  const name = new Date(2024, 0, 7 + (Number(weekday) || 0)).toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE', { weekday: style });
+  return style === 'short' ? name.replace('.', '') : name;
+}
+
+function baseCadenceLabel(topic) {
   if (topic.cadence === 'daily') return t('daily', topic.run_time);
   if (topic.cadence === 'weekly') {
     const day = new Date(2024, 0, 7 + (Number(topic.weekday) || 0)).toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE', { weekday: 'short' }).replace('.', '');
@@ -1038,6 +1069,7 @@ function fillDrawerForm(draft) {
   els.drawer.querySelectorAll('[data-category]').forEach((chip) => {
     chip.setAttribute('aria-pressed', String((draft.categories || CATEGORIES).includes(chip.dataset.category)));
   });
+  renderDigestField();
   syncCadenceFields();
 }
 
@@ -1067,6 +1099,44 @@ function syncCadenceFields() {
     deadline: cadence === 'deadline',
   };
   els.form?.querySelectorAll('[data-cadence-field]').forEach((field) => { field.hidden = !visible[field.dataset.cadenceField]; });
+  const digestField = els.form?.querySelector('[data-digest-field]');
+  if (digestField) digestField.hidden = cadence !== 'daily';
+}
+
+// --- Wochenzusammenfassung (#800): Einstellung im Themen-Dialog, gespeichert wie jedes Feld (sofort + Rückgängig) ---
+
+function renderDigestField() {
+  const host = els.form?.querySelector('[data-digest-field]');
+  if (!host || !state.drawer) return;
+  const digest = digestOf(state.drawer.topic);
+  host.querySelectorAll('[data-digest-text]').forEach((el) => { el.textContent = t(el.dataset.digestText); });
+  host.querySelector('[data-digest-hint]')?.setAttribute('title', t('digestHint'));
+  host.querySelectorAll('[data-digest-input="weekday"] option').forEach((option) => { option.textContent = weekdayName(option.value); });
+  host.querySelector('[data-digest-input="enabled"]').checked = digest.enabled;
+  host.querySelector('[data-digest-input="weekday"]').value = String(digest.weekday);
+  host.querySelector('[data-digest-input="run_time"]').value = digest.run_time;
+  host.querySelector('[data-digest-schedule]').hidden = !digest.enabled;
+}
+
+function readDigestField() {
+  const host = els.form?.querySelector('[data-digest-field]');
+  return {
+    enabled: Boolean(host?.querySelector('[data-digest-input="enabled"]')?.checked),
+    weekday: Number(host?.querySelector('[data-digest-input="weekday"]')?.value ?? 5),
+    run_time: host?.querySelector('[data-digest-input="run_time"]')?.value || '17:00',
+  };
+}
+
+// Neues Thema: bleibt im Entwurf bis „Thema anlegen“; gespeichertes Thema: sofort, mit Rückgängig.
+function onDigestChange() {
+  const drawer = state.drawer;
+  if (!drawer) return;
+  const next = readDigestField();
+  if (JSON.stringify(digestOf(drawer.topic)) === JSON.stringify(digestOf({ payload: { digest: next } }))) return;
+  drawer.topic = withDigest(drawer.topic, next);
+  const schedule = els.form?.querySelector('[data-digest-schedule]');
+  if (schedule) schedule.hidden = !next.enabled;
+  instantSave();
 }
 
 function syncSourcePlaceholder() {
@@ -1234,6 +1304,11 @@ async function persistDrawer(topic, sourceList = state.drawer?.sources || [], re
     || previous.enabled !== topic.enabled
     || previous.title !== topic.title;
   if (scheduleChanged) dispatch(buildScheduleCommand(topic));
+  // Der Wochen-Termin folgt dem Thema: nur ein tägliches, aktives Thema behält ihn.
+  const digestChanged = previous
+    ? digestActive(previous) !== digestActive(topic) || (digestActive(topic) && JSON.stringify(digestOf(previous)) !== JSON.stringify(digestOf(topic)))
+    : digestActive(topic);
+  if (digestChanged) dispatch(buildScheduleCommand(topic, { digest: true }));
   return true;
 }
 
@@ -1328,6 +1403,7 @@ async function deleteTopic() {
   }
   // Zeitplan löschen als Befehl (ohne Warten; Fehler → Zone), Datensätze lokal entfernen.
   dispatch(buildScheduleCommand(topic, { deleted: true }));
+  if (digestOf(topic).enabled) dispatch(buildScheduleCommand(topic, { deleted: true, digest: true }));
   const removeWhere = async (name, predicate) => {
     for (const doc of state.api ? state.api.query(name, {}).get() : []) {
       if (predicate(doc)) await write('remove', name, doc.id);
@@ -1372,6 +1448,7 @@ function importTopics() {
         idMap.set(raw.id, topic.id);
         await write('put', COLLECTIONS.topics, topic);
         dispatch(buildScheduleCommand(topic));
+        if (digestActive(topic)) dispatch(buildScheduleCommand(topic, { digest: true }));
       }
       for (const raw of Array.isArray(data.sources) ? data.sources : []) {
         const topicId = idMap.get(raw.topic_id);

@@ -6,6 +6,7 @@
 
 import {
   NEWS_ISSUE_GENERATE,
+  digestScheduleName,
   NEWS_MODULE,
   ROUTE_MARKER,
   fail,
@@ -38,9 +39,11 @@ export default async function handle(command, ctx) {
   const topicId = firstStringField(payload, ['topic_id']) ?? recordIdOf(command) ?? '';
   if (!validRecordId(topicId)) fail('invalid', 'news.topic.schedule requires a valid topic_id');
   const deleted = payload.deleted === true;
+  // #800: die Wochenzusammenfassung hat ihren eigenen Termin news-digest:<topic>; kein Rueckschrieb ans Thema.
+  const digest = firstStringField(payload, ['mode']) === 'digest';
   const cronExpr = firstStringField(payload, ['cron_expr']) ?? '';
   const enabled = !deleted && payload.enabled !== false && cronExpr.trim() !== '';
-  const name = scheduleName(topicId);
+  const name = digest ? digestScheduleName(topicId) : scheduleName(topicId);
   const threadKey = topicThreadKey(topicId);
   const tasks = await ctx.cap.schedule.list({ name, thread_key: threadKey });
   const existing = (Array.isArray(tasks) ? tasks : []).find((t) => t?.name === name && t?.thread_key === threadKey);
@@ -50,7 +53,7 @@ export default async function handle(command, ctx) {
       if (deleted) await ctx.cap.schedule.remove({ task_id: existing.task_id });
       else if (existing.enabled) await ctx.cap.schedule.set_enabled({ task_id: existing.task_id, enabled: false });
     }
-    if (!deleted) await storeScheduleTaskId(ctx, topicId, existing?.task_id);
+    if (!deleted && !digest) await storeScheduleTaskId(ctx, topicId, existing?.task_id);
     return {
       ok: true,
       topic_id: topicId,
@@ -70,6 +73,7 @@ export default async function handle(command, ctx) {
       firstStringField(payload, ['deadline_date']) ??
       (typeof payload.record_snapshot?.topic?.deadline_date === 'string' ? payload.record_snapshot.topic.deadline_date : '') ??
       '',
+    ...(digest ? { mode: 'digest' } : {}),
   };
   // §16.30: schedule.upsert (flach), legt an oder aktualisiert nach name + thread_key.
   let task = await ctx.cap.schedule.upsert({
@@ -84,7 +88,7 @@ export default async function handle(command, ctx) {
     command: { type: NEWS_ISSUE_GENERATE, payload: { trigger: 'schedule', ...route }, actor_id: route.owner_user_id },
   });
   if (!task?.enabled) task = await ctx.cap.schedule.set_enabled({ task_id: task?.task_id, enabled: true });
-  await storeScheduleTaskId(ctx, topicId, task?.task_id);
+  if (!digest) await storeScheduleTaskId(ctx, topicId, task?.task_id);
   return {
     ok: true,
     topic_id: topicId,

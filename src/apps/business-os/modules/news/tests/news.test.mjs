@@ -17,6 +17,11 @@ import {
   cronForTopic,
   issueLabel,
   issueWindow,
+  digestOf,
+  withDigest,
+  digestActive,
+  cronForDigest,
+  issueNodeLabel,
   normalizeStoryUrl,
   issuesForTopic,
   mergeIntoAccountSource,
@@ -244,4 +249,29 @@ test('issue window runs since the previous issue and lists covered links', () =>
   // v4: die Anweisung (inkl. Zeitfenster-Zeile) baut der Handler aus prompts/issue.md.
   assert.equal(command.payload.instruction, undefined);
   assert.equal(buildGenerateCommand(normalizeTopic({ id: 't1', title: 'KI' }), [], { id: 'i4', issue_date: '2026-10-15' }, null).payload.window_start_ms, undefined);
+});
+
+test('weekly digest rides on a daily topic with its own schedule', () => {
+  const topic = normalizeTopic({ id: 't1', title: 'KI', cadence: 'daily', run_time: '07:00' });
+  assert.deepEqual(digestOf(topic), { enabled: false, weekday: 5, run_time: '17:00' });
+  const on = withDigest(topic, { enabled: true, weekday: 0, run_time: '18:30' });
+  assert.equal(digestActive(on), true);
+  assert.equal(cronForDigest(on), '30 18 * * 0');
+  assert.equal(digestActive({ ...on, cadence: 'weekly' }), false);
+  assert.equal(digestActive({ ...on, enabled: false }), false);
+  const command = buildScheduleCommand(on, { digest: true });
+  assert.equal(command.payload.mode, 'digest');
+  assert.equal(command.payload.cron_expr, '30 18 * * 0');
+  assert.equal(command.payload.enabled, true);
+  assert.equal(buildScheduleCommand(on).payload.cron_expr, '0 7 * * *');
+  assert.equal(buildScheduleCommand(on).payload.mode, undefined);
+  const off = buildScheduleCommand(withDigest(on, { enabled: false }), { digest: true });
+  assert.equal(off.payload.enabled, false);
+  const gone = buildScheduleCommand(on, { digest: true, deleted: true });
+  assert.deepEqual([gone.payload.mode, gone.payload.cron_expr, gone.payload.enabled, gone.payload.deleted], ['digest', '', false, true]);
+  const today = new Date('2026-10-16T12:00:00Z');
+  const digestIssue = { issue_date: '2026-10-16', payload: { kind: 'weekly_digest' } };
+  assert.match(issueNodeLabel(digestIssue, [digestIssue], 'de', today), /^Woche · /);
+  assert.match(issueNodeLabel(digestIssue, [digestIssue], 'en', today), /^Week · /);
+  assert.doesNotMatch(issueNodeLabel({ issue_date: '2026-10-16', payload: {} }, [], 'de', today), /Woche/);
 });

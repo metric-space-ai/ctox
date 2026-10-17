@@ -272,6 +272,50 @@ test('Themen-Dialog: Änderungen eines gespeicherten Themas sofort per api.put, 
   assert.deepEqual(page.__errors, []);
 });
 
+test('Wochenzusammenfassung: Einstellung im Themen-Dialog, sofort gespeichert, Zeitplan als news.topic.schedule mode digest', async () => {
+  await page.evaluate(() => document.querySelector('[data-topic-id="topic_ai"]')?.click());
+  await settle();
+  await page.click('[data-action="configure-topic"]');
+  await settle();
+  assert.equal(await page.evaluate(() => document.querySelector('[data-digest-field]').hidden), false, 'tägliches Thema zeigt die Einstellung');
+  const before = await page.evaluate(() => window.__commands().length);
+  await page.evaluate(() => {
+    const box = document.querySelector('[data-digest-input="enabled"]');
+    box.checked = true;
+    box.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await settle();
+  const topic = await page.evaluate(() => window.__rows('news_topics').find((tp) => tp.id === 'topic_ai'));
+  assert.deepEqual(topic.payload.digest, { enabled: true, weekday: 5, run_time: '17:00' });
+  const sent = await page.evaluate((n) => window.__commands().slice(n), before);
+  const digestCmd = sent.find((c) => (c.command_type || c.type) === 'news.topic.schedule' && c.payload?.mode === 'digest');
+  assert.ok(digestCmd, 'Zeitplanbefehl für den Digest');
+  assert.equal(digestCmd.payload.cron_expr, '0 17 * * 5');
+  assert.equal(digestCmd.payload.enabled, true);
+  assert.equal(sent.filter((c) => (c.command_type || c.type) === 'news.topic.schedule' && !c.payload?.mode).length, 0, 'regulärer Zeitplan unverändert');
+  assert.equal(await page.evaluate(() => document.querySelector('[data-digest-schedule]').hidden), false);
+  assert.match(await topicText(), /Woche/);
+  // Rückgängig schaltet den Digest wieder ab (und sendet den Abschalt-Befehl).
+  await page.evaluate(() => document.querySelector('[data-action="drawer-undo"]').click());
+  await settle();
+  assert.equal((await page.evaluate(() => window.__rows('news_topics').find((tp) => tp.id === 'topic_ai'))).payload.digest?.enabled ?? false, false);
+  const off = (await page.evaluate(() => window.__commands())).at(-1);
+  assert.deepEqual([off.payload?.mode, off.payload?.enabled], ['digest', false]);
+  // Wöchentlicher Rhythmus blendet die Einstellung aus.
+  await page.evaluate(() => {
+    const sel = document.querySelector('[data-topic-form] [name="cadence"]');
+    sel.value = 'weekly';
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await settle();
+  assert.equal(await page.evaluate(() => document.querySelector('[data-digest-field]').hidden), true);
+  await page.evaluate(() => document.querySelector('[data-action="drawer-undo"]').click());
+  await settle();
+  await page.evaluate(() => document.querySelector('[data-action="close-drawer"]')?.click());
+  await settle();
+  assert.deepEqual(page.__errors, []);
+});
+
 test('FIX9a: laufende Ausgabe zeigt die letzte fertige (Status nur Zone + Punkt); leere Kategoriereiter und leere Trend-Spalte ausgeblendet', async () => {
   const ts = Date.now();
   await page.evaluate((ts) => window.__k.sim.push('news_issues', { id: 'issue_run', topic_id: 'topic_ai', title: 'KI-Labs', issue_date: '2099-01-01', status: 'running', command_id: 'cmd-run', task_id: '', post_count: 0, generated_at_ms: 0, error: '', payload: {}, created_at_ms: ts + 5000, updated_at_ms: ts + 5000 }), ts);

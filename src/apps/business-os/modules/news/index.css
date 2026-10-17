@@ -529,3 +529,9 @@
 [data-app="news"] .news-drawer .news-undo { display: flex; justify-content: flex-end; padding: 8px 14px; border-top: 1px solid var(--news-line); }
 [data-app="news"] .news-drawer .news-undo[hidden],
 [data-app="news"] .news-drawer .news-drawer-foot[hidden] { display: none; }
+
+/* Wochenzusammenfassung eines täglichen Themas (Nachport 8b43f9e8d). */
+[data-app="news"] .news-drawer .news-digest { border: 0; margin: 14px 0 0; padding: 12px 0 0; border-top: 1px solid var(--news-line); min-width: 0; }
+[data-app="news"] .news-drawer .news-digest[hidden],
+[data-app="news"] .news-drawer .news-digest [hidden] { display: none; }
+[data-app="news"] .news-drawer .news-digest .news-check { margin-top: 0; }

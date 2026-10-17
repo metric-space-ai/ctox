@@ -112,6 +112,36 @@ export function cronForTopic(topic) {
   return '';
 }
 
+// Weekly digest of a daily topic: built from that week's daily issues (#800).
+export function digestOf(topic) {
+  const raw = topic?.payload?.digest || {};
+  const weekday = Number(raw.weekday);
+  return {
+    enabled: raw.enabled === true,
+    weekday: Number.isInteger(weekday) && weekday >= 0 && weekday <= 6 ? weekday : 5,
+    run_time: /^\d{1,2}:\d{2}$/.test(String(raw.run_time || '')) ? String(raw.run_time) : '17:00',
+  };
+}
+
+export function withDigest(topic, digest, now = Date.now()) {
+  const next = digestOf({ payload: { digest } });
+  return { ...topic, payload: { ...(topic.payload || {}), digest: next }, updated_at_ms: now };
+}
+
+export function digestActive(topic) {
+  return topic?.cadence === 'daily' && topic?.enabled !== false && digestOf(topic).enabled;
+}
+
+export function cronForDigest(topic) {
+  const digest = digestOf(topic);
+  const { hour, minute } = parseTime(digest.run_time);
+  return `${minute} ${hour} * * ${digest.weekday}`;
+}
+
+export function isDigestIssue(issue) {
+  return issue?.payload?.kind === 'weekly_digest';
+}
+
 export function normalizeTopic(input, now = Date.now()) {
   const cadence = CADENCES.includes(input?.cadence) ? input.cadence : 'daily';
   const categories = Array.isArray(input?.categories)
@@ -319,7 +349,8 @@ export function issuesForTopic(issues, topicId, limit = 6) {
 
 // Two issues of the same day are told apart by their start time.
 export function issueNodeLabel(issue, siblings, lang = 'de', today = new Date()) {
-  const label = issueLabel(issue.issue_date, lang, today);
+  const day = issueLabel(issue.issue_date, lang, today);
+  const label = isDigestIssue(issue) ? `${lang === 'en' ? 'Week' : 'Woche'} · ${day}` : day;
   const sameDay = siblings.filter((other) => other.issue_date === issue.issue_date).length;
   const created = Number(issue.created_at_ms) || 0;
   if (sameDay < 2 || !created) return label;
@@ -515,7 +546,9 @@ function localTimezone() {
   }
 }
 
-export function buildScheduleCommand(topic, { deleted = false } = {}) {
+export function buildScheduleCommand(topic, { deleted = false, digest = false } = {}) {
+  const cron = digest ? cronForDigest(topic) : topic.cron_expr;
+  const active = digest ? digestActive(topic) : topic.enabled !== false && Boolean(topic.cron_expr);
   return commandEnvelope({
     command_type: NEWS_TOPIC_SCHEDULE,
     record_id: topic.id,
@@ -523,8 +556,9 @@ export function buildScheduleCommand(topic, { deleted = false } = {}) {
     topic_id: topic.id,
     title: topic.title,
     cadence: topic.cadence,
-    cron_expr: deleted ? '' : topic.cron_expr,
-    enabled: deleted ? false : topic.enabled !== false && Boolean(topic.cron_expr),
+    ...(digest ? { mode: 'digest' } : {}),
+    cron_expr: deleted ? '' : cron,
+    enabled: deleted ? false : active,
     deleted,
     deadline_date: topic.deadline_date || '',
     timezone: localTimezone(),
