@@ -14,6 +14,15 @@ impl HttpTransport for Mock {
         if r.url.contains("/items/boom") {
             return Ok(HttpResponse { status: 500, body: b"{}".to_vec(), session_id: None });
         }
+        if r.url.contains("/items/moved") {
+            return Ok(HttpResponse { status: 301, body: vec![], session_id: None });
+        }
+        if r.url.contains("/items/empty") {
+            return Ok(HttpResponse { status: 200, body: vec![], session_id: None });
+        }
+        if r.url.contains("/items/flaky") && self.calls.lock().unwrap().iter().filter(|c| c.contains("/items/flaky")).count() == 1 {
+            bail!("http transport error: Network Error: peer closed connection without sending TLS close_notify");
+        }
         let body = if r.url.contains("zippopotam.us/de/10115") {
             json!({"country": "Germany", "post code": "10115", "places": [{"place name": "Berlin"}]})
         } else {
@@ -21,12 +30,16 @@ impl HttpTransport for Mock {
         };
         Ok(HttpResponse { status: 200, body: serde_json::to_vec(&body)?, session_id: None })
     }
+    fn redirect_of(&self, url: &str) -> anyhow::Result<Option<(u16, String)>> {
+        Ok(url.contains("/items/moved").then(|| (301, url.replace("api.testsvc.example.org", "api.testsvc.example.com/v2"))))
+    }
 }
 
 #[derive(Default)]
 struct Gates {
     states: RefCell<std::collections::BTreeMap<String, String>>,
     missions: RefCell<std::collections::BTreeMap<String, String>>,
+    closed: RefCell<Vec<(String, String)>>,
 }
 impl ApprovalGates for Gates {
     fn open(&self, _r: &GateRequest) -> Result<String> {
@@ -43,6 +56,11 @@ impl ApprovalGates for Gates {
     }
     fn builder_mission_service(&self, work_id: &str) -> Result<Option<String>> {
         Ok(self.missions.borrow().get(work_id).cloned())
+    }
+    fn close_builder_mission(&self, work_id: &str, _slug: &str, _sha256: &str, summary: &str) -> Result<()> {
+        self.missions.borrow_mut().remove(work_id);
+        self.closed.borrow_mut().push((work_id.into(), summary.into()));
+        Ok(())
     }
 }
 
@@ -82,7 +100,7 @@ impl Env {
 }
 
 fn zip_probe() -> Vec<Probe> {
-    vec![Probe { tool: "ZIPPOPOTAM_LOOKUP_POSTAL_CODE".into(), args: json!({"country": "de", "postal_code": "10115"}), cleanup: vec![] }]
+    vec![Probe { tool: "ZIPPOPOTAM_LOOKUP_POSTAL_CODE".into(), args: json!({"country": "de", "postal_code": "10115"}), cleanup: vec![], expect: None }]
 }
 
 const SVC: &str = r#"{
@@ -108,8 +126,8 @@ fn active_svc(e: &Env) {
     s.draft_spec(SVC).unwrap();
     assert_eq!(s.validate("testsvc", "1.0.0").unwrap()["ok"], json!(true));
     let probes = vec![
-        Probe { tool: "TESTSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![] },
-        Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "probe"}), cleanup: vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![] }] },
+        Probe { tool: "TESTSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None },
+        Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "probe"}), cleanup: vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None }], expect: None },
     ];
     let t = s.live_test("testsvc", "1.0.0", &probes, None).unwrap();
     assert_eq!(t["passed"], json!(true), "{t}");
@@ -134,7 +152,7 @@ fn end_to_end_autonomous_draft_validate_test_activate_execute() {
     assert_eq!(v["hosts"], json!(["api.zippopotam.us"]));
     assert!(worker.execute("ZIPPOPOTAM_LOOKUP_POSTAL_CODE", &json!({"country": "de", "postal_code": "10115"}), None, None).is_err());
     assert!(worker.activate("zippopotam", "1.0.0", None).is_err(), "no proof yet, no mission");
-    let t = worker.live_test("zippopotam", "1.0.0", &zip_probe(), None).unwrap();
+    let t = worker.live_test_in_mission("zippopotam", "1.0.0", &zip_probe(), None, Some("self-work:internal:m1")).unwrap();
     assert_eq!(t["passed"], json!(true), "{t}");
     assert_eq!(t["review"]["untested"], json!(["ZIPPOPOTAM_FIND_POSTAL_CODES"]));
     // Worker: only inside a builder mission for this service.
@@ -145,6 +163,10 @@ fn end_to_end_autonomous_draft_validate_test_activate_execute() {
     e.gates.missions.borrow_mut().insert("self-work:internal:m1".into(), "zippopotam".into());
     let a = worker.activate("zippopotam", "1.0.0", Some("self-work:internal:m1")).unwrap();
     assert_eq!(a["active"]["version"], json!("1.0.0"));
+    // The mission closes itself after the activation.
+    assert_eq!(a["mission"], json!({"work_id": "self-work:internal:m1", "closed": true}));
+    assert_eq!(e.gates.closed.borrow()[0].0, "self-work:internal:m1");
+    assert!(e.gates.closed.borrow()[0].1.contains("ZIPPOPOTAM_LOOKUP_POSTAL_CODE"));
     assert!(e.gates.states.borrow().is_empty(), "no approval gate for adapter setup");
     let one = e.b(AgentRole::OneShot, &Allow);
     let s = one.search("postal code", false, 10).unwrap();
@@ -233,12 +255,12 @@ fn live_test_probe_rules() {
     let e = env();
     let sup = e.b(AgentRole::Supervisor, &Allow);
     sup.draft_spec(SVC).unwrap();
-    let write_no_cleanup = vec![Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "x"}), cleanup: vec![] }];
+    let write_no_cleanup = vec![Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "x"}), cleanup: vec![], expect: None }];
     assert!(sup.live_test("testsvc", "1.0.0", &write_no_cleanup, None).unwrap_err().to_string().contains("cleanup"));
-    let destructive = vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![] }];
+    let destructive = vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None }];
     assert!(sup.live_test("testsvc", "1.0.0", &destructive, None).unwrap_err().to_string().contains("never run"));
     assert!(sup.live_test("testsvc", "1.0.0", &[], None).is_err());
-    let write = vec![Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "x"}), cleanup: vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![] }] }];
+    let write = vec![Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "x"}), cleanup: vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None }], expect: None }];
     assert!(e.b(AgentRole::Worker, &Allow).live_test("testsvc", "1.0.0", &write, None).unwrap_err().to_string().contains("delegate_to_supervisor"));
     assert!(e.b(AgentRole::Mcp, &Allow).draft_spec(SVC).is_err());
 }
@@ -249,7 +271,7 @@ fn missing_access_answer_depends_on_role() {
     let spec = SVC.replace(r#"[{"type": "none"}]"#, r#"[{"type": "bearer"}]"#).replace("testsvc", "authsvc").replace("TESTSVC", "AUTHSVC");
     let one = e.b(AgentRole::OneShot, &Allow);
     one.draft_spec(&spec).unwrap();
-    let probes = vec![Probe { tool: "AUTHSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![] }];
+    let probes = vec![Probe { tool: "AUTHSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None }];
     let t = one.live_test("authsvc", "1.0.0", &probes, None).unwrap();
     assert_eq!(t["passed"], json!(false));
     assert!(t["access_missing"].as_str().unwrap().starts_with("Zugang fehlt"));
@@ -262,7 +284,7 @@ fn svc_v2(e: &Env) {
     let s = e.b(AgentRole::Supervisor, &Allow);
     let v2 = SVC.replace("\"version\": \"1.0.0\"", "\"version\": \"1.0.1\"");
     s.draft_spec(&v2).unwrap();
-    s.live_test("testsvc", "1.0.1", &[Probe { tool: "TESTSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![] }], None).unwrap();
+    s.live_test("testsvc", "1.0.1", &[Probe { tool: "TESTSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None }], None).unwrap();
     s.activate("testsvc", "1.0.1", None).unwrap();
 }
 
@@ -333,4 +355,52 @@ fn mission_service_matches_dash_and_underscore_slugs() {
     assert!(!err.contains("builder mission"), "mission accepted, proof still missing: {err}");
     e.gates.missions.borrow_mut().insert("m-x".into(), "nager-dates".into());
     assert!(worker.activate("nager_date", "1.0.1", Some("m-x")).unwrap_err().to_string().contains("builder mission"));
+}
+
+#[test]
+fn worker_proof_is_bound_to_its_mission() {
+    let e = env();
+    let worker = e.b(AgentRole::Worker, &Allow);
+    worker.draft_from_catalog("zippopotam").unwrap();
+    e.gates.missions.borrow_mut().insert("m-a".into(), "zippopotam".into());
+    e.gates.missions.borrow_mut().insert("m-b".into(), "zippopotam".into());
+    worker.live_test_in_mission("zippopotam", "1.0.0", &zip_probe(), None, Some("m-a")).unwrap();
+    let err = worker.activate("zippopotam", "1.0.0", Some("m-b")).unwrap_err().to_string();
+    assert!(err.contains("belongs to mission m-a"), "{err}");
+    // A proof without a mission does not count for a worker either.
+    worker.live_test("zippopotam", "1.0.0", &zip_probe(), None).unwrap();
+    assert!(worker.activate("zippopotam", "1.0.0", Some("m-a")).unwrap_err().to_string().contains("(none)"));
+    worker.live_test_in_mission("zippopotam", "1.0.0", &zip_probe(), None, Some("m-b")).unwrap();
+    assert_eq!(worker.activate("zippopotam", "1.0.0", Some("m-b")).unwrap()["mission"]["closed"], json!(true));
+    assert!(worker.activate("zippopotam", "1.0.0", Some("m-b")).unwrap_err().to_string().contains("not a live builder mission"), "closed missions cannot activate again");
+    // The supervisor needs no mission.
+    assert!(e.b(AgentRole::Supervisor, &Allow).activate("zippopotam", "1.0.0", None).is_ok());
+}
+
+#[test]
+fn live_test_checks_shape_retries_once_and_names_redirects() {
+    let e = env();
+    let s = e.b(AgentRole::Supervisor, &Allow);
+    s.draft_spec(SVC).unwrap();
+    let get = |id: &str, expect: Option<probe::Expect>| vec![Probe { tool: "TESTSVC_GET_ITEM".into(), args: json!({"id": id}), cleanup: vec![], expect }];
+    // Empty body: fails unless allowed.
+    let t = s.live_test("testsvc", "1.0.0", &get("empty", None), None).unwrap();
+    assert_eq!(t["passed"], json!(false));
+    assert!(t["review"]["results"][0]["detail"].as_str().unwrap().contains("empty result"), "{t}");
+    let allow = probe::Expect { allow_empty: true, ..Default::default() };
+    assert_eq!(s.live_test("testsvc", "1.0.0", &get("empty", Some(allow)), None).unwrap()["passed"], json!(true));
+    // Shape assertion.
+    let want = probe::Expect { pointers: vec!["/name".into()], ..Default::default() };
+    let t = s.live_test("testsvc", "1.0.0", &get("1", Some(want)), None).unwrap();
+    assert!(t["review"]["results"][0]["detail"].as_str().unwrap().contains("/name"), "{t}");
+    // One retry on a TLS hiccup.
+    let t = s.live_test("testsvc", "1.0.0", &get("flaky", None), None).unwrap();
+    assert_eq!(t["passed"], json!(true), "{t}");
+    assert_eq!(e.mock.calls.lock().unwrap().iter().filter(|c| c.contains("/items/flaky")).count(), 2);
+    // A redirect names the final host as a suggestion.
+    let t = s.live_test("testsvc", "1.0.0", &get("moved", None), None).unwrap();
+    assert_eq!(t["passed"], json!(false));
+    assert_eq!(t["redirects"][0]["suggested_host"], json!("api.testsvc.example.com"), "{t}");
+    assert_eq!(t["redirects"][0]["suggested_api_base"], json!("https://api.testsvc.example.com/v2"), "{t}");
+    assert!(t["review"]["results"][0]["detail"].as_str().unwrap().contains("api_base"));
 }

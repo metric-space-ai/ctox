@@ -20,6 +20,7 @@
 //! - `<root>/runtime/toolhub/drafts/<slug>/<version>.json` drafts
 //! - `<specs>/<slug>/history.jsonl`            audit (append-only)
 pub mod catalog;
+pub mod probe;
 pub mod roles;
 
 use std::path::{Path, PathBuf};
@@ -82,6 +83,13 @@ pub trait ApprovalGates {
         let _ = work_id;
         Ok(None)
     }
+    /// Close a builder mission after its adapter `slug` was activated with
+    /// the live-tested `sha256` (`summary` is the closing note). The host
+    /// re-checks the condition before it closes. Default: nothing to close.
+    fn close_builder_mission(&self, work_id: &str, slug: &str, sha256: &str, summary: &str) -> Result<()> {
+        let _ = (work_id, slug, sha256, summary);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -134,6 +142,9 @@ pub struct Probe {
     /// Required for write probes: calls that undo the probe.
     #[serde(default)]
     pub cleanup: Vec<Probe>,
+    /// Result-shape assertion; without it an empty result still fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expect: Option<probe::Expect>,
 }
 
 fn empty_object() -> Value {
@@ -161,6 +172,10 @@ pub struct ReviewRecord {
     pub passed: bool,
     pub results: Vec<ProbeResult>,
     pub untested: Vec<String>,
+    /// Builder mission (work item id) the test ran in; a worker can activate
+    /// only with a proof from that same mission.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mission: Option<String>,
 }
 
 pub fn risk_str(r: Risk) -> &'static str {
@@ -185,6 +200,11 @@ fn safe(v: &str) -> Result<&str> {
         bail!("invalid name `{v}`");
     }
     Ok(v)
+}
+
+/// `api_base` of a spec text (for URL suffixes in redirect hints).
+fn adapter_base(text: &str) -> String {
+    serde_json::from_str::<Value>(text).ok().and_then(|d| d["api_base"].as_str().map(String::from)).unwrap_or_default()
 }
 
 fn short(e: impl std::fmt::Display) -> String {
@@ -532,6 +552,54 @@ impl<'a> Builder<'a> {
         self.draft_spec(text)
     }
 
+    /// Fetch an OpenAPI document (core egress rules: https, public addresses,
+    /// no redirects). Supervisor and worker only.
+    pub fn fetch_document(&self, url: &str) -> Result<String> {
+        self.require(Tool::DraftSpec, None)?;
+        if !matches!(self.role, AgentRole::Supervisor | AgentRole::Worker) {
+            bail!("not_allowed: only supervisor and worker fetch documents; pass a file instead");
+        }
+        if !url.starts_with("https://") {
+            bail!("--from-openapi URL must be https");
+        }
+        let req = crate::http::HttpRequest::new("GET", url).header("accept", "application/json, application/yaml, text/yaml, */*");
+        let r = self.transport.send_restricted(req).or_else(|e| {
+            if probe::is_transient(&format!("{e:#}")) {
+                self.transport.send_restricted(crate::http::HttpRequest::new("GET", url))
+            } else {
+                Err(e)
+            }
+        })?;
+        if (300..400).contains(&r.status) {
+            let to = self.transport.redirect_of(url).ok().flatten().map(|(_, l)| l).unwrap_or_else(|| "?".into());
+            bail!("{url} answers {} -> {to}; redirects are not followed, pass that URL", r.status);
+        }
+        if r.status != 200 {
+            bail!("{url} answered HTTP {}", r.status);
+        }
+        Ok(String::from_utf8_lossy(&r.body).into_owned())
+    }
+
+    /// Draft a spec (plus read probes) from an OpenAPI 3 / Swagger 2 document,
+    /// then validate it. The probes land next to the draft (`live_test`
+    /// without probes uses them).
+    pub fn draft_from_openapi(&self, document: &str, opts: &crate::spec::openapi::Options) -> Result<Value> {
+        self.require(Tool::DraftSpec, None)?;
+        let doc = crate::spec::openapi::parse_document(document)?;
+        let d = crate::spec::openapi::draft_from_openapi(&doc, opts)?;
+        let text = serde_json::to_string_pretty(&d.spec)?;
+        let stored = self.draft_spec(&text)?;
+        let (slug, version) = (stored["slug"].as_str().unwrap_or_default().to_string(), stored["version"].as_str().unwrap_or_default().to_string());
+        let probes_file = self.save_drafted_probes(&slug, &version, &json!(d.probes))?;
+        let validation = self.validate(&slug, &version)?;
+        Ok(json!({
+            "slug": slug, "version": version, "sha256": stored["sha256"], "draft": stored["draft"],
+            "actions": d.spec["actions"].as_array().map_or(0, Vec::len),
+            "validate": validation, "auth": d.auth, "probes": d.probes, "probes_file": probes_file,
+            "probes_missing": d.probes_missing, "skipped": d.skipped, "notes": d.notes, "spec": d.spec,
+        }))
+    }
+
     fn draft_text(&self, slug: &str, version: &str) -> Result<String> {
         let p = self.draft_path(slug, version)?;
         std::fs::read_to_string(&p).or_else(|_| self.store.version_text(slug, version)).with_context(|| format!("no draft {slug} {version}"))
@@ -548,16 +616,47 @@ impl<'a> Builder<'a> {
                 } else {
                     let actions: Vec<Value> = a.spec().tools.iter().map(|t| json!({"tool": t.slug, "risk": a.risk(&t.slug).map(risk_str).unwrap_or("write")})).collect();
                     let builtin = crate::toolkits::builtin().iter().any(|b| b.spec().slug == slug);
-                    json!({"ok": true, "sha256": a.sha256(), "hosts": doc["allowed_hosts"], "auth_schemes": a.spec().auth_schemes.iter().map(|s| s.kind()).collect::<Vec<_>>(), "actions": actions, "builtin_exists": builtin, "replaces_builtin": a.replaces_builtin()})
+                    let mut out = json!({"ok": true, "sha256": a.sha256(), "hosts": doc["allowed_hosts"], "auth_schemes": a.spec().auth_schemes.iter().map(|s| s.kind()).collect::<Vec<_>>(), "actions": actions, "builtin_exists": builtin, "replaces_builtin": a.replaces_builtin()});
+                    if let Some(r) = self.base_redirect(&doc) {
+                        out["redirect"] = r;
+                    }
+                    out
                 }
             }
             Err(e) => json!({"ok": false, "errors": [format!("{e:#}")]}),
         })
     }
 
+    /// A 3xx on the spec's fixed `api_base` (redirects are never followed).
+    fn base_redirect(&self, doc: &Value) -> Option<Value> {
+        let base = doc.get("api_base").and_then(Value::as_str)?;
+        if doc.get("api_base_template").is_some() {
+            return None;
+        }
+        probe::redirect_hint(self.transport.as_ref(), base, "")
+    }
+
+    /// Probes drafted next to a draft (`draft-spec --from-openapi`).
+    pub fn drafted_probes(&self, slug: &str, version: &str) -> Result<Vec<Probe>> {
+        let p = self.draft_path(slug, version)?.with_extension("probes.json");
+        let text = std::fs::read_to_string(&p).with_context(|| format!("no probes given and none drafted for {slug} {version}"))?;
+        Ok(serde_json::from_str(&text)?)
+    }
+
+    pub(crate) fn save_drafted_probes(&self, slug: &str, version: &str, probes: &Value) -> Result<PathBuf> {
+        let p = self.draft_path(slug, version)?.with_extension("probes.json");
+        std::fs::write(&p, serde_json::to_vec_pretty(probes)?)?;
+        Ok(p)
+    }
+
     /// Run probes against the real API (core only). On success the version is
     /// installed (inactive) and the review proof is written next to it.
     pub fn live_test(&self, slug: &str, version: &str, probes: &[Probe], account: Option<&str>) -> Result<Value> {
+        self.live_test_in_mission(slug, version, probes, account, None)
+    }
+
+    /// `live_test` inside a builder mission: the proof records the work item id.
+    pub fn live_test_in_mission(&self, slug: &str, version: &str, probes: &[Probe], account: Option<&str>, mission: Option<&str>) -> Result<Value> {
         let text = self.draft_text(slug, version)?;
         let adapter = SpecAdapter::from_json(&text).context("validate first")?;
         if adapter.spec().slug != slug || adapter.version() != version {
@@ -588,13 +687,44 @@ impl<'a> Builder<'a> {
         let sha = adapter.sha256().to_string();
         let mut hub = ToolHub::new(self.backend.clone(), self.transport.clone()).with_clock(self.clock.clone());
         hub.register(Box::new(SpecAdapter::from_json(&text)?));
-        let run = |p: &Probe| -> ProbeResult {
+        let base = adapter_base(&text);
+        let mut redirects: Vec<Value> = Vec::new();
+        let mut run = |p: &Probe| -> ProbeResult {
             let risk = risk_str(adapter.risk(&p.tool).unwrap_or(Risk::Write)).to_string();
-            let (result, status, detail) = match hub.execute(&self.project, &p.tool, &p.args, account) {
-                Ok(ToolOutcome::Success { .. }) => ("pass", None, None),
+            let mut outcome = hub.execute(&self.project, &p.tool, &p.args, account);
+            // One retry on a transient network/TLS error (never on HTTP answers).
+            if let Err(e) = &outcome {
+                if probe::is_transient(&format!("{e:#}")) {
+                    outcome = hub.execute(&self.project, &p.tool, &p.args, account);
+                }
+            }
+            let (result, status, detail) = match outcome {
+                Ok(ToolOutcome::Success { data }) => match probe::check(&data, p.expect.as_ref()) {
+                    Ok(()) => ("pass", None, None),
+                    Err(why) => ("fail", None, Some(short(format!("result shape: {why}")))),
+                },
+                Ok(ToolOutcome::ProviderError { status, .. }) if (300..400).contains(&status) => {
+                    let url = adapter.build_request(&p.tool, &p.args).map(|r| r.url).unwrap_or_default();
+                    let suffix = url.strip_prefix(base.as_str()).unwrap_or("");
+                    match probe::redirect_hint(self.transport.as_ref(), &url, suffix) {
+                        Some(h) => {
+                            let d = h["hint"].as_str().unwrap_or_default().to_string();
+                            redirects.push(h);
+                            ("fail", Some(status), Some(short(d)))
+                        }
+                        None => ("fail", Some(status), Some(format!("provider answered HTTP {status} (redirect; not followed)"))),
+                    }
+                }
                 Ok(ToolOutcome::ProviderError { status, .. }) => ("fail", Some(status), Some(format!("provider returned HTTP {status}"))),
                 Ok(ToolOutcome::CredentialRequired { toolkit, .. }) => ("access_missing", None, Some(roles::access_missing(self.role, &toolkit).1)),
-                Err(e) => ("fail", None, Some(short(format!("{e:#}")))),
+                Err(e) => {
+                    let e = format!("{e:#}");
+                    let d = match probe::egress_hint(&e) {
+                        Some(h) => format!("{} | {h}", short(&e)),
+                        None => short(&e),
+                    };
+                    ("fail", None, Some(d))
+                }
             };
             ProbeResult { tool: p.tool.clone(), risk, result: result.into(), status, detail }
         };
@@ -612,14 +742,23 @@ impl<'a> Builder<'a> {
         let tested: std::collections::BTreeSet<&str> = results.iter().map(|r| r.tool.as_str()).collect();
         let untested: Vec<String> = adapter.spec().tools.iter().map(|t| t.slug.clone()).filter(|t| !tested.contains(t.as_str())).collect();
         let passed = results.iter().all(|r| r.result == "pass");
-        let review = ReviewRecord { slug: slug.into(), version: version.into(), sha256: sha.clone(), tested_at: self.now(), tested_by: self.who(), passed, results, untested };
+        let review = ReviewRecord { slug: slug.into(), version: version.into(), sha256: sha.clone(), tested_at: self.now(), tested_by: self.who(), passed, results, untested, mission: mission.map(String::from) };
         if passed {
             self.store.install(&text)?;
             write_json(&self.review_path(slug, version)?, &review)?;
         }
         self.audit(slug, json!({"event": "live_test", "version": version, "sha256": sha, "passed": passed, "probes": review.results.len()}))?;
         let access_missing = review.results.iter().find(|r| r.result == "access_missing").and_then(|r| r.detail.clone());
-        Ok(json!({"passed": passed, "installed": passed, "review": review, "access_missing": access_missing}))
+        let mut out = json!({"passed": passed, "installed": passed, "review": review, "access_missing": access_missing});
+        if !passed {
+            if let Some(r) = self.base_redirect(&serde_json::from_str(&text)?) {
+                redirects.insert(0, r);
+            }
+        }
+        if !redirects.is_empty() {
+            out["redirects"] = json!(redirects);
+        }
+        Ok(out)
     }
 
     /// Record the user's decision on a per-call (destructive) gate; the host
@@ -674,11 +813,38 @@ impl<'a> Builder<'a> {
         if self.now().saturating_sub(review.tested_at) > REVIEW_MAX_AGE_SECS {
             bail!("the live-test proof is older than 24 h; run live_test again");
         }
+        // A worker's proof must come from this very mission (work item id).
+        if self.role == AgentRole::Worker && review.mission.as_deref() != mission {
+            bail!(
+                "the live-test proof belongs to mission {}, not {}; run live_test with --mission {}",
+                review.mission.as_deref().unwrap_or("(none)"),
+                mission.unwrap_or("(none)"),
+                mission.unwrap_or("<work_id>")
+            );
+        }
         let ptr = self.store.activate(slug, version, &self.who())?;
         let _ = std::fs::remove_file(self.health_path(slug)?);
-        self.audit(slug, json!({"event": "activate_proof", "version": version, "sha256": review.sha256, "tested_at": review.tested_at, "tested_by": review.tested_by, "mission": mission}))?;
+        self.audit(slug, json!({"event": "activate_proof", "version": version, "sha256": review.sha256, "tested_at": review.tested_at, "tested_by": review.tested_by, "mission": mission, "proof_mission": review.mission}))?;
         let reload = self.hub().map(|_| "ok").unwrap_or("failed");
-        Ok(json!({"active": ptr, "sha256": review.sha256, "reload": reload}))
+        let mut out = json!({"active": ptr, "sha256": review.sha256, "reload": reload});
+        if let Some(id) = mission {
+            let mine = self.gates.builder_mission_service(id)?.is_some_and(|s| s.replace('_', "-") == slug.replace('_', "-"));
+            if mine {
+                let tools: Vec<&str> = review.results.iter().map(|r| r.tool.as_str()).collect();
+                let summary = format!(
+                    "Adapter {slug} {version} aktiv / active (sha256 {}); live getestet / live-tested: {}",
+                    &review.sha256[..12.min(review.sha256.len())],
+                    tools.join(", ")
+                );
+                let closed = self.gates.close_builder_mission(id, slug, &review.sha256, &summary);
+                self.audit(slug, json!({"event": "mission_closed", "mission": id, "ok": closed.is_ok()}))?;
+                out["mission"] = match closed {
+                    Ok(()) => json!({"work_id": id, "closed": true}),
+                    Err(e) => json!({"work_id": id, "closed": false, "error": short(format!("{e:#}"))}),
+                };
+            }
+        }
+        Ok(out)
     }
 
     pub fn deactivate(&self, slug: &str) -> Result<Value> {

@@ -32,6 +32,8 @@ mod work_item_status;
 pub(crate) use work_item_status::WorkItemStatus;
 
 mod work_items;
+mod adapter_mission;
+pub(crate) use adapter_mission::close_adapter_build_mission_after_activation;
 #[cfg(test)]
 use work_items::ticket_self_work_spawn_budget;
 pub(crate) use work_items::{
@@ -123,6 +125,12 @@ enum TerminalPolicyGrantKind {
         approval_message_key: String,
         body_sha256_prefix: String,
     },
+    /// A ToolHub builder mission whose adapter is active with exactly the
+    /// live-tested sha256 (proof bound to this mission), see `adapter_mission`.
+    AdapterActivatedWithProof {
+        slug: String,
+        sha256_prefix: String,
+    },
 }
 
 /// Ticket terminal-policy capability created only after the corresponding
@@ -146,8 +154,18 @@ impl TerminalPolicyGrant {
         })
     }
 
+    fn adapter_activated_with_proof(slug: &str, sha256: &str) -> Self {
+        Self(TerminalPolicyGrantKind::AdapterActivatedWithProof {
+            slug: slug.to_string(),
+            sha256_prefix: sha256.chars().take(16).collect(),
+        })
+    }
+
     fn proof(&self) -> String {
         match &self.0 {
+            TerminalPolicyGrantKind::AdapterActivatedWithProof { slug, sha256_prefix } => {
+                format!("policy:toolhub-adapter-activated-with-live-test-proof:{slug}:{sha256_prefix}")
+            }
             TerminalPolicyGrantKind::OutboundTicketEvent => {
                 "policy:ticket-event-outbound-terminal".to_string()
             }

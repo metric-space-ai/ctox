@@ -72,9 +72,9 @@ const DEFS: &[Def] = &[
     Def { name: "ctox_toolhub_get_schema", min_role: ToolhubRole::OneShot, description: "Input schema, risk and auth of one active tool.", params: &[("tool", "Tool slug.", true)] },
     Def { name: "ctox_toolhub_list", min_role: ToolhubRole::OneShot, description: "List adapters, versions, review and approval state.", params: &[] },
     Def { name: "ctox_toolhub_execute", min_role: ToolhubRole::OneShot, description: "Execute an active tool. Writes and destructive calls follow your role rules; destructive calls return approval_required with a gate id first.", params: &[("tool", "Tool slug.", true), ("args_json", "Arguments as a JSON object string.", false), ("account", "Connected account id, if several.", false), ("approval_gate", "Decided per-call gate id for a destructive call.", false)] },
-    Def { name: "ctox_toolhub_draft_spec", min_role: ToolhubRole::OneShot, description: "Store a draft adapter spec (ctox.adapter-spec/v1) or copy one from the vetted catalog. Drafts are inactive.", params: &[("spec_json", "Full spec as JSON string.", false), ("from_catalog", "Catalog slug instead of spec_json.", false)] },
+    Def { name: "ctox_toolhub_draft_spec", min_role: ToolhubRole::OneShot, description: "Store a draft adapter spec (ctox.adapter-spec/v1), copy one from the vetted catalog, or generate one from an OpenAPI/Swagger document (actions, risk by method, auth suggestion, host allowlist, read probes from examples). Drafts are inactive.", params: &[("spec_json", "Full spec as JSON string.", false), ("from_catalog", "Catalog slug instead of spec_json.", false), ("from_openapi", "https URL (supervisor/worker) or file path of an OpenAPI 3 / Swagger 2 document.", false), ("slug", "Toolkit slug for from_openapi (default from the title).", false), ("operations", "Comma-separated operationIds to keep (from_openapi).", false)] },
     Def { name: "ctox_toolhub_validate", min_role: ToolhubRole::OneShot, description: "Validate a draft: schema, hosts, risk rules.", params: &[("slug", "Adapter slug.", true), ("version", "Version.", true)] },
-    Def { name: "ctox_toolhub_live_test", min_role: ToolhubRole::OneShot, description: "Run probes against the real API and record the review proof. Write probes need cleanup; destructive actions are never probed.", params: &[("slug", "Adapter slug.", true), ("version", "Version.", true), ("probes_json", "JSON array of {tool,args,cleanup[]}.", true), ("account", "Connected account id.", false)] },
+    Def { name: "ctox_toolhub_live_test", min_role: ToolhubRole::OneShot, description: "Run probes against the real API and record the review proof. Write probes need cleanup; destructive actions are never probed.", params: &[("slug", "Adapter slug.", true), ("version", "Version.", true), ("probes_json", "JSON array of {tool,args,cleanup[],expect{kind,pointers,min_items,allow_empty}}; omit to use the probes drafted by from_openapi. Empty results fail unless expect.allow_empty.", false), ("account", "Connected account id.", false), ("mission", "Builder mission work id (workers: the proof is bound to it).", false)] },
     Def { name: "ctox_toolhub_request_adapter", min_role: ToolhubRole::Worker, description: "Queue a builder mission (adapter-builder skill) for a service that has no adapter yet. One open mission per service.", params: &[("service", "Service name, e.g. pipedrive.", true), ("reason", "Why the task needs it.", false)] },
     Def { name: "ctox_toolhub_approve", min_role: ToolhubRole::Supervisor, description: "Record the user's decision on a per-call gate of a destructive action. Only with the user's own words in user_quote.", params: &[("gate", "Gate id.", true), ("decision", "approve | reject", true), ("user_quote", "The user's literal answer.", true)] },
     Def { name: "ctox_toolhub_activate", min_role: ToolhubRole::Worker, description: "Activate a version autonomously once validate passed and a live test passed within 24 h for exactly this version. Workers: only inside a builder mission (pass its work id as mission).", params: &[("slug", "Adapter slug.", true), ("version", "Version.", true), ("mission", "Builder mission work id (required for workers).", false)] },
@@ -157,14 +157,20 @@ pub fn build_argv(tool: &str, args: &Value, role: ToolhubRole, session: Option<&
             v.push("draft-spec".into());
             if let Some(c) = s(args, "from_catalog") {
                 v.extend(["--from-catalog".into(), c]);
+            } else if let Some(o) = s(args, "from_openapi") {
+                v.extend(["--from-openapi".into(), o]);
+                opt(&mut v, "--slug", "slug");
+                opt(&mut v, "--operations", "operations");
             } else {
                 v.extend(["--spec-json".into(), need(args, "spec_json")?]);
             }
         }
         "ctox_toolhub_validate" => v.extend(["validate".into(), need(args, "slug")?, need(args, "version")?]),
         "ctox_toolhub_live_test" => {
-            v.extend(["live-test".into(), need(args, "slug")?, need(args, "version")?, "--probes-json".into(), need(args, "probes_json")?]);
+            v.extend(["live-test".into(), need(args, "slug")?, need(args, "version")?]);
+            opt(&mut v, "--probes-json", "probes_json");
             opt(&mut v, "--account", "account");
+            opt(&mut v, "--mission", "mission");
         }
         "ctox_toolhub_request_adapter" => {
             v.extend(["request-adapter".into(), need(args, "service")?]);
@@ -248,6 +254,10 @@ mod tests {
         assert!(build_argv("ctox_toolhub_activate", &json!({"slug": "a", "version": "1"}), ToolhubRole::OneShot, None).is_err());
         let argv = build_argv("ctox_toolhub_activate", &json!({"slug": "a", "version": "1", "mission": "w1"}), ToolhubRole::Worker, None).unwrap();
         assert_eq!(&argv[3..], &["activate", "a", "1", "--mission", "w1"]);
+        let argv = build_argv("ctox_toolhub_live_test", &json!({"slug": "a", "version": "1", "mission": "w1"}), ToolhubRole::Worker, None).unwrap();
+        assert_eq!(&argv[3..], &["live-test", "a", "1", "--mission", "w1"]);
+        let argv = build_argv("ctox_toolhub_draft_spec", &json!({"from_openapi": "https://x.org/o.yaml", "slug": "x"}), ToolhubRole::Worker, None).unwrap();
+        assert_eq!(&argv[3..], &["draft-spec", "--from-openapi", "https://x.org/o.yaml", "--slug", "x"]);
         assert_eq!(ToolhubRole::resolve(Some("root")), ToolhubRole::OneShot);
         let argv = build_argv("ctox_toolhub_approve", &json!({"gate": "g", "decision": "approve", "user_quote": "ja"}), ToolhubRole::Supervisor, Some("tok")).unwrap();
         assert_eq!(argv, ["toolhub", "--as", "supervisor", "--command-session", "tok", "approve", "--gate", "g", "--decision", "approve", "--user-quote", "ja"]);

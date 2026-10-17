@@ -60,6 +60,12 @@ pub trait HttpTransport: Send + Sync {
     fn send_restricted(&self, request: HttpRequest) -> anyhow::Result<HttpResponse> {
         self.send(request)
     }
+    /// Where `url` redirects to (status, absolute `Location`), without following
+    /// it; same egress rules as `send_restricted`. Default: unknown (`None`).
+    fn redirect_of(&self, url: &str) -> anyhow::Result<Option<(u16, String)>> {
+        let _ = url;
+        Ok(None)
+    }
 }
 
 #[cfg(feature = "ureq-transport")]
@@ -132,6 +138,20 @@ impl HttpTransport for UreqTransport {
     }
     fn send_restricted(&self, request: HttpRequest) -> anyhow::Result<HttpResponse> {
         send_with(&self.restricted, request)
+    }
+    fn redirect_of(&self, url: &str) -> anyhow::Result<Option<(u16, String)>> {
+        let response = match self.restricted.get(url).call() {
+            Ok(r) => r,
+            Err(ureq::Error::Status(_, r)) => r,
+            Err(e) => return Err(anyhow::anyhow!("http transport error: {e}")),
+        };
+        let status = response.status();
+        if !(300..400).contains(&status) {
+            return Ok(None);
+        }
+        let Some(location) = response.header("location") else { return Ok(None) };
+        let absolute = url::Url::parse(url).and_then(|base| base.join(location)).map(|u| u.to_string()).unwrap_or_else(|_| location.to_string());
+        Ok(Some((status, absolute)))
     }
 }
 

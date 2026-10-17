@@ -47,7 +47,15 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
    most the writes the task really requires. Every action gets a risk level:
    `read` (GET or query-only POST with `read_only_post`), `write`, or
    `destructive` (every DELETE, and anything that cannot be undone).
-3. **Write the spec** (`src/core/execution/toolhub/schema/adapter-spec.v1.schema.json`,
+3. **Generate or write the spec.** If the service publishes OpenAPI/Swagger,
+   start with `ctox toolhub draft-spec --from-openapi <https-url|file>` (tool
+   `ctox_toolhub_draft_spec from_openapi=...`): it maps operations to actions,
+   sets risk by method, suggests auth, sets `allowed_hosts` to the server host,
+   validates, and drafts read probes from the doc's examples (`probes_file`).
+   Read its `skipped`, `probes_missing` and `notes`, then fix the draft (DE/EN
+   texts, missing examples) and re-draft with `--spec-json` and a new version
+   if needed. Otherwise write it by hand
+   (`src/core/execution/toolhub/schema/adapter-spec.v1.schema.json`,
    examples `src/core/execution/toolhub/specs/todoist.json`, `asana.json`):
    - `allowed_hosts` as narrow as possible; `*.domain` only for per-tenant hosts.
    - `api_base_template` + `connection_fields` for per-account hosts (only single
@@ -68,12 +76,19 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
    already supports; otherwise ask for a personal token or stop.
 7. **Live test** (definition of done): real calls against the real API through
    the hub with the installed spec. Reads first. Writes only with explicit user
-   consent, only in a test object, and clean up afterwards. Record per action:
+   consent, only in a test object, and clean up afterwards. Pass `--mission
+   <work_id>` (worker: required, the proof is bound to it). Without probes the
+   drafted ones run. An empty result fails unless the probe says
+   `"expect": {"allow_empty": true}`; add `kind`, `pointers`, `min_items` to
+   check the shape. One retry happens on network/TLS errors. A 3xx names the
+   final host (`redirects[].suggested_api_base`). Record per action:
    PASS / FAIL / SKIP with reason. An action without a passing live call is not
    done; remove it from the spec or mark the spec as not ready.
 8. **Activate** yourself, right after a passing live test:
    `ctox_toolhub_activate <slug> <version>` (worker: with `mission`). No user
    step. The hub picks it up via `reload_specs_if_changed` without restart.
+   With `mission`, the builder mission closes itself (core grant re-checks
+   the active sha256 and the mission-bound proof); no manual close.
    Report to the supervisor what was activated (service, hosts, actions by risk).
 9. **Rollback.** After 5 consecutive failed calls (mapping errors, 5xx, 400/410)
    the active version rolls back automatically to the previous one (once, no
@@ -90,12 +105,13 @@ session, never by you. Rules per role: `ctox toolhub --as <role> rules`.
 |---|---|---|
 | Find existing | `ctox_toolhub_search` (`include_catalog=true`) | all |
 | Queue a builder mission | `ctox_toolhub_request_adapter` / `request-adapter <service>` | supervisor, worker |
-| Draft | `ctox_toolhub_draft_spec` (`spec_json` or `from_catalog`) | all except MCP |
+| Draft | `ctox_toolhub_draft_spec` (`spec_json`, `from_catalog`, or `from_openapi` URL/file) | all except MCP (URLs: supervisor, worker) |
 | Validate | `ctox_toolhub_validate <slug> <version>` | all except MCP |
-| Live test + review proof | `ctox_toolhub_live_test` with `probes_json` `[{tool,args,cleanup[]}]` | reads: all; write probes: supervisor; destructive: never |
+| Live test + review proof | `ctox_toolhub_live_test` with `probes_json` `[{tool,args,cleanup[],expect}]` (or the drafted probes) and `mission` | reads: all; write probes: supervisor; destructive: never |
 | Activate (no user approval) | `ctox_toolhub_activate <slug> <version> [mission]` | supervisor; worker only with its builder mission |
 | Deactivate / rollback | `ctox_toolhub_deactivate`, `ctox_toolhub_rollback` | supervisor (plus automatic rollback on repeated failures) |
 | Per-call approval (destructive only) | `ctox_toolhub_approve gate decision=approve|reject user_quote="<user's words>"` | supervisor only, after asking the user |
+| Fake-IP egress (operator) | `ctox toolhub --as supervisor config set fake-ip-egress on` (or `off`), `config show` | supervisor |
 | Use | `ctox_toolhub_execute` (destructive: first `approval_required` + gate, then again with `approval_gate`) | per role rules |
 
 Hard checks in code: activation needs a validating spec and a passing live-test

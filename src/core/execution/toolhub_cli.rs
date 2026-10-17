@@ -100,6 +100,14 @@ impl ApprovalGates for TicketGates<'_> {
             .filter(|item| item.kind == BUILDER_MISSION_KIND && !matches!(item.state.as_str(), "closed" | "failed" | "cancelled"))
             .and_then(|item| item.metadata["service"].as_str().map(str::to_string)))
     }
+
+    /// Closes through the core's own terminal grant, which re-checks the
+    /// active sha256 and the mission-bound live-test proof in the store.
+    fn close_builder_mission(&self, work_id: &str, slug: &str, sha256: &str, summary: &str) -> Result<()> {
+        tickets::close_adapter_build_mission_after_activation(self.root, work_id, slug, sha256, summary)?;
+        let _ = tickets::append_ticket_self_work_note(self.root, work_id, summary, "toolhub", "internal");
+        Ok(())
+    }
 }
 
 /// Internal work-item kind of a builder mission (`request-adapter`).
@@ -188,7 +196,33 @@ pub(crate) fn handle_toolhub_command(root: &Path, args: &[String]) -> Result<()>
     Ok(())
 }
 
-pub(crate) const USAGE: &str = "usage: ctox toolhub [--as supervisor|worker|oneshot|mcp] <search|get-schema|list|execute|draft-spec|validate|live-test|approve|activate|deactivate|rollback|request-adapter|rules> ...";
+pub(crate) const USAGE: &str = "usage: ctox toolhub [--as supervisor|worker|oneshot|mcp] <search|get-schema|list|execute|draft-spec|validate|live-test|approve|activate|deactivate|rollback|request-adapter|rules|config> ...\n  draft-spec --from-openapi <https-url|file> [--slug s] [--version v] [--max-actions n] [--operations a,b]\n  live-test <slug> <version> [--probes-json|--probes-file] [--mission <work_id>]   (no probes: the drafted ones)\n  config show | config set fake-ip-egress on|off   (supervisor)";
+
+/// Instance config key for the fake-IP egress transport option.
+const FAKE_IP_KEY: &str = "CTOX_TOOLHUB_FAKE_IP_EGRESS";
+
+/// `ctox toolhub config ...`: typed instance settings of the toolhub (stored in
+/// the runtime config store, never env vars).
+fn config_command(root: &Path, role: AgentRole, policy: &CtoxPolicy, args: &[String]) -> Result<Value> {
+    use crate::execution::models::runtime_env;
+    let show = || json!({"fake_ip_egress": runtime_env::config_flag(root, FAKE_IP_KEY)});
+    match (positional(args, 1), positional(args, 2), positional(args, 3)) {
+        (Some("show") | None, _, _) => Ok(show()),
+        (Some("set"), Some("fake-ip-egress"), Some(v)) => {
+            if role != AgentRole::Supervisor {
+                bail!("not_allowed: only the supervisor (operator) changes toolhub settings");
+            }
+            policy.check(Permission::IntegrationsManage)?;
+            match v {
+                "on" | "true" | "1" => runtime_env::set_runtime_env_value(root, FAKE_IP_KEY, "1")?,
+                "off" | "false" | "0" => runtime_env::clear_runtime_env_value(root, FAKE_IP_KEY)?,
+                o => bail!("fake-ip-egress takes on|off, got `{o}`"),
+            }
+            Ok(json!({"fake_ip_egress": runtime_env::config_flag(root, FAKE_IP_KEY), "note": "only the 198.18.0.0/15 egress-proxy range is admitted; all other private ranges stay blocked"}))
+        }
+        _ => bail!("usage: ctox toolhub config show | config set fake-ip-egress on|off"),
+    }
+}
 
 /// `transport` is injectable for tests; production uses ureq with the
 /// SSRF-guarded options.
@@ -206,11 +240,14 @@ pub(crate) fn run(
     let (actor, bos_role) = resolve_actor(root, args)?;
     let transport = transport.unwrap_or_else(|| {
         Arc::new(UreqTransport::with_options(TransportOptions {
-            fake_ip_egress: crate::execution::models::runtime_env::config_flag(root, "CTOX_TOOLHUB_FAKE_IP_EGRESS"),
+            fake_ip_egress: crate::execution::models::runtime_env::config_flag(root, FAKE_IP_KEY),
         }))
     });
     let gates = TicketGates { root };
     let policy = CtoxPolicy { actor: BusinessOsActor::new(Some(actor.clone()), &bos_role) };
+    if cmd == "config" {
+        return config_command(root, role, &policy, args);
+    }
     let mut b = Builder::new(root, Arc::new(CtoxSecrets { root: root.to_path_buf() }), transport, &gates, &policy, role, &actor);
     if let Some(p) = flag(args, "--project") {
         b = b.with_project(p);
@@ -228,6 +265,20 @@ pub(crate) fn run(
         "draft-spec" => {
             if let Some(slug) = flag(args, "--from-catalog") {
                 b.draft_from_catalog(slug)
+            } else if let Some(src) = flag(args, "--from-openapi") {
+                let text = if src.starts_with("https://") || src.starts_with("http://") {
+                    b.fetch_document(src)?
+                } else {
+                    std::fs::read_to_string(src).with_context(|| format!("read {src}"))?
+                };
+                let opts = ctox_toolhub::spec::openapi::Options {
+                    slug: flag(args, "--slug").map(String::from),
+                    version: flag(args, "--version").unwrap_or("1.0.0").to_string(),
+                    max_actions: flag(args, "--max-actions").and_then(|n| n.parse().ok()).unwrap_or(40),
+                    operations: flag(args, "--operations").map(|o| o.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
+                    source: src.to_string(),
+                };
+                b.draft_from_openapi(&text, &opts)
             } else {
                 let spec = json_arg(args, "--spec-json", "--spec-file")?.context("missing --spec-json/--spec-file/--from-catalog")?;
                 b.draft_spec(&serde_json::to_string(&spec)?)
@@ -235,10 +286,11 @@ pub(crate) fn run(
         }
         "validate" => b.validate(p1()?, p2()?),
         "live-test" => {
-            let probes: Vec<Probe> = serde_json::from_value(
-                json_arg(args, "--probes-json", "--probes-file")?.context("missing --probes-json/--probes-file")?,
-            )?;
-            b.live_test(p1()?, p2()?, &probes, flag(args, "--account"))
+            let probes: Vec<Probe> = match json_arg(args, "--probes-json", "--probes-file")? {
+                Some(v) => serde_json::from_value(v)?,
+                None => b.drafted_probes(p1()?, p2()?)?,
+            };
+            b.live_test_in_mission(p1()?, p2()?, &probes, flag(args, "--account"), flag(args, "--mission"))
         }
         "approve" => b.approve(
             req(flag(args, "--gate"), "--gate")?,
@@ -283,7 +335,7 @@ fn request_adapter(root: &Path, role: AgentRole, service: &str, reason: &str) ->
             kind: BUILDER_MISSION_KIND.into(),
             title: format!("Adapter bauen: {slug} / Build adapter: {slug}"),
             body_text: format!(
-                "Baue einen ToolHub-Adapter für `{slug}` mit dem Skill adapter-builder: Katalog prüfen (`ctox toolhub search --include-catalog`), sonst Spec entwerfen, validieren, live testen und mit `--mission <diese work_id>` selbst aktivieren (ohne Nutzerfreigabe).\n\nBuild a ToolHub adapter for `{slug}` with the adapter-builder skill: check the catalog, else draft, validate, live-test and activate it yourself with `--mission <this work_id>` (no user approval).\n\nGrund / Reason: {reason}"
+                "Baue einen ToolHub-Adapter für `{slug}` mit dem Skill adapter-builder: Katalog prüfen (`ctox toolhub search --include-catalog`), sonst Spec entwerfen (mit OpenAPI: `draft-spec --from-openapi <url>`), validieren, mit `--mission <diese work_id>` live testen und selbst aktivieren (ohne Nutzerfreigabe); die Mission schließt sich danach selbst.\n\nBuild a ToolHub adapter for `{slug}` with the adapter-builder skill: check the catalog, else draft (with OpenAPI: `draft-spec --from-openapi <url>`), validate, live-test and activate it yourself with `--mission <this work_id>` (no user approval); the mission closes itself afterwards.\n\nGrund / Reason: {reason}"
             ),
             state: "open".into(),
             metadata: json!({"skill": "adapter-builder", "service": slug, "reason": reason, "dedupe_key": dedupe_key, "requested_by_role": role.as_str()}),
