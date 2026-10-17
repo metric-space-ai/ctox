@@ -230,7 +230,7 @@ pub(crate) fn collect(
                     .tables
                     .iter()
                     .any(|d| d.table.name == "iot_datapoints" && d.rule == "E29.1");
-                let extra = if archive_timeseries {
+                let mut extra = if archive_timeseries {
                     let key = format!("{}:iot_datapoints", source.choice.database);
                     let rows = freeze::measure(tx, "iot_datapoints")?.row_count;
                     if out.audit.source_rows.get(&key) != Some(&rows)
@@ -252,11 +252,22 @@ pub(crate) fn collect(
                 } else {
                     core_import::collect(tx, &mut services, 2_000_000, 256 * 1024 * 1024)?
                 };
+                // E29-R2: an unregistered computed view cannot become a target.
+                // Every original row is already archived or retained by E29-R5/6.
+                let mut declared_documents = Vec::new();
+                for doc in extra.documents {
+                    if release.collections.values().flatten().any(|d| d.name == doc.collection) {
+                        declared_documents.push(doc);
+                    } else {
+                        extra.report.diagnostics.push(format!("core_projection_unregistered:{}",doc.collection));
+                    }
+                }
+                extra.documents = declared_documents;
                 let keys: Vec<_> = keys
                     .into_iter()
                     .filter(|key| {
                         !source.tables.iter().any(|d| {
-                            d.rule == "E29.1"
+                            (d.rule == "E29.1" || !release.collections.values().flatten().any(|schema|schema.name==d.table.collection))
                                 && *key == format!("{}:{}", source.choice.database, d.table.name)
                         })
                     })

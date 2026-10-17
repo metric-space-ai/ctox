@@ -139,7 +139,7 @@ def main():
   else:source_kind='core'
   source={'choice':{'database':database,'live_file':str(path),'frozen_file':str(frozen_path),'lsof_receipt_sha256':hashlib.sha256(fg.encoded({'synthetic':True,'selected_file':str(path),'producer_pid':os.getpid()})).hexdigest()},'measurement_sha256':hashlib.sha256(fg.encoded({d['table']['name']:d['measurement'] for d in sorted(decisions,key=lambda d:d['table']['name'])})).hexdigest(),'kind':source_kind,'internal_table':internal,'tables':decisions,'collectors':collectors}
   sources.append(source)
- result.update(synthetic_known_row_count=source_count,table_count=len(models),protected_tables=sum(m['measurement_status']=='protected_content_not_read' for m in models),secret_api_tables=len(retained),active_versions_source='explicit synthetic RxDB metadata, not WELSCH inference')
+ result.update(synthetic_known_row_count=source_count,table_count=len(models),physical_nonsecret_tables=sum(len(s['tables']) for s in sources),physical_types_and_constraints='not supplied; synthetic table definitions model supplied column names and known counts',protected_tables=sum(m['measurement_status']=='protected_content_not_read' for m in models),secret_api_tables=len(retained),active_versions_source='explicit synthetic RxDB metadata, not WELSCH inference')
  snapshot={'schema':'ctox.v4.cutover_snapshot.v1','frozen':True,'method':'sqlite_backup_api','imported_at_ms':STAMP,'archive_custodian_user':'synthetic-custodian','release':{'v4_root':str(frozen/'v4'),'platform_manifest':str(frozen/'platform.json'),'app_ver':'main@4794af03d+v4','client_limit':100000,'byte_budget':33554432,'rights_ver':1},'databases':sources,'inventory':inventory,'retained':retained}
  fg.save(frozen/'cutover.json',snapshot);(frozen/'cutover.json').chmod(0o444);fg.save(out/'build-result.json',result);print('SYNTHETIC_495_CREATED',flush=True)
  # The accepted DevOps fixture supplies the held owner; the complete synthetic
@@ -182,6 +182,26 @@ def main():
   for m in models:
    r=actual[(m['database'],m['table'])];assert r['source_rows']==m['row_count'],(m['database'],m['table'],r['source_rows'],m['row_count'])
    rows.append(dict(r,target_rows_kind='planned (dry-run only)',planned_target_rows=r['expected_target_rows'],source_count_kind=m['measurement_status'],production_source_hash_not_relabelled=True))
+  # Mutation: removing an actual table declaration must fail, even after the
+  # caller updates its inventory and measurement digest to agree with the lie.
+  bad=copy.deepcopy(snapshot);selected=next(s for s in bad['databases'] if s['choice']['database']=='ctox.sqlite3')
+  omitted=next(d for d in selected['tables'] if d['table']['name']=='ctox_process_events');selected['tables'].remove(omitted);bad['inventory']['ctox.sqlite3'].remove('ctox_process_events')
+  selected['measurement_sha256']=hashlib.sha256(fg.encoded({d['table']['name']:d['measurement'] for d in sorted(selected['tables'],key=lambda d:d['table']['name'])})).hexdigest()
+  fg.save(frozen/'omitted-table.json',bad)
+  bad_command=command.copy();bad_command[bad_command.index('--snapshot')+1]=str(frozen/'omitted-table.json')
+  negative=subprocess.Popen(bad_command,cwd=root,env=env,stdout=subprocess.PIPE,stderr=subprocess.PIPE,start_new_session=True)
+  try:stdout,stderr=negative.communicate(timeout=90)
+  except BaseException:fg.stop(negative);raise
+  (out/'omitted-table.stdout').write_bytes(stdout);(out/'omitted-table.stderr').write_bytes(stderr)
+  assert negative.returncode!=0,'physical table silently omitted'
+  receipts=[]
+  for line in stderr.splitlines():
+   try:value=json.loads(line)
+   except ValueError:continue
+   if isinstance(value,dict) and 'report_path' in value:receipts.append(value)
+  assert len(receipts)==1
+  rejection=json.loads(Path(receipts[0]['report_path']).read_text());assert 'cutover_table_without_decision' in rejection['error'],rejection
+  result['input_mutation']={'omit_table':'ctox_process_events','exit':negative.returncode,'error':rejection['error'],'source_rows_preserved':True}
   result.update(pass_=True,zero_silent_skips=True,coverage=rows,snapshot_sha256=hashlib.sha256((frozen/'cutover.json').read_bytes()).hexdigest(),dry_run_writes=False)
   result['pass']=result.pop('pass_');fg.save(out/'result.json',result)
  finally:
