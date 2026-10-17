@@ -1038,10 +1038,67 @@ fn merge_field_status(existing: Option<&Value>, incoming: Value) -> Value {
                     continue;
                 }
             }
+            // Ein belegter Wert wird nur durch einen neuen Beleg ersetzt, nie
+            // durch "offen" oder "nicht gefunden" eines spaeteren Laufs.
+            // Kundeninstanz 15.10.2026: ein Lueckenlauf schrieb Umsatz und
+            // Mitarbeiter eines Leads als action_required zurueck ("zuvor
+            // gespeicherte Werte nicht wieder eingetragen") und loeschte bei
+            // einem anderen Lead belegtes Geschlecht und Titel; der Review
+            // verwarf die Laeufe danach als Datenverlust, bis das Budget leer
+            // war. Der Einwand bleibt als `challenge` am Feld sichtbar.
+            // Zurueckgestuft wird ein belegter Wert nur, wenn er im Feld-Review
+            // widerlegt ist oder der Einwand selbst eine Quelle mit URL und
+            // Zitat traegt (begruendeter Widerspruch). Stresstest 15./16.10.:
+            // ohne diese Ausnahme lehnte der Speicher jede belegte Korrektur
+            // ab, der Review verlangte sie weiter, sechs Laeufe erschoepften ihr
+            // Budget.
+            if let Some(previous) = merged.get_mut(field) {
+                if is_unrefuted_verified(previous)
+                    && !is_verified_status(status)
+                    && !status_carries_contradicting_source(status)
+                {
+                    if let Some(previous) = previous.as_object_mut() {
+                        previous.insert("challenge".to_string(), status.clone());
+                    }
+                    continue;
+                }
+            }
             merged.insert(field.clone(), status.clone());
         }
     }
     Value::Object(merged)
+}
+
+fn is_verified_status(status: &Value) -> bool {
+    status
+        .get("status")
+        .and_then(Value::as_str)
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("verified"))
+}
+
+fn status_carries_contradicting_source(status: &Value) -> bool {
+    status
+        .get("sources")
+        .and_then(Value::as_array)
+        .is_some_and(|sources| {
+            sources.iter().any(|source| {
+                let text = |key: &str| {
+                    source
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .is_some_and(|value| !value.trim().is_empty())
+                };
+                (text("url") || text("source_url")) && text("quote")
+            })
+        })
+}
+
+fn is_unrefuted_verified(status: &Value) -> bool {
+    is_verified_status(status)
+        && status
+            .pointer("/review/verdict")
+            .and_then(Value::as_str)
+            .is_none_or(|verdict| !verdict.trim().eq_ignore_ascii_case("refuted"))
 }
 
 /// Stores person-bound field statuses durably in `lead.person_field_status`
@@ -1205,6 +1262,24 @@ fn sanitize_person_status(
         {
             notes.push("Wert auf nicht-verifiziertem Feld entfernt".to_string());
             status.value = Value::Null;
+        }
+        // Auch ein offenes Feld traegt keine Belege, die ausdruecklich einer
+        // anderen Person gehoeren. Ein Beleg ohne Schluessel bleibt: das
+        // E-Mail-Muster der Firma wird bewusst mit der Adresse eines
+        // Kollegen belegt (Rechercheablauf 4b).
+        let before = status.sources.len();
+        status.sources.retain(|source| {
+            source
+                .person_key
+                .as_deref()
+                .map(str::trim)
+                .is_none_or(|key| key.is_empty() || key == person_key)
+        });
+        if status.sources.len() != before {
+            notes.push(format!(
+                "{} Beleg(e) verworfen (gehoeren zu einer anderen Person)",
+                before - status.sources.len()
+            ));
         }
         return Ok((status, notes));
     }
@@ -5735,12 +5810,81 @@ mod tests {
             "Vom Rueckschreiben nicht geliefert"
         );
         assert_eq!(merged["firma_telefon"]["status"], "unsupported");
-        // A documented `unsupported` (with attempts) is not a filler and wins.
+        // A documented `unsupported` (with attempts) is not a filler and wins
+        // over an earlier negative ...
+        let documented = serde_json::json!({
+            "firma_domain": {"status": "unsupported", "attempts": [{"source_id": "official", "note": "Seite offline"}], "sources": []}
+        });
+        let merged = merge_field_status(Some(&merged), documented);
+        assert_eq!(merged["firma_domain"]["status"], "unsupported");
+        // ... but never over a verified value: an offline page proves nothing.
         let documented = serde_json::json!({
             "firma_name": {"status": "unsupported", "attempts": [{"source_id": "official", "note": "Seite offline"}], "sources": []}
         });
         let merged = merge_field_status(Some(&merged), documented);
-        assert_eq!(merged["firma_name"]["status"], "unsupported");
+        assert_eq!(merged["firma_name"]["status"], "verified");
+        assert_eq!(merged["firma_name"]["challenge"]["status"], "unsupported");
+    }
+
+    #[test]
+    fn an_open_person_field_drops_sources_of_another_person_but_keeps_pattern_evidence() {
+        let status: FieldStatus = serde_json::from_value(serde_json::json!({
+            "status": "action_required",
+            "value": "alexander.bartels@ha-group.test",
+            "sources": [
+                {"source_id": "leadfeeder.com", "url": "https://www.leadfeeder.com/", "quote": "soeren.nold@ha-group.test", "person_key": null},
+                {"source_id": "experte.de", "url": "https://www.experte.de/email-pruefen", "quote": "verdict: soeren.nold@ha-group.test | Unbekannt", "person_key": "p-nold-soeren"}
+            ]
+        }))
+        .unwrap();
+        let (status, notes) = sanitize_person_status(
+            "person_email",
+            "p-bartels-alexander",
+            status,
+            &CrmBaseline::default(),
+        )
+        .unwrap();
+        assert_eq!(status.sources.len(), 1);
+        assert_eq!(status.sources[0].source_id, "leadfeeder.com");
+        assert!(notes.iter().any(|note| note.contains("anderen Person")));
+    }
+
+    #[test]
+    fn a_later_open_status_keeps_the_verified_value_and_records_the_challenge() {
+        // Kundeninstanz 15.10.2026: a gap run wrote umsatz/mitarbeiter back as
+        // action_required and dropped verified gender and title of a contact.
+        let earlier = serde_json::json!({
+            "umsatz": {"status": "verified", "value": "199.494.166 EUR (2023)", "sources": [{"source_id": "bundesanzeiger.de"}, {"source_id": "dnbhoovers.com"}]},
+            "person_geschlecht": {"status": "verified", "value": "männlich", "sources": [{"source_id": "xing.com"}]},
+            "wz_code": {"status": "verified", "value": "20.59", "review": {"verdict": "refuted"}}
+        });
+        let later = serde_json::json!({
+            "umsatz": {"status": "action_required", "value": null, "sources": [], "attempts": [{"kind": "scrape"}], "reason": "zuvor gespeicherte Werte nicht wieder eingetragen"},
+            "person_geschlecht": {"status": "no_match", "value": null, "sources": [], "attempts": [{"kind": "scrape"}]},
+            "wz_code": {"status": "action_required", "value": null, "attempts": [{"kind": "scrape"}]}
+        });
+        let merged = merge_field_status(Some(&earlier), later);
+        assert_eq!(merged["umsatz"]["status"], "verified");
+        assert_eq!(merged["umsatz"]["value"], "199.494.166 EUR (2023)");
+        assert_eq!(merged["umsatz"]["challenge"]["status"], "action_required");
+        assert_eq!(merged["person_geschlecht"]["status"], "verified");
+        // A value refuted in the field review may be reopened.
+        assert_eq!(merged["wz_code"]["status"], "action_required");
+        // A contradiction backed by a quoted source reopens the value.
+        let contradicted = serde_json::json!({
+            "umsatz": {"status": "action_required", "value": null, "reason": "Quellen widersprechen sich",
+                "sources": [{"source_id": "bundesanzeiger.de", "url": "https://www.bundesanzeiger.de/x", "quote": "Umsatzerlöse 2024: 187.000.000 EUR"}]}
+        });
+        let reopened = merge_field_status(Some(&merged), contradicted);
+        assert_eq!(reopened["umsatz"]["status"], "action_required");
+        assert!(reopened["umsatz"].get("challenge").is_none());
+        // A newly verified value still replaces the old one.
+        let corrected = serde_json::json!({
+            "umsatz": {"status": "verified", "value": "201.000.000 EUR (2024)", "sources": [{"source_id": "bundesanzeiger.de"}, {"source_id": "dnbhoovers.com"}]}
+        });
+        let merged = merge_field_status(Some(&merged), corrected);
+        assert_eq!(merged["umsatz"]["value"], "201.000.000 EUR (2024)");
+        assert!(merged["umsatz"].get("challenge").is_none());
     }
 
     #[test]
