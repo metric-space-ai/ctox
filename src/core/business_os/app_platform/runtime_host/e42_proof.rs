@@ -167,6 +167,8 @@ async fn prove_matching_and_news(database: &Database, cas: &Cas, pressure: bool)
 /// Publish the real package and exercise the committed native visibility rules.
 pub(super) async fn prove_knowledge(database: &Database, cas: &Cas) -> Result<()> {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/apps/business-os");
+    // Knowledge imports the same real shell library as its deployed package.
+    install(database,cas,"shell",vec![("shared/prompt-template.js".into(),std::fs::read(root.join("shared/prompt-template.js"))?)],json!({}),json!({"title":"Native shell exports","handlers":{},"shared_exports":["shared/prompt-template.js"]})).await?;
     let mut fields: Value = serde_json::from_slice(&std::fs::read(
         root.join("v4/manifests/knowledge.manifest.json"),
     )?)?;
