@@ -628,15 +628,15 @@ impl BrowserRuntimeManager {
             "CTOX_BROWSER_MAX_SESSIONS",
         )
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(16)
+        .unwrap_or(50)
         .clamp(1, 128);
         let max_sessions_per_user = crate::inference::runtime_env::get_runtime_env_value(
             &root,
             "CTOX_BROWSER_MAX_SESSIONS_PER_USER",
         )
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(3)
-        .clamp(1, 16);
+        .unwrap_or(50)
+        .clamp(1, 128);
         if let Ok(sessions) = self.sessions.lock() {
             let live_sessions = sessions.len();
             if live_sessions >= max_sessions {
