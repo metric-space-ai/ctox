@@ -9,6 +9,7 @@ import os
 import pwd
 from pathlib import Path
 import signal
+import select
 import subprocess
 import sys
 import time
@@ -77,13 +78,29 @@ def setup(config, delegated=False):
         'group': 'root:x:0:\n' + ('' if c.get('mappedUser') else f"m7-fixture:x:{c['gid']}:m7-fixture\n"),
         'nsswitch.conf': 'passwd: files\ngroup: files\nshadow: files\nhosts: files dns\nnetworks: files\nservices: files\nprotocols: files\n',
     }
+    if c.get('dressSmoke'):
+        entries['resolv.conf'] = 'nameserver 10.0.2.3\n'
     for name, content in entries.items():
         file = nss / name
         file.write_text(content)
         file.chmod(0o644)
-        run('mount', '--bind', str(file), '/etc/' + name)
+        target = Path('/etc') / name
+        if name == 'resolv.conf' and not target.exists():
+            resolved = target.resolve()
+            assert Path('/run') in resolved.parents, 'Only private masked-run resolver target may be created'
+            resolved.parent.mkdir(parents=True, exist_ok=True)
+            resolved.touch()
+        run('mount', '--bind', str(file), str(target))
     if pwd.getpwuid(c['uid']).pw_dir != str(home):
         raise RuntimeError('Private NSS home does not match owned profile')
+    if c.get('dressSmoke'):
+        ack = os.open(out / 'network-ack', os.O_RDWR | os.O_NONBLOCK)
+        try:
+            (out / 'network-request.json').write_text(json.dumps({'privateNet': True}))
+            if not select.select([ack], [], [], 30)[0] or os.read(ack, 1) != b'1':
+                raise RuntimeError('Private rootless network not ready')
+        finally:
+            os.close(ack)
     env = {'PATH': c.get('path', '/usr/bin:/bin'), 'HOME': str(home),
            'XDG_RUNTIME_DIR': str(runtime), 'DBUS_SESSION_BUS_ADDRESS': 'unix:path=' + str(runtime / 'bus'),
            'XDG_CONFIG_HOME': str(home / '.config'), 'XDG_CACHE_HOME': str(home / '.cache'),
@@ -109,6 +126,11 @@ def setup(config, delegated=False):
         unit_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         for path in [home / '.config', home / '.config/systemd', unit_dir]:
             os.chown(path, c['uid'], c['gid'])
+        if c.get('dressSmoke'):
+            dropin = unit_dir / 'ctox.service.d'
+            dropin.mkdir(mode=0o700, exist_ok=True)
+            os.chown(dropin, c['uid'], c['gid'])
+            (dropin / 'm7-evidence.conf').write_text('[Service]\nStandardOutput=append:' + str(out / 'native-service.log') + '\nStandardError=append:' + str(out / 'native-service.log') + '\n')
         (unit_dir / 'm7-home-probe.service').write_text('[Service]\nType=oneshot\nWorkingDirectory=%h\nExecStart=/usr/bin/true\n')
         subprocess.run(prefix + ['systemctl', '--user', 'daemon-reload'], env=env, capture_output=True, timeout=5, check=True)
         resolved = subprocess.run(prefix + ['systemctl', '--user', 'show', 'm7-home-probe.service', '--property=WorkingDirectory', '--value'], env=env, capture_output=True, text=True, timeout=5, check=True)

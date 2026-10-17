@@ -18,6 +18,10 @@ import importlib.util
 
 
 def main(a):
+    def interrupted(sig, _):
+        raise RuntimeError('Owned K24 target probe interrupted '+str(sig))
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
     base = (Path(os.environ['BUILD_LANE_BIN'])/'../artifacts').resolve()
     root, out = a.root.resolve(), a.output.resolve()
     assert base in root.parents and base in out.parents and not out.exists()
@@ -49,11 +53,15 @@ def main(a):
         with (out/(name+'.log')).open('w') as log:
             p = subprocess.Popen([str(x) for x in args],cwd=current,env=env,stdout=log,stderr=log,start_new_session=True)
         children.append(p)
-        row = dict(name=name,pid=p.pid,pgid=p.pid,stopAfterSeconds=60)
+        row = dict(name=name,pid=p.pid,pgid=p.pid,stopAfterSeconds=150)
         result['processes'].append(row)
         return p
     try:
-        native = spawn('foreground',[binary,'service','--foreground','--root',current])
+        fixture_spec = importlib.util.spec_from_file_location('bootstrap_fixture', Path(__file__).parent.parent/'k11/m7-bootstrap-fixture.py')
+        fixture = importlib.util.module_from_spec(fixture_spec)
+        fixture_spec.loader.exec_module(fixture)
+        result['privateBootstrapConfiguration'] = fixture.configure(root)
+        native = spawn('foreground',[binary,'service','--foreground'])
         until = time.monotonic()+15
         while time.monotonic()<until and native.poll() is None:
             if 'ctox v4 store daemon ready:' in (out/'foreground.log').read_text(): break
@@ -63,7 +71,7 @@ def main(a):
         result['fingerprintBefore'] = adapter.fingerprint(root,native.pid,[public,root/'managed/install_manifest.json'])
         with socket.socket() as sock:
             sock.bind(('127.0.0.1',0)); port = sock.getsockname()[1]
-        web = spawn('http',[binary,'business-os','serve','--addr','127.0.0.1:'+str(port),'--root',current])
+        web = spawn('http',[binary,'business-os','serve','--addr','127.0.0.1:'+str(port)])
         until = time.monotonic()+15
         while time.monotonic()<until and web.poll() is None:
             try:

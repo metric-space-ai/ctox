@@ -12,15 +12,18 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import subprocess
+import fcntl
+from contextlib import ExitStack
 import time
 
 OWNER = "01a087a0-169a-7e23-ba3d-71352256cbfb"
 SUFFIXES = {".db", ".sqlite", ".sqlite3"}
 
 
-def connection(path):
-    # No immutable=1: the SQLite backup API must see committed WAL contents.
-    db = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=5)
+def connection(path, immutable=False):
+    # Immutable is allowed only under the explicit, held offline custody below.
+    db = sqlite3.connect(path.as_uri() + "?mode=ro" + ("&immutable=1" if immutable else ""), uri=True, timeout=5)
     db.execute("PRAGMA query_only=ON")
     return db
 
@@ -73,7 +76,7 @@ def fingerprint(path):
             "schemaSha256": hashlib.sha256(json.dumps(schema, ensure_ascii=False).encode()).hexdigest()}
 
 
-def copy_database(source, destination):
+def copy_database(source, destination, immutable=False):
     destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     if destination.exists():
         raise ValueError("Refusing to overwrite a database")
@@ -81,7 +84,7 @@ def copy_database(source, destination):
     def progress(status, remaining, total):
         if time.monotonic() > deadline:
             raise TimeoutError("SQLite backup exceeded 120 seconds")
-    src = connection(source)
+    src = connection(source, immutable)
     dst = sqlite3.connect(destination)
     try:
         src.backup(dst, pages=128, progress=progress, sleep=0.05)
@@ -92,11 +95,30 @@ def copy_database(source, destination):
     return fingerprint(destination)
 
 
-def snapshot(root, output):
+def snapshot(root, output, immutable=False):
     paths = inventory(root)
     if output.exists() or output == root or root in output.parents:
         raise ValueError("A new snapshot outside the source profile is required")
     output.mkdir(parents=True, mode=0o700)
+    guards = ExitStack()
+    if immutable:
+        try:
+            # Same stable inode locks as the real store; retained until backup ends.
+            locks = [root/'runtime/store/store-daemon.lock'] + [root/'runtime'/Path(str(p)+'.ctox-store.lock') for p in paths]
+            for path in locks:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                file = guards.enter_context(path.open('a+'))
+                fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            files = [str(root/'runtime'/p)+s for p in paths for s in ('','-wal','-shm') if Path(str(root/'runtime'/p)+s).exists()]
+            probe = subprocess.run(['lsof','-nP','-t','--',*files], capture_output=True, text=True, timeout=10)
+            proof = dict(atMs=int(time.time()*1000), command=['lsof','-nP','-t','--',*files], exit=probe.returncode,
+                         stdout=probe.stdout, stderr=probe.stderr, ownerLocksHeld=True)
+            (output/'quiescence.json').write_text(json.dumps(proof, indent=2))
+            if probe.returncode != 1 or probe.stdout.strip() or probe.stderr.strip():
+                raise ValueError('Immutable snapshot refused: DB holders or unverifiable lsof')
+        except BaseException:
+            guards.close()
+            raise
     result = {"schema": "ctox.m7.sqlite-snapshot.v1", "owner": OWNER, "synthetic": True,
               "consistency": "per_database; caller must quiesce for a shared checkpoint",
               "excludedDirectories": ["runtime/backups (existing recovery copies, preserved)"],
@@ -105,13 +127,14 @@ def snapshot(root, output):
         for relative in paths:
             started = time.monotonic()
             dest = output / "databases" / relative
-            proof = copy_database(root / "runtime" / relative, dest)
+            proof = copy_database(root / "runtime" / relative, dest, immutable)
             result["databases"].append({"relative": relative.as_posix(), "bytes": dest.stat().st_size,
                                         "durationMs": round((time.monotonic()-started)*1000), **proof})
         if inventory(root) != paths:
             raise ValueError("SQLite inventory changed during snapshot")
         result["complete"] = True
     finally:
+        guards.close()
         result["finishedAtMs"] = int(time.time()*1000)
         (output / "snapshot.json").write_text(json.dumps(result, indent=2)+"\n")
     return result
@@ -159,6 +182,7 @@ if __name__ == "__main__":
     parser.add_argument("--root", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--destination", type=Path)
+    parser.add_argument("--immutable-after-quiesce", action="store_true")
     args = parser.parse_args()
     if not os.environ.get("BUILD_LANE_BIN") or os.uname().sysname != "Linux":
         raise SystemExit("Canonical Linux lane required")
@@ -168,7 +192,7 @@ if __name__ == "__main__":
         if value is not None and allowed not in value.parents:
             raise SystemExit("Only private lane artifact paths are permitted")
     if args.operation == "snapshot":
-        result = snapshot(args.root.resolve(), output)
+        result = snapshot(args.root.resolve(), output, args.immutable_after_quiesce)
     elif args.operation == "verify":
         result = {"verified": bool(verify(output))}
     else:

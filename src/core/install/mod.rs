@@ -2361,11 +2361,12 @@ fn ensure_no_restore_handles(state_root: &Path) -> Result<()> {
     use std::os::unix::fs::MetadataExt;
     let root = fs::canonicalize(state_root)?;
     let uid = fs::metadata("/proc/self")?.uid();
+    let own_pid = std::process::id();
     for entry in fs::read_dir("/proc")? {
         let entry = entry?;
-        if entry.file_name().to_string_lossy().parse::<u32>().is_err() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
             continue;
-        }
+        };
         let Ok(meta) = entry.metadata() else {
             continue;
         };
@@ -2375,13 +2376,26 @@ fn ensure_no_restore_handles(state_root: &Path) -> Result<()> {
         let fds = match fs::read_dir(entry.path().join("fd")) {
             Ok(fds) => fds,
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            // Uninspectable same-UID helpers (e.g. sshd/sd-pam) neither prove
+            // nor disprove a DB holder. Keep checking all readable target FDs;
+            // our own handles must always be inspectable and closed.
+            Err(error) if pid != own_pid && error.kind() == ErrorKind::PermissionDenied => continue,
             Err(error) => return Err(error).context("cannot verify DB handle custody"),
         };
         for fd in fds {
-            let fd = fd?;
+            let fd = match fd {
+                Ok(fd) => fd,
+                Err(error) if pid != own_pid && error.kind() == ErrorKind::PermissionDenied => {
+                    continue
+                }
+                Err(error) => return Err(error).context("cannot enumerate DB handles"),
+            };
             let target = match fs::read_link(fd.path()) {
                 Ok(path) => path,
                 Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) if pid != own_pid && error.kind() == ErrorKind::PermissionDenied => {
+                    continue
+                }
                 Err(error) => return Err(error).context("cannot inspect DB handle"),
             };
             let text = target.to_string_lossy();

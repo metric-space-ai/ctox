@@ -5,6 +5,7 @@ import {join,resolve} from 'node:path';
 import {createServer} from 'node:http';
 import {spawn,spawnSync,execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
+import {performDressSmoke} from './m7-signed-step.mjs';
 import {verifiedBuild,owner} from '../../sync-v4-e2e/native.mjs';
 const hash=b=>createHash('sha256').update(b).digest('hex');
 export function verifiedUpgrade(oldReceipt,newReceipt,root){
@@ -22,7 +23,7 @@ export function requireSandbox(proof){
  }
  if(process.getuid()===0&&(!proof.mappedUser||!proof.host.user||proof.host.user===fs.readlinkSync('/proc/self/ns/user')))throw Error('Host root installer is forbidden; mapped own UID requires a private user namespace');
 }
-export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,roundtrip=false,resumeRolledBack=false}){
+export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,roundtrip=false,resumeRolledBack=false,traceRollback=false,dressSmoke=null}){
  requireSandbox(proof);if(!tmpdir||!fs.statSync(tmpdir).isDirectory())throw Error('Canonical lane TMPDIR required');const {before,after}=verifiedUpgrade(oldReceipt,newReceipt,root);
  const installRoot=join(root,'managed'),stateRoot=join(root,'runtime');
  const home=join(root,'installer-home');fs.mkdirSync(home,{recursive:true,mode:0o700});
@@ -71,26 +72,42 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
  // Use GNU tar's ordinary non-root semantics; no wrapper or archive mutation.
  if(proof.mappedUser)env.TAR_OPTIONS='--no-same-owner';
  const calls=[];
+ const holderTrap=(label)=>{const file=join(output,'holders-'+label+'.json');execFileSync('python3',[new URL('./m7-holder-trap.py',import.meta.url).pathname,'--root',root,'--output',file,'--label',label],{env,timeout:25000});return file;};
  const serviceCalls=[];
  const quiesce=()=>{
   if(!proof.serviceManager)throw Error('Real private service manager required for recovery');
   for(const unit of ['ctox-watchdog.timer','ctox-watchdog.service','ctox.service']){
+   holderTrap('before-stop-'+unit);
    const at=Date.now(),p=execFileSync('systemctl',['--user','stop',unit],{env,encoding:'utf8',timeout:30000});
    serviceCalls.push({args:['stop',unit],startedAtMs:at,durationMs:Date.now()-at,output:p.trim()});
   }
+  holderTrap('after-stop');
   const active=execFileSync('systemctl',['--user','show','ctox.service','--property=MainPID','--value'],{env,encoding:'utf8',timeout:10000}).trim();
   if(active!=='0')throw Error('Fixture daemon is not quiescent before rollback');
  };
- const cli=async args=>{
+ const cli=async (args,{allowFailure=false,targetUpdater=false}={})=>{
   const out=fs.openSync(join(output,'installer-'+calls.length+'.log'),'w',0o600),at=Date.now();
   // Recovery must execute the installed candidate's fixed lease code, rather
   // than continuing to invoke the historical producer after the link switch.
-  const executable=fs.realpathSync(join(installRoot,'current/bin/ctox'));
+  const executable=fs.realpathSync(targetUpdater?after.binary:join(installRoot,'current/bin/ctox'));
   const executableSha256=hash(fs.readFileSync(executable));
-  const p=spawn(executable,[...args,'--root',env.CTOX_ROOT],{cwd:env.CTOX_ROOT,env,stdio:['ignore',out,out]});fs.closeSync(out);
+  if(targetUpdater&&executableSha256!==after.binarySha256)throw Error('Target main updater image differs from verified artifact');
+  const rollback=args[0]==='update'&&args[1]==='rollback';
+  const trace=rollback&&traceRollback;
+  const argv=[...args,'--root',env.CTOX_ROOT];
+  if(rollback)holderTrap('rollback-start');
+  const p=spawn(trace?'strace':executable,trace?['-f','-k','-ttt','-T','-e','trace=openat','-P',join(stateRoot,'ctox.sqlite3'),'-o',join(output,'rollback.trace'),executable,...argv]:argv,{cwd:env.CTOX_ROOT,env,stdio:['ignore',out,out]});fs.closeSync(out);
+  let observer;
+  if(rollback)observer=spawn('python3',[new URL('./m7-holder-trap.py',import.meta.url).pathname,'--root',root,'--output',join(output,'rollback-live'),'--label','rollback-live','--observe-pid',String(p.pid)],{env,stdio:'ignore'});
   const timer=setTimeout(()=>p.kill('SIGKILL'),180000);
-  const code=await new Promise((r,j)=>{p.once('exit',r);p.once('error',j);});clearTimeout(timer);
-  calls.push({args,executable,executableSha256,startedAtMs:at,durationMs:Date.now()-at,code});if(code!==0)throw Error('Real installer CLI failed: '+args.join(' ')+' exit '+code);
+  const code=await new Promise((r,j)=>{p.once('exit',r);p.once('error',j);});const exitedAtMs=Date.now();clearTimeout(timer);
+  if(observer){await new Promise(r=>{if(observer.exitCode!==null)r();else observer.once('exit',r);});holderTrap('rollback-exit-'+code);}
+  const log=join(output,'installer-'+calls.length+'.log');
+  // Persist only this fixed guard diagnosis, never arbitrary runtime/credential output.
+  const coreContextMessage='synchronous Core caller must use run_core_sync or run_core_blocking';
+  const failure=code!==0&&fs.readFileSync(log,'utf8').includes(coreContextMessage)
+   ?{guard:'Core-Kontext-Guard',code:'CoreSyncError::Required',message:coreContextMessage}:undefined;
+  calls.push({args,executable,executableSha256,startedAtMs:at,exitedAtMs,durationMs:exitedAtMs-at,code,log,failure});if(code!==0&&!allowFailure)throw Error('Real installer CLI failed: '+args.join(' ')+' exit '+code);return calls.at(-1);
  };
  const record={before:{revision:before.revision,binarySha256:before.binarySha256},after:{revision:after.revision,binarySha256:after.binarySha256},stateRoot,archive,archiveSha256,canonicalReleasePackage:!!after.package,calls,serviceCalls,requests,resumeRolledBack,installerExecuted:false,migrationExecuted:false};
  const readback=phase=>{
@@ -139,6 +156,7 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
   record.installerExecuted=true;record.activeBinarySha256=actual;
   record.updateState=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json')));
   if(record.updateState.phase!=='completed'||!record.updateState.state_backup_path)throw Error('Installer did not complete with state backup');
+  if(dressSmoke)record.signedSmoke=await performDressSmoke({config:dressSmoke,root,output,env,cli,quiesce,phase:'after-update'});
   if(roundtrip){
    const startedAtMs=Date.now(),snapshot=record.updateState.state_backup_path;
    quiesce();
@@ -148,12 +166,13 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
    record.rollback={startedAtMs,durationMs:Date.now()-startedAtMs,currentRelease:oldCurrent,binarySha256:before.binarySha256,phase:rolled.phase,stateBackupPath:snapshot,stateRestoreSemantics:'Official update rollback restores the recorded pre-update state; not binary-only'};
    quiesce();record.rollback.dataReadback=readback('rollback');
    record.rollback.verifiedDurationMs=Date.now()-startedAtMs;
-   const forwardAt=Date.now();quiesce();await cli(['update','apply','--version',release,'--force']);
+   const forwardAt=Date.now();quiesce();await cli(['update','apply','--version',release,'--force'],{targetUpdater:!!dressSmoke});
    const finalCurrent=fs.realpathSync(join(installRoot,'current')),final=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json')));
    if(final.phase!=='completed'||finalCurrent!==join(releases,release)||hash(fs.readFileSync(join(finalCurrent,'bin/ctox')))!==after.binarySha256)throw Error('Forward re-install did not restore the verified candidate');
    record.forward={startedAtMs:forwardAt,durationMs:Date.now()-forwardAt,binarySha256:after.binarySha256,phase:final.phase};
    quiesce();record.forward.dataReadback=readback('forward');
    record.forward.verifiedDurationMs=Date.now()-forwardAt;
+   if(dressSmoke)record.forward.signedSmoke=await performDressSmoke({config:dressSmoke,root,output,env,cli,quiesce,phase:'after-forward'});
    record.roundtripExecuted=true;record.finalUpdateState=final;
   }
   return record;

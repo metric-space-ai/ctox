@@ -60,6 +60,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', required=True, type=Path)
     parser.add_argument('--reuse-build', type=Path)
+    parser.add_argument('--profile', choices=('release', 'dev'), default='release')
     args = parser.parse_args()
     if os.uname().sysname != 'Linux' or not os.environ.get('BUILD_LANE_BIN'):
         raise SystemExit('Canonical Linux lane required')
@@ -88,7 +89,9 @@ def main():
                                  for name in ('Cargo.toml', 'Cargo.lock')}
         env = {**os.environ, 'CARGO_BUILD_JOBS': '2', 'CMAKE_BUILD_PARALLEL_LEVEL': '2',
                'RUST_TEST_THREADS': '2', 'CTOX_BUILD_VERSION': 'native-m7-'+revision[:12]}
-        command = ['cargo', 'build', '--locked', '--release', '--target', 'x86_64-unknown-linux-gnu', '-j', '2']
+        command = ['cargo', 'build', '--locked', '--release', '--target', 'x86_64-unknown-linux-gnu', '-j', '2'] if args.profile == 'release' else ['cargo', 'build', '--locked', '--bin', 'ctox', '-j', '2']
+        report['buildProfile'] = args.profile
+        report['scope'] = 'Canonical layout; dev profile is a private correctness probe, never a release/performance acceptance'
         report['command'] = command
         save()
         if args.reuse_build:
@@ -129,7 +132,7 @@ def main():
             if result:
                 raise RuntimeError('Canonical release build failed; see build.log')
             target = Path(env.get('CARGO_TARGET_DIR', 'target'))
-            binary = target / 'x86_64-unknown-linux-gnu/release/ctox'
+            binary = target / ('x86_64-unknown-linux-gnu/release/ctox' if args.profile == 'release' else 'debug/ctox')
         bundle = out / 'bundle'
         bundle.mkdir()
         def copy(source, dest):
@@ -137,7 +140,7 @@ def main():
             if source.is_dir():
                 # The main CLI release copies the entire runtime source tree;
                 # do not silently drop a tracked nested runtime dependency.
-                shutil.copytree(source, dest, ignore=shutil.ignore_patterns('.git'))
+                shutil.copytree(source, dest, ignore=shutil.ignore_patterns('.git', *(['node_modules'] if args.profile == 'dev' else [])))
             else:
                 shutil.copy2(source, dest)
         copy(binary, bundle / 'bin/ctox')
