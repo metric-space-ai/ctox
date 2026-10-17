@@ -41,7 +41,14 @@ export async function performDressSmoke({config,root,output,env,cli,quiesce,phas
   if(child.pid){result.browserProcess={pid:child.pid,pgid:child.pid,stop:'smoke terminal or95s timeout'};try{process.kill(-child.pid,'SIGKILL');}catch(e){if(e.code!=='ESRCH')throw e;}}
   result.smokeExit=child.status;result.smokeError=child.error?.message;
   if(fs.existsSync(join(out,'smoke.json')))result.smoke=JSON.parse(fs.readFileSync(join(out,'smoke.json')));
-  result.pass=result.signedSlot.status==='pass'&&result.smoke?.pass===true;
+  const commandCriterion=result.smoke?.criteria?.find(c=>c.id==='platform-command-roundtrip');
+  result.commandNativeReceipt={status:'not_run',owner:'signaling-deploy',reason:'No successful kernel command; no native receipt claimed'};
+  if(commandCriterion?.status==='pass'){
+   const file=join(out,'native-command-receipt.json'),log=fs.openSync(join(out,'native-command-readback.log'),'w',0o600);
+   const read=spawnSync('python3',[new URL('./m7-command-readback.py',import.meta.url).pathname,'--root',root,'--id',commandCriterion.commandId,'--output',file],{env,stdio:['ignore',log,log],timeout:30000});fs.closeSync(log);
+   result.commandNativeReceipt=read.status===0&&fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):{status:'fail',exit:read.status,evidence:join(out,'native-command-readback.log')};
+  }
+  result.pass=result.signedSlot.status==='pass'&&result.smoke?.pass===true&&result.commandNativeReceipt.status==='pass';
  }catch(error){result.error=error.message;}
  finally{result.durationMs=Date.now()-startedAtMs;result.terminal=true;fs.writeFileSync(join(out,'step.json'),JSON.stringify(result,null,2),{mode:0o600});}
  return result;
