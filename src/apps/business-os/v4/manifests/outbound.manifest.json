@@ -11,9 +11,6 @@
       "handlers/_lib/research-task.js",
       "handlers/outbound.research_source.generate_adapter.done.js"
     ],
-    "artifact.write": [
-      "handlers/outbound.source.import.js"
-    ],
     "audit.event": [
       "handlers/_lib/outbound.js"
     ],
@@ -24,6 +21,9 @@
       "handlers/outbound.source.import.js"
     ],
     "files.get": [
+      "handlers/outbound.source.import.js"
+    ],
+    "files.put": [
       "handlers/outbound.source.import.js"
     ],
     "knowledge.query": [
@@ -91,11 +91,11 @@
   "capabilities_required": [
     "agent.task.enqueue",
     "agent.task.get",
-    "artifact.write",
     "audit.event",
     "browser.auth_assist.request",
     "browser.automation.run",
     "files.get",
+    "files.put",
     "knowledge.query",
     "mail.delivery_log.query",
     "net.ingest.webhook.register",
@@ -1561,7 +1561,7 @@
     "handlers/outbound.sequence.save.js": "661b5dfbe90e79046db517364c7614c96b39fb5a9ee3f7d811845cbfe8c479bf",
     "handlers/outbound.skillbook.save.js": "6dfab7590bdc1be809bf08846b3284796e7ef360b2511f083aef34e793125e15",
     "handlers/outbound.skillbook.seed_defaults.js": "e8faa029247833d0a09ab105cf3789ceaaf460e953e065ba80b5590d02b2ab9f",
-    "handlers/outbound.source.import.js": "6dc10eec8d76f439d095cff3afd5bd066dabe332687234c45c31a7f1b25085c6",
+    "handlers/outbound.source.import.js": "125cc67de2ae1287337f76a16f55fcd25bb65bc627d82ff794a8d08311c3c941",
     "handlers/outbound.tracking.event.js": "e6f30f9d355952a2c824f5d5d51a443257c1247b48558be2361dc5af3ee2d37a",
     "handlers/outbound.tracking.register.js": "a1ef41c878cfbd779f7d1d20e2e8c07b178f3c1621e80ec4637b88a23f14547c",
     "handlers/outbound.update_digest.send_now.js": "1d132bf6554d8744f0bee03f7067103561170375dd071c238035b5738903fcd0",
@@ -2008,7 +2008,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "27b110f37a4900a543d8495dd160ea87f34a7a64a86a661180dc746b1ca496f8",
+    "base_hash": "4a93ed0ce5adf4f9a2a6cbd4567cadb70c4c872cee7fe38eac457aed2f0f84df",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

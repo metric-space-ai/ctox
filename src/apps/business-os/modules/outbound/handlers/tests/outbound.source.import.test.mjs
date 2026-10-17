@@ -67,7 +67,8 @@ function caps(log, kernel) {
     'knowledge.query': async ({ argv }) => { log.push(argv); return { ok: true }; },
     'browser.automation.run': kernel['browser.automation.run'],
     'files.get': kernel['files.get'],
-    'artifact.write': async (artifact) => { log.push(['artifact', artifact]); return { ok: true }; },
+    // E58: Import-Protokoll über files.put statt artifact.write.
+    'files.put': async (content, meta) => { log.push(['artifact', { meta, json: JSON.parse(content.text) }]); return { id: meta?.id ?? 'f', ref: 'r', done: Promise.resolve() }; },
   };
 }
 
@@ -108,6 +109,9 @@ test('imports companies from extract steps with letter pagination (click + wait)
   assert.equal(written[0].country, 'Deutschland');
   assert.equal(written[0].source_id, 'src1');
   const artifact = log.find((e) => e[0] === 'artifact')[1];
+  assert.equal(artifact.meta.name, 'outbound_companies.json');
+  assert.equal(artifact.meta.mime, 'application/json');
+  assert.equal(artifact.meta.id, 'outbound_companies-imp1');
   assert.equal(artifact.json.records_count, 3);
   assert.ok(artifact.json.automation.skipped_letters.includes('B'));
 });

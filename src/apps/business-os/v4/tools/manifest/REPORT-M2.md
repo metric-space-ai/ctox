@@ -14,7 +14,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | Collections gesamt / App-eigen / ctox-platform | 237 / 221 / 16 |
 | Handler gesamt (Apps mit Handlern) | 116 (15) |
 | Legacy-Rest gesamt (ctx.cap.legacy) | 0 |
-| Capabilities gesamt (verschieden, ohne legacy) | 41 |
+| Capabilities gesamt (verschieden, ohne legacy) | 40 |
 | Trigger | 10 |
 | command_rights-Einträge | 42 |
 | foreign-Deklarationen (davon write / nur Code-Scan) | 297 (32 / 94) |
@@ -85,7 +85,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 ## Legacy-Rest je App
 
 
-## Capabilities gesamt (41)
+## Capabilities gesamt (40)
 
 | Capability | Apps |
 |---|---|
@@ -100,7 +100,6 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | `agent.task.set_metadata` | outbound-lead-generation |
 | `agent.task.update` | outbound-lead-generation |
 | `agent.task.workspace.read` | documents, knowledge, outbound-lead-generation, research |
-| `artifact.write` | outbound |
 | `audit.event` | outbound, threads |
 | `blob.materialize` | mail |
 | `browser.auth_assist.request` | outbound, outbound-lead-generation |
@@ -113,7 +112,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | `fence.claim` | outbound-lead-generation |
 | `fence.release` | outbound-lead-generation |
 | `files.get` | outbound, outbound-lead-generation |
-| `files.put` | outbound-lead-generation |
+| `files.put` | outbound, outbound-lead-generation |
 | `identity.users.list` | kundenpipeline |
 | `knowledge.query` | iot, outbound, research |
 | `mail.delivery_log.query` | outbound |
