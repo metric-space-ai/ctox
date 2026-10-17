@@ -487,6 +487,25 @@ export function createSyncRuntime({
     unregisteredSweepTimer.unref?.();
   };
 
+  // The shared room transport is alive when at least one collection OUTSIDE
+  // the failing set is healthy and its bridge holds an open data channel to
+  // the native instance. Diagnostics alone are not enough: after a network
+  // switch (15.10.2026) healthy-looking collections sat on a dead transport;
+  // their channel state is what tells the two cases apart.
+  const sharedTransportProvenAlive = async (failingCollections = []) => {
+    const failing = new Set(failingCollections || []);
+    for (const collection of [...bridges.keys()]) {
+      if (failing.has(collection)) continue;
+      const current = diagnostics.collections[collection] || {};
+      if (!isHealthyCollectionStatus(current.connectionStatus || current.status)) continue;
+      const bridge = await Promise.race([
+        Promise.resolve(bridges.get(collection)).catch(() => null),
+        delay(250).then(() => null),
+      ]);
+      if (bridge?.state && hasOpenNativePeerState(bridge.state)) return true;
+    }
+    return false;
+  };
   const scheduleRestartOfUnhealthyCollections = (triggerCollection, delayMs = 5000) => {
     if (stopped) return;
     if (roomCircuit.permanent) return;
@@ -518,7 +537,18 @@ export function createSyncRuntime({
       try {
         if (collections.length) {
           let stableBridges;
-          if (transportRebringupFailures > 0) {
+          // Field incident 17.10.2026: ONE collection (user_thread_states)
+          // failing its individual restart tore down the shared transport for
+          // all 30 collections every 2-3 minutes, while 28 of them were
+          // connected over an open channel. A large initial replication never
+          // finished inside that window. A full re-bring-up is only justified
+          // when no healthy collection proves the shared transport alive;
+          // otherwise the failing collections stay on the per-collection
+          // repair with the room circuit's bounded backoff.
+          if (
+            transportRebringupFailures > 0
+            && !(await sharedTransportProvenAlive(collections))
+          ) {
             // The previous full re-bring-up already proved the shared room
             // peer cannot be revived per collection; go straight to it.
             stableBridges = await syncRuntime.rebringUpTransport(triggerCollection);
@@ -529,9 +559,19 @@ export function createSyncRuntime({
               });
             } catch (individualError) {
               if (!shouldEscalateToTransportRebringup(individualError)) throw individualError;
+              if (await sharedTransportProvenAlive(collections)) {
+                diagnostics.transportRebringupSuppressed = {
+                  trigger: triggerCollection || null,
+                  collections: collections.slice(0, 32),
+                  reason: 'shared-transport-open',
+                  at: new Date().toISOString(),
+                };
+                throw individualError;
+              }
               // Individual restart + individual retry found no open native
-              // peer: the shared transport itself is dead. Re-bring it up NOW
-              // instead of scheduling another deferred per-collection repair.
+              // peer and no healthy collection holds an open channel: the
+              // shared transport itself is dead. Re-bring it up NOW instead
+              // of scheduling another deferred per-collection repair.
               stableBridges = await syncRuntime.rebringUpTransport(triggerCollection);
             }
           }
