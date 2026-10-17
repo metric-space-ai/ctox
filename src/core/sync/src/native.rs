@@ -17,6 +17,11 @@ use std::{io, panic::AssertUnwindSafe, sync::Arc, time::Duration};
 pub type NativePool = Arc<RxWebRTCReplicationPool<WebRTCRsConnectionHandler>>;
 pub use rxdb::plugins::replication_webrtc::NativePeerRole;
 pub type SignalingUrls = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
+pub type AsyncSignalingUrls = Arc<
+    dyn Fn() -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<String>> + Send>>
+        + Send
+        + Sync,
+>;
 
 /// One current saved-target identity. Pins come from authenticated enrollment,
 /// never signaling or the proof response. The credential callback must retain
@@ -265,6 +270,25 @@ impl NativeSyncSession {
         Self::start_mode(options, setup, false).await
     }
 
+    /// Host credentials may require an awaited owner read. The synchronous
+    /// options provider remains available for existing memory-only providers.
+    pub async fn start_with_async_signaling_provider<F, Fut>(
+        options: NativeSyncOptions,
+        provider: F,
+    ) -> io::Result<Self>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Vec<String>> + Send + 'static,
+    {
+        Self::start_mode_with_connector(
+            options,
+            |_| Ok(()),
+            false,
+            move |_| SignalingClient::connect_with_async_url_list_provider(provider),
+        )
+        .await
+    }
+
     async fn start_mode<F>(
         options: NativeSyncOptions,
         setup: F,
@@ -272,6 +296,24 @@ impl NativeSyncSession {
     ) -> io::Result<Self>
     where
         F: FnOnce(&NativePool) -> Result<(), rxdb::rx_error::RxError> + Send,
+    {
+        Self::start_mode_with_connector(options, setup, data_client, |provider| async move {
+            SignalingClient::connect_with_url_list_provider(move || provider()).await
+        })
+        .await
+    }
+
+    async fn start_mode_with_connector<F, C, Connected>(
+        options: NativeSyncOptions,
+        setup: F,
+        data_client: bool,
+        connect: C,
+    ) -> io::Result<Self>
+    where
+        F: FnOnce(&NativePool) -> Result<(), rxdb::rx_error::RxError> + Send,
+        C: FnOnce(SignalingUrls) -> Connected + Send,
+        Connected: std::future::Future<Output = Result<Arc<SignalingClient>, rxdb::rx_error::RxError>>
+            + Send,
     {
         if options.room.trim().is_empty()
             || options.peer_session_id.trim().is_empty()
@@ -292,9 +334,7 @@ impl NativeSyncSession {
         let result = tokio::time::timeout(
             timeout,
             AssertUnwindSafe(async {
-                let provider = options.signaling_urls;
-                let signaling =
-                    SignalingClient::connect_with_url_list_provider(move || provider()).await?;
+                let signaling = connect(options.signaling_urls).await?;
                 // Own the signaling supervisor BEFORE awaiting room admission. A
                 // rejected or cancelled join must not leave it reconnecting forever.
                 resources.signaling = Some(signaling.clone());

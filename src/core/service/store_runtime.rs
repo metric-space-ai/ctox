@@ -134,6 +134,35 @@ impl Dispatcher for Inspect {
                 .ok_or(StoreError::Closed)?
                 .dispatch(request, options);
         }
+        #[cfg(unix)]
+        if request.kind == JobKind::Read && request.method == "sync.status" {
+            if !request.payload.is_empty() {
+                return Err(StoreError::Invalid(
+                    "status request accepts no payload".into(),
+                ));
+            }
+            options.check()?;
+            let root = self
+                .native_root
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
+                .ok_or(StoreError::Closed)?;
+            let (reply, receive) = tokio::sync::oneshot::channel();
+            self.runtime.spawn(async move {
+                let result = crate::sync_host::owner_status(root)
+                    .await
+                    .map_err(|_| StoreError::Invalid("native status unavailable".into()))
+                    .and_then(|status| {
+                        options.check()?;
+                        serde_json::to_vec(&status).map_err(|_| {
+                            StoreError::Invalid("native status encoding failed".into())
+                        })
+                    });
+                let _ = reply.send(result);
+            });
+            return Ok(JobHandle::from_receiver(receive));
+        }
         if request.kind == JobKind::Read && request.method == "sync.identity" {
             if !request.payload.is_empty() {
                 return Err(StoreError::Invalid(

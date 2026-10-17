@@ -138,8 +138,15 @@ fn initialize(root: &Path, imported: Option<(Vec<u8>, SigningIdentity)>) -> Resu
     print(serde_json::json!({"identity": identity.public_identity()}))
 }
 
+pub(crate) async fn owner_status(root: PathBuf) -> Result<serde_json::Value> {
+    runtime::owner_status(root).await
+}
+
 pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
-    if args.first().is_some_and(|word| word == "identity") {
+    if args
+        .first()
+        .is_some_and(|word| matches!(word.as_str(), "identity" | "status"))
+    {
         let endpoint = crate::service::queue_store::endpoint(root);
         let active_endpoint = match &endpoint {
             ctox_store::ipc::StoreEndpoint::UnixSocket { path } => path.exists(),
@@ -153,7 +160,12 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
                 ctox_store::ipc::Request {
                     request_id: 1,
                     kind: ctox_store::ipc::JobKind::Read,
-                    method: "sync.identity".into(),
+                    method: if args[0] == "status" {
+                        "sync.status"
+                    } else {
+                        "sync.identity"
+                    }
+                    .into(),
                     payload: Vec::new(),
                 },
                 ctox_store::JobOptions::default(),
@@ -177,8 +189,19 @@ pub fn handle_command(root: &Path, args: &[String]) -> Result<()> {
     }
     let work = root.to_owned();
     let args = args.to_owned();
-    crate::persistence::run_cli_owned(root, move || handle_owned_command(&work, &args))
-        .context("native Sync CLI owner execution failed")
+    let lifecycle = args.first().is_some_and(|word| {
+        matches!(
+            word.as_str(),
+            "init" | "import-key" | "identity" | "configure" | "transport" | "status" | "run"
+        )
+    });
+    let operation = move || handle_owned_command(&work, &args);
+    let result = if lifecycle {
+        crate::persistence::run_native_cli_owned(root, operation)
+    } else {
+        crate::persistence::run_cli_owned(root, operation)
+    };
+    result.context("native Sync CLI owner execution failed")
 }
 
 fn handle_owned_command(root: &Path, args: &[String]) -> Result<()> {
