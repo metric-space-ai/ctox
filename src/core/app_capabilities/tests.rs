@@ -129,8 +129,12 @@ impl CapabilityBackend for Backend<'_> {
         Ok(self.output.clone())
     }
 }
-fn args(_: &str) -> Value {
-    json!({"payload":{"probe":"existing-handler"},"record_id":"record"})
+fn args(name: &str) -> Value {
+    if name == "knowledge" {
+        json!({"payload":{"args":["tables"]}})
+    } else {
+        json!({"payload":{"probe":"existing-handler"},"record_id":"record"})
+    }
 }
 fn exercise(name: &str, function: &str, command_type: &str) {
     let host = Host::new();
@@ -275,13 +279,58 @@ route_test!(
 route_test!(coding_turn, "agent.coding", "turn", "ctox.coding.turn");
 route_test!(schedule_upsert, "schedule", "upsert", "cap.schedule.ensure");
 
+// CAP-20: retain the retired CAP-1 route identities as negative contracts.
+// E17 removed app-specific operations from the native capability registry.
+macro_rules! retired_route_test {
+    ($test:ident, $name:literal, $function:literal) => {
+        #[test]
+        fn $test() {
+            let mut host = Host::new();
+            host.manifest.insert($name.into());
+            let backend = Backend::new(&host);
+            let error = CapabilityRegistry::cap1().invoke(&host, &backend, &host.ctx,
+                $name, $function, json!({"payload":{"probe":"existing-handler"},"record_id":"record"}))
+                .expect_err("retired app logic must not regain a native capability route");
+            assert_eq!(error.code, ErrorCode::NotFound);
+            assert!(backend.calls.borrow().is_empty());
+            let audits = host.audits.borrow();
+            assert_eq!(audits.last().map(|entry| entry.stage.clone()), Some(AuditStage::Rejected));
+        }
+    };
+}
+retired_route_test!(crew_assign, "agent.crew", "assign");
+retired_route_test!(crew_learning_confirm, "agent.crew", "learning.confirm");
+retired_route_test!(crew_learning_delete, "agent.crew", "learning.delete");
+retired_route_test!(crew_learning_update, "agent.crew", "learning.update");
+retired_route_test!(crew_member_create, "agent.crew", "member.create");
+retired_route_test!(crew_member_update, "agent.crew", "member.update");
+retired_route_test!(crew_memory_update, "agent.crew", "memory.update");
+route_test!(knowledge_query, "knowledge", "query", "knowledge.command");
+retired_route_test!(task_approve, "agent.task", "approve");
+retired_route_test!(task_company_research, "agent.task", "company.research");
+retired_route_test!(task_contact_research, "agent.task", "contact_research");
+retired_route_test!(task_delegate, "agent.task", "delegate");
+retired_route_test!(task_lead_qualification, "agent.task", "lead_qualification");
+retired_route_test!(task_report_bug, "agent.task", "report_bug");
+retired_route_test!(task_request, "agent.task", "request");
+retired_route_test!(ticket_approve, "ctox.ticket", "approve");
+retired_route_test!(ticket_close, "ctox.ticket", "close");
+retired_route_test!(ticket_create_from_conversation, "ctox.ticket", "create_from_conversation");
+retired_route_test!(ticket_execute, "ctox.ticket", "execute");
+retired_route_test!(ticket_local_create, "ctox.ticket", "local.create");
+retired_route_test!(ticket_publish_clarification, "ctox.ticket", "publish_clarification");
+retired_route_test!(ticket_request_clarification, "ctox.ticket", "request_clarification");
+retired_route_test!(ticket_resolve_clarification, "ctox.ticket", "resolve_clarification");
+retired_route_test!(ticket_verify, "ctox.ticket", "verify");
+retired_route_test!(ticket_writeback_comment, "ctox.ticket", "writeback_comment");
+
 #[test]
 fn app_capabilities_registry_is_exact_and_duplicate_registration_preserves_original() {
     let mut registry = CapabilityRegistry::cap1();
     let before = registry.descriptors();
     assert!(before.as_array().unwrap().iter().all(|d| !matches!(
         d["name"].as_str(),
-        Some("ctox.ticket" | "agent.crew" | "knowledge")
+        Some("ctox.ticket" | "agent.crew")
     )));
     let route = *caps::all_routes().next().unwrap();
     assert_eq!(
