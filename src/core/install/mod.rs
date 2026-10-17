@@ -909,7 +909,7 @@ fn mark_maintenance_rolled_back(state_root: &Path, error: &str) -> Result<()> {
 /// live, but the update reported failure and never recorded the new release
 /// in the install manifest. A lock is not a missing credential, so wait for
 /// it; any other failure is still reported at once.
-fn verify_preserved_while_service_starts(
+fn verify_preserved_before_service_starts(
     invariants: &RuntimeCredentialSnapshot,
     state_root: &Path,
 ) -> Result<()> {
@@ -2167,6 +2167,28 @@ fn apply_update(
         mark_maintenance_rolled_back(&layout.state_root, &err.to_string())?;
         return Err(err);
     }
+    // Verify the installer's state changes while it still has exclusive
+    // offline ownership. After starting the new daemon, this process must
+    // not attach a second owner to its live runtime/secrets databases.
+    if let Err(err) =
+        verify_preserved_before_service_starts(&runtime_invariants, &layout.state_root)
+    {
+        rollback_to_previous_release(
+            &install_root,
+            &current_link,
+            previous_release_root.as_deref(),
+            &layout.state_root,
+            should_restart,
+        )?;
+        persist_update_phase(
+            &layout.update_state_path(),
+            "failed",
+            Some(err.to_string().as_str()),
+        )?;
+        mark_maintenance_rolled_back(&layout.state_root, &err.to_string())?;
+        return Err(err);
+    }
+
     if should_restart {
         set_active_maintenance_phase(&layout, "restarting", 85, "CTOX-Dienst wird neu gestartet")?;
         progress_step("starting CTOX background service");
@@ -2202,7 +2224,6 @@ fn apply_update(
             return Err(err);
         }
     }
-    verify_preserved_while_service_starts(&runtime_invariants, &layout.state_root)?;
     if should_restart {
         if let Some(state) = load_maintenance_state_from_root(&layout.state_root)? {
             if !state.is_terminal() {
