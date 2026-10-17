@@ -84,7 +84,7 @@
     "shared/office-workspace.css": "75145dd3d816522188c275ccd4af76e9e3b162707aa0405ea0b3e86f5efbf209",
     "shared/operator-icon-selection.js": "d4fb0a7fe3ec1195581789a7f636ac334a64aed684576c2788e11b16239ab76e",
     "shared/pane-grammar.js": "fe2481128c8279facdddfc18349f3e7dcd1f140312320c830534b2c87f716670",
-    "shared/pane-icon-labels.js": "d08614cad6d545ed83cca9822be2af991fb113a2281c4530ce40e1b21b92cc0e",
+    "shared/pane-icon-labels.js": "8bce746553b667b9cf1ac70e443dfbba762e4c78482b94fc585dbb315033f595",
     "shared/permissions.js": "1d59e3e3c4e082d9e02c6b39ddc7a3e9c162a4c66958b82c5826f2ad65cc424d",
     "shared/presentation.js": "2669385957bf00883edd5d20620ff16ee76dade66bfd8b9d5247c1758d4ebac9",
     "shared/prompt-template.js": "d2d1d8e85e8056042da7f4670d3e9723565d8b229c5e055bd39ff79b558f4a3f",
@@ -389,7 +389,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "dbf3e0e53f9303c90facc4d67ba1f99321964e423c317b21851aef4faf09b449",
+    "base_hash": "dc346f59a3dcae2a41cb619c1ed6ee954b6e190a3bb43d3181535d92e5b76d96",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

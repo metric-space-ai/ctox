@@ -122,7 +122,11 @@ function createFitter(root) {
   // Titel und Knöpfe ändern sich ohne Größenänderung der Zeile (Thema gewählt, neu gerenderte Knöpfe): Text- und
   // Kindänderungen unter root lösen ebenfalls einen Durchlauf aus (Wörter setzen, messen). Attribute nicht beobachten
   // (das eigene data-icons-only); das eingefügte Wort selbst löst höchstens einen weiteren, wirkungslosen Durchlauf aus.
-  const mo = typeof win?.MutationObserver === 'function' ? new win.MutationObserver(() => schedule()) : null;
+  // Tippen in Editoren (contenteditable) betrifft keine Kopfzeile: diese Änderungen lösen keinen Durchlauf aus.
+  const inEditor = (node) => (node.nodeType === 1 ? node : node.parentElement)?.closest?.('[contenteditable=""], [contenteditable="true"]');
+  const mo = typeof win?.MutationObserver === 'function'
+    ? new win.MutationObserver((records) => { if (records.some((r) => !inEditor(r.target))) schedule(); })
+    : null;
   let key = 'shortDe';
   ro?.observe(root);
   mo?.observe(root, { childList: true, characterData: true, subtree: true });
