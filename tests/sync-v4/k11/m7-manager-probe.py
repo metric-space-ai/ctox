@@ -96,9 +96,14 @@ def setup(config, delegated=False):
     if c.get('dressSmoke'):
         ack = os.open(out / 'network-ack', os.O_RDWR | os.O_NONBLOCK)
         try:
-            (out / 'network-request.json').write_text(json.dumps({'privateNet': True}))
+            (out / 'network-request.json').write_text(json.dumps({'privateNet': True, 'net': os.readlink('/proc/self/ns/net')}))
             if not select.select([ack], [], [], 30)[0] or os.read(ack, 1) != b'1':
                 raise RuntimeError('Private rootless network not ready')
+            # Qualify real egress before any daemon, not merely host DNS.
+            import socket
+            addr = socket.getaddrinfo('signaling.ctox.dev',443,type=socket.SOCK_STREAM)[0][4]
+            with socket.create_connection(addr,timeout=10):pass
+            (out/'network-egress.json').write_text(json.dumps({'dns':True,'tcp443':True,'host':'signaling.ctox.dev','measuredAtMs':int(time.time()*1000),'net':os.readlink('/proc/self/ns/net')}))
         finally:
             os.close(ack)
     env = {'PATH': c.get('path', '/usr/bin:/bin'), 'HOME': str(home),

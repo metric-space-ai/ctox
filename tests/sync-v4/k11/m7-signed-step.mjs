@@ -26,7 +26,8 @@ export async function performDressSmoke({config,root,output,env,cli,quiesce,phas
   }
   // HttpSurface chooses its immutable asset root at startup. Restart only this
   // namespace's real service after official activation, never a host service.
-  quiesce();execFileSync('systemctl',['--user','start','ctox.service'],{env,timeout:30000});
+  quiesce();result.serviceStartAtMs=Date.now();execFileSync('systemctl',['--user','start','ctox.service'],{env,timeout:30000});
+  env={...env,M7_SERVICE_START_AT:String(result.serviceStartAtMs)};
   const wrapper=join(resolve(env.BUILD_LANE_BIN,'..'),'tools/with-playwright.sh');
   const command=[wrapper,'node',new URL('./m7-t4-smoke.mjs',import.meta.url).pathname,'--base','http://127.0.0.1:8765','--expected-root',expectedRoot,'--output',out,'--proof',join(output,'sandbox.json')];
   const log=fs.openSync(join(out,'wrapper.log'),'w',0o600);
