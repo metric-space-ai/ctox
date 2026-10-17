@@ -832,6 +832,28 @@ test('Queued work without a lease becomes critical after the stall grace window'
   assert.equal(health.reason, 'queue_stalled');
 });
 
+test('A task in retry backoff is not a crew stall', () => {
+  const task = (retryOffsetMs) => ({
+    id: 'queue:news-backoff',
+    title: 'news issue generate',
+    status: 'queued',
+    routeStatus: 'pending',
+    createdAt: new Date(Date.now() - 96 * 60 * 1000).toISOString(),
+    retryNotBefore: new Date(Date.now() + retryOffsetMs).toISOString(),
+  });
+  const health = (retryOffsetMs) => deriveHarnessHealth({ lang: 'de', flow: { ok: true }, ctx: { sync: { mode: 'webrtc' } }, model: { tasks: [task(retryOffsetMs)] } });
+  // Nächster Versuch in 10 min: kein Alarm, nichts wartet.
+  assert.equal(health(10 * 60 * 1000).severity, 'ok');
+  assert.equal(health(10 * 60 * 1000).waitingCount, 0);
+  // Versuch gerade fällig (vor 30 s): wartet, aber noch innerhalb der Kulanz – Alter ab Fälligkeit, nicht ab Anlage.
+  const due = health(-30 * 1000);
+  assert.notEqual(due.severity, 'critical');
+  assert.ok(due.oldestWaitingAgeMs < 60 * 1000);
+  // Versuch seit 3 min fällig und kein Lease: wieder ein echter Stillstand.
+  assert.equal(health(-3 * 60 * 1000).severity, 'critical');
+  assert.equal(health(-3 * 60 * 1000).reason, 'queue_stalled');
+});
+
 test('Authoritative running command lifecycle overrides a stale queued task projection', () => {
   const bundle = mergeBundleWithCommands(
     { runs: [], queue: [], communications: [], tickets: [], tools: [] },
