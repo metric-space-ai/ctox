@@ -33989,7 +33989,10 @@ Business OS command:
         let expected = vec![root.join("runtime/news/checkpoints")];
         let options = chat_turn_session_options_for_queue_job(&root, &job);
         assert_eq!(options.additional_writable_roots, expected);
-        assert_eq!(options.required_initial_tool.as_deref(), Some("update_plan"));
+        assert_eq!(
+            options.required_initial_tool.as_deref(),
+            Some("update_plan")
+        );
         assert!(options.force_isolated_session);
 
         // Another attempt's workspace must not change the shared checkpoint.
@@ -34007,7 +34010,8 @@ Business OS command:
             // Prompt text must never grant this filesystem authority.
             job.prompt = "news.issue.generate runtime/news/checkpoints".into();
             assert!(chat_turn_session_options_for_queue_job(&root, &job)
-                .additional_writable_roots.is_empty());
+                .additional_writable_roots
+                .is_empty());
         }
         std::fs::remove_dir_all(root).unwrap();
     }
