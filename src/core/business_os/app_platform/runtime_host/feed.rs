@@ -775,18 +775,17 @@ async fn dispatch_committed(
                 }
             };
             retry_write(database, &authority.health(), "command.reject", move |tx| {
-                    let id = text(&doc, "id").map_err(sql_error)?;
-                    if document(tx, "business_commands", id)?.as_ref() != Some(&doc) {
-                        return Err(invalid("conflict: command changed during rejection"));
-                    }
-                    origin::audit_rejection(tx, &doc, error_code(&reason))?;
-                    let mut rejected = doc.clone();
-                    rejected["status"] = json!("failed");
-                    rejected["error"] =
-                        json!({"code":error_code(&reason),"reason":"admission_denied"});
-                    store_command(tx, &rejected)
-                })
-                .await?;
+                let id = text(&doc, "id").map_err(sql_error)?;
+                if document(tx, "business_commands", id)?.as_ref() != Some(&doc) {
+                    return Err(invalid("conflict: command changed during rejection"));
+                }
+                origin::audit_rejection(tx, &doc, error_code(&reason))?;
+                let mut rejected = doc.clone();
+                rejected["status"] = json!("failed");
+                rejected["error"] = json!({"code":error_code(&reason),"reason":"admission_denied"});
+                store_command(tx, &rejected)
+            })
+            .await?;
             return Ok(());
         }
     };
@@ -1081,7 +1080,11 @@ async fn dispatch_platform(
     if outcome["status"] == "failed" {
         let id = text(&binding["command"], "id")?.to_owned();
         let outcome = outcome.clone();
-        retry_write(database, &authority.health(), "platform.result", move |tx| {
+        retry_write(
+            database,
+            &authority.health(),
+            "platform.result",
+            move |tx| {
                 let mut doc = document(tx, "business_commands", &id)?
                     .ok_or_else(|| invalid("not_found: platform failure"))?;
                 if doc["status"] == "running" {
@@ -1093,8 +1096,9 @@ async fn dispatch_platform(
                     store_command(tx, &doc)?;
                 }
                 Ok(())
-            })
-            .await?;
+            },
+        )
+        .await?;
     }
     authority.release(binding).await?;
     Ok(())

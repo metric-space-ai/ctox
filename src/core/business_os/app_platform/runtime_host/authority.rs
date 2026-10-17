@@ -148,7 +148,8 @@ impl RuntimeAuthority {
         };
         let command_id = id.clone();
         let owner = self.clone();
-        let binding = feed::retry_write(&self.database, &self.health(), "command.claim", move |tx| {
+        let binding =
+            feed::retry_write(&self.database, &self.health(), "command.claim", move |tx| {
                 let mut saved = document(tx, "business_commands", &command_id)?
                     .ok_or_else(|| invalid("not_found: command"))?;
                 if saved != doc {
@@ -312,17 +313,17 @@ impl RuntimeAuthority {
         };
         let command_id = id.clone();
         let lease = feed::retry_write(&self.database, &self.health(), "command.renew", move |tx| {
-                Ok(write_contract::claim_command(
-                    tx,
-                    &participant,
-                    &command_id,
-                    Some(Seq(expected)),
-                    now(),
-                    &gate,
-                )?
-                .map_err(|e| invalid(format!("{}: {}", e.code, e.reason)))?)
-            })
-            .await?;
+            Ok(write_contract::claim_command(
+                tx,
+                &participant,
+                &command_id,
+                Some(Seq(expected)),
+                now(),
+                &gate,
+            )?
+            .map_err(|e| invalid(format!("{}: {}", e.code, e.reason)))?)
+        })
+        .await?;
         if let Some(held) = self
             .held
             .write()
@@ -754,14 +755,14 @@ impl RuntimeAuthority {
         let codec = self.codec.clone();
         let b = binding.clone();
         feed::retry_write(&self.database, &self.health(), "event.result", move |tx| {
-                codec.check_fence(tx, &b)?;
-                let mut doc = document(tx, "business_commands", &id)?
-                    .ok_or_else(|| invalid("not_found: event"))?;
-                doc["status"] = json!(status);
-                store_command(tx, &doc)?;
-                Ok(())
-            })
-            .await?;
+            codec.check_fence(tx, &b)?;
+            let mut doc = document(tx, "business_commands", &id)?
+                .ok_or_else(|| invalid("not_found: event"))?;
+            doc["status"] = json!(status);
+            store_command(tx, &doc)?;
+            Ok(())
+        })
+        .await?;
         Ok(())
     }
     pub(super) fn completion_binding(&self, id: &str) -> Result<Option<Value>> {
@@ -826,15 +827,20 @@ impl RuntimeAuthority {
         let b = binding.clone();
         let codec = self.codec.clone();
         let id = format!("command-callback:{target}");
-        feed::retry_write(&self.database, &self.health(), "callback.result", move |tx| {
+        feed::retry_write(
+            &self.database,
+            &self.health(),
+            "callback.result",
+            move |tx| {
                 codec.check_fence(tx, &b)?;
                 let mut doc = document(tx, "business_commands", &id)?
                     .ok_or_else(|| invalid("not_found: callback record"))?;
                 doc["status"] = json!(if succeeded { "done" } else { "failed" });
                 store_command(tx, &doc)?;
                 Ok(())
-            })
-            .await?;
+            },
+        )
+        .await?;
         Ok(())
     }
 }
