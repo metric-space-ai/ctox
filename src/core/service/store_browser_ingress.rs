@@ -233,6 +233,17 @@ impl BrowserIngress {
                 if let Some(url) = value["urls"].as_str() {
                     value["urls"] = serde_json::json!([url]);
                 }
+                // Browser RTCIceServer permits omitted credentials for STUN;
+                // the native serde type requires both strings. Preserve TURN
+                // credentials and reject wrong types rather than replacing them.
+                if let Some(server) = value.as_object_mut() {
+                    server
+                        .entry("username")
+                        .or_insert_with(|| Value::String(String::new()));
+                    server
+                        .entry("credential")
+                        .or_insert_with(|| Value::String(String::new()));
+                }
                 serde_json::from_value(value)
             })
             .collect::<Result<_, _>>()
