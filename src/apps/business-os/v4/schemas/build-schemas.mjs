@@ -208,6 +208,10 @@ const LEGACY_JS_STEPS = {
   browser_input_events: { steps: [1], ev: 'modules/browser/schema.js:241 @4794af03d' },
   browser_sessions: { steps: [1], ev: 'modules/browser/schema.js:238 @4794af03d' },
   browser_tabs: { steps: [1], ev: 'modules/browser/schema.js:239 @4794af03d' },
+  // E61: the platform catalog advertises the V4 command document (fixture business-command-document-v4.json, v3).
+  // The native registry already binds V3 (src/core/store/schema.rs bind_platform_command_schema); V2 bodies are
+  // refused by validate_migrated_command (command_schema_migration_required), never relabelled. Step 3 is identity.
+  business_commands: { steps: [3], ev: 'src/core/store/schema.rs bind_platform_command_schema; src/core/store/command_contract.rs validate_migrated_command (E61)' },
 };
 
 // ---------------------------------------------------------------- Aufbau

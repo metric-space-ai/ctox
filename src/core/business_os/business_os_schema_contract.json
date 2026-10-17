@@ -1133,6 +1133,50 @@
       "device_id"
     ]
   },
+  "app_catalog": {
+    "primaryKey": "id",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "app_id",
+      "app_ver",
+      "source"
+    ],
+    "indexes": [
+      "app_id",
+      "source"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "app_id": {
+        "type": "string"
+      },
+      "app_ver": {
+        "type": "string"
+      },
+      "title": {
+        "type": "string"
+      },
+      "layout": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "source": {
+        "type": "string",
+        "enum": [
+          "main",
+          "instance"
+        ]
+      },
+      "published_at": {
+        "type": "number"
+      }
+    }
+  },
   "app_drafts": {
     "primaryKey": "id",
     "type": "object",
@@ -2708,80 +2752,71 @@
     "additionalProperties": true
   },
   "business_commands": {
-    "version": 2,
+    "version": 3,
     "primaryKey": "id",
     "type": "object",
     "properties": {
       "id": {
         "type": "string",
-        "maxLength": 128
-      },
-      "command_id": {
-        "type": "string"
-      },
-      "module": {
-        "type": "string"
-      },
-      "command_type": {
-        "type": "string"
-      },
-      "record_id": {
-        "type": "string"
+        "maxLength": 180
       },
       "status": {
-        "type": "string"
-      },
-      "inbound_channel": {
-        "type": "string"
+        "type": "string",
+        "enum": [
+          "queued",
+          "accepted",
+          "running",
+          "done",
+          "failed",
+          "cancelled",
+          "rejected"
+        ]
       },
       "payload": {
         "type": "object",
         "additionalProperties": true
       },
-      "client_context": {
-        "type": "object",
-        "additionalProperties": true
+      "result": {},
+      "type": {
+        "type": "string",
+        "minLength": 1
       },
-      "updated_at_ms": {
-        "type": "number"
+      "app_id": {
+        "type": "string",
+        "minLength": 1
       },
-      "result": {
-        "type": "object",
-        "additionalProperties": true
-      },
-      "execution_progress": {
-        "type": "object",
-        "additionalProperties": true
-      },
-      "task_id": {
+      "actor_id": {
         "type": "string"
       },
-      "task_status": {
+      "created_at": {
+        "type": "string",
+        "format": "date-time"
+      },
+      "on_complete": {
         "type": "string"
-      }
+      },
+      "on_failed": {
+        "type": "string"
+      },
+      "executor_fence": {
+        "type": "string",
+        "pattern": "^[1-9][0-9]*$"
+      },
+      "error": {}
     },
     "required": [
       "id",
-      "command_id",
-      "module",
-      "command_type",
+      "type",
+      "app_id",
+      "actor_id",
+      "created_at",
       "status",
-      "updated_at_ms"
+      "payload"
     ],
     "additionalProperties": true,
     "indexes": [
-      "status",
-      "command_id",
-      [
-        "status",
-        "updated_at_ms"
-      ],
-      [
-        "module",
-        "command_type",
-        "status",
-        "updated_at_ms"
-      ]
+      "app_id",
+      "status"
     ]
   },
   "business_consents": {
@@ -3946,6 +3981,220 @@
       "updated_at_ms"
     ],
     "additionalProperties": true
+  },
+  "coding_turns": {
+    "primaryKey": "id",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "app_id",
+      "draft_id",
+      "user_id",
+      "command_id",
+      "state",
+      "created_at_ms",
+      "updated_at_ms"
+    ],
+    "indexes": [
+      "draft_id",
+      "user_id",
+      "state"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "app_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "draft_id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "command_id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "origin_app": {
+        "type": "string",
+        "maxLength": 128,
+        "description": "App des auslösenden Befehlsdokuments (Callback-Ziel)."
+      },
+      "base_draft_rev": {
+        "type": "string"
+      },
+      "state": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "done",
+          "failed",
+          "cancelled",
+          "conflict"
+        ]
+      },
+      "messages": {
+        "type": "array",
+        "maxItems": 200,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "role",
+            "text",
+            "at_ms"
+          ],
+          "properties": {
+            "role": {
+              "type": "string",
+              "enum": [
+                "user",
+                "assistant"
+              ]
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 16384
+            },
+            "at_ms": {
+              "type": "number"
+            }
+          }
+        }
+      },
+      "tool_events": {
+        "type": "array",
+        "maxItems": 500,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "kind",
+            "at_ms"
+          ],
+          "properties": {
+            "kind": {
+              "type": "string",
+              "maxLength": 64
+            },
+            "path": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "at_ms": {
+              "type": "number"
+            }
+          }
+        }
+      },
+      "draft_rev_after": {
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "changed_files": {
+        "type": "array",
+        "maxItems": 2000,
+        "items": {
+          "type": "string",
+          "maxLength": 512
+        }
+      },
+      "patch": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "ref",
+          "file_id"
+        ],
+        "properties": {
+          "ref": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "file_id": {
+            "type": "string",
+            "maxLength": 180
+          }
+        },
+        "description": "Nur bei state=conflict: Änderungen des Agenten als Patch (files-Datensatz, §16.32)."
+      },
+      "error": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "code"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "rejected",
+              "failed"
+            ]
+          },
+          "code": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "reason": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "path": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "detail": {
+            "type": "string",
+            "maxLength": 2048
+          }
+        }
+      },
+      "callback": {
+        "type": [
+          "object",
+          "null"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "on_complete": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "on_failed": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "callback_command_id": {
+        "type": "string",
+        "maxLength": 180
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "updated_at_ms": {
+        "type": "number"
+      },
+      "finished_at_ms": {
+        "type": "number"
+      }
+    }
   },
   "communication_accounts": {
     "version": 1,
@@ -6920,6 +7169,69 @@
     ],
     "additionalProperties": true
   },
+  "devices": {
+    "primaryKey": "id",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "kind",
+      "kind_source",
+      "label",
+      "user_id",
+      "created_at_ms",
+      "connected",
+      "last_seen_at_ms"
+    ],
+    "indexes": [
+      "user_id",
+      "kind"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 256,
+        "description": "device_pairing_id"
+      },
+      "kind": {
+        "type": "string",
+        "enum": [
+          "mobile",
+          "desktop",
+          "browser",
+          "machine"
+        ]
+      },
+      "platform": {
+        "type": "string",
+        "maxLength": 64
+      },
+      "label": {
+        "type": "string",
+        "maxLength": 120
+      },
+      "user_id": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "connected": {
+        "type": "boolean"
+      },
+      "last_seen_at_ms": {
+        "type": "number"
+      },
+      "kind_source": {
+        "type": "string",
+        "enum": [
+          "client",
+          "legacy",
+          "enrollment"
+        ]
+      }
+    }
+  },
   "document_blob_chunks": {
     "version": 0,
     "primaryKey": "id",
@@ -8664,6 +8976,110 @@
       ],
       "record_id"
     ]
+  },
+  "machine_enrollments": {
+    "primaryKey": "id",
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "id",
+      "label",
+      "transport",
+      "created_by",
+      "created_at_ms",
+      "expires_at_ms",
+      "status",
+      "steps"
+    ],
+    "indexes": [
+      "status",
+      "created_by"
+    ],
+    "properties": {
+      "id": {
+        "type": "string",
+        "maxLength": 128
+      },
+      "label": {
+        "type": "string",
+        "maxLength": 120
+      },
+      "transport": {
+        "type": "string",
+        "enum": [
+          "local",
+          "ssh",
+          "tailscale"
+        ]
+      },
+      "created_by": {
+        "type": "string"
+      },
+      "created_at_ms": {
+        "type": "number"
+      },
+      "expires_at_ms": {
+        "type": "number"
+      },
+      "status": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "green",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "steps": {
+        "type": "array",
+        "maxItems": 8,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "key",
+            "state",
+            "at_ms"
+          ],
+          "properties": {
+            "key": {
+              "type": "string",
+              "enum": [
+                "token_issued",
+                "transport_connected",
+                "package_copied",
+                "installed",
+                "service_started",
+                "device_bound",
+                "peer_connected",
+                "green"
+              ]
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "running",
+                "done",
+                "failed"
+              ]
+            },
+            "at_ms": {
+              "type": "number"
+            },
+            "detail": {
+              "type": "string",
+              "maxLength": 512
+            },
+            "error_code": {
+              "type": "string",
+              "maxLength": 64
+            }
+          }
+        }
+      }
+    }
   },
   "mail_server_state": {
     "primaryKey": "id",
