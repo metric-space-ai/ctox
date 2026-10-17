@@ -6895,7 +6895,7 @@ fn start_prompt_worker(
                     })
                 },
             );
-            let mut session_options = chat_turn_session_options_for_queue_job(&job);
+            let mut session_options = chat_turn_session_options_for_queue_job(&root, &job);
             session_options.crew_persona = crew.as_ref().map(|context| context.persona.clone());
             session_options.crew_memory_block = crew
                 .as_ref()
@@ -11895,6 +11895,7 @@ fn cv_print_parse_dated_line(line: &str) -> Option<(String, String, String)> {
 }
 
 fn chat_turn_session_options_for_queue_job(
+    root: &Path,
     job: &QueuedPrompt,
 ) -> turn_loop::ChatTurnSessionOptions {
     if is_person_research_gap_closure_job(job) {
@@ -11975,6 +11976,21 @@ fn chat_turn_session_options_for_queue_job(
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty()),
         required_initial_tool: Some("update_plan".to_string()),
+        // News retries share a persistent per-issue checkpoint outside their
+        // individual workspaces. Grant only its directory, never all runtime.
+        additional_writable_roots: if metadata_string(
+            &job.queue_task_metadata,
+            "business_os_command_type",
+        )
+        .as_deref()
+            == Some("news.issue.generate")
+            && metadata_string(&job.queue_task_metadata, "business_os_module").as_deref()
+                == Some("news")
+        {
+            vec![root.join("runtime/news/checkpoints")]
+        } else {
+            Vec::new()
+        },
         additional_readable_roots: inbound_attachment_readable_roots(&job.queue_task_metadata),
         ..turn_loop::ChatTurnSessionOptions::default()
     }
@@ -34107,11 +34123,62 @@ Business OS command:
     }
 
     #[test]
+    fn news_queue_session_grants_only_the_persistent_checkpoint_directory() {
+        let root = temp_root("news-checkpoint-session-options");
+        let mut job = QueuedPrompt {
+            queue_task_metadata: json!({
+                "business_os_module": "news",
+                "business_os_command_type": "news.issue.generate",
+            }),
+            prompt: "Generate a news issue".into(),
+            goal: "News issue".into(),
+            preview: "News issue".into(),
+            source_label: "queue".into(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:system::news".into()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/news/issue".into()),
+            workspace_root: Some(root.join("workspace/news-attempt").display().to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let expected = vec![root.join("runtime/news/checkpoints")];
+        let options = chat_turn_session_options_for_queue_job(&root, &job);
+        assert_eq!(options.additional_writable_roots, expected);
+        assert_eq!(
+            options.required_initial_tool.as_deref(),
+            Some("update_plan")
+        );
+        assert!(options.force_isolated_session);
+
+        // Another attempt's workspace must not change the shared checkpoint.
+        job.workspace_root = Some(root.join("workspace/retry").display().to_string());
+        assert_eq!(
+            chat_turn_session_options_for_queue_job(&root, &job).additional_writable_roots,
+            expected
+        );
+        for metadata in [
+            Value::Null,
+            json!({"business_os_module":"news", "business_os_command_type":"news.source.adapter"}),
+            json!({"business_os_module":"other", "business_os_command_type":"news.issue.generate"}),
+        ] {
+            job.queue_task_metadata = metadata;
+            // Prompt text must never grant this filesystem authority.
+            job.prompt = "news.issue.generate runtime/news/checkpoints".into();
+            assert!(chat_turn_session_options_for_queue_job(&root, &job)
+                .additional_writable_roots
+                .is_empty());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn person_research_gap_closure_queue_jobs_get_one_hour_turn_budget() {
         let workspace = temp_root("person-research-gap-session-options");
         let job = person_research_gap_closure_test_job(&workspace);
 
-        let options = chat_turn_session_options_for_queue_job(&job);
+        let options = chat_turn_session_options_for_queue_job(&workspace, &job);
 
         assert_eq!(options.turn_timeout_secs_override, Some(3_600));
         assert_eq!(
@@ -34124,7 +34191,7 @@ Business OS command:
 
         let mut ordinary = job;
         ordinary.queue_task_metadata = Value::Null;
-        let ordinary_options = chat_turn_session_options_for_queue_job(&ordinary);
+        let ordinary_options = chat_turn_session_options_for_queue_job(&workspace, &ordinary);
         assert_eq!(ordinary_options.turn_timeout_secs_override, None);
         assert_eq!(
             ordinary_options.required_initial_tool.as_deref(),
@@ -34137,7 +34204,7 @@ Business OS command:
         let workspace = temp_root("systematic-research-session-options");
         let job = systematic_research_test_job(&workspace);
 
-        let options = chat_turn_session_options_for_queue_job(&job);
+        let options = chat_turn_session_options_for_queue_job(&workspace, &job);
 
         assert!(!options.disable_mcp_servers);
         assert!(options.force_isolated_session);
@@ -34159,7 +34226,7 @@ Business OS command:
             "\nReview feedback: evidence receipt artifacts were not emitted by typed ctox_web_read calls in the current durable research run",
         );
 
-        let options = chat_turn_session_options_for_queue_job(&job);
+        let options = chat_turn_session_options_for_queue_job(&workspace, &job);
 
         // Receipt retries still begin with the durable plan. Once update_plan
         // succeeds, the complete typed research surface is restored.
@@ -34172,6 +34239,7 @@ Business OS command:
 
     #[test]
     fn business_os_app_queue_jobs_use_lean_mcp_free_session() {
+        let root = temp_root("app-queue-session-options");
         let mut job = QueuedPrompt {
             queue_task_metadata: business_os_app_queue_metadata(
                 "contracts",
@@ -34191,7 +34259,7 @@ Business OS command:
             outbound_anchor: None,
         };
 
-        let options = chat_turn_session_options_for_queue_job(&job);
+        let options = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(options.disable_mcp_servers);
         assert!(!options.force_isolated_session);
         assert!(options.plain_prompt);
@@ -34214,7 +34282,7 @@ Business OS command:
 
         job.prompt = "Write a short implementation note.".to_string();
         job.queue_task_metadata = json!({});
-        let options = chat_turn_session_options_for_queue_job(&job);
+        let options = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(!options.disable_mcp_servers);
         assert!(options.force_isolated_session);
         assert!(!options.plain_prompt);
@@ -34227,7 +34295,7 @@ Business OS command:
         assert_eq!(options.turn_timeout_secs_override, None);
 
         job.thread_key = None;
-        let options = chat_turn_session_options_for_queue_job(&job);
+        let options = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(!options.force_isolated_session);
         assert!(queue_job_reuses_persistent_session(&options));
     }
@@ -34254,7 +34322,7 @@ Business OS command:
             .context("missing actual supervisor queue task")?;
         let key = task.message_key.clone();
         let job = queued_prompt_from_queue_task(task);
-        let mut options = chat_turn_session_options_for_queue_job(&job);
+        let mut options = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(configure_business_os_mcp_session_for_queue_job(
             root,
             &job,
@@ -34289,7 +34357,7 @@ Business OS command:
         // Verification authenticates claims; dispatch compares the live lease.
         // The service must also refuse minting a session once the live lease expires.
         core.execute("UPDATE communication_routing_state SET lease_expires_at='2001-01-01T00:00:00Z' WHERE message_key=?1", [&key])?;
-        let mut expired = chat_turn_session_options_for_queue_job(&job);
+        let mut expired = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut expired).is_err());
         assert!(expired.business_os_mcp_command_session.is_none());
         Ok(())
@@ -34322,7 +34390,7 @@ Business OS command:
         let mut unrelated = job.clone();
         unrelated.leased_message_keys = vec!["email:owner::mail".into()];
         assert!(!queue_job_needs_native_turn_lease(&unrelated));
-        let mut options = chat_turn_session_options_for_queue_job(&job);
+        let mut options = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut options).is_err());
         assert!(options.business_os_mcp_command_session.is_none());
         let mut fence = channels::QueueTurnLeaseFence {
@@ -34364,7 +34432,7 @@ Business OS command:
             crate::business_os::mcp_channel::verify_internal_command_session_token(root, token)?;
         assert_eq!(trusted["command_id"], "");
         assert_eq!(trusted["workjet_confirmed_plan"]["lease"]["task_id"], task);
-        let mut wrong = chat_turn_session_options_for_queue_job(&job);
+        let mut wrong = chat_turn_session_options_for_queue_job(&root, &job);
         wrong.queue_turn_lease = options.queue_turn_lease.clone();
         wrong.queue_turn_lease.as_mut().unwrap().worker_id = "foreign-worker".into();
         assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut wrong).is_err());
@@ -34400,7 +34468,7 @@ Business OS command:
         let key = accepted["task_id"].as_str().context("missing task")?;
         let task = channels::load_queue_task(root, key)?.context("missing queued task")?;
         let job = queued_prompt_from_queue_task(task);
-        let mut options = chat_turn_session_options_for_queue_job(&job);
+        let mut options = chat_turn_session_options_for_queue_job(&root, &job);
         // Merely selecting an external executor does not admit a Crew attempt.
         assert!(!configure_business_os_mcp_session_for_queue_job(
             root,
@@ -34526,7 +34594,7 @@ Business OS command:
             outbound_email: None,
             outbound_anchor: None,
         };
-        let mut options = chat_turn_session_options_for_queue_job(&job);
+        let mut options = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(configure_business_os_mcp_session_for_queue_job(
             &root,
             &job,
@@ -38569,7 +38637,7 @@ Business OS command:
 
         // The rework may act on Business OS as the sender (lead import from
         // the Excel); a sender without a Business OS user gets no session.
-        let mut options = chat_turn_session_options_for_queue_job(&leased);
+        let mut options = chat_turn_session_options_for_queue_job(&root, &leased);
         assert!(
             !configure_business_os_mcp_session_for_queue_job(&root, &leased, &mut options)
                 .expect("configure without business user")
