@@ -3,6 +3,10 @@ use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
+#[path = "app_grant.rs"]
+pub mod app_grant;
+#[path = "app_grant_route.rs"]
+pub mod app_grant_route;
 #[path = "manifest_rules.rs"]
 pub mod manifest_rules;
 #[path = "scope.rs"]

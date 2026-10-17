@@ -15,6 +15,10 @@ pub(crate) enum FeedHealth {
     Unavailable {
         code: &'static str,
     },
+    ReconciliationRequired {
+        code: &'static str,
+        command_id: String,
+    },
     Degraded {
         code: &'static str,
         stage: &'static str,
@@ -24,10 +28,142 @@ pub(crate) enum FeedHealth {
     },
 }
 
+fn terminal_reason(error: &anyhow::Error) -> &'static str {
+    if let Some(error) = error.downcast_ref::<StoreError>() {
+        return match error {
+            StoreError::Closed => "store_closed",
+            StoreError::Cancelled => "cancelled",
+            StoreError::Invalid(reason) if error_code(reason) == "revoked" => "revoked",
+            StoreError::Invalid(_) => "schema_or_contract",
+            _ => "fatal_store",
+        };
+    }
+    match error_code(&error.to_string()) {
+        "revoked" => "revoked",
+        "invalid" => "schema_or_contract",
+        _ => "fatal_owner",
+    }
+}
+
+fn transient_store(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<StoreError>(),
+        Some(StoreError::Busy | StoreError::DeadlineExceeded)
+    ) || error
+        .downcast_ref::<ctox_app_runtime::HandlerError>()
+        .is_some_and(|e| {
+            !e.uncertain
+                && (e.message == "read_overload"
+                    || e.message == "Core Store rejected operation"
+                        && matches!(e.code.as_str(), "quota" | "expired"))
+        })
+}
+
+// Only pure admission or an idempotent metadata step belongs here. In
+// particular, never wrap ingress.command or an uncertain external effect.
+pub(super) async fn retry_step<T, F, Fut>(
+    health: &watch::Sender<FeedHealth>,
+    stage: &'static str,
+    mut step: F,
+) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut attempts = 0u32;
+    loop {
+        match step().await {
+            Err(error) if transient_store(&error) => {
+                attempts = attempts.saturating_add(1);
+                let status = FeedHealth::Degraded {
+                    code: "read_overload",
+                    stage,
+                    attempts,
+                    callback_cpu_us: None,
+                    page_limit: 1,
+                };
+                if !matches!(&*health.borrow(), FeedHealth::ReconciliationRequired { .. }) {
+                    health.send_replace(status.clone());
+                }
+                if attempts == 1 || attempts % 32 == 0 {
+                    eprintln!("native app feed health={}", serde_json::to_string(&status)?);
+                }
+                tokio::time::sleep(Duration::from_millis((10u64 << attempts.min(5)).min(500)))
+                    .await;
+            }
+            result => {
+                if result.is_ok()
+                    && attempts > 0
+                    && matches!(&*health.borrow(), FeedHealth::Degraded { stage: prior, .. } if *prior == stage)
+                {
+                    health.send_replace(FeedHealth::Healthy);
+                }
+                return result;
+            }
+        }
+    }
+}
+
+// The Store still owns admission, rollback and commit. Recreate only this
+// transaction after a known rollback; do not repeat the handler producing it.
+pub(super) async fn retry_write<T: Send + 'static>(
+    database: &Database,
+    health: &watch::Sender<FeedHealth>,
+    stage: &'static str,
+    operation: impl Fn(&rusqlite::Transaction<'_>) -> Result<T, StoreError> + Send + Sync + 'static,
+) -> Result<T> {
+    let operation = Arc::new(operation);
+    retry_step(health, stage, || {
+        let operation = operation.clone();
+        let writer = database.writer.clone();
+        #[cfg(test)]
+        let path = writer.db_id().path().to_owned();
+        async move {
+            #[cfg(test)]
+            let lease_probe = if stage == "platform.result" {
+                load_source::platform_attempt(&path)
+            } else {
+                None
+            };
+            #[cfg(test)]
+            if lease_probe == Some(1) {
+                writer.submit(WriteJob::new(Default::default(), |tx| {
+                    tx.execute("UPDATE _command_leases SET fence=fence+1 WHERE command_id='hot-invalid-publication'", [])?;
+                    Ok(())
+                }))?.await?;
+            }
+            let options = JobOptions::default();
+            #[cfg(test)]
+            let options = if lease_probe == Some(2) || stage == "cursor.ack" && load_source::cursor_pending(&path) {
+                JobOptions {
+                    deadline: Some(std::time::Instant::now() + Duration::from_millis(25)),
+                    ..options
+                }
+            } else {
+                options
+            };
+            Ok(writer
+                .submit(WriteJob::new(options, move |tx| {
+                    #[cfg(test)]
+                    if lease_probe == Some(2) {
+                        std::thread::sleep(Duration::from_millis(80));
+                    }
+                    #[cfg(test)]
+                    if stage == "cursor.ack" {
+                        load_source::before_cursor(tx);
+                    }
+                    operation(tx)
+                }))?
+                .await?)
+        }
+    })
+    .await
+}
+
 // Retry only pure snapshots, before any handler/effect or cursor acknowledgement.
 // The store still owns its admission/deadline/generation guards. Wall-clock
 // preemption must not be interpreted as a terminal failure of the subscription.
-async fn resilient_read<T: Send + 'static>(
+pub(super) async fn resilient_read<T: Send + 'static>(
     pool: ctox_store::read_pool::ReadPool,
     stage: &'static str,
     health: &watch::Sender<FeedHealth>,
@@ -44,7 +180,8 @@ async fn resilient_read<T: Send + 'static>(
         }
         match result {
             Ok(value) => {
-                if *health.borrow() != FeedHealth::Healthy {
+                if matches!(&*health.borrow(), FeedHealth::Degraded { code: "read_overload", stage: prior, .. } if *prior == stage)
+                {
                     health.send_replace(FeedHealth::Healthy);
                     eprintln!(
                         "native app feed health={{\"state\":\"healthy\",\"stage\":\"{stage}\"}}"
@@ -63,7 +200,9 @@ async fn resilient_read<T: Send + 'static>(
                         callback_cpu_us: cpu,
                         page_limit: limit,
                     };
-                    health.send_replace(status.clone());
+                    if !matches!(&*health.borrow(), FeedHealth::ReconciliationRequired { .. }) {
+                        health.send_replace(status.clone());
+                    }
                     if attempts == 3 || attempts % 32 == 0 {
                         eprintln!(
                             "native app feed health={}",
@@ -99,6 +238,29 @@ pub(super) mod load_source {
             .is_none());
         Delay(path)
     }
+    pub(crate) fn delay_admission(path: &Path, pages: u32) -> Delay {
+        delay_pages(&path.with_extension("admission"), pages)
+    }
+    pub(crate) fn delay_cursor(path: &Path, pages: u32) -> Delay {
+        delay_pages(&path.with_extension("cursor"), pages)
+    }
+    pub(crate) fn replace_platform_lease(path: &Path) -> Delay {
+        delay_pages(&path.with_extension("platform-lease"), 2)
+    }
+    pub(super) fn platform_attempt(path: &Path) -> Option<u32> {
+        let mut delays = DELAYS.get()?.lock().ok()?;
+        let left = delays.get_mut(&path.with_extension("platform-lease"))?;
+        let attempt = *left;
+        *left = left.saturating_sub(1);
+        (attempt > 0).then_some(attempt)
+    }
+    pub(super) fn cursor_pending(path: &Path) -> bool {
+        DELAYS
+            .get()
+            .and_then(|v| v.lock().ok())
+            .and_then(|v| v.get(&path.with_extension("cursor")).copied())
+            .is_some_and(|v| v > 0)
+    }
     impl Delay {
         pub(crate) fn exhausted(&self) -> bool {
             DELAYS.get().unwrap().lock().unwrap().get(&self.0) == Some(&0)
@@ -110,12 +272,28 @@ pub(super) mod load_source {
         }
     }
     pub(super) fn before_page(db: &Connection) {
+        before(db, "change_page");
+    }
+    pub(in super::super) fn before_admission(db: &Connection) {
+        before(db, "admission");
+    }
+    pub(super) fn before_cursor(db: &Connection) {
+        before(db, "cursor");
+    }
+    fn before(db: &Connection, stage: &str) {
         let delayed = {
             let Some(delays) = DELAYS.get() else {
                 return;
             };
             let mut delays = delays.lock().unwrap();
-            let Some(left) = db.path().and_then(|p| delays.get_mut(Path::new(p))) else {
+            let key = db.path().map(|p| {
+                if stage != "change_page" {
+                    Path::new(p).with_extension(stage)
+                } else {
+                    Path::new(p).to_owned()
+                }
+            });
+            let Some(left) = key.as_ref().and_then(|p| delays.get_mut(p)) else {
                 return;
             };
             let delayed = *left > 0;
@@ -123,7 +301,21 @@ pub(super) mod load_source {
             delayed
         };
         if delayed {
-            eprintln!("APP_PLATFORM_SLOW_CHANGE_SOURCE delay_ms=80");
+            if stage == "admission" {
+                let cursor: u64 = db
+                    .query_row(
+                        "SELECT cursor FROM _app_runtime_feed WHERE singleton=1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .expect("native feed cursor");
+                let queued: Option<u64> = db.query_row("SELECT MIN(seq) FROM _changes WHERE collection='business_commands' AND id='hot-write'", [], |r| r.get(0)).expect("native command sequence");
+                if let Some(seq) = queued {
+                    assert!(cursor < seq, "transient admission advanced the feed cursor");
+                }
+                eprintln!("APP_PLATFORM_ADMISSION_RETRY cursor={cursor} command_seq={queued:?}");
+            }
+            eprintln!("APP_PLATFORM_SLOW_SOURCE stage={stage} delay_ms=80");
             std::thread::sleep(Duration::from_millis(80));
         }
     }
@@ -277,6 +469,7 @@ impl RuntimeBinding {
         let commits = database.writer.subscribe_commits();
         let (host, authority) =
             crate::persistence::run_core_sync(move || super::host(&owners)).await?;
+        authority.set_health(health_send.clone())?;
         let codec = host.codec.clone();
         let (active,initial,epoch)=resilient_read(database.readers.clone(), "activation_snapshot", &health_send, &mut 256, |_| { let codec = codec.clone(); ReadJob::new(JobOptions::default(),move|db|{
             let c=collection(db,"business_apps")?;
@@ -286,14 +479,14 @@ impl RuntimeBinding {
             let epoch:String=db.query_row("SELECT epoch FROM _meta WHERE singleton=1",[],|r|r.get(0))?;
             Ok((active,head,epoch))
         })}).await?;
-        let cursor=database.writer.submit(WriteJob::new(JobOptions::default(),move|tx|{
+        let cursor=retry_write(&database, &health_send, "cursor.initialize", move|tx|{
             tx.execute_batch("CREATE TABLE IF NOT EXISTS _app_runtime_feed(singleton INTEGER PRIMARY KEY CHECK(singleton=1),epoch TEXT NOT NULL,cursor INTEGER NOT NULL)")?;
             let saved:Option<(String,u64)>=tx.query_row("SELECT epoch,cursor FROM _app_runtime_feed WHERE singleton=1",[],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
             match saved {
                 Some((old,cursor)) if old==epoch=>Ok(cursor),
                 _=>{tx.execute("INSERT INTO _app_runtime_feed VALUES(1,?1,?2) ON CONFLICT(singleton) DO UPDATE SET epoch=excluded.epoch,cursor=excluded.cursor",params![epoch,initial])?;Ok(initial)}
             }
-        }))?.await?;
+        }).await?;
         let inputs = AppRuntimeInputs {
             host: host.clone(),
             runtime: runtime.clone(),
@@ -313,7 +506,10 @@ impl RuntimeBinding {
         let feed_ingress = ingress.clone();
         let task = runtime.spawn(async move {
             let feed_health = health_send.clone();
-            let result = drive(
+            eprintln!("APP_FEED_EVENT ts={} event=feed_open", now());
+            let result = tokio::select! { biased;
+                _ = async { let mut stop = stopping.clone(); let _ = stop.changed().await; } => Ok(()),
+                result = drive(
                 native_root,
                 database,
                 authority,
@@ -322,15 +518,14 @@ impl RuntimeBinding {
                 feed_ingress,
                 commits,
                 cursor,
-                stopping,
+                stopping.clone(),
                 health_send,
-            )
-            .await;
+            ) => result,
+            };
             if result.is_err() {
-                feed_health.send_replace(FeedHealth::Unavailable {
-                    code: "feed_stopped",
-                });
-                eprintln!("native app runtime feed stopped; ingress is closing: {result:?}");
+                let code = terminal_reason(result.as_ref().err().unwrap());
+                feed_health.send_replace(FeedHealth::Unavailable { code });
+                eprintln!("APP_FEED_EVENT ts={} event=feed_close reason={code} error={result:?} backtrace={}", now(), std::backtrace::Backtrace::force_capture());
             }
             let drained = registration.shutdown().await;
             result.and(drained)
@@ -449,12 +644,11 @@ async fn drive(
                 tokio::select! { biased;
                     _ = stop.changed() => return Ok(()),
                     page = &mut read => break page?,
-                    _ = lease_tick.tick() => authority.renew_events().await?,
+                    _ = lease_tick.tick() => retry_step(&health, "event.renew", || authority.renew_events()).await?,
                 }
             };
             if page.is_empty() {
-                authority
-                    .finish_events(true)
+                retry_step(&health, "event.finalize", || authority.finish_events(true))
                     .await
                     .context("native idle event finalization")?;
                 break;
@@ -462,10 +656,14 @@ async fn drive(
             for (collection, id, seq, op, doc) in page {
                 if collection == "business_apps" {
                     match &doc {
-                        Some(app) if app["state"] == "active" => ingress
-                            .published(id.clone(), text(app, "active_ver")?.into())
+                        Some(app) if app["state"] == "active" => {
+                            let version = text(app, "active_ver")?.to_owned();
+                            retry_step(&health, "app.publish", || {
+                                ingress.published(id.clone(), version.clone())
+                            })
                             .await
-                            .with_context(|| format!("native published seq={seq} app={id}"))?,
+                            .with_context(|| format!("native published seq={seq} app={id}"))?
+                        }
                         _ => ingress
                             .removed(id.clone())
                             .await
@@ -521,22 +719,53 @@ async fn drive(
                 changed.with_context(|| {
                     format!("native change seq={seq} collection={collection} id={id}")
                 })?;
+                retry_write(&database, &health, "cursor.ack", move |tx| {
+                    tx.execute(
+                        "UPDATE _app_runtime_feed SET cursor=MAX(cursor,?1) WHERE singleton=1",
+                        [seq],
+                    )?;
+                    Ok(())
+                })
+                .await?;
                 cursor = seq;
-                database
-                    .writer
-                    .submit(WriteJob::new(JobOptions::default(), move |tx| {
-                        tx.execute(
-                            "UPDATE _app_runtime_feed SET cursor=MAX(cursor,?1) WHERE singleton=1",
-                            [seq],
-                        )?;
-                        Ok(())
-                    }))?
-                    .await?;
             }
         }
-        tokio::select! {biased;_=stop.changed()=>break,result=commits.changed()=>{result?;},_=lease_tick.tick()=>{authority.renew_events().await?;}}
+        tokio::select! {biased;_=stop.changed()=>break,result=commits.changed()=>{result?;},_=lease_tick.tick()=>{retry_step(&health, "event.renew", || authority.renew_events()).await?;}}
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(super) mod core_route_probe {
+    use std::{
+        collections::BTreeMap,
+        sync::{Mutex, OnceLock},
+    };
+    static CALLS: OnceLock<Mutex<BTreeMap<String, u32>>> = OnceLock::new();
+    pub(super) fn record(id: &str) {
+        *CALLS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .entry(id.to_owned())
+            .or_default() += 1;
+    }
+    pub(crate) fn observed(id: &str) -> bool {
+        CALLS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .contains_key(id)
+    }
+    pub(crate) fn count(id: &str) -> u32 {
+        CALLS
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap()
+            .get(id)
+            .copied()
+            .unwrap_or(0)
+    }
 }
 
 async fn dispatch_committed(
@@ -558,7 +787,7 @@ async fn dispatch_committed(
                 Some(StoreError::Invalid(reason))
                     if matches!(
                         error_code(reason),
-                        "forbidden" | "revoked" | "not_found" | "invalid"
+                        "forbidden" | "revoked" | "not_found" | "unknown_command" | "invalid"
                     ) =>
                 {
                     reason.clone()
@@ -572,21 +801,18 @@ async fn dispatch_committed(
                     })
                 }
             };
-            database
-                .writer
-                .submit(WriteJob::new(JobOptions::default(), move |tx| {
-                    let id = text(&doc, "id").map_err(sql_error)?;
-                    if document(tx, "business_commands", id)?.as_ref() != Some(&doc) {
-                        return Err(invalid("conflict: command changed during rejection"));
-                    }
-                    origin::audit_rejection(tx, &doc, error_code(&reason))?;
-                    let mut rejected = doc;
-                    rejected["status"] = json!("failed");
-                    rejected["error"] =
-                        json!({"code":error_code(&reason),"reason":"admission_denied"});
-                    store_command(tx, &rejected)
-                }))?
-                .await?;
+            retry_write(database, &authority.health(), "command.reject", move |tx| {
+                let id = text(&doc, "id").map_err(sql_error)?;
+                if document(tx, "business_commands", id)?.as_ref() != Some(&doc) {
+                    return Err(invalid("conflict: command changed during rejection"));
+                }
+                origin::audit_rejection(tx, &doc, error_code(&reason))?;
+                let mut rejected = doc.clone();
+                rejected["status"] = json!("failed");
+                rejected["error"] = json!({"code":error_code(&reason),"reason":"admission_denied"});
+                store_command(tx, &rejected)
+            })
+            .await?;
             return Ok(());
         }
     };
@@ -602,19 +828,21 @@ async fn dispatch_committed(
     }
     let command = binding["command"].clone();
     let fence = binding["fence"].clone();
-    let e25_core = write_contract::routes::resolve(text(&command, "type")?)
-        .is_ok_and(write_contract::routes::is_command_bus);
+    let e25_core = routing::core_route(text(&command, "type")?);
     let native_root = native_root.to_path_buf();
     let retained = authority.clone();
     let native_binding = binding.clone();
     let call = async {
         if e25_core {
             tokio::task::spawn_blocking(move || {
-                crate::business_os::command_plane::execute_v4_core_registered_command(
+                let result = crate::business_os::command_plane::execute_v4_core_registered_command(
                     &native_root,
                     &native_binding,
                     &*retained,
-                )
+                );
+                #[cfg(test)]
+                core_route_probe::record(text(&native_binding["command"], "id").unwrap());
+                result
             })
             .await?
         } else {
@@ -625,9 +853,28 @@ async fn dispatch_committed(
     let mut renew = tokio::time::interval(Duration::from_secs(10));
     renew.tick().await;
     let result = loop {
-        tokio::select! {result=&mut call=>break result,_=renew.tick()=>authority.renew(&binding).await?}
+        tokio::select! {result=&mut call=>break result,_=renew.tick()=>retry_step(&authority.health(), "command.renew", || authority.renew(&binding)).await?}
     };
     // A failed handler is a typed terminal result; an uncertain effect stays running.
+    let result = result.map_err(|error| {
+        if e25_core
+            && error
+                .downcast_ref::<ctox_app_runtime::HandlerError>()
+                .is_none()
+            && (error.to_string().starts_with("unknown_command:")
+                || error.to_string().starts_with("not_found:"))
+        {
+            ctox_app_runtime::HandlerError {
+                uncertain: false,
+                code: "not_found".into(),
+                message: "unknown_command: native Core route unavailable".into(),
+                path: None,
+            }
+            .into()
+        } else {
+            error
+        }
+    });
     let outcome = match result {
         Ok(value) => json!({"status":"done","result":value}),
         Err(error) => {
@@ -635,20 +882,32 @@ async fn dispatch_committed(
                 .downcast_ref::<ctox_app_runtime::HandlerError>()
                 .map_or(true, |e| e.uncertain);
             if uncertain {
-                return Err(error).with_context(|| {
-                    format!(
-                        "native handler id={} type={}",
-                        binding["command"]["id"], binding["command"]["type"]
-                    )
-                });
+                // Preserve the durable BeginEffect: never rerun an uncertain
+                // handler or fabricate terminal success. Quarantine this command
+                // without tearing down the registration for every other app.
+                authority.effect_uncertain(text(&binding["command"], "id")?)?;
+                json!({"status":"running","error":{"code":"unavailable","reason":"effect_uncertain","uncertain":true},"result":{"state":"reconciliation_required"}})
+            } else {
+                let native_reason = error
+                    .downcast_ref::<ctox_app_runtime::HandlerError>()
+                    .map(|e| e.message.as_str())
+                    .filter(|reason| {
+                        e25_core
+                            && reason.starts_with("native_")
+                            && reason.len() <= 128
+                            && reason
+                                .bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    });
+                json!({"status":"failed","error":{"status":"failed","code":error_code(&error.to_string()),"reason":native_reason.unwrap_or("handler_failed")}})
             }
-            json!({"status":"failed","error":{"status":"failed","code":error_code(&error.to_string()),"reason":"handler_failed"}})
         }
     };
+    let uncertain = outcome["status"] == "running";
     let id = text(&binding["command"], "id")?.to_owned();
     let codec = authority.codec.clone();
     let b = binding.clone();
-    database.writer.submit(WriteJob::new(JobOptions::default(),move|tx|{
+    retry_write(database, &authority.health(), "command.result", move|tx|{
         codec.check_fence(tx,&b)?;
         let mut doc=document(tx,"business_commands",&id)?.ok_or_else(||invalid("not_found: command"))?;
         doc["status"]=outcome["status"].clone();for key in ["result","error"]{if let Some(value)=outcome.get(key){doc[key]=value.clone();}}
@@ -656,11 +915,13 @@ async fn dispatch_committed(
         let c=collection(tx,"business_commands")?;
         let (rev,seq):(String,u64)=tx.query_row("SELECT rev,seq FROM _changes WHERE collection='business_commands' AND gen=?1 AND id=?2",params![c.gen,id],|r|Ok((r.get(0)?,r.get(1)?)))?;
         write_contract::project_command(tx,&id,c.gen,&rev,seq,&doc)?;Ok(())
-    }))?.await?;
-    authority
-        .release(&binding)
-        .await
-        .with_context(|| format!("native release id={}", binding["command"]["id"]))?;
+    }).await?;
+    if !uncertain {
+        authority
+            .release(&binding)
+            .await
+            .with_context(|| format!("native release id={}", binding["command"]["id"]))?;
+    }
     Ok(())
 }
 
@@ -757,18 +1018,19 @@ async fn dispatch_platform(
             Ok((a, command))
         }))?
         .await?;
-    // Suspend publication before the schema/rights transaction. The existing P6
-    // router is the same writer/generation owner used by replication.
-    let pending = if command.command_type.starts_with("ctox.app.") {
-        Some(
-            policy_owner
-                .router
-                .begin_rights_update()
-                .map_err(|e| anyhow!(e))?,
-        )
-    } else {
-        None
-    };
+    let publication = Arc::new(std::sync::Mutex::new(None));
+    let pending = publication.clone();
+    let owner = policy_owner.clone();
+    let platform = platform.clone().with_rights_publication(Arc::new(move || {
+        let mut pending = pending
+            .lock()
+            .map_err(|_| invalid("unavailable: rights publication lock"))?;
+        if pending.is_some() {
+            return Err(invalid("conflict: duplicate rights publication"));
+        }
+        *pending = Some(owner.router.begin_rights_update().map_err(sql_error)?);
+        Ok(())
+    }));
     let model_fence = if command.command_type == "instance.providers.models.check" {
         let native = authority.clone();
         let invocation = binding.clone();
@@ -805,27 +1067,81 @@ async fn dispatch_platform(
     } else {
         None
     };
+    eprintln!(
+        "APP_FEED_EVENT ts={} event=install_start type={}",
+        now(),
+        command.command_type
+    );
     let outcome = platform
         .dispatch_fenced(actor, command, now(), model_fence)
         .await;
+    eprintln!("APP_FEED_EVENT ts={} event=install_dispatch_complete status={} code={} reason={} detail={}", now(), outcome["status"], outcome["code"], outcome["reason"], outcome["detail"]);
+    let pending = publication
+        .lock()
+        .map_err(|_| anyhow!("rights publication lock"))?
+        .take();
     if let Some(pending) = pending {
-        let refreshed = database
-            .readers
-            .read(|tx| sync_rights::read(tx))
-            .await
-            .map_err(|e| e.to_string());
+        let refreshed = resilient_read(
+            database.readers.clone(),
+            "rights.refresh",
+            &authority.health(),
+            &mut 1,
+            |_| ReadJob::new(Default::default(), rights),
+        )
+        .await
+        .map_err(|e| e.to_string());
+        eprintln!(
+            "APP_FEED_EVENT ts={} event=rights_refresh expected_ver={} committed_ver={:?}",
+            now(),
+            pending.expected_version(),
+            refreshed.as_ref().map(|r| r.rights_ver)
+        );
         policy_owner
             .router
             .finish_rights_update(pending, refreshed)
             .map_err(|e| anyhow!(e))?;
     }
-    // Platform owns its own idempotent terminal/pending receipt; do not overwrite it.
-    authority.release(binding).await?;
+    // A rolled-back validation failure has no native terminal receipt yet.
+    // Persist the typed failure in the same command plane instead of killing
+    // the shared feed (and masking it with a rights-publication error).
     if outcome["status"] == "failed" {
-        return Err(anyhow!(
-            "unavailable: native platform effect failed; inspect typed command result"
-        ));
+        let id = text(&binding["command"], "id")?.to_owned();
+        let participant = text(&binding["fence"], "participant")?.to_owned();
+        let fence = binding["fence"]["fence"]
+            .as_u64()
+            .context("invalid: platform result fence")?;
+        let outcome = outcome.clone();
+        retry_write(
+            database,
+            &authority.health(),
+            "platform.result",
+            move |tx| {
+                let mut doc = document(tx, "business_commands", &id)?
+                    .ok_or_else(|| invalid("not_found: platform failure"))?;
+                if doc["status"] == "running" {
+                    // Backoff may outlast this lease; only its current P9 owner
+                    // may change the nonterminal receipt.
+                    write_contract::check_executor_fence(
+                        tx,
+                        &participant,
+                        &id,
+                        ctox_store::change_log::subscription::protocol::Seq(fence),
+                        now(),
+                    )?
+                    .map_err(|_| invalid("revoked: platform result executor fence lost"))?;
+                    let code = outcome["code"].as_str().unwrap_or("unavailable");
+                    origin::audit_rejection(tx, &doc, code)?;
+                    doc["status"] = json!("failed");
+                    doc["error"] = json!({"code":code,"reason":outcome["reason"]});
+                    doc["result"] = outcome.clone();
+                    store_command(tx, &doc)?;
+                }
+                Ok(())
+            },
+        )
+        .await?;
     }
+    authority.release(binding).await?;
     Ok(())
 }
 

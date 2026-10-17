@@ -85,6 +85,8 @@ pub(crate) struct PackageKey {
 struct Device {
     actor: Actor,
     peer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    device_pubkey: Option<String>,
 }
 
 /// `user` is the route's authenticated principal, never a browser body. Its role
@@ -93,7 +95,22 @@ pub(crate) async fn build(
     owners: &Arc<StoreInputs>,
     user: &BusinessOsUser,
 ) -> Result<V4LaunchContext> {
-    build_principal(owners, user, false).await
+    build_principal(owners, user, false, None).await
+}
+/// E54.4: called only after the pairing owner verified the one-time proof.
+/// The device key is inside the instance-signed offer and E50's ticket digest;
+/// no alternate signer, ticket, peer role or admission path is introduced.
+pub(crate) async fn build_for_device(
+    owners: &Arc<StoreInputs>,
+    user: &BusinessOsUser,
+    device_pubkey: &str,
+) -> Result<V4LaunchContext> {
+    let raw = URL_SAFE_NO_PAD.decode(device_pubkey)?;
+    ensure!(
+        raw.len() == 32 && URL_SAFE_NO_PAD.encode(&raw) == device_pubkey,
+        "invalid paired device public key"
+    );
+    build_principal(owners, user, false, Some(device_pubkey)).await
 }
 /// E50: only the HTTP boundary may authenticate the implicit loopback admin.
 /// No persisted local-dev account or credential is created.
@@ -107,12 +124,13 @@ pub(crate) async fn build_local(owners: &Arc<StoreInputs>) -> Result<V4LaunchCon
         created_at_ms: 0,
         updated_at_ms: 0,
     };
-    build_principal(owners, &user, true).await
+    build_principal(owners, &user, true, None).await
 }
 async fn build_principal(
     owners: &Arc<StoreInputs>,
     user: &BusinessOsUser,
     local: bool,
+    device_pubkey: Option<&str>,
 ) -> Result<V4LaunchContext> {
     ensure!(
         user.active && !user.id.is_empty(),
@@ -120,25 +138,22 @@ async fn build_principal(
     );
     let signer = owners.instance_signer()?;
     let raw_key = public_key(signer.key_id())?;
+    let peer = format!("browser-{}", uuid::Uuid::new_v4());
+    let prepared = super::browser_bootstrap::prepared(&owners.root, &peer)?;
+    let catalog = prepared.catalog;
     let id = user.id.clone();
     let key = raw_key;
+    let rights_started = std::time::Instant::now();
     let snapshot = owners
         .activation_snapshot(move |tx| {
-            snapshot(tx, &id, &key, local)
+            snapshot(tx, &id, &key, local, &catalog)
                 .map_err(|e| rusqlite::Error::InvalidParameterName(e.to_string()))
         })
         .await
         .context("read launch identity and grants")?
         .value;
-    let root = owners.root.clone();
-    let peer = format!("browser-{}", uuid::Uuid::new_v4());
-    let session = peer.clone();
-    // Reuse the V3 browser credential and configured/ctox.dev TURN route. This
-    // existing helper performs network/secret-owner I/O outside the Sync snapshot.
-    let config =
-        crate::persistence::run_core_sync(move || store::sync_config_for_browser(&root, &session))
-            .await
-            .context("resolve browser signaling and TURN")?;
+    eprintln!("ctox_bootstrap_launch_timing={}", serde_json::json!({"current_rights_snapshot_us":rights_started.elapsed().as_micros(),"launch_config_value_us":0,"legacy_catalog_computation_us":0}));
+    let config = prepared.config;
     ensure!(
         config.instance_id == signer.instance_id(),
         "instance identity differs"
@@ -160,6 +175,7 @@ async fn build_principal(
     let device = serde_json::to_string(&Device {
         actor: actor.clone(),
         peer: signaling.peer_id.clone(),
+        device_pubkey: device_pubkey.map(str::to_owned),
     })?;
     ensure!(
         device.len() <= 256,
@@ -313,7 +329,7 @@ pub(crate) fn verify_offer(hello: &Hello, peer: &str, key: &[u8; 32]) -> Result<
 fn quote(name: &str) -> String {
     format!("\"{}\"", name.replace('"', "\"\""))
 }
-fn documents(db: &Connection, collection: &str) -> Result<Vec<Value>> {
+pub(super) fn documents(db: &Connection, collection: &str) -> Result<Vec<Value>> {
     let table: String = db.query_row(
         "SELECT table_name FROM _collections WHERE name=?1 AND state='active'",
         [collection],
@@ -354,6 +370,7 @@ fn snapshot(
     id: &str,
     key: &[u8; 32],
     local: bool,
+    catalog: &Value,
 ) -> Result<(Actor, Vec<String>, Vec<String>)> {
     let user = if local && id == "local-dev" {
         serde_json::json!({"id":"local-dev","role":"admin","active":true})
@@ -405,7 +422,10 @@ fn snapshot(
         let Some(ver) = app["active_ver"].as_str().filter(|v| !v.is_empty()) else {
             continue;
         };
-        let version = document(tx, "business_app_versions", &format!("{app_id}@{ver}"))?;
+        let version_id = format!("{app_id}@{ver}");
+        let version = catalog["business_app_versions"].as_array()
+            .and_then(|versions| versions.iter().find(|version| version["id"] == version_id))
+            .context("active app release preparation pending")?;
         ensure!(
             matches!(version["state"].as_str(), Some("published" | "archived")),
             "unpublished active manifest"

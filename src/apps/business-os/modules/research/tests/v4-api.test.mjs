@@ -1,6 +1,6 @@
 // research gegen den verbindlichen App-API-4.0-Stub des Kerns (createStubKernel, Pin 67229d2, read-only unter
 // /__stub/) in echtem Chromium. Muster: modules/knowledge/tests/v4-api.test.mjs.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 \
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c \
 //       node --test src/apps/business-os/modules/research/tests/v4-api.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -73,6 +73,9 @@ test('leere Collections rendern keinen Zustandstext und keine Zone', async () =>
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     const k2 = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, instanceId: 'empty' });
     await k2.ready;
+    // E48: auch der leere Kern braucht die veröffentlichte Version mit Deklarationen (window.__routes aus seedKernel).
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await k2.sim.inspect('business_apps', o.app))?.data?.active_ver) await k2.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await k2.sim.publishAppVersion('research', '1.0.0', { title: 'Web Research', manifestExtra: window.__routes });
     const host = document.createElement('div');
     host.style.cssText = 'width:900px;height:500px';
     document.body.append(host);

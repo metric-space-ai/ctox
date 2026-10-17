@@ -2,7 +2,7 @@
 // Zeitleiste nur Daten des neuen Threads; Änderungen am vorher gewählten Thread erreichen sie nicht mehr, und die
 // alten Detail-Abos sind abgemeldet. In App-API 4.0 gibt es keine Anfragen im Flug mehr – die Abos werden je Auswahl
 // gewechselt (index.js syncDetailSubscription).
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/threads/tests/detail-generation.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node --test src/apps/business-os/modules/threads/tests/detail-generation.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startHarness, mountMain } from './_v4-harness.mjs';

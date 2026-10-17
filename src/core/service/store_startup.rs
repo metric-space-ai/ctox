@@ -289,9 +289,14 @@ impl Foreground {
                 return Err(error);
             }
         }
-        owner
-            .stores
-            .install_http(super::store_http::HttpSurface::new(owner.inputs.clone()))?;
+        let http = match super::store_http::HttpSurface::new(owner.inputs.clone()).await {
+            Ok(http) => http,
+            Err(error) => {
+                owner.drain().await?;
+                return Err(error);
+            }
+        };
+        owner.stores.install_http(http)?;
         let app_engine =
             crate::business_os::app_platform::runtime_host::attach_native(owner.inputs.clone())
                 .await; // APP-PLATFORM-4 attach
@@ -336,6 +341,16 @@ impl Foreground {
                     return Err(error);
                 }
             }
+        }
+        if let Err(error) = owner
+            .inputs
+            .browser_ingress
+            .get()
+            .ok_or(StoreError::Closed)?
+            .start_owned(&owner.inputs.runtime)
+        {
+            owner.shutdown().await?;
+            return Err(error);
         }
         Ok(owner)
     }
@@ -401,6 +416,9 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let mut owner = Foreground::start(root.clone(), Handle::current()).await?;
+    // Static assets do not wait for the network. Owner startup already owns
+    // bring-up; launch reads readiness and the fatal watcher below drains a
+    // failed peer. No HTTP request can initiate or retry signaling.
     // E36: the ordinary daemon owns HTTP too. Read the established typed
     // runtime-store settings through its existing reader, never a CLI opener.
     let http_start = async {
@@ -466,16 +484,24 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
         "ctox v4 store daemon ready: Core/Sync owners and typed store IPC; engine bindings={}",
         owner.engines.len()
     );
+    let browser = owner
+        .inputs
+        .browser_ingress
+        .get()
+        .ok_or(StoreError::Closed)?
+        .clone();
     #[cfg(unix)]
     let signal_result = tokio::select! {
         result=tokio::signal::ctrl_c()=>result,
         _=terminate.recv()=>Ok(()),
         result=owner.wait_native_stopped()=>result,
+        result=browser.wait_failed()=>result,
     };
     #[cfg(not(unix))]
     let signal_result = tokio::select! {
         result=tokio::signal::ctrl_c()=>result,
         result=owner.wait_native_stopped()=>result,
+        result=browser.wait_failed()=>result,
     };
     // Retire the PID while the daemon lease is still held; a successor cannot
     // publish its own PID between our identity check and unlink.

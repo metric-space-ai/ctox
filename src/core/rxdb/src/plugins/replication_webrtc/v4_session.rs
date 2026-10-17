@@ -15,6 +15,14 @@ use std::sync::{
 /// It signs pages, reads the commit-driven change log and uses the ONE writer
 /// transaction for document + op_id result. Replayed requests recheck authority.
 pub trait V4StreamSource: Send + Sync {
+    /// Native grant owner supplies commit-driven revocations. Stateless test
+    /// sources have no grants; the production source overrides this hook.
+    fn control_events(&self, _: &str) -> RxResult<BoxStream<'static, RxResult<Value>>> {
+        Ok(futures::stream::empty().boxed())
+    }
+    fn control(&self, _: &str, _: Value) -> BoxFuture<'static, RxResult<Option<Value>>> {
+        Box::pin(async { Err(invalid()) })
+    }
     /// Missing or stale authority is an error, including every retained replay.
     /// An optional guard would silently turn denied publication into unrestricted IO.
     fn publication(
@@ -37,16 +45,21 @@ pub trait V4StreamSource: Send + Sync {
     fn app_activation(&self, peer: &str, report: Value) -> BoxFuture<'static, RxResult<()>>;
     fn priority(&self, peer: &str, hint: Value) -> BoxFuture<'static, RxResult<()>>;
 }
+#[path = "v4_scope_grant_control.rs"]
+mod grant_control;
 fn invalid() -> crate::rx_error::RxError {
     new_rx_error("ctox_v4_application_contract", None)
 }
 
 /// Association lifetime owns every lane and subscription task. Dropping it
 /// aborts pending reads; source cursors resume only from committed checkpoints.
-struct SubscriptionTask(tokio::task::JoinHandle<()>);
+struct SubscriptionTask {
+    task: tokio::task::JoinHandle<()>,
+    scope_hash: String,
+}
 impl Drop for SubscriptionTask {
     fn drop(&mut self) {
-        self.0.abort();
+        self.task.abort();
     }
 }
 pub struct V4Session {
@@ -78,6 +91,11 @@ impl V4Session {
             })
             .collect::<RxResult<Vec<_>>>()?;
         let mut results = source.write_results(&peer)?;
+        let mut controls = source.control_events(&peer)?;
+        let subscriptions = Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+            String,
+            SubscriptionTask,
+        >::new()));
         let mut tasks = Vec::new();
         let (result_sender, result_source, result_peer, result_seq) =
             (scheduler.clone(), source.clone(), peer.clone(), seq.clone());
@@ -107,13 +125,49 @@ impl V4Session {
             }
             result_sender.close_now();
         }));
+        let (control_sender, control_source, control_peer, control_seq, control_subscriptions) = (
+            scheduler.clone(),
+            source.clone(),
+            peer.clone(),
+            seq.clone(),
+            subscriptions.clone(),
+        );
+        tasks.push(tokio::spawn(async move {
+            while let Some(frame) = controls.next().await {
+                let outcome = async {
+                    let frame = frame?;
+                    if frame["type"] != "scope_revoke" || !frame["app_id"].is_string() {
+                        return Err(invalid());
+                    }
+                    let revoked = frame["scope_hash"].as_str().ok_or_else(invalid)?;
+                    control_subscriptions
+                        .lock()
+                        .map_err(|_| invalid())?
+                        .retain(|_, task| task.scope_hash != revoked);
+                    let guard = control_source.publication(&control_peer, &frame)?;
+                    control_sender
+                        .send(
+                            Lane::Control,
+                            WireSeq(control_seq.fetch_add(1, Ordering::Relaxed)),
+                            &serde_json::to_vec(&frame).map_err(|_| invalid())?,
+                            Some(guard),
+                        )
+                        .await
+                }
+                .await;
+                if outcome.is_err() {
+                    control_sender.close_now();
+                    return;
+                }
+            }
+        }));
         for (lane, mut incoming) in incoming {
             let (sender, source, peer, seq) =
                 (scheduler.clone(), source.clone(), peer.clone(), seq.clone());
+            let subscriptions = subscriptions.clone();
             tasks.push(tokio::spawn(async move {
                 // Per-lane tasks: a slow page never serializes command/control ingress.
-                let mut subscriptions =
-                    std::collections::HashMap::<String, SubscriptionTask>::new();
+                let subscriptions = subscriptions.clone();
                 while let Some(item) = incoming.recv().await {
                     let Incoming::Reliable {
                         bytes, delivery, ..
@@ -125,19 +179,31 @@ impl V4Session {
                         let message: Value =
                             serde_json::from_slice(&bytes).map_err(|_| invalid())?;
                         match message.get("type").and_then(Value::as_str) {
+                            Some("scope.grant.request") if lane == Lane::Control => {
+                                grant_control::dispatch(&*source, &peer, message, &sender, &seq)
+                                    .await?;
+                            }
                             Some("subscribe") if lane == Lane::Control => {
                                 let collection = message["collection"]
                                     .as_str()
                                     .ok_or_else(invalid)?
                                     .to_owned();
+                                let scope_hash = message["scope_hash"]
+                                    .as_str()
+                                    .ok_or_else(invalid)?
+                                    .to_owned();
                                 let mut stream = source.subscribe(&peer, message).await?;
-                                subscriptions.remove(&collection);
+                                subscriptions
+                                    .lock()
+                                    .map_err(|_| invalid())?
+                                    .remove(&collection);
                                 let (sender, seq, source, peer) =
                                     (sender.clone(), seq.clone(), source.clone(), peer.clone());
                                 let task = tokio::spawn(async move {
                                     while let Some(packet) = stream.next().await {
                                         let Ok(packet) = packet else {
-                                            sender.close_now();
+                                            // A revoked cursor stops publishing immediately.
+                                            // Keep control alive for the signed scope_revoke.
                                             break;
                                         };
                                         let lane = if packet["type"] == "live" {
@@ -150,7 +216,6 @@ impl V4Session {
                                             break;
                                         };
                                         let Ok(guard) = source.publication(&peer, &packet) else {
-                                            sender.close_now();
                                             break;
                                         };
                                         if sender
@@ -167,7 +232,10 @@ impl V4Session {
                                         }
                                     }
                                 });
-                                subscriptions.insert(collection, SubscriptionTask(task));
+                                subscriptions
+                                    .lock()
+                                    .map_err(|_| invalid())?
+                                    .insert(collection, SubscriptionTask { task, scope_hash });
                             }
                             Some("write") if lane == Lane::Commands => {
                                 source.write(&peer, message).await?;
@@ -194,7 +262,9 @@ impl V4Session {
                         }
                     }
                 }
-                drop(subscriptions);
+                if let Ok(mut tasks) = subscriptions.lock() {
+                    tasks.clear();
+                };
             }));
         }
         Ok(Self { tasks })

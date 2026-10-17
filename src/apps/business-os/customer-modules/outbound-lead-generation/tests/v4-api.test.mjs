@@ -1,6 +1,6 @@
 // outbound-lead-generation gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium.
 // Muster: modules/knowledge/tests/v4-api.test.mjs. Stub-Pin: CTOX_APP_API_STUB (Pflicht laut Port-Auftrag).
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf \
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c \
 //   node --test src/apps/business-os/customer-modules/outbound-lead-generation/tests/v4-api.test.mjs
 // Bildschirmfotos (1280/420) landen in tests/shots/.
 import { test, before, after } from 'node:test';
@@ -13,7 +13,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const APP = '/customer-modules/outbound-lead-generation';
@@ -512,6 +512,36 @@ test('OLGUI: „Nur Pflichtfelder“ überlebt den Remount (snapshot/restored)',
   // Zurück auf aus, damit folgende Tests den Standard sehen.
   await page.click('[data-detail-body] [data-action="toggle-required-only"]');
   await settle();
+  assert.equal(await schalterStand(), 'false');
+});
+
+test('OLGUI: „Nur Pflichtfelder“ bleibt nach Neuladen (api.prefs, E51) – ohne snapshot, je Nutzer gespeichert', async (t) => {
+  const hasPrefs = await page.evaluate(() => typeof window.__c.api.prefs?.get === 'function');
+  if (!hasPrefs) { t.skip('Stub vor E51 (kein api.prefs)'); return; }
+  await olguiOeffnen('company');
+  await page.click('[data-detail-body] [data-action="toggle-required-only"]');
+  await settle();
+  assert.equal(await page.evaluate(() => window.__c.api.prefs.get('drawer.required_only')), true, 'Einstellung gespeichert');
+  // Neuladen: App neu einhängen OHNE restored (kein Live-Remount-Snapshot) – der Wert kommt aus api.prefs.
+  await page.evaluate(async () => {
+    await window.__app.unmount();
+    window.__mod.__leadgenOutboundTestHooks.__render.getState().requiredFieldsOnly = false;
+    window.__app = await window.__mod.mount(document.getElementById('win'), window.__c.api, {});
+  });
+  await settle();
+  await olguiOeffnen('company');
+  assert.equal(await schalterStand(), 'true');
+  assert.ok(!(await felderImDrawer()).includes('firma_postfach'));
+  // Gegenprobe: aus → gespeichert aus, nach erneutem Einhängen aus.
+  await page.click('[data-detail-body] [data-action="toggle-required-only"]');
+  await settle();
+  assert.equal(await page.evaluate(() => window.__c.api.prefs.get('drawer.required_only')), false);
+  await page.evaluate(async () => {
+    await window.__app.unmount();
+    window.__app = await window.__mod.mount(document.getElementById('win'), window.__c.api, {});
+  });
+  await settle();
+  await olguiOeffnen('company');
   assert.equal(await schalterStand(), 'false');
 });
 

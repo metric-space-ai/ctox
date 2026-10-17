@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {createKernel} from '../kernel.mjs';
 import {KernelTransport} from '../transport.mjs';
 import {observeCommand} from '../command-observer.mjs';
+import {publishNativePlatformCatalog} from './native-platform-catalog.mjs';
 import {testLocks} from './web-locks.mjs';
 let serial=0;
 const until=async fn=>{const end=Date.now()+2500;while(!await fn()){assert.ok(Date.now()<end,'kernel dispatch deadline');await new Promise(r=>setTimeout(r,2));}};
@@ -15,9 +16,13 @@ class Capture extends KernelTransport {
 async function setup(t,transport=new Capture(),instanceId='s9-'+process.pid+'-'+(++serial)){
  const options={instanceId,userId:'alice',storage:'memory',multiTab:false,locks:testLocks,latencyMs:0,transport};
  const kernel=createKernel(options);await kernel.ready;t.after(()=>kernel.close());
+ await until(()=>transport.events);
+ await publishNativePlatformCatalog((collection,docs)=>transport.events.page({collection,epoch:'1',scope_hash:'local',gen:1,cursor_to:'0',complete:true,docs}));
+ const manifest={collections:{},foreign_collections:{business_commands:{owner_app:'ctox-platform',ops:['read']},ctox_queue_tasks:{owner_app:'ctox-platform',ops:['read']}}};
+ await transport.events.page({collection:'business_app_versions',epoch:'1',scope_hash:'local',gen:1,cursor_to:'1',head_seq:'1',complete:true,docs:[{id:'probe@1',seq:'1',rev:'fixture-app-1',data:{id:'probe@1',app_id:'probe',app_ver:'1',manifest}}]});
  const api=kernel.appApi('probe','1');
  const receipt=async(entry,status='accepted',extra={})=>transport.events.write_result({op_id:entry.op_id,status,seq:'10',rev:'native-10',gen:1,...extra});
- const page=async(doc,seq='11')=>transport.events.page({collection:'business_commands',epoch:'1',scope_hash:'local',gen:1,cursor_to:seq,head_seq:seq,complete:true,docs:[{id:doc.id,data:doc,seq,rev:'native-'+seq}]});
+ const page=async(doc,seq='11')=>{const {_rev,_pending,...canonical}=doc;return transport.events.page({collection:'business_commands',epoch:'1',scope_hash:'local',gen:1,cursor_to:seq,head_seq:seq,complete:true,docs:[{id:doc.id,data:canonical,seq,rev:'native-'+seq}]});};
  return {kernel,api,transport,options,receipt,page};
 }
 

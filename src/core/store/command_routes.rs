@@ -47,6 +47,30 @@ macro_rules! core_route {
 }
 /// Exact method names, not the action discriminants inside their native payloads.
 pub const ROUTES: &[Route] = &[
+    core_route!(
+        "ctox.secret.request.list",
+        "src/core/business_os/app_platform/platform_routes.rs"
+    ),
+    core_route!(
+        "ctox.secret.request.fulfill",
+        "src/core/business_os/app_platform/platform_routes.rs"
+    ),
+    core_route!(
+        "ctox.secret.request.decline",
+        "src/core/business_os/app_platform/platform_routes.rs"
+    ),
+    core_route!(
+        "ctox.workjet.remote_worker.admit",
+        "src/core/business_os/app_platform/platform_routes.rs"
+    ),
+    core_route!(
+        "ctox.maintenance.restart",
+        "src/core/business_os/app_platform/platform_routes.rs"
+    ),
+    core_route!(
+        "instance.providers.models.check",
+        "src/core/business_os/app_platform/provider_model_check.rs"
+    ),
     route!(
         "ctox.workjet.speech.settings.v1",
         "src/core/business_os/rxdb_peer_speech_settings.rs:372"
@@ -289,6 +313,26 @@ pub const ROUTES: &[Route] = &[
         "ctox.workjet.working_copy.upsert",
         "src/core/business_os/command_plane.rs:1734"
     ),
+    core_route!(
+        "ctox.crew.execution.list",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
+    core_route!(
+        "ctox.crew.execution.claim",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
+    core_route!(
+        "ctox.crew.execution.plan.update",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
+    core_route!(
+        "ctox.crew.execution.report",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
+    core_route!(
+        "ctox.task.create",
+        "src/core/business_os/mcp_native_tasks.rs::execute"
+    ),
 ];
 pub fn owns_type(method: &str) -> bool {
     method.starts_with("ctox.workjet.") || method == "ctox.plan.step.retry"
@@ -327,6 +371,33 @@ pub fn resolve(method: &str) -> Result<Route, CommandError> {
 /// Before the ordering buffer, document/history or rejection ledger can see
 /// an E25 input. Credential bytes belong only to the official secret provider.
 pub fn validate_persisted_input(document: &Value) -> Result<(), CommandError> {
+    // E49.2 request documents carry metadata only. Credential values need the
+    // protected SecretStore intake, never the Core ordering/history log.
+    if matches!(
+        document["type"].as_str(),
+        Some("ctox.secret.request.fulfill" | "ctox.secret.request.decline")
+    ) {
+        let valid = document["payload"].as_object().is_some_and(|p| {
+            p.len() == 1
+                && p.get("request_id")
+                    .and_then(Value::as_str)
+                    .is_some_and(|id| {
+                        !id.is_empty() && id.len() <= 180 && !id.chars().any(char::is_control)
+                    })
+        });
+        if !valid {
+            return Err(error("invalid", "credential_ref_required"));
+        }
+    }
+
+    if document["type"] == "ctox.secret.request.list"
+        && !document["payload"]
+            .as_object()
+            .is_some_and(|p| p.is_empty())
+    {
+        return Err(error("invalid", "credential_ref_required"));
+    }
+
     if contains_credential(&document["payload"])
         || (document["type"] == "ctox.workjet.calendar.connect.v1"
             && document["payload"].get("callbackUrl").is_some())

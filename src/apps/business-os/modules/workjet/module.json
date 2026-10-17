@@ -1,0 +1,40 @@
+{
+  "id": "workjet",
+  "title": "Workjet",
+  "description": "Instance-side Workjet app data: worker-dispatch intent queue, mailbox envelopes and Luma state. Handler only, no window.",
+  "entry": null,
+  "collections": [
+    "workjet_mailbox_envelopes",
+    "workjet_luma_state",
+    "workjet_worker_dispatch_sources",
+    "workjet_worker_dispatch_intents",
+    "workjet_worker_dispatch_outcomes"
+  ],
+  "source": "catalog",
+  "core": false,
+  "editable": false,
+  "deletable": true,
+  "layout": {
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-workjet\"><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" stroke=\"#4f46e5\" stroke-width=\"2\"></rect><path d=\"M7 9l3 3-3 3M12 15h5\" stroke=\"#4f46e5\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>"
+  },
+  "category": "System",
+  "version": "0.1.0",
+  "developer": "CTOX",
+  "license": "AGPL-3.0-only",
+  "tags": [
+    "workjet",
+    "dispatch",
+    "handler-only"
+  ],
+  "store": {
+    "summary": "Handler-only Workjet instance module (E54.3b); not listed, not launchable.",
+    "repository": "metric-space-ai/ctox",
+    "source_path": "modules/workjet",
+    "installable": false,
+    "editable_after_install": false,
+    "distribution": "internal-module"
+  },
+  "install_scope": "internal",
+  "default_installed": false,
+  "instance_visible": false
+}

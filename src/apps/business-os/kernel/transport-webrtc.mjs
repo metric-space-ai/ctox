@@ -1,4 +1,5 @@
 import {KernelTransport,seqGreater} from './transport.mjs';
+import {decodeAppGrant} from './app-grants.mjs';
 import {CtoxError,uuidv7,sha256Hex} from './values.mjs';
 import {HelloConnection,decimalSeq} from './vendor/hello.mjs';
 import {SendScheduler,LANES} from './scheduler.mjs';
@@ -118,7 +119,7 @@ export class NativeWire {
  * HTTP records nor V3 query/replication fallbacks exist in this adapter.
  */
 export class WebRTCKernelTransport extends KernelTransport {
- constructor(options){super();this.options=options.authSession?{...options,hello:(...args)=>options.authSession.hello(...args)}:options;this.reliable=new ReliableClientSession();this.now=options.now??clock;this.readyState=deferred();this.ready=this.readyState.promise;this.listeners=[];this.pending=new Map();this.closed=false;this.scopes=new Map();this.samples=0;this.offset=null;}
+ constructor(options){super();this.options=options.authSession?{...options,hello:(...args)=>options.authSession.hello(...args)}:options;this.reliable=new ReliableClientSession();this.now=options.now??clock;this.readyState=deferred();this.ready=this.readyState.promise;this.listeners=[];this.pending=new Map();this.grantRequests=new Map();this.grantFailures=new Map();this.requestedApps=new Set();this.grantRenewals=new Map();this.grantClock=options.grantClock??{now:clock,setTimeout:(fn,ms)=>setTimeout(fn,ms),clearTimeout:timer=>clearTimeout(timer)};this.closed=false;this.scopes=new Map();this.samples=0;this.offset=null;}
  async connect(identity,events){
   if(this.events)throw new CtoxError('conflict','Transport already bound');this.identity={...identity};this.events=events;this.started=this.now();
   try {
@@ -126,6 +127,7 @@ export class WebRTCKernelTransport extends KernelTransport {
    const challenge=early?await early.challenge:undefined;
    const hello=typeof this.options.hello==='function'?await this.options.hello(identity,challenge):this.options.hello;
    if(hello?.instance_id!==identity.instanceId)throw new CtoxError('forbidden','Hello identity mismatch');
+   this.offeredDeviceId=hello.device_proof.device_id;
    if(typeof this.options.verifyPackage!=='function')throw new CtoxError('forbidden','Authenticated package verifier required');
    this.hello=new HelloConnection(hello,state=>{if(state.state==='closed'&&state.rejection)this.fail(new CtoxError('unavailable',`hello rejected: ${state.rejection.reason}`));},{handshakeTimeoutMs:this.options.handshakeTimeoutMs??10000});
    const endpoint=early??(this.options.channels?{channels:this.options.channels,peer:this.options.peer}:await Promise.race([this.options.createPeer(this.options.address,identity),this.ready.then(()=>{throw new CtoxError('unavailable','Handshake ended before connection setup');})]));
@@ -151,6 +153,7 @@ export class WebRTCKernelTransport extends KernelTransport {
   }catch(error){this.fail(error);throw error;}
  }
  /** E43.2: capabilities granted by the Core in hello_ok; null until the authenticated hello completed. */
+ deviceId(){return this.boundDeviceId??null;}
  get capabilities(){return this.session?[...this.session.capabilities??[]]:null;}
  attachChannel(channel){
   channel.binaryType='arraybuffer';this.listen(channel,'open',()=>this.channelsChanged?.());
@@ -177,7 +180,9 @@ export class WebRTCKernelTransport extends KernelTransport {
    if(selected.type!=='hello_ok')throw new CtoxError('unavailable','Negotiation rejected');
    if(selected.transport.codec==='zstd'&&!this.options.codecs?.zstd)throw new CtoxError('unavailable','Negotiated codec adapter unavailable');
    if(this.options.wireFormat!=='k2-fixture'){this.reliable.attach({session_id,resume_from});this.scheduler.generation=this.reliable.generation;}
-   await this.options.authSession?.acceptHello(selected);
+   await this.options.authSession?.acceptHello(selected);this.currentRightsVer=selected.rights_ver;this.grantFailures.clear();
+   this.boundDeviceId=this.offeredDeviceId;
+   for(const token of selected.scope_tokens){const appId=decodeAppGrant(token)?.claims.app_id;if(appId){this.requestedApps.add(appId);this.armGrantRefresh(appId,token);}}
    this.session=selected;this.scheduler.configure(selected.transport);this.ingress.codec=selected.transport.codec;this.ingress.frameBytes=selected.transport.frame_bytes;
    if(core_time_ms!==undefined){if(!Number.isFinite(core_time_ms)||core_time_ms<0)throw new CtoxError('invalid','Invalid Core clock');this.offset=core_time_ms-(this.started+this.now())/2;}
    this.rtt=this.now()-this.started;this.events.session?.({epoch:selected.epoch,head_seq:selected.head_seq,rights_ver:selected.rights_ver});this.hello.activate();
@@ -207,7 +212,16 @@ export class WebRTCKernelTransport extends KernelTransport {
     if(this.offset!==null)this.events.timing?.({push_latency_ms:Math.max(0,this.now()+this.offset-message.core_sent_at_ms),clock_offset_ms:this.offset,clock_uncertainty_ms:this.rtt/2,samples:++this.samples});
     return;
    }
-   case 'scope_revoke':if(!await this.options.verifyPackage(message,this.session))throw new CtoxError('forbidden','Revocation signature invalid');await this.events.revoke?.(message);return;
+   case 'scope.grant':case 'forbidden': {
+    if(lane!==0)throw new CtoxError('forbidden','App grant outside control lane');
+    const appId=message.type==='scope.grant'?decodeAppGrant(message.token)?.claims.app_id:message.app_id;
+    if(appId==='shell')throw new CtoxError('forbidden','Shell grant requires hello_ok');
+    const pending=this.grantRequests.get(appId);if(!pending){if(!this.requestedApps.has(appId))throw new CtoxError('forbidden','Unsolicited app grant');if(message.type==='scope.grant'){await this.options.authSession?.acceptAppGrant(appId,message.token);this.armGrantRefresh(appId,message.token);}else{this.cancelGrantRefresh(appId);this.events.status?.(appId,{level:'error',code:'forbidden',text:'Collection grant missing'});}return;}
+    clearTimeout(pending.timer);
+    try{if(message.type==='forbidden'){this.cancelGrantRefresh(appId);throw new CtoxError('forbidden','Collection grant missing',{app_id:appId,reason:message.reason});}if(!this.options.authSession?.acceptAppGrant)throw new CtoxError('forbidden','App grant verifier required');await this.options.authSession.acceptAppGrant(appId,message.token);this.armGrantRefresh(appId,message.token);this.grantFailures.delete(appId);pending.resolve(message.token);}catch(error){this.grantFailures.set(appId,error);pending.reject(error);}finally{if(this.grantRequests.get(appId)===pending)this.grantRequests.delete(appId);}
+    return;
+   }
+   case 'scope_revoke':if(!await this.options.verifyPackage(message,this.session))throw new CtoxError('forbidden','Revocation signature invalid');{if(message.rights_ver!==undefined&&String(message.rights_ver)!==this.currentRightsVer){this.currentRightsVer=String(message.rights_ver);this.grantFailures.clear();}this.cancelGrantRefresh(message.app_id);this.requestedApps.delete(message.app_id);this.grantFailures.delete(message.app_id);const pending=this.grantRequests.get(message.app_id);if(pending){this.grantRequests.delete(message.app_id);clearTimeout(pending.timer);pending.reject(new CtoxError('forbidden','Collection grant missing'));}const token=this.options.authSession?.revokeApp?.(message.app_id,message.rights_ver),collections=[...new Set([...(message.collections??[]),...(decodeAppGrant(token)?.claims.collections.map(c=>c.collection)??[])])];for(const c of collections)this.scopes.delete(c);await this.events.revoke?.({...message,collections});}return;
    case 'write_result':
     if(typeof message.op_id!=='string'||!['accepted','rejected','migrated','merged'].includes(message.status))throw new CtoxError('invalid','Invalid write result');
     if(message.status!=='rejected')decimalSeq(message.seq);await this.events.write_result(message);return;
@@ -221,6 +235,29 @@ export class WebRTCKernelTransport extends KernelTransport {
    default:throw new CtoxError('invalid',`Unknown V4 message ${message.type}`);
   }
  }
+ cancelGrantRefresh(app_id){const timer=this.grantRenewals.get(app_id);if(timer!==undefined)this.grantClock.clearTimeout(timer);this.grantRenewals.delete(app_id);}
+ armGrantRefresh(app_id,token){this.cancelGrantRefresh(app_id);
+  const claims=decodeAppGrant(token)?.claims;if(!claims||this.closed||app_id==='shell')return;
+  // P6's 240-second leases must renew while the owner remains active. One
+  // timer per app, retired on revoke/close; no retry storm after a denial.
+  const delay=Math.max(1000,Math.min(2147483647,claims.exp*1000-this.grantClock.now()-30000));
+  const timer=this.grantClock.setTimeout(()=>{this.grantRenewals.delete(app_id);if(!this.closed)this.grantApp(app_id,{renew:true}).catch(error=>this.events?.status?.(app_id,{level:'error',code:error.code??'unavailable',text:'Collection grant missing'}));},delay);
+  timer.unref?.();this.grantRenewals.set(app_id,timer);
+ }
+ async grantApp(app_id,{renew=false}={}){
+  await this.ready;if(!this.options.authSession?.acceptAppGrant)throw new CtoxError('forbidden','Collection grant missing');
+  if(this.grantRequests.has(app_id))return this.grantRequests.get(app_id).promise;
+  const existing=(this.options.authSession.tokens?.()??[]).find(token=>{const claims=decodeAppGrant(token)?.claims;return claims?.app_id===app_id&&claims.rights_ver===this.currentRightsVer&&claims.exp*1000>this.grantClock.now();});
+  // Shell authority comes exclusively from hello_ok. Boot/owner callers reuse verified app authority.
+  if(app_id==='shell'){if(existing)return existing;throw new CtoxError('forbidden','Collection grant missing');}
+  if(existing&&!renew)return existing;
+  if(!renew&&this.grantFailures.has(app_id))throw this.grantFailures.get(app_id);
+  const done=deferred(),pending={...done,timer:null};
+  this.requestedApps.add(app_id);this.grantRequests.set(app_id,pending);
+  this.scheduler.send('control',{type:'scope.grant.request',app_id}).then(()=>{
+   if(this.grantRequests.get(app_id)===pending)pending.timer=setTimeout(()=>{this.grantRequests.delete(app_id);const error=new CtoxError('forbidden','Collection grant missing',{app_id});this.grantFailures.set(app_id,error);done.reject(error);},this.options.grantTimeoutMs??10000);
+  },error=>{clearTimeout(pending.timer);this.grantRequests.delete(app_id);this.grantFailures.set(app_id,error);done.reject(error);});return done.promise;
+ }
  async scope(collection){await this.ready;if(this.options.authSession)return this.options.authSession.scope(collection);const resolved=await this.options.resolveScope?.(collection,this.session);if(!resolved?.scope_hash || !Number.isSafeInteger(resolved.gen))throw new CtoxError('forbidden','Canonical subscription scope missing');return {...resolved,collection,epoch:this.session.epoch};}
  async subscribe(scope){await this.ready;const sub={...scope,epoch:this.session.epoch};decimalSeq(sub.checkpoint_seq??'0');this.scopes.set(scope.collection,sub);if(this.options.wireFormat==='k2-fixture')await this.scheduler.send('control',{type:'subscribe',...sub,checkpoint:sub.checkpoint_seq==='0'?null:{instance_id:this.identity.instanceId,participant:sub.participant??this.identity.userId,collection:sub.collection,scope_hash:sub.scope_hash,gen:sub.gen,epoch:String(this.session.epoch),seq:sub.checkpoint_seq}});
   else await this.scheduler.send('control',{type:'subscribe',collection:sub.collection,scope_hash:sub.scope_hash,gen:sub.gen,priority:sub.priority??'P2',checkpoint:sub.checkpoint_seq==='0'?null:{instance_id:this.identity.instanceId,participant:this.options.participant??this.identity.userId,collection:sub.collection,scope_hash:sub.scope_hash,gen:sub.gen,epoch:String(this.session.epoch),seq:sub.checkpoint_seq}});
@@ -231,9 +268,11 @@ export class WebRTCKernelTransport extends KernelTransport {
  priority(hint){this.ready.then(()=>Promise.all(hint.collections.map(collection=>this.scheduler.send('control',{type:'priority',collection,priority:'P1'})))).catch(e=>this.events?.status?.('kernel',{level:'warn',code:'transport.priority',text:e.message}));}
  async request(type,body){
   await this.ready;if(this.closed)throw new CtoxError('unavailable','Transport closed');const request_id=uuidv7(),done=deferred();
-  const timer=setTimeout(()=>{this.pending.delete(request_id);done.reject(new CtoxError('unavailable','Transfer deadline exceeded'));},this.options.transferTimeoutMs??10000);
-  this.pending.set(request_id,{...done,timer});
-  this.scheduler.send('transfer',{type,request_id,...body}).catch(error=>{clearTimeout(timer);this.pending.delete(request_id);done.reject(error)});return done.promise;
+  const pending={...done,timer:null};this.pending.set(request_id,pending);
+  // A queued frame has no remote response deadline. Never recycle the peer for local queue time.
+  this.scheduler.send('transfer',{type,request_id,...body}).then(()=>{
+   if(this.pending.get(request_id)===pending)pending.timer=setTimeout(()=>{this.pending.delete(request_id);done.reject(new CtoxError('unavailable','Transfer deadline exceeded'));},this.options.transferTimeoutMs??10000);
+  },error=>{clearTimeout(pending.timer);this.pending.delete(request_id);done.reject(error)});return done.promise;
  }
  async download(ref,kind){
   const parts=[];let total=null,mime='application/octet-stream';
@@ -289,6 +328,8 @@ export class WebRTCKernelTransport extends KernelTransport {
  close(){
   if(this.closed)return;this.closed=true;this.options.authSession?.close();this.hello?.close();this.scheduler?.close();this.ingress?.close();
   for(const [t,n,f]of this.listeners)t.removeEventListener(n,f);this.listeners=[];
+  for(const appId of this.grantRenewals.keys())this.cancelGrantRefresh(appId);
+  for(const p of this.grantRequests.values()){clearTimeout(p.timer);p.reject(new CtoxError('unavailable','Transport closed'));}this.grantRequests.clear();this.grantFailures.clear();
   for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(new CtoxError('unavailable','Transport closed'));}this.pending.clear();
   this.readyState.reject(new CtoxError('unavailable','Transport closed'));
   if(this.options.ownsConnection!==false){this.endpoint?.close?.();this.endpoint?.peer?.close();for(const channel of new Set(Object.values(this.channels??{})))channel.close?.();}

@@ -47,8 +47,8 @@
   "exports": {},
   "files": {
     "app.css": "6afa07b9977acaaf0e147f1efbbc02958c361fa7a2b894e4a3c62c7bb2deb9db",
-    "app.js": "c92992e7500f0669ce2c3fc9169b9d62c54fef150dfb093b33888f251e517078",
-    "index.html": "33b3389543f1ebc63d1ec2cb54232561e2e30591121592974a91b6e3304f1fef",
+    "app.js": "3f10d2f1d530af50462372a41045678a576dfc7e08b7cc47fa062e86ab163ef7",
+    "index.html": "43e16cf61453425a8ee4299f27337de98ba8e2cb30abe0727945984bee5febf9",
     "mobile-host.css": "2e8c3f7b09d1c6477e6db03c98ead8b89093f6e521b84b5fc2b6048cfc74906e",
     "mobile-host.js": "34728511baa0ba4d32fda7215acf67665d2aaefaf7e29133fb5d563c09e8ee07",
     "shared/app-actions.js": "8981357ae03157b86d92a8b17562b19f8868bdd28b04f9c08e2a256925e3c496",
@@ -60,7 +60,7 @@
     "shared/business-companions.js": "63c72e71da0dd0730271e748f0c446c994f1ef6cc9214cf43025512906c81ac2",
     "shared/business-permissions.js": "c47c081d8ba4299bac9294c55f76dfc0d9da7ea4e5620a5f91dc4f4f816c4a52",
     "shared/business-reporter.js": "9b67d5c478f444a01918e67bfa38451016f8dc17ee9af479b9be0b1cc26b37a7",
-    "shared/collection-freshness.js": "9ffeb6a02528c7cac49a4f8630109128aefd9c98aa72ae885fcb940793ba75f5",
+    "shared/collection-freshness.js": "240ed33cfc3739c897ac9fe663d01b1eb447cb8145a72d1f803a1c7fb15e4d46",
     "shared/context-chat.js": "08df10e92358c8a11e8f07ff63a4376cdf7397de5d04989143ea62de9bbe1ba6",
     "shared/context-menu.js": "1c14587ffe3075a6e26d106a2f608c6370a45c213e8da88b52e37bff32e873e9",
     "shared/crew-motion.js": "6eb1e50141d4df80f78e7984d5ce2b66d6ce12728909ccb880044b40351a42ee",
@@ -87,7 +87,7 @@
     "shared/permissions.js": "1d59e3e3c4e082d9e02c6b39ddc7a3e9c162a4c66958b82c5826f2ad65cc424d",
     "shared/presentation.js": "2669385957bf00883edd5d20620ff16ee76dade66bfd8b9d5247c1758d4ebac9",
     "shared/prompt-template.js": "d2d1d8e85e8056042da7f4670d3e9723565d8b229c5e055bd39ff79b558f4a3f",
-    "shared/react-settings.js": "c35d64e3e80a0026101a4807fe0251d9403b93b5500f97ce18bef00329796d34",
+    "shared/react-settings.js": "c67c43e17c2f2fca2fb5f39bc43367b39a6473c0e3acc6a5ad78915f33a13190",
     "shared/resizer.js": "a4835d924f921e5c121092bcb36940cefd4a6bd6cea9f00ce3262ec201704f04",
     "shared/roles.js": "989c894b77d6b39ada867d45c685196328b0299d0c94992806c111e06d646c29",
     "shared/sanitize-rich-html.js": "2a24550380875a701c7966d3fdeaf3b548b5fed1992f6c93e32e0445cf05e012",
@@ -112,7 +112,7 @@
     "shared/window-manager.js": "4884bef339fb4518c916ab52ad21a46d4f1b6b5551f0d1a87e12ed32f3c9eb4a",
     "shared/window-switcher.js": "dba57a56b3491faa92c33abb2dab2374b6bdb9c9333878fd2eee1f54a307684b",
     "shared/workjet-calendar-contract.generated.mjs": "303e6319a7f19a6299702cb77fc241fd602b828daed5c2190d1dd09192705040",
-    "shared/workjet-calendar-native.mjs": "77d5ce6fb0fb7657bf06b891631c4f20609933ff80b416342ca5561d42e0e9d1",
+    "shared/workjet-calendar-native.mjs": "e1744e68d1b52c3e64333a7cebf85a0836a49175ca0f2f0453102395e2478973",
     "shared/workjet-grok-native.mjs": "00f654191ef7821af407084ed106239c957fbc72b29f6bc8198a7c8c23760001",
     "shared/workjet-jour-fixe-contract.generated.mjs": "9c2dc66907be2a2ea236ca43ad9d80e681b7e93adad1b5895a44581e6048e949",
     "shared/workjet-presentation-contract.generated.mjs": "5c82b6c8dcebb97c1a096721a8704c55451bf1ca9790806f1320908e24e2b703",
@@ -123,14 +123,14 @@
     "shared/workjet-supervisor-luma-contract.generated.mjs": "bc5031a847bf8394d71bea254ae7858560a7fc51a0e909e7564f437f12f8eff8",
     "shared/workjet-supervisor-route-computation-contract.generated.mjs": "f48fff51152d1682dfe0e1506875236bf2355a7d6556a6e7f60ebb21c96bfeb9",
     "shared/workjet-supervisor-route-display-contract.generated.mjs": "83a21ab60e587be65789ef633a0cbe6a15cc7eed2bc87f394df66b57ba6ff5e1",
-    "shared/workjet-supervisor-route-native.mjs": "b2278004f2afc4fe98bf6ecd28cd2c974549768e88810e6b8e16383804cb4a33",
+    "shared/workjet-supervisor-route-native.mjs": "a7fbbcb5ad8a54572589003f3a7704129bc30ed2d38aae5979d71dc471e3f904",
     "shared/workjet-theme.js": "b95ebcc0d6d94e80834abfcdb467f9c09ae36f9cee9dc378e66bcf11cb70c995",
     "shared/workspace-session.js": "ac00f69b26d8af516bdd6290549cdcbf56682aa828a6ca18c8094432c428b875",
     "v4/frame/crew-bar.js": "caaefe44927952c432117240d44e23ff74346c7bf1102164b1852a67110b8cc8",
     "v4/frame/desktop.js": "be621803003d967b05050a8442ffc72345fc028dc6cb29816f013e9a031064ce",
     "v4/frame/frame.css": "3e2cb79f65a597be66b4b9eed5138a878c98e699ce5c1f1928b465f361c136d6",
     "v4/frame/glossary.js": "496a962b5a5744ffe5c50d275cd0e31d0d4228cfd4d0a6d43f5276288190410e",
-    "v4/frame/index.js": "a95daefa94c322221f145e87094b351195c695a537c3f797b395ee9777b2ac4b",
+    "v4/frame/index.js": "aa53555e5b1a7e6716e525e0611cd5ad5fe10effcd6193cf119732c3bc9d5ca3",
     "v4/frame/launcher.js": "e4c141ed28922d3c03d3872633adf09a34e80de9f9e927399641e2066b790cde",
     "v4/frame/pane-heads.js": "5049171627830e5b42a61d4140b0de81f8b79bf67e6296bcee1a373cc92125c1",
     "v4/frame/pane-narrow.js": "85cd2ec7dfc185424ec9dd098f5ccb3d2d7973b01e0cc22a92b1f063da04272d",
@@ -143,9 +143,9 @@
     "v4/shell/chat/chat-v2.css": "2b8052b88bf02528c4db3aca499620b9228826a97546acfbe817fe6d88a51317",
     "v4/shell/chat/chat-v4.css": "4b87f2262874e47d228d3ef0120f267a61f4552c524aa5240004c70246c008fa",
     "v4/shell/chat/index.js": "8d4e4119272572b17afb1c2ce173ee0c6043026ae6b389b150b696e1d8a35b35",
-    "v4/shell/chat/raw-db.js": "bcd41043400bc909b56b45538387921b981ea0542e627d534dfb2f137b61d065",
+    "v4/shell/chat/raw-db.js": "2d99d5fd55535350ed7b2d1c07ba6d7f36b06f8b3d0bda7e19ae9fed4c581d09",
     "v4/shell/column-resizers.js": "ccd8e1b9615381987ccc8f710ae8faf01c924f3d7c74a76b3a029469f71c554e",
-    "v4/shell/kernel-adapter.js": "d52b5123bacdc2e08db0970f8a4d84cf29006eed2fda01af5a7b603212160eb2",
+    "v4/shell/kernel-adapter.js": "8b55208d36f2bd801487ebc678a1bb0499c579bfc879f73ea0a28a3091a073ed",
     "v4/shell/report.js": "2809f32401811004129ad7742c61d72da1e8f25792a5a87b0b94a650460971ff",
     "v4/shell/status-zone.js": "91337341f92baed0887bb194f58c2446a77007024fa859892c3e7ab46575ee76",
     "v4/shell/sync-state.js": "a3a49dc99d5eabf5b7a798f07a7311e7519fd3fc67fff45ccb60746e4a9d0e42",
@@ -168,7 +168,7 @@
     "v4/source/reports-tab.js": "b94228ff23c3ac665be676f86271636f59878e7d87ee269f47c0431ff142adbd",
     "v4/source/schema-diff.js": "2631f21cbf0924d7010e33e98da6b143811c0085eb3dd8ae540c5185b0fe31ec",
     "v4/source/source-mode.css": "7179e9c7dc68d9938f773a7c5b061aa8e40fddfd327aed7d44ed25551ccc9131",
-    "v4/source/source-mode.js": "eb5cb4f47c32eec1711d6d9c2a4cceb865b2db2217757406f8bc699046b5b88f",
+    "v4/source/source-mode.js": "33c8098c1d08c53bf9b0fbb896719ca13fb7c6d3de003a67890286d289f4ed1f",
     "v4/source/text-diff.js": "78773df3c7acc2dd08ddc1018156f2ef88ec8e11e36771b0859f87fc07837d2c",
     "v4/source/upload.js": "42ed570e10b90516461c06791d470d61ad1c02fed905fc5a3fba99de17924105",
     "v4/sw.js": "4263986afea2f1dfd885b04dee4ff675f1cdf2395ece4fca7f3efc597a8171c3"
@@ -219,6 +219,17 @@
         "read"
       ],
       "owner_app": "ctox"
+    },
+    "coding_turns": {
+      "_evidence": {
+        "sources": [
+          "v4/source/coding-port.js:27 (turns: api.query coding_turns)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
     },
     "ctox_bug_reports": {
       "_evidence": {
@@ -286,6 +297,17 @@
         "read"
       ],
       "owner_app": "desktop"
+    },
+    "files": {
+      "_evidence": {
+        "sources": [
+          "v4/source/coding-port.js:42 (readPatch: api.get files → ref)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
     },
     "shell_preferences": {
       "_evidence": {
@@ -365,7 +387,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "a57b88ee7debe65bfd3401abfc45b6a3b3b0bb27c9b585f68e277eda44ed68ee",
+    "base_hash": "283cd4a294bc4d5b77e029bf31f5a9911b5f05a3215a07e2239a29daa2d1d4c8",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

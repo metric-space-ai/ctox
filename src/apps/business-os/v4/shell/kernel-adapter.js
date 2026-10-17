@@ -203,7 +203,8 @@ export function adaptKernel(k) {
           subscribe: (cb) => live().subscribe((row) => cb(row ?? null)),
           async put(fields) {
             const prev = live().get() ?? {};
-            const { _deleted, ...rest } = prev; // eslint-disable-line no-unused-vars
+            // E47: _rev/_pending sind Lese-Metadaten, _deleted gehört dem Kern – nie zurückschreiben.
+            const { _deleted, _rev, _pending, ...rest } = prev; // eslint-disable-line no-unused-vars
             const h = api.put(PREFERENCES_COLLECTION, { ...rest, ...fields, id: actorId });
             await h.local;
             return h;

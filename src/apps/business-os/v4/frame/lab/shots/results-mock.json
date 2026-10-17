@@ -147,7 +147,7 @@
   {
     "name": "Pin steht in shell_preferences (eine Zeile, id = Nutzer)",
     "ok": true,
-    "detail": "{\"taskbar_pins\":{\"version\":2,\"pins\":[\"notes\"],\"updated_at_ms\":1792130368082},\"launcher_order\":[],\"updated_at_ms\":1792130368082,\"id\":\"owner\"}"
+    "detail": "{\"taskbar_pins\":{\"version\":2,\"pins\":[\"notes\"],\"updated_at_ms\":1792217997481},\"launcher_order\":[],\"updated_at_ms\":1792217997481,\"id\":\"owner\"}"
   },
   {
     "name": "Shell-Tausch: genau ein Rahmen, ein Satz Shell-CSS (Theme, base, Shell-V2-Chrome, Rahmen, Shell-V2-Kopfleiste, Shell-V2-Desktop/Startmenü/Crew)",
@@ -167,7 +167,7 @@
   {
     "name": "Shell-Tausch <= 2 s",
     "ok": true,
-    "detail": "23.4 ms, Snapshot 1363 B"
+    "detail": "19.5 ms, Snapshot 1354 B"
   },
   {
     "name": "Fenstertitel ohne Versionsnummer",
@@ -257,7 +257,7 @@
   {
     "name": "Fensterwechsel per Taskleiste und Alt+`",
     "ok": true,
-    "detail": "desk_win_rpae8yf4dob8"
+    "detail": "desk_win_490nf41hvhb4w"
   },
   {
     "name": "Breite 900: kein horizontaler Ueberlauf, Fenster nicht ueber Taskleiste/Rand",
@@ -552,7 +552,7 @@
   {
     "name": "FR6b-T3 (FR6c) Rechtsklick auf den Reiter zeigt die Fensterliste (6 Chats, direkt unter dem Reiter); Auswahl holt genau dieses Fenster nach vorn; Esc schließt",
     "ok": true,
-    "detail": "{\"menu\":{\"open\":true,\"items\":[\"Chat Anna\",\"Chat Ben\",\"Chat Cleo\",\"Chat Anna\",\"Chat Ben\",\"Chat Cleo\"],\"inBar\":true},\"pickId\":\"desk_win_azw5jm4y68nz\",\"picked\":true,\"pickedOwner\":\"v4app:crew-cleo#6\",\"menuClosed\":true,\"escClosed\":true}"
+    "detail": "{\"menu\":{\"open\":true,\"items\":[\"Chat Anna\",\"Chat Ben\",\"Chat Cleo\",\"Chat Anna\",\"Chat Ben\",\"Chat Cleo\"],\"inBar\":true},\"pickId\":\"desk_win_w6mk171tyqd1y\",\"picked\":true,\"pickedOwner\":\"v4app:crew-cleo#6\",\"menuClosed\":true,\"escClosed\":true}"
   },
   {
     "name": "FR6b-T4 (FR6c) Reiterleiste wächst nie über ihre Breite: 1280 alles sichtbar ohne „+N“; auf 260 px Überlauf „+N“ (gruppiert, Crew zählt als EIN Eintrag), der aktive Reiter bleibt sichtbar, alles passt; wieder breit → kein „+N“",
@@ -577,7 +577,7 @@
   {
     "name": "FR6b-D1 (FR6c) „Desktop“ im Launcher-Fuß (links, daneben „Einstellungen“, frei klickbar): alle Fenster minimiert (Desktop frei); zweiter Klick stellt genau die vorher sichtbaren wieder her (gleiche Reihenfolge, gleiches vorderstes), das vorher minimierte bleibt unten",
     "ok": true,
-    "detail": "{\"deskBtnFree\":{\"hit\":true,\"foot\":true,\"first\":true,\"nextIsSettings\":true},\"n\":9,\"midVis\":0,\"same\":true,\"topBefore\":\"v4app:ledger#3\",\"topAfter\":\"v4app:ledger#3\",\"tasksWin\":\"desk_win_iibdj1f69cb0\",\"before\":10}"
+    "detail": "{\"deskBtnFree\":{\"hit\":true,\"foot\":true,\"first\":true,\"nextIsSettings\":true},\"n\":9,\"midVis\":0,\"same\":true,\"topBefore\":\"v4app:ledger#3\",\"topAfter\":\"v4app:ledger#3\",\"tasksWin\":\"desk_win_k06sj21h5bkil\",\"before\":10}"
   },
   {
     "name": "FR6b-D2 Strg+Alt+D: minimiert alle, erneut: stellt sie wieder her",
@@ -652,7 +652,7 @@
   {
     "name": "FR6c-crew FR6d Crew-Leiste unten links: Pille „Crew“ mit den 3 Crew-Mitgliedern, Kalender-Navigator ‹ 📅 ›; Klick auf Ben holt dessen Chat nach vorn (Reiter „Crew“ aktiv); Tag zurück/vor, nie über heute",
     "ok": true,
-    "detail": "{\"members\":[\"crew-anna\",\"crew-ben\",\"crew-cleo\"],\"label\":\"Crew\",\"nav\":3,\"rect\":[18,782],\"visible\":true,\"front0\":\"crew-anna\",\"front1\":\"crew-ben\",\"activeTab\":\"crew\",\"days\":[\"2026-10-16\",\"2026-10-15\",\"2026-10-16\"]}"
+    "detail": "{\"members\":[\"crew-anna\",\"crew-ben\",\"crew-cleo\"],\"label\":\"Crew\",\"nav\":3,\"rect\":[18,782],\"visible\":true,\"front0\":\"crew-anna\",\"front1\":\"crew-ben\",\"activeTab\":\"crew\",\"days\":[\"2026-10-17\",\"2026-10-16\",\"2026-10-17\"]}"
   },
   {
     "name": "FR6c-gear 420 px: Zahnrad weg, aktiver Reiter sichtbar, „Einstellungen“ oberster Eintrag im Konto-Blatt und öffnet das Blatt",
@@ -1127,7 +1127,7 @@
   {
     "name": "FRX 420 px Mutationsprobe: ohne Schrumpfen/Kürzen überlappen Reiter Punkt bzw. Avatar – die Prüfung findet es",
     "ok": true,
-    "detail": "{\"tabsRight\":455.7,\"tabsLeft\":317,\"sync\":{\"l\":359,\"r\":378,\"w\":19},\"avatar\":{\"l\":382,\"r\":412,\"w\":30},\"leftRight\":313}"
+    "detail": "{\"tabsRight\":498.4,\"tabsLeft\":317,\"sync\":{\"l\":359,\"r\":378,\"w\":19},\"avatar\":{\"l\":382,\"r\":412,\"w\":30},\"leftRight\":313}"
   },
   {
     "name": "FRX 420 px ohne Seitenfehler",

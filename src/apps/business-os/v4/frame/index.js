@@ -1296,7 +1296,8 @@ export async function startShell(loaderKernel, options = {}) {
     state.rawApps = rows;
     for (const row of rows) loadManifest(row);
     // Shell und Plattform-Bibliotheken (lib:<name>, §16.37) sind keine Apps.
-    state.apps = rows.filter((row) => row && row.id && row.id !== 'shell' && !String(row.id).startsWith('lib:') && row.activated_ver).map(appView);
+    // Keine Apps: Rahmen, Plattform (ctox-platform, E48) und Bibliotheken – nie im Starter.
+    state.apps = rows.filter((row) => row && row.id && row.id !== 'shell' && row.id !== 'ctox-platform' && !String(row.id).startsWith('lib:') && row.activated_ver).map(appView);
     state.appById = new Map(state.apps.map((a) => [a.id, a]));
     state.resolveAppsLoaded?.();
     for (const cb of state.appsListeners || []) { try { cb(); } catch (e) { console.warn('[v4 frame] apps listener', e); } }

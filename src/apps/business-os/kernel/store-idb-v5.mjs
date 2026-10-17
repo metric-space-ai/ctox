@@ -48,7 +48,9 @@ export class MemoryBackend {
   }
   tx(fn) {
     const run = this.lock.then(async () => {
-      const next = new Map([...this.stores].map(([s, values]) => [s, new Map([...values].map(([k,v]) => [k, cloneValue(v)]))]));
+      // _ops detaches values on get/all/put; map copies preserve rollback.
+      // Retain immutable rows instead of cloning the entire database per write.
+      const next = new Map([...this.stores].map(([s, values]) => [s, new Map(values)]));
       const result = await fn(this._ops(next));
       this.stores = next;
       return result;

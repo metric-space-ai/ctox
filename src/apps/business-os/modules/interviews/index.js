@@ -216,12 +216,15 @@ export async function mount(host, api, { restored } = {}) {
     const end = start != null && Number.isFinite(durationMin) ? start + durationMin * 60_000 : null;
     const parties = String(f.parties || '')
       .split(',').map((s) => s.trim()).filter(Boolean).map((name) => ({ name }));
+    // Schema (E48): Texte sind string, Zeiten number – leer heißt '' bzw. Feld weglassen, nie null.
     return {
       candidate_id,
-      vacancy_id: String(f.vacancy_id || '').trim() || null,
-      parties, start, end,
-      location_mode: String(f.location_mode || 'video').trim() || null,
-      video_link: String(f.video_link || '').trim() || null,
+      vacancy_id: String(f.vacancy_id || '').trim(),
+      parties,
+      ...(start != null ? { start } : {}),
+      ...(end != null ? { end } : {}),
+      location_mode: String(f.location_mode || 'video').trim() || 'video',
+      video_link: String(f.video_link || '').trim(),
     };
   }
 
@@ -382,7 +385,7 @@ export async function mount(host, api, { restored } = {}) {
       id: 'imeet_' + now + '_' + Math.round(now % 1e6),
     }, fields, {
       state: 'proposed', attended: false,
-      created_at_ms: now, updated_at_ms: now, _deleted: false,
+      created_at_ms: now, updated_at_ms: now,
     });
     followWrite(api.put(PRIMARY, record), 'interviews.meeting.create_failed', t('createFailed'));
     // Bind the freshly created record in the workbench (lokal sofort sichtbar).
@@ -680,7 +683,6 @@ function normalizeImported(raw, index) {
     attended: Boolean(raw.attended),
     created_at_ms: Number.isFinite(Number(raw.created_at_ms)) ? Number(raw.created_at_ms) : now,
     updated_at_ms: now,
-    _deleted: false,
   };
   if (raw.transcript_id) record.transcript_id = String(raw.transcript_id);
   return record;

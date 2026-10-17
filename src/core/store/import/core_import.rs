@@ -323,6 +323,25 @@ pub fn collect(
     max_documents: usize,
     max_bytes: usize,
 ) -> Result<CoreImport> {
+    collect_inner(tx, services, max_documents, max_bytes, true)
+}
+/// E29.1: the generic cutover collector has already archived every raw point.
+/// Do not parse, normalize or project time-series values without a v4 owner.
+pub(crate) fn collect_archiving_timeseries(
+    tx: &Transaction<'_>,
+    services: &mut impl ImportServices,
+    max_documents: usize,
+    max_bytes: usize,
+) -> Result<CoreImport> {
+    collect_inner(tx, services, max_documents, max_bytes, false)
+}
+fn collect_inner(
+    tx: &Transaction<'_>,
+    services: &mut impl ImportServices,
+    max_documents: usize,
+    max_bytes: usize,
+    include_timeseries: bool,
+) -> Result<CoreImport> {
     let mut out = CoreImport {
         documents: Vec::new(),
         dataframe_rows: Vec::new(),
@@ -363,7 +382,7 @@ pub fn collect(
     }
     mail_tracking(tx, &mut out)?;
     tickets(tx, &mut out)?;
-    iot(tx, &mut out)?;
+    iot(tx, &mut out, include_timeseries)?;
     crew(tx, services, &mut out)?;
     scrape(tx, services, &mut out)?;
     for mut row in rows(
@@ -474,7 +493,7 @@ fn tickets(conn: &Connection, out: &mut CoreImport) -> Result<()> {
     Ok(())
 }
 
-fn iot(conn: &Connection, out: &mut CoreImport) -> Result<()> {
+fn iot(conn: &Connection, out: &mut CoreImport, include_timeseries: bool) -> Result<()> {
     let attributes = rows(
         conn,
         "iot_attributes",
@@ -545,6 +564,9 @@ fn iot(conn: &Connection, out: &mut CoreImport) -> Result<()> {
         let attr = attribute(row.clone())?;
         let body = json!({"id":id,"asset_id":row["asset_id"],"attribute_name":row["name"],"value_type":row["value_type"],"timestamp_ms":row["timestamp_ms"],"data":attr,"status_key":row["value_type"],"updated_at_ms":row["timestamp_ms"],"is_deleted":false});
         push(out, "iot_attributes", id, body)?;
+    }
+    if !include_timeseries {
+        return Ok(());
     }
     out.dataframe_rows = rows(
         conn,

@@ -926,3 +926,82 @@ fn e34_native_aliases_never_infer_profiles_or_revoked_owners() -> Result<()> {
     );
     Ok(())
 }
+
+#[test]
+fn specialized_raw_archive_preserves_canonical_collection_and_compound_or_duplicate_identities(
+) -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let f = seed(
+        dir.path(),
+        "core.sqlite3",
+        json!({"id":"r","title":"source"}),
+    )?;
+    {
+        let db = rusqlite::Connection::open(&f.frozen_file)?;
+        db.execute_batch("CREATE TABLE compound(a TEXT,b TEXT,payload TEXT,PRIMARY KEY(a,b));INSERT INTO compound VALUES('same','one','first'),('same','two','second');CREATE TABLE duplicate(value TEXT);INSERT INTO duplicate VALUES('same'),('same');")?;
+    }
+    let mut db = ro(&f)?;
+    let tx = db.transaction()?;
+    let mut tables = vec![spec("known", 1, c::Entity::Core, c::Mode::ArchiveOnly)];
+    for (name, key) in [("compound", "$primary_key"), ("duplicate", "$rowid")] {
+        tables.push(c::Table {
+            name: name.into(),
+            collection: "known".into(),
+            version: 1,
+            id_column: key.into(),
+            body_column: None,
+            entity: c::Entity::Core,
+            mode: c::Mode::ArchiveOnly,
+        });
+    }
+    let out = c::collect(
+        &[input(&tx, &f, c::SourceKind::Core, &tables)],
+        &plan(),
+        &ReleaseMigration,
+        &budget(),
+        7,
+    )?;
+    assert!(out
+        .snapshot
+        .documents
+        .iter()
+        .all(|d| d.collection == c::ARCHIVE));
+    assert_eq!(
+        out.snapshot
+            .documents
+            .iter()
+            .filter(|d| d.body["source_table"] == "compound")
+            .count(),
+        2
+    );
+    assert_eq!(
+        out.snapshot
+            .documents
+            .iter()
+            .filter(|d| d.body["source_table"] == "duplicate")
+            .count(),
+        2
+    );
+    assert!(out
+        .snapshot
+        .documents
+        .iter()
+        .all(|d| d.body["collection"] == "known"));
+    assert!(out
+        .snapshot
+        .documents
+        .iter()
+        .filter(|d| d.body["source_table"] == "duplicate")
+        .all(|d| d.body["doc"] == json!({"value":"same"})));
+    let ids: std::collections::BTreeSet<_> = out.snapshot.documents.iter().map(|d| &d.id).collect();
+    assert_eq!(ids.len(), out.snapshot.documents.len());
+    let replay = c::collect(
+        &[input(&tx, &f, c::SourceKind::Core, &tables)],
+        &plan(),
+        &ReleaseMigration,
+        &budget(),
+        7,
+    )?;
+    assert_eq!(out.snapshot.documents, replay.snapshot.documents);
+    Ok(())
+}

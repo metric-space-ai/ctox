@@ -11,6 +11,8 @@ use std::process::{Child, Command};
 #[cfg(target_os = "linux")]
 mod linux;
 
+pub mod grants;
+
 pub const HELPER: &str = "__ctox-process-network";
 pub const SOCKET: &str = "/run/ctox-process-proxy.sock";
 
@@ -146,7 +148,6 @@ pub fn dispatch() -> Option<Result<()>> {
         Some(Err(anyhow::anyhow!("network helper requires Linux")))
     }
 }
-#[cfg(target_os = "linux")]
 fn domain(name: &str) -> bool {
     name.len() <= 253
         && name.contains('.')

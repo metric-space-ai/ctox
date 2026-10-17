@@ -53,14 +53,14 @@
     "icon.svg": "da577c7cfa4604f7002cbb004a7be18eca5e00664914ba6b39e6247fe07b0e20",
     "index.css": "ffed2279ecab03a13d79920e8119cfc69ee53c6bbc2219d56b4202e6ddbeff95",
     "index.html": "5c6bc907f36efbc96fddf45597709c579539a9da80b784870b3848eab997de2e",
-    "index.js": "de325bf9a86bfd37244feca819f3fd492f78df1bc5f5e24981497728f0defa56",
+    "index.js": "ca9bdc5e2b12a2d0aade17efe76b207fec979bbfc9669e4cba2ca18bf8de949c",
     "locales/de.json": "8ab9b7c32aeccc8a3f6b1ff7c480431ec62a67fdad27c2e713d52f8a4b70e108",
     "locales/en.json": "bdda3f7c4dd8468ccd040eb0e023fdb5a015eb4ab317ea5f1c7f675e5efdc753",
     "module.json": "3963ab1dcf0690144873916c901ee818788a621b3d4aeacaaa8c5679d7a87be9",
     "v4-manifest.json": "84e1a51804e0f5a51cce115d7d4a04e1ddb877d0ae909dc086ab69ff5dc40065",
     "vendor/store-shelf/box-art.mjs": "e3a842c0d2264aa147349429eb1d46e1be58f2405832602179fe7131f7c670ff",
     "vendor/store-shelf/provenance.json": "ad1b9705156e73e5e600fbe23d5d5437963da8c4d1ab6edc29e53459f6dbb037",
-    "vendor/store-shelf/store-shelf.mjs": "23b2ef6742c92ee28749db3b545dec30c0fb112fe81c80abc45d813683263cf3",
+    "vendor/store-shelf/store-shelf.mjs": "f4036e74846cc3478025ef81caa7268650a0b094ac28c0520ec0b9258f4fae60",
     "vendor/three/RoundedBoxGeometry.js": "047158fdb27e8b64a42b03af68c69c32f667818a8f328ea2b85691e0bf974414",
     "vendor/three/provenance.json": "594225efa7691c0863248ecc7aad74b4b2ef8c001eb3957cd39297e05d918872",
     "vendor/three/three.core.min.js": "05b2609338c76cd65daf74f3ac515bc9a5045e1b3b33edc07d8c9bd55250fa90",
@@ -89,7 +89,7 @@
         "code_read": [
           "index.js:2",
           "index.js:155",
-          "index.js:1760"
+          "index.js:1764"
         ],
         "code_write": [],
         "declaration_basis": "modules/app-store/V4-PORT.md OFFEN 8 (documents/notes/spreadsheets Fehltreffer; files braucht write über api.files.put); app_drafts read: Kern E56.1a (ctox-platform exportiert read, Zeilenfilter user_id = actor_id), index.js:155 eigene Entwürfe → ctox.app.publish",
@@ -182,7 +182,7 @@
       "_evidence": {
         "code_read": [
           "index.js:74",
-          "index.js:1891",
+          "index.js:1895",
           "vendor/store-shelf/box-art.mjs:270"
         ],
         "code_write": [],
@@ -264,7 +264,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "a24a8e9bbe8560da022e37552095db6be058b167c154d026f16ff0431b6dc51a",
+    "base_hash": "dcb07d3bf43b5a9daf683419c06270cc8871dcc92a745ef19e5966b4e0d1a489",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

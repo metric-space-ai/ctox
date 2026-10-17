@@ -2,6 +2,7 @@
 // no business data) -> WebRTCKernelTransport -> createLoader. There is no V2,
 // V3 or HTTP data fallback: every failure is a typed BootV4Error.
 import {CtoxError} from './values.mjs';
+import {APP_SCOPE_DOMAIN as SCOPE_DOMAIN,decodeAppGrant,validAppGrantClaims,appGrantScope} from './app-grants.mjs';
 import {createLoader} from './loader.mjs';
 import {createKernelSession} from './session.mjs';
 import {WebRTCKernelTransport,createReliableChannels} from './transport-webrtc.mjs';
@@ -9,7 +10,7 @@ import {decodeHelloFrame} from './vendor/hello.mjs';
 
 export const DEFAULT_LAUNCH_CONTEXT_URL='/api/business-os/launch-context';
 export const STREAM_DOMAIN='ctox.sync.v4.stream\0';
-export const SCOPE_DOMAIN='ctox:v4:scope\0';
+export {SCOPE_DOMAIN};
 const REASON_CODE=Object.freeze({invalid_options:'invalid',launch_context_unavailable:'unavailable',launch_context_invalid:'invalid',package_verifier_missing:'forbidden',hello_rejected:'forbidden',transport_unavailable:'unavailable'});
 
 export class BootV4Error extends CtoxError {
@@ -146,19 +147,15 @@ export async function bootV4({launchContextUrl=DEFAULT_LAUNCH_CONTEXT_URL,resolv
   if(next.instanceId!==instanceId||next.userId!==userId)throw new CtoxError('forbidden','Launch context identity changed');
   current=next;return next.hello.offer;
  };
- const verifyScopeToken=async(token,{rights_ver})=>{
-  const value=decodeScopeToken(token),claims=value?.claims;
-  if(!claims||claims.instance_id!==instanceId||claims.device_id!==current.hello.offer.device_proof.device_id||String(claims.rights_ver)!==String(rights_ver)||!text(claims.scope_hash)||!(Number(claims.exp)*1000>Date.now()))return false;
+ const verifyScopeToken=async(token,{rights_ver,appId='shell'})=>{
+  const value=decodeAppGrant(token),claims=value?.claims;
+  if(!validAppGrantClaims(claims,{instanceId,userId,deviceId:current.hello.offer.device_proof.device_id,rightsVer:rights_ver,appId}))return false;
   const signature=signatureBytes(value.signature);if(!signature)return false;
   const bytes=utf8(SCOPE_DOMAIN+canonicalJson(claims));
   for(const key of keys.values()){try{if(await subtle.verify({name:'Ed25519'},key,signature,bytes))return true;}catch{}}
   return false;
  };
- // hello_ok.scope_tokens[i] answers hello.scopes_wanted[i] (native policy issues them in request order).
- const resolveScope=(collection,selected)=>{
-  const index=current.hello.offer.scopes_wanted.indexOf(collection),claims=index<0?null:decodeScopeToken(selected.scope_tokens[index])?.claims;
-  return claims?{scope_hash:claims.scope_hash,gen:genOf(collection),participant:userId}:null;
- };
+ const resolveScope=(collection,selected)=>appGrantScope(collection,[...selected.scope_tokens,...selected.app_scope_tokens??[]],{instanceId,userId,deviceId:current.hello.offer.device_proof.device_id,rightsVer:selected.rights_ver});
  const authSession=createKernelSession({instanceId,userId,hello,verifyScopeToken,resolveScope});
  const peerFactory=createPeer??createSignalingPeerFactory();
  const transport=new WebRTCKernelTransport({authSession,verifyPackage:createPackageVerifier({instanceId,userId,keys,subtle}),createPeer:(_address,identity)=>peerFactory(current.signaling,identity),address:context.signaling,codecs,...(handshakeTimeoutMs?{handshakeTimeoutMs}:{})});

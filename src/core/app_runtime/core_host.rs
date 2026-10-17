@@ -102,7 +102,13 @@ pub trait StoreCodec: Send + Sync + 'static {
 /// No permissive defaults: command_rights/app-write rights before handler,
 //  active grants, actual executor lease and retained authority at effect point.
 pub trait CoreAuthority: Send + Sync + 'static {
+    /// Pressure telemetry on the retained native feed, never an authority source.
+    fn read_pressure(&self, _stage: &'static str, _attempts: u32) {}
     fn admit(&self, manifest: &Value, binding: &Value) -> Result<()>;
+    /// Core owns the platform inventory; a platform command never starts an app.
+    fn platform_command(&self, kind: &str) -> bool {
+        crate::core_command(kind)
+    }
     /// command.submit checks the target app's current command_rights and actor
     /// assignment. It authorizes a new intent; it MUST NOT reinterpret the
     /// originating command/fence as an executor lease for the receiving app.
@@ -341,9 +347,49 @@ impl CoreRuntimeHost {
             .map_err(|_| failure("unavailable", "Store outcome requires reconciliation", true))?
             .map_err(store_failure)
     }
-    fn read_job<T: Send + 'static>(&self, job: ReadJob<T>) -> Result<T> {
+    fn read_job<T: Send + 'static>(
+        &self,
+        operation: impl Fn(&Connection) -> std::result::Result<T, StoreError> + Send + Sync + 'static,
+    ) -> Result<T> {
         let readers = self.readers.clone();
-        self.wait(async move { readers.read_job(job).await })
+        let authority = self.authority.clone();
+        let operation = Arc::new(operation);
+        self.wait(async move {
+            let until = Instant::now() + Duration::from_secs(12);
+            let mut attempts = 0u32;
+            loop {
+                let operation = operation.clone();
+                let result = readers
+                    .read_job(ReadJob::new(
+                        JobOptions {
+                            deadline: Some(until),
+                            ..Default::default()
+                        },
+                        move |db| operation(db),
+                    ))
+                    .await;
+                match result {
+                    Err(StoreError::Busy | StoreError::DeadlineExceeded)
+                        if Instant::now() < until =>
+                    {
+                        attempts = attempts.saturating_add(1);
+                        if attempts >= 3 {
+                            authority.read_pressure("host.snapshot", attempts);
+                        }
+                        tokio::time::sleep(Duration::from_millis(
+                            (10u64 << attempts.min(5)).min(500),
+                        ))
+                        .await;
+                    }
+                    result => {
+                        if result.is_ok() && attempts > 0 {
+                            authority.read_pressure("host.snapshot", 0);
+                        }
+                        return result;
+                    }
+                }
+            }
+        })
     }
     fn options() -> JobOptions {
         JobOptions {
@@ -355,9 +401,7 @@ impl CoreRuntimeHost {
         let codec = self.codec.clone();
         let app = app.to_owned();
         let version = version.to_owned();
-        self.read_job(ReadJob::new(Self::options(), move |db| {
-            codec.version(db, &app, &version)
-        }))
+        self.read_job(move |db| codec.version(db, &app, &version))
     }
     pub fn artifact(&self, hash: &str) -> Result<Vec<u8>> {
         ensure!(
@@ -366,17 +410,13 @@ impl CoreRuntimeHost {
         );
         let codec = self.codec.clone();
         let hash = hash.to_owned();
-        self.read_job(ReadJob::new(Self::options(), move |db| {
-            codec.artifact(db, &hash)
-        }))
+        self.read_job(move |db| codec.artifact(db, &hash))
     }
     fn read(&self, binding: &Value, collection: &str) -> Result<Value> {
         let codec = self.codec.clone();
         let binding = binding.clone();
         let collection = collection.to_owned();
-        let rows = self.read_job(ReadJob::new(Self::options(), move |db| {
-            codec.read(db, &binding, &collection)
-        }))?;
+        let rows = self.read_job(move |db| codec.read(db, &binding, &collection))?;
         ensure!(
             serde_json::to_vec(&rows)?.len() <= 6 * 1024 * 1024,
             "quota: authorized snapshot exceeds IPC budget"
@@ -401,7 +441,7 @@ impl CoreRuntimeHost {
                             if method == "command.accept" {
                                 let target = crate::string(&args, "target_app")?;
                                 let kind = crate::string(&args, "type")?;
-                                let receiver = if binding["command"]["app_id"] == target {
+                                let receiver = if binding["manifest"]["app_id"] == target {
                                     codec
                                         .version(
                                             tx,
@@ -417,12 +457,14 @@ impl CoreRuntimeHost {
                                     receiver["app_ver"] == args["target_app_ver"],
                                     "conflict: target activation changed"
                                 );
-                                crate::ipc::check(
+                                if !authority.platform_command(kind) {
+                                crate::command_declarations(
                                     &binding["manifest"],
                                     receiver,
                                     kind,
                                     &args["options"],
                                 )?;
+                                }
                                 authority.authorize(target,&binding["command"]["actor"],&json!({
                                     "operation":"command.submit","type":kind,"payload":args["payload"],
                                     "command_rights":receiver["command_rights"],"manifest":receiver,
@@ -523,9 +565,7 @@ impl CoreRuntimeHost {
         }
         let codec = self.codec.clone();
         let context = binding.clone();
-        let snapshot = self.read_job(ReadJob::new(Self::options(), move |db| {
-            codec.snapshot(db, &context, &names)
-        }))?;
+        let snapshot = self.read_job(move |db| codec.snapshot(db, &context, &names))?;
         let invocation = crate::string(binding, "invocation_id")?.to_owned();
         let mut pending = self
             .transactions
@@ -653,9 +693,7 @@ impl CoreRuntimeHost {
 impl RuntimeHost for CoreRuntimeHost {
     fn shared_modules(&self, _binding: &Value) -> Result<crate::shared::SharedModules> {
         let codec = self.codec.clone();
-        let manifest = self.read_job(ReadJob::new(Self::options(), move |db| {
-            codec.active_shell(db)
-        }))?;
+        let manifest = self.read_job(move |db| codec.active_shell(db))?;
         match manifest {
             Some(manifest) => {
                 crate::shared::SharedModules::load(&manifest, |hash| self.artifact(hash))
@@ -759,7 +797,7 @@ impl RuntimeHost for CoreRuntimeHost {
                         );
                     }
                     self.authority.authorize(
-                        crate::string(&binding["command"], "app_id")?,
+                        crate::string(&binding["manifest"], "app_id")?,
                         &binding["command"]["actor"],
                         &json!({"operation":"write","args":[op.collection,op.op]}),
                     )?;
@@ -769,17 +807,22 @@ impl RuntimeHost for CoreRuntimeHost {
             "command" => {
                 let kind = args[0].as_str().context("invalid: command type")?;
                 let options = args.get(2).cloned().unwrap_or(json!({}));
-                let target = crate::ipc::target(&binding["manifest"], kind, &options)?.to_owned();
-                let receiver = if target == binding["command"]["app_id"] {
+                let target = if self.authority.platform_command(kind) {
+                    crate::string(&binding["manifest"], "app_id")?.to_owned()
+                } else {
+                    crate::declared_target(&binding["manifest"], kind, options["module"].as_str())?
+                        .to_owned()
+                };
+                let receiver = if target == binding["manifest"]["app_id"] {
                     binding["manifest"].clone()
                 } else {
                     let codec = self.codec.clone();
                     let app = target.clone();
-                    self.read_job(ReadJob::new(Self::options(), move |db| {
-                        codec.active_manifest(db, &app)
-                    }))?
+                    self.read_job(move |db| codec.active_manifest(db, &app))?
                 };
-                crate::ipc::check(&binding["manifest"], &receiver, kind, &options)?;
+                if !self.authority.platform_command(kind) {
+                    crate::command_declarations(&binding["manifest"], &receiver, kind, &options)?;
+                }
                 self.authority.authorize(
                     &target,
                     &binding["command"]["actor"],
@@ -792,7 +835,7 @@ impl RuntimeHost for CoreRuntimeHost {
                 // Codec MUST repeat active-version/declaration/user-right checks in
                 // its acceptance transaction; the read snapshot grants no authority.
                 let value=self.platform(binding,"command.accept",&json!({"type":args[0],"payload":args[1],"options":options,
-                    "target_app":target,"target_app_ver":receiver["app_ver"],"callback_app":binding["command"]["app_id"]}))?;
+                    "target_app":target,"target_app_ver":receiver["app_ver"],"callback_app":binding["manifest"]["app_id"]}))?;
                 ensure!(
                     value["id"].is_string()
                         && matches!(value["status"].as_str(), Some("accepted" | "rejected")),

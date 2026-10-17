@@ -363,21 +363,48 @@ async fn kernel_component(e25: bool) {
     use std::io::{BufRead, BufReader, Write as IoWrite};
     use std::process::Stdio;
     let (_dir, writer, readers) = runtime().await;
-    let plan = command_release_fixture();
+    let mut plan = command_release_fixture();
+    // E48: take the wire version from the repository platform manifest.
+    // Keep the release fixture's corrected V4 document shape: the legacy
+    // repository schema still requires command_id, absent from Kernel intents.
+    let platform: Value = serde_json::from_str(include_str!(
+        "../business_os/v4/ctox-platform.manifest.json"
+    ))
+    .unwrap();
+    let manifest_version = platform["collections"]["business_commands"]["schema"]["version"]
+        .as_u64()
+        .unwrap();
+    let schema_ver = u32::try_from(manifest_version).unwrap();
+    let published_schema = &mut plan
+        .manifests
+        .iter_mut()
+        .find(|m| m["app_id"] == "ctox-platform")
+        .unwrap()["collections"]["business_commands"]["schema"];
+    published_schema["version"] = json!(schema_ver);
+    let manifest_schema = published_schema.clone();
+    let definition = plan
+        .collections
+        .get_mut("ctox-platform")
+        .unwrap()
+        .iter_mut()
+        .find(|d| d.name == "business_commands")
+        .unwrap();
+    definition.schema_ver = schema_ver;
+    definition.schema_json = manifest_schema.clone();
     crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
         .await
         .unwrap();
     let schema = readers
-        .read(|tx| {
+        .read(move |tx| {
             let active = crate::schema::active_collection(tx, "business_commands")?.unwrap();
             assert_eq!(active.definition.app_id, "ctox-platform");
-            assert_eq!(active.definition.schema_ver, 3);
+            assert_eq!(active.definition.schema_ver, schema_ver);
             assert_eq!(active.definition.app_ver, "platform-7");
             Ok(active.definition.schema_json)
         })
         .await
         .unwrap();
-    assert_eq!(schema, command_document_schema());
+    assert_eq!(schema, manifest_schema);
     assert_eq!(
         plan.manifests
             .iter()
@@ -452,6 +479,9 @@ async fn kernel_component(e25: bool) {
     let mut measured = None;
     let mut reply_closed = false;
     let mut projection_us = Vec::new();
+    // Test-only stage trap; monotonic offsets within the Core process. No
+    // wall-clock subtraction between the JS and native process is required.
+    let mut stage_trace = Vec::<Value>::new();
     loop {
         line.clear();
         if output.read_line(&mut line).unwrap() == 0 {
@@ -462,6 +492,11 @@ async fn kernel_component(e25: bool) {
             // Preserve raw measurements even when a latency assertion makes
             // the child exit nonzero before the final enriched result is built.
             if e25 {
+                let mut trace = request.clone();
+                trace["core_stages"] = json!(stage_trace);
+                if let Ok(path) = std::env::var("E25_TRACE_OUT") {
+                    std::fs::write(path, serde_json::to_vec(&trace).unwrap()).unwrap();
+                }
                 println!("E25_KERNEL_COMPONENT_RAW {}", request);
             }
             measured = Some(request);
@@ -480,16 +515,19 @@ async fn kernel_component(e25: bool) {
             .as_millis() as u64;
         let value = match request["type"].as_str().unwrap() {
             "write" => {
+                let stage_start = std::time::Instant::now();
+                let mut stages = json!({"core_ingest_us":0});
                 let ClientMessage::Write(write) =
                     serde_json::from_value(request["message"].clone())
                         .expect("real Kernel wire must parse strict native Write")
                 else {
                     panic!("not write")
                 };
-                assert_eq!(write.write.schema_ver, 3);
+                assert_eq!(write.write.schema_ver, schema_ver);
                 assert_eq!(write.write.app_ver, "platform-7");
                 let mut doc = write.write.body.clone().unwrap();
                 let id = write.write.id.clone();
+                stages["id"] = json!(id);
                 let completion_lane = if e25 {
                     Some(
                         routes::resolve(doc["type"].as_str().unwrap())
@@ -501,6 +539,7 @@ async fn kernel_component(e25: bool) {
                 };
                 let result = ingress.submit("alice".into(), write, now).await.unwrap();
                 assert_eq!(result.results.len(), 1);
+                stages["ingest_commit_us"] = json!(stage_start.elapsed().as_micros() as u64);
                 let receipt = result.results[0].clone();
                 if receipt.result.status == WriteStatus::Accepted {
                     let lease = ingress
@@ -508,6 +547,7 @@ async fn kernel_component(e25: bool) {
                         .await
                         .unwrap()
                         .unwrap();
+                    stages["dispatch_claim_us"] = json!(stage_start.elapsed().as_micros() as u64);
                     executor_seq += 1;
                     doc["status"] = json!("done");
                     doc["executor_fence"] = json!(lease.fence);
@@ -528,6 +568,8 @@ async fn kernel_component(e25: bool) {
                             .unwrap()
                             .await
                             .expect("E25 route must resolve instead of unknown_command");
+                        stages["handler_complete_us"] =
+                            json!(stage_start.elapsed().as_micros() as u64);
                         assert_eq!(complete.command_id, id);
                         doc["status"] = json!(complete.status);
                         doc["result"] = complete.result.unwrap();
@@ -545,7 +587,7 @@ async fn kernel_component(e25: bool) {
                             expected_revision: None,
                             base_seq: receipt.result.seq,
                             gen: 1,
-                            schema_ver: 3,
+                            schema_ver,
                             app_ver: "platform-7".into(),
                             op: WriteOp::Put,
                             body: Some(doc.clone()),
@@ -566,6 +608,8 @@ async fn kernel_component(e25: bool) {
                             .await
                             .unwrap()
                     };
+                    stages["completion_commit_us"] =
+                        json!(stage_start.elapsed().as_micros() as u64);
                     assert_eq!(done.results[0].result.status, WriteStatus::Accepted);
                     if first.is_none() {
                         writer
@@ -597,7 +641,9 @@ async fn kernel_component(e25: bool) {
                     .next_page(100, Arc::new(Policy), &signer, || now)
                     .await
                     .unwrap();
-                json!({"receipt":CoreMessage::WriteResult(receipt),"page":page,"completion_lane":completion_lane})
+                stages["page_ready_us"] = json!(stage_start.elapsed().as_micros() as u64);
+                stage_trace.push(stages.clone());
+                json!({"receipt":CoreMessage::WriteResult(receipt),"page":page,"completion_lane":completion_lane,"core_stages":stages})
             }
             "subscribe" => {
                 let ClientMessage::Subscribe(sub) =
@@ -619,6 +665,14 @@ async fn kernel_component(e25: bool) {
                         .unwrap(),
                 )
                 .unwrap()
+            }
+            "trace" => {
+                let mut trace = request["measured"].clone();
+                trace["core_stages"] = json!(stage_trace);
+                if let Ok(path) = std::env::var("E25_TRACE_OUT") {
+                    std::fs::write(path, serde_json::to_vec(&trace).unwrap()).unwrap();
+                }
+                Value::Null
             }
             "first_command" => first.clone().unwrap(),
             "drain" => Value::Null,

@@ -1,8 +1,10 @@
 // Explicit in-memory test core. Never selected implicitly by createKernel().
 // K-1c: mehrere Nutzer je Instanz teilen einen Core (namespace), jeder Nutzer hat seine eigene Kernel-DB (§16.7);
 // Rechte, Handler-Laufzeit, Trigger, Katalog-Primitive und ctox.app.* liegen in fake-core-runtime.mjs.
+import {createFakeAppGrantIssuer} from './fake-core-grants.mjs';
+import {preferenceError,PREFERENCE_COLLECTION} from './preferences.mjs';
 import { KernelTransport, decimalSeq } from './transport.mjs';
-import { cloneValue, CtoxError, fnv1a, mergePatch } from './values.mjs';
+import { cloneValue, stripReadMetadata, CtoxError, fnv1a, mergePatch } from './values.mjs';
 import { applyOp } from './outbox.mjs';
 import { createCoreRuntime, FAKE_CORE_CAPABILITIES } from './fake-core-runtime.mjs';
 import { checkCommandTransition, COMMAND_IMMUTABLE_FIELDS } from './command-state.mjs';
@@ -75,7 +77,7 @@ export class MemoryCoreTransport extends KernelTransport {
   /** user = {id, role, permissions}: der Core kennt den Nutzer (Rechte wirken); ohne user prüft der Core keine Rechte. */
   constructor({ namespace = 'test', latencyMs = 5, user = null, everyMs, agentDelayMs, deviceLabel, codingDelayMs } = {}) {
     super(); this.namespace = namespace; this.latencyMs = latencyMs;
-    this.core = coreFor(namespace); this.reject = []; this.rejectUpload = []; this.migrate = []; this.handlers = new Map(); this.failures = new Map();
+    this.core = coreFor(namespace);this.issueAppGrant=createFakeAppGrantIssuer();this.appGrants=new Map();this.appGrantAcquisitions=new Map();this.grantMessages=[];this.deniedAppGrants=new Set(); this.reject = []; this.rejectUpload = []; this.migrate = []; this.handlers = new Map(); this.failures = new Map();
     if (everyMs !== undefined) this.core.everyMs = everyMs;
     if (agentDelayMs !== undefined) this.core.agentDelayMs = agentDelayMs;
     if (codingDelayMs !== undefined) this.core.codingDelayMs = codingDelayMs;
@@ -107,6 +109,18 @@ export class MemoryCoreTransport extends KernelTransport {
   key(collection,id) { return JSON.stringify([collection,id]); }
   get backlog(){return [...this.core.docs.values()].filter(row=>this.subscriptions.has(row.collection) && BigInt(row.seq)>BigInt(this.subscriptions.get(row.collection).checkpoint_seq??'0')).length;}
   get head() { return decimalSeq(this.core.head); }
+  async grantApp(app_id) {
+    const app=this.core.docs.get(this.key('business_apps',app_id))?.data;
+    const cacheKey=`${app_id}@${app?.active_ver??''}`;
+    if(this.appGrantAcquisitions.has(cacheKey))return this.appGrantAcquisitions.get(cacheKey);
+    const acquire=(async()=>{
+    if(app_id!=='shell')this.grantMessages.push({type:'scope.grant.request',app_id});
+    if(this.deniedAppGrants.has(app_id)){this.grantMessages.push({type:'forbidden',app_id,reason:'forbidden'});throw new CtoxError('forbidden','Collection grant missing');}
+    const manifest=this.core.docs.get(this.key('business_app_versions',`${app_id}@${app?.active_ver}`))?.data?.manifest;
+    const claims={instance_id:this.identity.instanceId,user_id:this.identity.userId,app_id,scope_hash:`scope:${app_id}`,rights_ver:'1',device_id:this.deviceId(this.identity.instanceId,this.identity.userId),exp:Math.floor(Date.now()/1000)+3600,collections:Object.keys(manifest?.collections??{}).map(c=>({collection:c.includes('@g')||!(manifest.generations?.[c]>1)?c:`${c}@g${manifest.generations[c]}`,gen:manifest.generations?.[c]??1,rights:['read','write'],field_mask_digest:'fake:all'}))};
+    const token=await this.issueAppGrant(claims);this.appGrants.set(app_id,token);if(app_id!=='shell')this.grantMessages.push({type:'scope.grant',token});return token;
+    })();this.appGrantAcquisitions.set(cacheKey,acquire);return acquire;
+  }
   async subscribe(sub) {
     this.subscriptions.set(sub.collection, cloneValue(sub)); this.sent.delete(sub.collection);
     if (this.online) await this.deliver(sub.collection, { priority: true }); // erste Seite eines neuen Abos vor Rückstand
@@ -149,10 +163,12 @@ export class MemoryCoreTransport extends KernelTransport {
   async push(collection, docs) { return this.core.commit(collection, docs); }
   async write(entry) {
     if (!this.online || this.closed) throw new CtoxError('unavailable', 'Test core offline');
+    entry = {...entry, body:stripReadMetadata(entry.body)};
     const previous = this.core.ops.get(entry.op_id); if (previous) return cloneValue(previous);
     const old = this.core.docs.get(this.key(entry.collection,entry.id));
     const rejection = this.reject.shift();
     let result = rejection === undefined ? null : {status:'rejected', ...(typeof rejection === 'object' ? rejection : {reason:rejection})};
+    if (!result && entry.body && Object.keys(entry.body).some(key=>key.startsWith('_'))) result={status:'rejected',code:'invalid',reason:'Underscore document fields are reserved'};
     // K-WJ-B2 (E27.2): Befehlstyp ohne veröffentlichte Route → beim Schreiben abgelehnt, nie erst accepted und später failed
     if (!result && entry.collection === 'business_commands' && entry.op === 'put' && entry.body?.status === 'queued' && !(old?.data && !old.deleted) && !this.commandRouteKnown(entry.body)) {
       result = { status: 'rejected', code: 'unknown_command', reason: `unknown_command:${entry.body.type}` };
@@ -160,6 +176,11 @@ export class MemoryCoreTransport extends KernelTransport {
     if (!result) {
       const code = this.core.runtime.checkWrite(this.currentUser, {...entry,test_route:this.handlers.has(entry.body?.type)||this.failures.has(entry.body?.type)}, old);
       if (code) result = typeof code === 'object' ? { status: 'rejected', code: code.code, reason: code.reason } : { status: 'rejected', reason: code };
+    }
+    if (!result && entry.collection===PREFERENCE_COLLECTION) {
+      const rows=[...this.core.docs.values()].filter(r=>r.collection===PREFERENCE_COLLECTION&&!r.deleted&&r.data).map(r=>r.data);
+      const code=preferenceError(entry.app_id,this.currentUser?.id??this.identity?.userId,entry.id,entry.op==='delete'?null:entry.body,rows);
+      if(code)result={status:'rejected',code,reason:code};
     }
     if (!result && entry.expected_revision !== undefined && entry.expected_revision !== old?.rev) result={status:'rejected',code:'revision_conflict',reason:'Expected revision differs from current revision'};
     if (!result && entry.op === 'patch' && (!old || old.deleted)) result={status:'rejected',reason:'not_found'};

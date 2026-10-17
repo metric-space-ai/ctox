@@ -259,7 +259,7 @@ export function prepareImport(raw, nowMs, salt = '') {
     status: String(src.status || (src.verified === true ? 'valid' : 'unverified')),
     created_at_ms: Number(src.created_at_ms) || now,
     updated_at_ms: now,
-    _deleted: false,
+    // _deleted ist reserviert (Kern-Tombstone, E47) und wird nie von der App geschrieben.
   };
 }
 
@@ -613,7 +613,6 @@ export async function mount(host, api, { restored } = {}) {
       status: 'unverified',
       created_at_ms: now,
       updated_at_ms: now,
-      _deleted: false,
     };
     const handle = api.put(PRIMARY, record);
     handle.local.then(() => {

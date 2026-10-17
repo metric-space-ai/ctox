@@ -6,31 +6,31 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 
 | Kennzahl | Wert |
 |---|---|
-| apps | 41 |
-| manifests_total | 42 |
-| collections_total | 237 |
-| collections_in_contract | 233 |
-| owned_by_apps | 221 |
+| apps | 42 |
+| manifests_total | 43 |
+| collections_total | 242 |
+| collections_in_contract | 238 |
+| owned_by_apps | 226 |
 | owned_by_platform | 16 |
 | owner_proposals | 6 |
-| handlers_total | 116 |
-| apps_with_handlers | 15 |
+| handlers_total | 117 |
+| apps_with_handlers | 16 |
 | legacy_total | 0 |
-| capabilities_distinct | 41 |
+| capabilities_distinct | 40 |
 | triggers_total | 10 |
-| command_rights_entries | 42 |
-| foreign_declarations | 295 |
+| command_rights_entries | 43 |
+| foreign_declarations | 301 |
 | foreign_write_declarations | 32 |
 | foreign_code_only | 94 |
 | foreign_without_export | 0 |
 | platform_clamps | 0 |
-| exported_collections | 84 |
+| exported_collections | 85 |
 | handler_conflicts | 0 |
 | handlers_platform_type | 282 |
 | schema_missing | 0 |
 | schema_js_present | 3 |
 | schema_js_load_errors | 0 |
-| schema_from_v4_schemas | 41 |
+| schema_from_v4_schemas | 42 |
 | no_owner_app | 6 |
 | contract_only | 12 |
 | multiple_owners | 0 |
@@ -42,8 +42,8 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | shell_files | 126 |
 | apps_with_styles | 41 |
 | write_guards | 1 |
-| todo_total | 181 |
-| declarations | 40 |
+| todo_total | 185 |
+| declarations | 41 |
 | commands_out_total | 20 |
 | commands_in_total | 7 |
 | commands_unmatched | 0 |
@@ -55,9 +55,9 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | commands_in_without_handler | 0 |
 | exports_beyond_declaration | 0 |
 | net_ingest_total | 2 |
-| multi_instance_false | 40 |
+| multi_instance_false | 41 |
 | icon_raster | 40 |
-| icon_svg | 1 |
+| icon_svg | 2 |
 | icon_generated |  |
 
 ## 1. schema.js vs. collections.schema.json je App (29 Fälle)

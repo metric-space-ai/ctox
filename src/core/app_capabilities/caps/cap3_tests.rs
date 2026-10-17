@@ -370,17 +370,43 @@ pub(crate) fn run_with_core_owners<T: Send + 'static>(
         .build()
         .unwrap();
     rt.block_on(async move {
-        let core = crate::inference::runtime_env::RuntimeOwnerFixture::open(&root)
-            .await
-            .unwrap();
+        // Match daemon attachment: persistence and LCM share one Core owner.
+        use ctox_store::{testkit::StoreFixture, DbId, WriteJob};
+        let runtime_path = crate::inference::runtime_env::runtime_config_path(&root);
+        std::fs::create_dir_all(runtime_path.parent().unwrap()).unwrap();
+        drop(crate::lcm::LcmEngine::open(
+            &crate::paths::lcm_db(&root), crate::lcm::LcmConfig::default(),
+        ).unwrap());
+        let (core_writer, core_readers) = StoreFixture::open(
+            DbId::new(crate::persistence::sqlite_path(&root)).unwrap(),
+        ).await.unwrap().into_parts();
+        let core = crate::persistence::install_core_owner(
+            &root, core_writer.clone(), core_readers.clone(),
+        ).await.unwrap();
+        let lcm = crate::lcm::attach_lcm_store(&root, core_writer, core_readers).await.unwrap();
+        let (runtime_writer, runtime_readers) = StoreFixture::open(
+            DbId::new(runtime_path).unwrap(),
+        ).await.unwrap().into_parts();
+        runtime_writer.submit(WriteJob::new(Default::default(), |tx| {
+            tx.execute_batch("CREATE TABLE runtime_env_kv(env_key TEXT PRIMARY KEY,env_value TEXT NOT NULL);CREATE TABLE runtime_state_store(state_id INTEGER PRIMARY KEY CHECK(state_id=1),state_json TEXT NOT NULL);")?;
+            Ok(())
+        })).unwrap().await.unwrap();
+        let runtime = crate::inference::runtime_env::RuntimeStore::attach(
+            &root, runtime_writer.clone(), runtime_readers.clone(),
+        ).await.unwrap();
         let secrets = SecretOwner::open(&root).await;
         let rights = BoundRights::open(&root).await;
         let result = run_core_sync_admitted(move || Ok(body())).await;
         let failed = result.is_err();
         rights.close(failed).await;
         secrets.close(failed).await;
-        let closed = core.close().await;
+        drop(runtime);
+        let runtime_closed = (runtime_readers.shutdown().await, runtime_writer.shutdown().await);
+        drop(lcm);
+        let closed = core.shutdown().await;
         let value = result.unwrap();
+        runtime_closed.0.unwrap();
+        runtime_closed.1.unwrap();
         closed.unwrap();
         value
     })
@@ -2001,6 +2027,59 @@ fn app_capabilities_cap3_process_untrusted_contract() {
             f.call(&host, "process", "run", json!({"program":"trusted-cat"}))
                 .unwrap()["stdout"],
             "generated code host"
+        );
+    });
+}
+
+#[test]
+fn app_capabilities_e20_network_grant_is_checked_before_effect() {
+    with_core_owners(|f| {
+        let host = Host::new("network-app", "staff");
+        let set = |key, value: Value| {
+            assert!(crate::inference::runtime_env::set_runtime_env_value(
+                f.root.path(),
+                key,
+                &value.to_string()
+            )
+            .is_ok());
+        };
+        set(
+            process::ALLOWLIST_KEY,
+            json!({"net-tool":{"program":"/bin/true","net_from_call":true}}),
+        );
+        set(
+            sandbox::SANDBOX_KEY,
+            json!({"bwrap":"/missing/e20-bwrap","sandbox_exec":"/missing/e20-sandbox"}),
+        );
+        let run = || {
+            f.call(
+                &host,
+                "process",
+                "run",
+                json!({"program":"net-tool","net_domains":["example.com"]}),
+            )
+        };
+        assert_eq!(code(run()), ErrorCode::Forbidden);
+        assert!(
+            !process::workspace(f.root.path(), &host.ctx).exists(),
+            "effect before network grant"
+        );
+        for grant in [
+            json!({"other":{"1":{"net-tool":["example.com"]}}}),
+            json!({"network-app":{"2":{"net-tool":["example.com"]}}}),
+            json!({"network-app":{"1":{"net-tool":["example.org"]}}}),
+        ] {
+            set(ctox_process_network::grants::CONFIG_KEY, grant);
+            assert_eq!(code(run()), ErrorCode::Forbidden);
+        }
+        set(
+            ctox_process_network::grants::CONFIG_KEY,
+            json!({"network-app":{"1":{"net-tool":["example.com"]}}}),
+        );
+        assert_eq!(
+            code(run()),
+            ErrorCode::Unavailable,
+            "approved call reaches mandatory sandbox probe"
         );
     });
 }

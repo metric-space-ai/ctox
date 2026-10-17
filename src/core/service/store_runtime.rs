@@ -79,6 +79,7 @@ struct Inspect {
     closing: Arc<AtomicBool>,
     queue: Arc<Mutex<Option<Arc<super::queue_store::QueueStore>>>>,
     http: Arc<Mutex<Option<Arc<super::store_http::HttpSurface>>>>,
+    cutover: Mutex<Option<ctox_store::import::daemon::Attachment>>,
 }
 impl Dispatcher for Inspect {
     fn dispatch(
@@ -88,6 +89,41 @@ impl Dispatcher for Inspect {
     ) -> Result<JobHandle<Vec<u8>>, StoreError> {
         if self.closing.load(Ordering::Acquire) {
             return Err(StoreError::Closed);
+        }
+        if request.method == ctox_store::import::daemon::METHOD {
+            let mut cutover = self.cutover.lock().unwrap_or_else(|p| p.into_inner());
+            if cutover.is_none() {
+                let root = self
+                    .native_root
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone()
+                    .ok_or(StoreError::Closed)?;
+                let databases = self.databases.lock().unwrap_or_else(|p| p.into_inner());
+                let sync = databases.get("sync").ok_or(StoreError::Closed)?;
+                *cutover = Some(
+                    ctox_store::import::daemon::Attachment::new(
+                        sync.writer.clone(),
+                        sync.readers.clone(),
+                        databases
+                            .values()
+                            .map(|d| d.writer.db_id().path().to_path_buf())
+                            .collect(),
+                        crate::paths::runtime_dir(&root),
+                        self.runtime.clone(),
+                        crate::business_os::migrate_cutover_document,
+                        databases
+                            .values()
+                            .map(|d| (d.writer.db_id().path().to_path_buf(), d.readers.clone()))
+                            .collect(),
+                    )
+                    .with_core_conversation(crate::crew::member_conversation_id),
+                );
+            }
+            return cutover
+                .as_ref()
+                .ok_or(StoreError::Closed)?
+                .dispatch(request, options);
         }
         if request.method == "http.listen" {
             return self
@@ -218,6 +254,7 @@ impl DaemonStores {
                 closing: closing.clone(),
                 queue: queue.clone(),
                 http: http.clone(),
+                cutover: Mutex::new(None),
             }),
         )?;
         Ok(Self {

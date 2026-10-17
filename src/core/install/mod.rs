@@ -909,7 +909,7 @@ fn mark_maintenance_rolled_back(state_root: &Path, error: &str) -> Result<()> {
 /// live, but the update reported failure and never recorded the new release
 /// in the install manifest. A lock is not a missing credential, so wait for
 /// it; any other failure is still reported at once.
-fn verify_preserved_while_service_starts(
+fn verify_preserved_before_service_starts(
     invariants: &RuntimeCredentialSnapshot,
     state_root: &Path,
 ) -> Result<()> {
@@ -2167,6 +2167,28 @@ fn apply_update(
         mark_maintenance_rolled_back(&layout.state_root, &err.to_string())?;
         return Err(err);
     }
+    // Verify the installer's state changes while it still has exclusive
+    // offline ownership. After starting the new daemon, this process must
+    // not attach a second owner to its live runtime/secrets databases.
+    if let Err(err) =
+        verify_preserved_before_service_starts(&runtime_invariants, &layout.state_root)
+    {
+        rollback_to_previous_release(
+            &install_root,
+            &current_link,
+            previous_release_root.as_deref(),
+            &layout.state_root,
+            should_restart,
+        )?;
+        persist_update_phase(
+            &layout.update_state_path(),
+            "failed",
+            Some(err.to_string().as_str()),
+        )?;
+        mark_maintenance_rolled_back(&layout.state_root, &err.to_string())?;
+        return Err(err);
+    }
+
     if should_restart {
         set_active_maintenance_phase(&layout, "restarting", 85, "CTOX-Dienst wird neu gestartet")?;
         progress_step("starting CTOX background service");
@@ -2202,7 +2224,6 @@ fn apply_update(
             return Err(err);
         }
     }
-    verify_preserved_while_service_starts(&runtime_invariants, &layout.state_root)?;
     if should_restart {
         if let Some(state) = load_maintenance_state_from_root(&layout.state_root)? {
             if !state.is_terminal() {
@@ -4261,6 +4282,15 @@ struct RuntimeCredentialSnapshot {
 
 impl RuntimeCredentialSnapshot {
     fn capture(root: &Path) -> Result<Self> {
+        // The installer can run with the service stopped. Own the stores only
+        // for this snapshot, releasing the daemon lease before switching or
+        // starting a release; never hold an owner across the upgrade itself.
+        let work = root.to_owned();
+        crate::persistence::run_cli_owned(root, move || Self::capture_owned(&work))
+            .context("failed to capture upgrade credentials through the store owner")
+    }
+
+    fn capture_owned(root: &Path) -> Result<Self> {
         let env_map = runtime_env::effective_operator_env_map(root)
             .with_context(|| format!("failed to read runtime env from {}", root.display()))?;
         let env_values = UPGRADE_RUNTIME_ENV_INVARIANT_KEYS
@@ -6182,6 +6212,41 @@ mod tests {
         assert_eq!(state.phase, "building");
         assert!(state.finished_at.is_none());
         assert!(state.last_error.is_none());
+    }
+
+    #[test]
+    fn installer_snapshot_owns_stopped_runtime_and_preserves_guard() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().to_owned();
+        let work = root.clone();
+        crate::persistence::run_cli_owned(&root, move || {
+            let mut env = std::collections::BTreeMap::new();
+            env.insert("CTOX_CHAT_TURN_TIMEOUT_SECS".to_owned(), "30".to_owned());
+            runtime_env::save_runtime_env_map(&work, &env)
+        })
+        .unwrap();
+
+        // The old installer path is the mutation: the identical read without
+        // the CLI owner must still be rejected by the production guard.
+        let error = RuntimeCredentialSnapshot::capture_owned(&root).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<crate::persistence::CoreSyncError>(),
+            Some(crate::persistence::CoreSyncError::Required)
+        ));
+        let snapshot = RuntimeCredentialSnapshot::capture(&root).unwrap();
+        assert!(snapshot
+            .env_values
+            .iter()
+            .any(|(key, value)| key == "CTOX_CHAT_TURN_TIMEOUT_SECS" && value == "30"));
+        snapshot.verify_preserved(&root).unwrap();
+
+        // Each capture released its exclusive lease; the next offline owner
+        // can attach, and callers outside it still cannot access the store.
+        let error = runtime_env::effective_operator_env_map(&root).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<crate::persistence::CoreSyncError>(),
+            Some(crate::persistence::CoreSyncError::Required)
+        ));
     }
 
     #[test]

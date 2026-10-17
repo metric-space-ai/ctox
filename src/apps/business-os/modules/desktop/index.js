@@ -119,6 +119,10 @@ export async function mount(root, api, { restored } = {}) {
   let seeded = false;
   let surfaceWait = null; // ResizeObserver, bis die Fläche ihre echte Größe hat
   let normalized = false;
+  // Selbst gesetzte Standardanordnung folgt der Fensterbreite (Spaltenzahl), bis der Nutzer anordnet: das Fenster geht
+  // oft in einer Zwischengröße auf (Öffnen, dann maximieren), die Seeds sonst dauerhaft festschriebe (G6 @900).
+  let autoFlow = null; // { columns, icons: Map<id, { index, written: Set<'x:y'> }> }
+  let flowWatch = null; // ResizeObserver auf der Fläche, solange autoFlow lebt
   let selectedIconId = typeof snap.selectedIconId === 'string' ? snap.selectedIconId : '';
   // Sicherung vor „Zurücksetzen“: früher localStorage, jetzt Montagezustand + snapshot (OFFEN-3).
   let resetBackup = Array.isArray(snap.resetBackup) ? snap.resetBackup : null;
@@ -138,7 +142,8 @@ export async function mount(root, api, { restored } = {}) {
   cleanups.push(() => clearTimeout(clockTimer));
 
   cleanups.push(api.query('business_apps', {}).subscribe((rows) => {
-    modules = rows.filter((row) => row?.id && row.id !== 'shell');
+    // Keine Apps: Rahmen (shell), Plattform (ctox-platform, vom Kern veröffentlicht, E48) und Bibliotheken (lib:*).
+    modules = rows.filter((row) => row?.id && row.id !== 'shell' && row.id !== 'ctox-platform' && !String(row.id).startsWith('lib:'));
     // App icons are assets of each app (layout.icon_svg); shared/icons.js only supplies generic ones.
     for (const row of modules) if (row.layout?.icon_svg) registerSvgIcon(row.id, row.layout.icon_svg);
     launcher = createLauncher(modules);
@@ -170,6 +175,7 @@ export async function mount(root, api, { restored } = {}) {
     unmount() {
       disposed = true;
       surfaceWait?.disconnect(); surfaceWait = null;
+      stopAutoFlow();
       for (const dispose of cleanups.splice(0)) {
         try { dispose?.(); } catch (error) { console.error('[desktop] cleanup failed:', error); }
       }
@@ -208,16 +214,63 @@ export async function mount(root, api, { restored } = {}) {
       return;
     }
     seeded = true;
-    const grid = currentGrid();
+    // Gespeicherte x/y sind immer die freie Anordnung: im Kompaktraster (≤ 767 px) legt index.css die Icons im Fluss
+    // aus und ignoriert x/y, Kompakt-Koordinaten zerstörten sonst die Anordnung im breiten Fenster.
+    const grid = freeGrid();
+    const clampPositions = !currentGrid().compact;
     const existingById = new Map(iconDocs.map((doc) => [doc.id, doc]));
+    const fresh = new Map();
     launcher.entries().forEach((entry, index) => {
       const seed = iconSeedForEntry(entry, index, grid);
       const existing = existingById.get(seed.id);
-      if (!existing) { watch(api.put('desktop_icons', seed), 'write.seed'); return; }
-      const patch = normalizeIconPatch(existing, seed, grid);
+      if (!existing) {
+        fresh.set(seed.id, { index, written: new Set([posKey(seed)]) });
+        watch(api.put('desktop_icons', seed), 'write.seed');
+        return;
+      }
+      const patch = normalizeIconPatch(existing, seed, grid, clampPositions);
       if (Object.keys(patch).length) watch(api.patch('desktop_icons', seed.id, patch), 'write.seed');
     });
+    if (fresh.size) startAutoFlow(fresh, grid);
     normalizeIconLayoutIfNeeded();
+  }
+
+  function posKey(pos) { return `${Math.round(Number(pos?.x) || 0)}:${Math.round(Number(pos?.y) || 0)}`; }
+  function freeColumns(grid = freeGrid()) {
+    const width = surfaceSize().width || 1024;
+    return Math.max(1, Math.floor(Math.max(grid.cellW, width - grid.offset * 2) / grid.cellW));
+  }
+  function startAutoFlow(icons, grid) {
+    stopAutoFlow();
+    autoFlow = { icons, columns: freeColumns(grid) };
+    if (!refs.surface || typeof ResizeObserver !== 'function') return;
+    flowWatch = new ResizeObserver(() => reflowAuto());
+    flowWatch.observe(refs.surface);
+  }
+  function stopAutoFlow() {
+    flowWatch?.disconnect();
+    flowWatch = null;
+    autoFlow = null;
+  }
+  /** Standardanordnung dieser Montage an die neue Spaltenzahl der Fläche angleichen; endet, sobald der Nutzer anordnet. */
+  function reflowAuto() {
+    if (!autoFlow || disposed || currentGrid().compact) return;
+    const grid = freeGrid();
+    const columns = freeColumns(grid);
+    if (columns === autoFlow.columns) return;
+    const byId = new Map(iconDocs.map((doc) => [doc.id, doc]));
+    for (const [id, rec] of autoFlow.icons) {
+      const doc = byId.get(id);
+      if (doc && !rec.written.has(posKey(doc))) { stopAutoFlow(); return; }
+    }
+    autoFlow.columns = columns;
+    for (const [id, rec] of autoFlow.icons) {
+      const doc = byId.get(id);
+      if (!doc) continue;
+      const pos = gridPosition(rec.index, grid);
+      rec.written.add(posKey(pos));
+      if (posKey(pos) !== posKey(doc)) watch(api.patch('desktop_icons', id, { ...pos, updated_at_ms: Date.now() }), 'write.icons');
+    }
   }
 
   function renderIcons() {
@@ -479,7 +532,7 @@ export async function mount(root, api, { restored } = {}) {
     const confirmed = await api.shell.dialog({ kind: 'confirm', title: t('iconRestoreDefaults'), text: t('resetConfirm'), confirm_label: t('iconRestoreDefaults'), default: false });
     if (confirmed !== true || disposed) return;
     resetBackup = iconDocs.map((doc) => Object.fromEntries(Object.entries(doc).filter(([key]) => DESKTOP_ICON_PERSISTED_FIELDS.has(key))));
-    const grid = currentGrid();
+    const grid = freeGrid();
     const defaults = launcher.entries().map((entry, index) => iconSeedForEntry(entry, index, grid));
     replaceDesktopIcons({ api, docs: iconDocs, snapshot: defaults }).forEach((h) => watch(h, 'write.reset'));
   }
@@ -542,10 +595,16 @@ export async function mount(root, api, { restored } = {}) {
     };
   }
 
+  // Raster nach der eigenen Fläche (Fensterinhalt), nie nach dem Viewport.
   function currentGrid() {
-    const surfaceWidth = surfaceSize().width || globalThis.innerWidth || 0;
+    const surfaceWidth = surfaceSize().width;
     // Gleicher Kompakt-Umbruch wie index.css (Container ≤ 767 px).
     if (surfaceWidth > 0 && surfaceWidth <= 767) return { ...COMPACT_GRID, compact: true };
+    return freeGrid();
+  }
+
+  /** Raster der freien Anordnung (gespeicherte x/y), unabhängig vom Kompaktumbruch. */
+  function freeGrid() {
     return {
       cellW: Math.max(DEFAULT_GRID.cellW, layout?.grid_cell_w || DEFAULT_GRID.cellW),
       cellH: Math.max(DEFAULT_GRID.cellH, layout?.grid_cell_h || DEFAULT_GRID.cellH),
@@ -562,7 +621,7 @@ export async function mount(root, api, { restored } = {}) {
     return { width: el?.clientWidth || 0, height: el?.clientHeight || 0 };
   }
 
-  function gridPosition(index, grid = currentGrid()) {
+  function gridPosition(index, grid = freeGrid()) {
     const surfaceRect = surfaceSize();
     const usableWidth = Math.max(grid.cellW, (surfaceRect?.width || 1024) - grid.offset * 2);
     const columns = Math.max(1, Math.floor(usableWidth / grid.cellW));
@@ -587,9 +646,11 @@ export async function mount(root, api, { restored } = {}) {
     };
   }
 
-  function normalizeIconPatch(doc, seed, grid) {
+  function normalizeIconPatch(doc, seed, grid, clampPositions = true) {
     const patch = {};
-    const position = clampIconPosition(doc, seed, grid);
+    const position = clampPositions
+      ? clampIconPosition(doc, seed, grid)
+      : { x: Number.isFinite(doc.x) ? doc.x : seed.x, y: Number.isFinite(doc.y) ? doc.y : seed.y };
     if (position.x !== doc.x) patch.x = position.x;
     if (position.y !== doc.y) patch.y = position.y;
     if (!doc.target_type) patch.target_type = seed.target_type;
@@ -627,7 +688,7 @@ export async function mount(root, api, { restored } = {}) {
       seen.add(key);
     }
     if (!hasCollision) return;
-    const grid = currentGrid();
+    const grid = freeGrid();
     docs.forEach((doc, index) => watch(api.patch('desktop_icons', doc.id, { ...gridPosition(index, grid), sort_index: index, updated_at_ms: Date.now() }), 'write.icons'));
   }
 }

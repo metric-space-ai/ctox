@@ -12,7 +12,7 @@
 // Jede V2-Prüfung ohne v4-Gegenstück steht im Inventar unten (NO_V4) mit Grund; nichts wird wegassertiert.
 //
 // Lauf (aus src/apps/business-os): node modules/mail/tests/mail-browser-qa.v4.mjs
-//   CTOX_APP_API_STUB=<dir>          Stub (Standard ~/.local/state/shell-v4/stub-pins/b6624eb)
+//   CTOX_APP_API_STUB=<dir>          Stub (Standard ~/.local/state/shell-v4/stub-pins/64acc2c)
 //   CTOX_MAIL_ICON_PROVIDER_MODE     shell|absent|empty (v4: kein Anbieter, alle Modi erwarten mail-action-*)
 //   CTOX_MAIL_ICON_QA_ONLY=1         nur Posteingang + Icon-Abnahme
 //   CTOX_EVIDENCE_DIR=<dir>          Screenshots (Standard tests/shots)
@@ -23,8 +23,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const OUT = process.env.CTOX_EVIDENCE_DIR || join(HERE, 'shots');
@@ -113,6 +114,10 @@ const assertVisibleText = (text) => page.getByText(text, { exact: false }).first
 let exitCode = 0;
 mailQa: try {
   await page.goto(`${baseUrl}/mail-qa.html`, { waitUntil: 'domcontentloaded' });
+  // PIN-ALL (E48): echte Routen/Rechte/Fremd-Collections aus v4/manifests/mail.manifest.json; ohne aktive mail-Version und
+  // ohne Eigentümer-Manifeste sperrt der Kern Plattform- und Fremd-Collections.
+  // outbound: Ziel des App-Befehls outbound.message.compose (commands_in/handlers aus dem echten Manifest).
+  await page.evaluate(([routes, outbound]) => { window.__routes = routes; window.__outboundRoutes = outbound; }, [realManifestRoutes('mail'), realManifestRoutes('outbound')]);
   await page.evaluate(async () => {
     const now = Date.now();
     const ACCOUNT = 'email:alice@example.test';
@@ -164,6 +169,14 @@ mailQa: try {
       actor: { id: 'alice', display_name: 'Alice Admin', role: 'admin', permissions: ['apps.source.edit'] } });
     await kernel.ready;
     for (const [name, docs] of Object.entries(rows)) await kernel.sim.push(name, docs);
+    // Nach den business_apps-Zeilen veröffentlichen (sonst überschreiben sie active_ver); Eigentümer zuerst.
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    // Ein Fremd-App-Befehl braucht beim Ziel commands_in + handlers (sonst forbidden); mit Handler löst der Stub dessen Artefakt
+    // vor dem Simulator auf. Der echte Handler (relative Importe) ist kein Einzelartefakt; das Ergebnis liefert sim.onCommand
+    // unten, der Platzhalter würde nur ohne Simulator laufen und schlägt dann laut fehl.
+    await kernel.sim.publishAppVersion('outbound', 'qa-1', { title: 'Outbound', manifestExtra: window.__outboundRoutes,
+      files: { [window.__outboundRoutes.handlers['outbound.message.compose']]: "export default () => { throw new Error('fixture: sim.onCommand simulates outbound.message.compose'); };" } });
+    await kernel.sim.publishAppVersion('mail', '1', { title: 'Mail', manifestExtra: window.__routes });
     // Core-Seite der Befehle (V2 commandBus.dispatch, mail-browser-qa.mjs:291-405): Ergebnis wird projiziert.
     const sim = kernel.sim;
     const get = (name, id) => kernel.appApi('mail', '1').query(name, {}).get().find((d) => d.id === id);
@@ -416,12 +429,36 @@ mailQa: try {
     await visibleContent.waitFor({ state: 'visible', timeout: 5000 });
   });
   await step('editor.undo-redo', 'L582-L587', async () => {
+    // Auf die Wirkung warten statt auf feste Zeiten (CI 17.10.: Verlauf asynchron). Jede Station wird protokolliert und
+    // steht im Fehlertext, damit ein Rot auf dem Runner ohne Rätselraten lesbar ist.
+    const texts = () => editorFrame.locator('[contenteditable="true"]').evaluateAll((els) => els.map((e) => (e.innerText || '').trim()));
+    const full = async () => (await texts()).some((t) => t.includes('Echter visueller Kampagneninhalt'));
+    const log = [];
+    const note = async (label) => log.push(`${label}: ${JSON.stringify((await texts()).map((t) => t.slice(0, 80)))}`); // nur das Protokoll kürzt
+    const fail = (what) => { throw new Error(`${what} – Verlauf ${log.join(' | ')}`); };
     await page.locator('[data-mail-content-title]').click();
     await page.waitForTimeout(500);
-    await page.locator('[data-mail-editor-history="undo"]').click();
-    await page.waitForTimeout(300);
-    await page.locator('[data-mail-editor-history="redo"]').click();
-    await visibleContent.waitFor({ state: 'visible' });
+    // EasyEmail übernimmt Text-Eingaben per lodash.debounce(…, 200) ins Dokument und rendert den Block daraus neu; auf dem
+    // langsamen Runner zeigt der Block kurz einen Zwischenstand („…Echter visuel“, CI 17.10.). Erst der endgültige
+    // Stand zählt: bleibt der Text dauerhaft unvollständig, ist das Datenverlust und der Schritt bleibt rot.
+    const settled = await expectEventually(full, 'Text übernommen', 5000).then(() => true, () => false);
+    await note('vorher');
+    if (!settled) fail('getippter Text nach 5 s nicht im Dokument (Datenverlust)');
+    let undone = false;
+    for (let attempt = 1; attempt <= 5 && !undone; attempt++) {
+      await page.locator('[data-mail-editor-history="undo"]').click();
+      undone = await expectEventually(async () => !(await full()), 'undo', 3000).then(() => true, () => false);
+      await note(`undo ${attempt}`);
+    }
+    if (!undone) fail('undo nimmt den getippten Text nicht zurück');
+    let redone = false;
+    for (let attempt = 1; attempt <= 5 && !redone; attempt++) {
+      await page.locator('[data-mail-editor-history="redo"]').click();
+      redone = await expectEventually(full, 'redo', 3000).then(() => true, () => false);
+      await note(`redo ${attempt}`);
+    }
+    if (!redone) fail('redo stellt den getippten Text nicht wieder her');
+    await visibleContent.waitFor({ state: 'visible', timeout: 5000 }).catch(async () => { await note('sichtbar?'); fail('getippter Text nicht sichtbar'); });
   });
   await step('editor.preview-viewports', 'L588-L594', async () => {
     await page.locator('[data-mail-editor-viewport="desktop"]').click();
@@ -878,3 +915,12 @@ for (const [lines, check, reason] of NO_V4) console.log(`ohne v4-Gegenstück  V2
 for (const [id, list] of Object.entries(KNOWN_FINDINGS)) console.log(`Befund (streng gemessen) ${id}: ${list.join('; ')}`);
 console.log(`Mail browser QA v4: ${steps.length} Schritte portiert, ${NO_V4.length} V2-Prüfgruppen ohne v4-Gegenstück; Screenshots: ${shots.join(', ')}`);
 process.exitCode = exitCode;
+
+async function expectEventually(probe, what, timeoutMs = 10000) {
+  const until = Date.now() + timeoutMs;
+  for (;;) {
+    if (await probe()) return;
+    if (Date.now() > until) throw new Error(`nicht eingetreten: ${what}`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}

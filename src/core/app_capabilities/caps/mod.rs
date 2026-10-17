@@ -3,13 +3,11 @@ use super::schema::{FunctionSchema, PayloadShape};
 use super::CtoxError;
 use serde_json::Value;
 mod coding;
-mod crew;
 mod knowledge;
-mod queue;
-mod schedule;
-mod task;
-mod ticket;
-mod turn;
+pub mod queue;
+pub mod schedule;
+pub mod task;
+pub mod turn;
 /// CAP-3 flat-argument envelope for agent.coding (§16.30 Nr. 5).
 pub(crate) use coding::flat_envelope as coding_flat_envelope;
 
@@ -77,10 +75,8 @@ impl NativeCall {
 }
 pub fn all_routes() -> impl Iterator<Item = &'static NativeRoute> {
     [
-        ticket::ROUTES,
         queue::ROUTES,
         task::ROUTES,
-        crew::ROUTES,
         turn::ROUTES,
         coding::ROUTES,
         schedule::ROUTES,

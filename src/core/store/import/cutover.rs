@@ -11,13 +11,15 @@ use std::{
 
 pub const ARCHIVE: &str = "legacy_records";
 const INLINE: usize = 256 * 1024;
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     Rxdb,
     Core,
     Mirror,
 }
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Entity {
     App,
     Core,
@@ -40,12 +42,22 @@ pub struct FileChoice {
     pub lsof_receipt_sha256: String,
 }
 /// An explicit projection retains the complete SQL row in the archive as well.
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Mode {
     Rows,
-    MirrorRows { collection_column: String },
-    Projection { columns: Vec<String> },
+    /// Preserve complete SQL rows while a specialized collector builds app documents.
+    ArchiveOnly,
+    MirrorRows {
+        collection_column: String,
+    },
+    Projection {
+        columns: Vec<String>,
+    },
     KeepCore,
 }
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Table {
     pub name: String,
     pub collection: String,
@@ -84,6 +96,8 @@ pub struct Audit {
     pub findings: Vec<Finding>,
     pub compared_equal: Vec<String>,
     pub source_rows: BTreeMap<String, usize>,
+    #[serde(default)]
+    pub target_documents: BTreeMap<String, std::collections::BTreeSet<(String, String)>>,
     #[serde(default)]
     pub source_tables: BTreeMap<String, freeze::Measurement>,
     pub source_row_hashes: BTreeMap<String, BTreeMap<String, String>>,
@@ -197,6 +211,7 @@ struct Row {
     kind: SourceKind,
     authority: SourceKind,
     projection: bool,
+    archive_only: bool,
 }
 /// Actual physical generations; core collection ownership is an explicit input.
 /// The list is not a decision about which version is active.
@@ -257,8 +272,39 @@ fn read_rows(
     total: &mut (usize, usize),
 ) -> Result<Vec<Row>> {
     let name = sql(crate::change_log::identifier(&table.name))?;
-    let mut stmt = sql(input.tx.prepare(&format!("SELECT * FROM {name}")))?;
-    let names: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+    let archive_only = matches!(table.mode, Mode::ArchiveOnly);
+    let use_rowid = table.id_column == "$rowid";
+    let use_primary = table.id_column == "$primary_key";
+    if (use_rowid || use_primary) && !archive_only {
+        return Err(invalid("cutover_composite_identity_archive_only"));
+    }
+    let primary: Vec<String> = if use_primary {
+        let mut keys: Vec<(i64, String)> =
+            sql(input.tx.prepare(&format!("PRAGMA table_info({name})")))?
+                .query_map([], |r| Ok((r.get(5)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+        keys.retain(|k| k.0 > 0);
+        keys.sort_by_key(|k| k.0);
+        if keys.is_empty() {
+            return Err(invalid("cutover_source_primary_key_required"));
+        }
+        keys.into_iter().map(|(_, name)| name).collect()
+    } else {
+        Vec::new()
+    };
+    let select = if use_rowid {
+        format!("SELECT rowid AS __cutover_rowid,* FROM {name}")
+    } else {
+        format!("SELECT * FROM {name}")
+    };
+    let mut stmt = sql(input.tx.prepare(&select))?;
+    let offset = usize::from(use_rowid);
+    let names: Vec<String> = stmt
+        .column_names()
+        .iter()
+        .skip(offset)
+        .map(|s| s.to_string())
+        .collect();
     if names.iter().any(|n| {
         [
             "password",
@@ -278,7 +324,7 @@ fn read_rows(
     while let Some(row) = sql(cursor.next())? {
         let mut raw = serde_json::Map::new();
         for (idx, key) in names.iter().enumerate() {
-            let value = match sql(row.get_ref(idx))? {
+            let value = match sql(row.get_ref(idx + offset))? {
                 ValueRef::Null => Value::Null,
                 ValueRef::Integer(n) => json!(n),
                 ValueRef::Real(n) => {
@@ -306,10 +352,20 @@ fn read_rows(
         if total.0 > budget.rows || total.1 > budget.bytes {
             return Err(invalid("cutover_budget"));
         }
-        let id = match &raw[&table.id_column] {
-            Value::String(s) => s.clone(),
-            Value::Number(n) => n.to_string(),
-            _ => return Err(invalid("cutover_source_id")),
+        let id = if use_rowid {
+            sql(row.get::<_, i64>(0))?.to_string()
+        } else if use_primary {
+            let key: Vec<_> = primary.iter().map(|name| raw[name].clone()).collect();
+            if key.iter().any(Value::is_null) {
+                return Err(invalid("cutover_source_primary_key_null"));
+            }
+            format!("pk:{}", sha(&json!(key)))
+        } else {
+            match &raw[&table.id_column] {
+                Value::String(s) => s.clone(),
+                Value::Number(n) => n.to_string(),
+                _ => return Err(invalid("cutover_source_id")),
+            }
         };
         bound(&id, 512)?;
         let collection = if let Mode::MirrorRows { collection_column } = &table.mode {
@@ -367,6 +423,7 @@ fn read_rows(
             },
             authority: table.entity.authority(),
             projection: deleted || matches!(table.mode, Mode::Projection { .. }),
+            archive_only,
         });
     }
     Ok(rows)
@@ -403,6 +460,19 @@ fn add(docs: &mut BTreeMap<(String, String), Document>, doc: Document) -> Result
         docs.insert(key, doc);
     }
     Ok(())
+}
+fn add_for_row(
+    docs: &mut BTreeMap<(String, String), Document>,
+    doc: Document,
+    row: &Row,
+    audit: &mut Audit,
+) -> Result<()> {
+    audit
+        .target_documents
+        .entry(format!("{}:{}", row.db, row.table))
+        .or_default()
+        .insert((doc.collection.clone(), doc.id.clone()));
+    add(docs, doc)
 }
 /// Row equality is audited before target writes. This is an offline import, not
 /// a running projection or permission shortcut. CoreKeep never reads contents.
@@ -507,7 +577,8 @@ pub fn collect(
     // Only current authoritative rows may be the comparison oracle.
     let mut authorities = BTreeMap::new();
     for row in &rows {
-        if row.body.is_object()
+        if !row.archive_only
+            && row.body.is_object()
             && row.kind == row.authority
             && (row.authority == SourceKind::Core
                 || active.get(&row.collection) == Some(&row.version))
@@ -520,6 +591,10 @@ pub fn collect(
     }
     let mut docs = BTreeMap::new();
     for row in &rows {
+        if row.archive_only {
+            add_for_row(&mut docs, archive(row, imported_at)?, row, &mut audit)?;
+            continue;
+        }
         if !row.body.is_object() {
             let doc = archive(row, imported_at)?;
             audit.findings.push(Finding {
@@ -532,7 +607,7 @@ pub fn collect(
                 mirror_sha256: sha(&row.raw),
                 archive_id: doc.id.clone(),
             });
-            add(&mut docs, doc)?;
+            add_for_row(&mut docs, doc, row, &mut audit)?;
             continue;
         }
         // Historical RxDB versions are archived even when an identical Core mirror exists.
@@ -544,14 +619,27 @@ pub fn collect(
                 ))
             })?;
             if row.version != *current {
-                add(&mut docs, archive(row, imported_at)?)?;
+                add_for_row(&mut docs, archive(row, imported_at)?, row, &mut audit)?;
                 continue;
             } // E29-R4
         }
         if row.kind != row.authority {
             // E29-R3
             let authority = authorities.get(&(row.collection.clone(), row.id.clone()));
-            if authority.is_some_and(|body| *body == &row.body) {
+            if known.contains(row.collection.as_str())
+                && authority.is_some_and(|body| *body == &row.body)
+            {
+                let mut target_body = row.body.clone();
+                if let Some(spec) = plan.migrations.get(&row.collection) {
+                    target_body = evaluator.migrate(&row.collection, spec, target_body)?;
+                }
+                let (target_id, _) =
+                    base_release::migrated_identity(&row.collection, &row.id, target_body)?;
+                audit
+                    .target_documents
+                    .entry(format!("{}:{}", row.db, row.table))
+                    .or_default()
+                    .insert((row.collection.clone(), target_id));
                 audit.compared_equal.push(
                     json!([row.db, row.table, row.collection, row.version, row.id]).to_string(),
                 );
@@ -572,13 +660,13 @@ pub fn collect(
                     mirror_sha256: sha(&row.body),
                     archive_id: doc.id.clone(),
                 });
-                add(&mut docs, doc)?;
+                add_for_row(&mut docs, doc, row, &mut audit)?;
             }
             continue;
         }
         let declared = known.contains(row.collection.as_str()); // E29-R1
         if !declared {
-            add(&mut docs, archive(row, imported_at)?)?;
+            add_for_row(&mut docs, archive(row, imported_at)?, row, &mut audit)?;
             continue;
         } // E29-R2
         let mut body = row.body.clone();
@@ -588,7 +676,7 @@ pub fn collect(
         let _owner_changed = aliases.migrate(&row.collection, &mut body);
         let (id, body) = base_release::migrated_identity(&row.collection, &row.id, body)?;
         let archive_complete = row.projection || body != row.body;
-        add(
+        add_for_row(
             &mut docs,
             Document {
                 collection: row.collection.clone(),
@@ -596,9 +684,11 @@ pub fn collect(
                 body,
                 revision: row.revision.clone(),
             },
+            row,
+            &mut audit,
         )?;
         if archive_complete {
-            add(&mut docs, archive(row, imported_at)?)?;
+            add_for_row(&mut docs, archive(row, imported_at)?, row, &mut audit)?;
         } // E29-R5
     }
     let mut report = ImportReport::default();

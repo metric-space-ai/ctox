@@ -65,14 +65,22 @@ export const PLATFORM_COLLECTIONS = [
   'business_module_catalog', 'ctox_queue_tasks', 'ctox_runtime_settings', 'files', 'shell_preferences',
 ];
 // Rückfall, falls das Plattformmanifest nicht lesbar ist (Stand ctox-platform.manifest.json 15.10. 13:11).
+// Rückfall ohne Plattform-Manifest-Datei (Mini-Repo-Tests); muss den exports von src/core/business_os/v4/ctox-platform.manifest.json
+// gleichen – gen-manifest.test.mjs prüft das.
 export const PLATFORM_FALLBACK_EXPORTS = {
   app_activations: ['read', 'write'],
+  app_catalog: ['read'],
+  app_drafts: ['read'],
   business_app_versions: ['read'],
   business_apps: ['read'],
   business_commands: ['read', 'write'],
+  coding_turns: ['read'],
   ctox_queue_tasks: ['read'],
   ctox_runtime_settings: ['read'],
+  devices: ['read'],
   files: ['read', 'write'],
+  machine_enrollments: ['read'],
+  mail_server_state: ['read'],
   shell_preferences: ['read', 'write'],
 };
 // business_module_catalog entfällt (§16.14/§16.17): Zugriff stattdessen auf business_apps/business_app_versions.
@@ -96,6 +104,16 @@ export const OWNER_RESOLUTIONS = {
   sellify_campaigns: { owner: 'outbound-lead-generation', basis: '§16.21 Eigentum: OLG (Projektion der externen SQL-Quelle Sellify)' },
   sellify_companies: { owner: 'outbound-lead-generation', basis: '§16.21 Eigentum: OLG (Projektion der externen SQL-Quelle Sellify)' },
   sellify_people: { owner: 'outbound-lead-generation', basis: '§16.21 Eigentum: OLG (Projektion der externen SQL-Quelle Sellify)' },
+};
+
+// Exakte Ausnahmen vor den Präfix-Regeln (Namensgleichheit, kein Präfix): E42.3 Nr. 2 + E54.3b Nr. 1 (16.10.2026) – das
+// Instanzmodul workjet besitzt genau diese fünf workjet_*-Collections; alle anderen workjet_* bleiben bei ctox ('workjet_').
+export const EXACT_OWNERS = {
+  workjet_luma_state: 'workjet',
+  workjet_mailbox_envelopes: 'workjet',
+  workjet_worker_dispatch_intents: 'workjet',
+  workjet_worker_dispatch_outcomes: 'workjet',
+  workjet_worker_dispatch_sources: 'workjet',
 };
 
 // Präfix-Regeln: nur für Collections, die weder entschieden noch in der Basis-Zuordnung stehen.
@@ -193,6 +211,10 @@ export const SHELL_SHARED_PATTERNS = [
 // Eigentumszuordnung; generate() prüft sie und trägt die ops in die exports der Eigentümer-App ein.
 export const SHELL_FOREIGN = {
   shell_preferences: { owner_app: PLATFORM_OWNER, ops: ['read', 'write'], sources: ['§16.19 Nr. 3 (Pins, Launcher-Reihenfolge über api.put)'] },
+  // AGENT (§16.44): die Code-Ansicht der Shell liest Coding-Läufe und die Patch-Datei (v4/source/coding-port.js).
+  // Ohne Deklaration verweigert der Kern seit E48 das Lesen; die Code-Ansicht zeigte „Quelltext nicht ladbar“.
+  coding_turns: { owner_app: PLATFORM_OWNER, ops: ['read'], sources: ['v4/source/coding-port.js:27 (turns: api.query coding_turns)'] },
+  files: { owner_app: PLATFORM_OWNER, ops: ['read'], sources: ['v4/source/coding-port.js:42 (readPatch: api.get files → ref)'] },
   // MAN2: Meldeschleife FR6b (v4/shell/report.js, REPORT_COLLECTIONS) speichert Meldungen wie „Bugs & Features“.
   business_module_reports: { owner_app: 'ctox', ops: ['read', 'write'], sources: ['v4/shell/report.js REPORT_COLLECTIONS.reports (FR6b Meldeschleife, api.put)'] },
   ctox_bug_reports: { owner_app: 'ctox', ops: ['read', 'write'], sources: ['v4/shell/report.js REPORT_COLLECTIONS.bugs (FR6b Meldeschleife, api.put)'] },
@@ -567,13 +589,17 @@ function loadAnalysisSections(analysisDir) {
   return sections;
 }
 
-export function loadPlatform(file) {
+export function loadPlatform(file, repo = DEFAULT_REPO) {
   if (file && fs.existsSync(file)) {
     const m = readJson(file);
     const exports = {};
     for (const [name, ops] of Object.entries(m.exports || {})) if (!name.startsWith('_')) exports[name] = sortOps(ops);
     const collections = Object.keys(m.collections || {}).filter((n) => !n.startsWith('_'));
-    return { exports, collections, source: file.startsWith(os.homedir()) ? `~${file.slice(os.homedir().length)}` : file };
+    // Repo-relativ, sonst hinge die Ausgabe vom Checkout-Pfad ab und --check wäre je Klon/CI anders (16.10.: absoluter Pfad).
+    const abs = path.resolve(file), root = path.resolve(repo);
+    const source = abs.startsWith(root + path.sep) ? path.relative(root, abs).split(path.sep).join('/')
+      : abs.startsWith(os.homedir()) ? `~${abs.slice(os.homedir().length)}` : abs;
+    return { exports, collections, source };
   }
   return { exports: { ...PLATFORM_FALLBACK_EXPORTS }, collections: Object.keys(PLATFORM_FALLBACK_EXPORTS), source: 'PLATFORM_FALLBACK_EXPORTS (gen-manifest.mjs)' };
 }
@@ -1496,7 +1522,7 @@ export async function generate(options = {}) {
   const contract = fs.existsSync(contractFile) ? readJson(contractFile) : {};
   const baselineFile = options.baseline === undefined ? DEFAULT_BASELINE : options.baseline;
   const baseline = baselineFile && fs.existsSync(baselineFile) ? readJson(baselineFile).owners || {} : {};
-  const platform = loadPlatform(options.platformManifest === undefined ? path.join(repo, PLATFORM_MANIFEST_FILE) : options.platformManifest);
+  const platform = loadPlatform(options.platformManifest === undefined ? path.join(repo, PLATFORM_MANIFEST_FILE) : options.platformManifest, repo);
   const demandOnly = loadDemandOnly(repo);
   const analysis = loadAnalysisSections(analysisDir);
 
@@ -1583,6 +1609,8 @@ export async function generate(options = {}) {
   ]);
 
   const prefixOwner = (name, candidates = null) => {
+    const exact = Object.hasOwn(EXACT_OWNERS, name) ? EXACT_OWNERS[name] : null;
+    if (exact && (!candidates || candidates.includes(exact))) return exact;
     for (const [prefix, owner] of PREFIX_OWNERS) {
       if (!name.startsWith(prefix)) continue;
       if (candidates && !candidates.includes(owner)) continue;

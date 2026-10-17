@@ -164,26 +164,32 @@ export function computeCreatorActionState({ request, appId, appTitle, appDesc, a
   return { hasRequest, validationErrors, deployReady, diagnostic };
 }
 
+// v4 (ctox-platform-Schema business_apps: id, app_id, title, active_ver, layout, provenance, …): Eigenbau = App ohne
+// Release-Basis (provenance.base_release leer), also auf dieser Instanz angelegt; Kern-Apps aus dem Release tragen sie.
+// V2-Katalogzeilen (entry/source) bleiben für die V2-Linie unverändert.
+function isV4AppRow(mod) {
+  return mod && typeof mod === 'object' && !('entry' in mod) && !('source' in mod) && !('store' in mod)
+    && ('active_ver' in mod || 'app_id' in mod || 'provenance' in mod);
+}
+
 export function normalizeCreatorInstalledApps(catalog) {
   const modules = Array.isArray(catalog?.modules) ? catalog.modules : [];
   return modules
     .filter((mod) => {
+      if (!mod?.id || mod.id === 'creator') return false;
+      if (isV4AppRow(mod)) return !mod.provenance?.base_release && mod.id !== 'shell' && mod.id !== 'ctox-platform' && !String(mod.id).startsWith('lib:');
       const entry = String(mod?.entry || '');
       const source = String(mod?.source || mod?.store?.distribution || '').toLowerCase();
-      return mod?.id
-        && mod.id !== 'creator'
-        && (
-          entry.startsWith('installed-modules/')
+      return entry.startsWith('installed-modules/')
           || source === 'installed'
-          || source.includes('installed-module')
-        );
+          || source.includes('installed-module');
     })
     .map((mod) => ({
       id: normalizeModuleId(mod.id),
       title: String(mod.title || mod.id),
       description: String(mod.description || mod.store?.summary || ''),
-      category: String(mod.category || mod.source || 'Custom'),
-      version: String(mod.version || '0.1.0'),
+      category: String(mod.category || mod.layout?.category || mod.source || 'Custom'),
+      version: String(mod.version || mod.active_ver || '0.1.0'),
       entry: String(mod.entry || ''),
     }))
     .filter((mod) => mod.id)

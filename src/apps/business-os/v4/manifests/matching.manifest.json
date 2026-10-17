@@ -284,7 +284,7 @@
     "core/pipeline.js": "b47543dfb3005857f7a3619dca0e2add6923f61350edf0c6321f96683b774aeb",
     "core/screening.js": "e52b9dc276e753e8f2c2348e1db1c617feeca3cad926e8ca53ac51a765dd5810",
     "handlers/_lib/candidate.js": "53fabb8e5f0beb2dc4c3a302a6e6425f0269eb70189bf5a519b597aec59ac04e",
-    "handlers/_lib/envelope.js": "5bb3d60fd16d20ac2243dce4f0bec82f6d9468596bd6244f149c0bebba406cc1",
+    "handlers/_lib/envelope.js": "0d9573282a81c28c43173a681de5b0585768bc57d06b36eafa207d3252412676",
     "handlers/_lib/errors.js": "7438ffa06346f5e8edab02ca70339861877985442c5ca0862819ed70e3853b17",
     "handlers/_lib/files.js": "360cc44fddcc33fefbe518c4de382150552309e5dced1883c899e1c79a3784f9",
     "handlers/_lib/job.js": "14e0c924dfeb7e2a85de362c02db94c2d858df9c0f4060e24416bbbeb893170b",
@@ -444,7 +444,7 @@
   },
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "1c0f9ff073ce92a2ccf755acbc1f05a3ec274aad765628d96d1b1fbabc6d0fc9",
+    "base_hash": "cb8c64f12040bac01012a73457d8319aba7031e423281a60c85432d8b74bd105",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

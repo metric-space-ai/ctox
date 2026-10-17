@@ -3864,7 +3864,7 @@
     "icon.svg": "b0e39a31950163f74430e75f10e54946aa56b896a38c2e8d8bc069faf714fa20",
     "index.css": "7465020600d204abcd08096048753545bab6bdd8177add409b9ea102b064b8b5",
     "index.html": "e4ecc48f41fa232c52fe7c490d41418e85d826f183ac0c8e66ec98fbc501c0e8",
-    "index.js": "97b77360ac25a92932528f1a347397573d223dd18460669e5036c17393320697",
+    "index.js": "e330af0b869495c86600ee9f26650a910dc76df75dacad1dc037a269414ae65d",
     "locales/de.json": "0d3a6766c9f9002ded40e015c270e1fe09c5ae5c0e5079f3973848e92aad75d0",
     "locales/en.json": "515778d61cc570c1502bfb94fc6d046503be831a78522908bf1d9b5892895113",
     "module.json": "dc8917de377caa303b2b3c5b6578edc2dde25723dd27ec847edf0df9e7919047",
@@ -3931,7 +3931,7 @@
       "_evidence": {
         "code_read": [
           "index.js:969",
-          "index.js:2006"
+          "index.js:2025"
         ],
         "code_write": [],
         "sources": [
@@ -4183,7 +4183,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "859860ab9c63b17b946debf0a0ac9dc69928ca998959d3922c772d4e37125bba",
+    "base_hash": "75e037a13256e20b0b463485947bec0bd4417958c0cf5933247dcb992f2239cb",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

@@ -502,6 +502,11 @@
     row-gap: 5px;
   }
 
+  /* Textreiter brauchen Luft für fremde Schriftmetriken: auf Linux-Fonts (CI) lief die Zeile bei 360 px um 2 px über. */
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .ctox-pane-tab:not(.mail-content-editor-panel-button) {
+    padding-inline: 6px;
+  }
+
   [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-html-tools {
     flex: 1 0 100%;
     justify-content: center;

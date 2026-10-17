@@ -57,25 +57,27 @@ impl RuntimeCodec {
         if actor_json(&a) != command["actor"] {
             return Err(invalid("revoked: actor changed"));
         }
-        let native = super::super::commands::handles(text(command, "type").map_err(sql_error)?);
-        let manifest = if native {
-            json!({"app_id":command["app_id"],"app_ver":"native-platform"})
-        } else if command["runtime_completion"] == true {
-            self.version(
-                db,
-                text(command, "app_id").map_err(sql_error)?,
-                text(command, "app_ver").map_err(sql_error)?,
-            )?["manifest"]
-                .clone()
-        } else {
-            self.manifest(db, text(command, "app_id").map_err(sql_error)?)?
-        };
+        let manifest = self.route(db, &saved)?;
+        let resolved = manifest["app_id"]
+            .as_str()
+            .ok_or_else(|| invalid("invalid: execution target"))?;
+        if !routing::core_route(text(command, "type").map_err(sql_error)?)
+            && ctox_app_runtime::execution_app(command).map_err(sql_error)? != resolved
+        {
+            return Err(invalid("revoked: execution target changed"));
+        }
         if manifest["app_ver"] != command["app_ver"]
             || binding.get("manifest").is_some_and(|m| m != &manifest)
         {
             return Err(invalid("revoked: app version changed"));
         }
         let r = rights(db)?;
+        if command["id"] != parent {
+            let kind = text(command, "type").map_err(sql_error)?;
+            if !origin::core_only(&r, resolved, kind)? || !origin::native_event(db, &saved)? {
+                permit_with_rights(db, &r, resolved, &a, kind)?;
+            }
+        }
         if binding["fence"]["rights_ver"].as_u64() != Some(r.rights_ver) {
             return Err(invalid("revoked: rights changed"));
         }
@@ -131,7 +133,7 @@ impl StoreCodec for RuntimeCodec {
     fn read(&self, db: &Connection, binding: &Value, name: &str) -> Result<Vec<Value>, StoreError> {
         let a = self.check(db, binding)?;
         let r = rights(db)?;
-        let app = text(&binding["command"], "app_id").map_err(sql_error)?;
+        let app = ctox_app_runtime::execution_app(&binding["command"]).map_err(sql_error)?;
         // Authorize the collection even when it contains no rows.
         let scope = r
             .resolve_app_collection(app, a.role.as_str(), a.id.as_deref().unwrap(), name)
@@ -200,7 +202,7 @@ impl StoreCodec for RuntimeCodec {
         self.check_fence(tx, binding)?;
         let a = self.check(tx, binding)?;
         let r = rights(tx)?;
-        let app = text(&binding["command"], "app_id").map_err(sql_error)?;
+        let app = ctox_app_runtime::execution_app(&binding["command"]).map_err(sql_error)?;
         if let Some(stamp) = stamp {
             let h = ctox_store::change_log::head(tx)?;
             if stamp["epoch"] != h.epoch
@@ -210,7 +212,13 @@ impl StoreCodec for RuntimeCodec {
                 return Err(invalid("conflict: transaction snapshot changed"));
             }
         }
-        let core = origin::delivery_permit(tx, &binding["command"], &a)?;
+        let parent = text(&binding["fence"], "run_id")
+            .map_err(sql_error)?
+            .strip_prefix("app-runtime:")
+            .ok_or_else(|| invalid("invalid: native run"))?;
+        let canonical = document(tx, "business_commands", parent)?
+            .ok_or_else(|| invalid("revoked: command missing"))?;
+        let core = origin::delivery_permit_for(tx, &canonical, &a, &r, app)?;
         let permit = if core {
             None
         } else {
@@ -346,14 +354,11 @@ impl StoreCodec for RuntimeCodec {
             return Err(invalid("unavailable: native platform method"));
         }
         let app = text(args, "target_app").map_err(sql_error)?;
-        let source = text(&binding["command"], "app_id").map_err(sql_error)?;
+        let source = text(&binding["manifest"], "app_id").map_err(sql_error)?;
         let kind = text(args, "type").map_err(sql_error)?;
-        let source_manifest = self.manifest(tx, source)?;
-        let receiver = self.manifest(tx, app)?;
-        ctox_app_runtime::ipc::check(&source_manifest, &receiver, kind, &args["options"])
-            .map_err(sql_error)?;
         let a = self.check(tx, binding)?;
-        permit(tx, app, &a, kind)?;
+        let intent = json!({"app_id":source,"target_app":app,"type":kind,"actor_id":a.id});
+        self.route(tx, &intent)?;
         let id = args["options"]["id"]
             .as_str()
             .map(str::to_owned)
@@ -361,7 +366,7 @@ impl StoreCodec for RuntimeCodec {
         if document(tx, "business_commands", &id)?.is_some() {
             return Err(invalid("conflict: command id already exists"));
         }
-        let doc = json!({"id":id,"app_id":app,"source_app":source,"type":kind,"payload":args["payload"],"actor_id":a.id,"status":"queued","created_at":chrono::Utc::now().to_rfc3339(),"source_command_id":binding["command"]["id"],"record_id":args["options"]["record_id"],"client_context":args["options"]["client_context"]});
+        let doc = json!({"id":id,"app_id":source,"target_app":app,"type":kind,"payload":args["payload"],"actor_id":a.id,"status":"queued","created_at":chrono::Utc::now().to_rfc3339(),"source_command_id":binding["command"]["id"],"record_id":args["options"]["record_id"],"client_context":args["options"]["client_context"]});
         super::super::commands::put(tx, "business_commands", &id, &doc)?;
         let c = collection(tx, "business_commands")?;
         let (rev,seq):(String,u64)=tx.query_row("SELECT rev,seq FROM _changes WHERE collection='business_commands' AND gen=?1 AND id=?2",params![c.gen,id],|r|Ok((r.get(0)?,r.get(1)?)))?;

@@ -49,7 +49,10 @@ test('page-before-receipt and tombstones complete canonical writes without ack p
   const h=api.put('items',{id:'x',n:1});await h.local;
   await page('items',[{id:'x',seq:'30',rev:'removed',op:'delete'}],'30');
   await transport.events.write_result({op_id:h.op_id,status:'merged',requires_page:true,seq:'20',rev:'r20',gen:1,doc:{id:'x',forged:true}});
-  assert.equal((await h.result).status,'merged');assert.equal(api.get('items','x').get(),null);assert.equal((await k.sim.outbox()).length,0);
+  const receipt=await h.result;assert.equal(receipt.status,'merged');assert.equal(api.get('items','x').get(),null);assert.equal((await k.sim.outbox()).length,0);
+  const lost=(await k.sim.archiveLocal()).find(row=>row.op_id===h.op_id);assert.ok(lost,'Master tombstone must journal the locally acknowledged document');
+  assert.deepEqual(lost.local_version.data,{id:'x',n:1});assert.equal(lost.canonical_version.deleted,true);assert.equal(receipt.local_archived_ref,lost.ref);
+  assert.ok(k.status.forApp('sender').get().some(item=>item.ref===lost.ref));
   await page('items',[{id:'x',seq:'19',rev:'stale',body:{id:'x',n:0}}],'30');
   assert.equal(api.get('items','x').get(),null);
  }finally{await k.close();}

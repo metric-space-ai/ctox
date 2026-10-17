@@ -209,6 +209,30 @@ pub(super) fn execute(
     if !request.net_domains.is_empty() && !entry.net_from_call {
         return Err(forbidden("this program may not name network targets"));
     }
+    if entry.net_domains.len() > 16 || !entry.net_domains.iter().all(|d| domain(d)) {
+        return Err(CtoxError::new(
+            ErrorCode::Unavailable,
+            "invalid platform network targets",
+        ));
+    }
+    let mut net_domains = entry.net_domains.clone();
+    net_domains.extend(request.net_domains.iter().cloned());
+    net_domains.sort();
+    net_domains.dedup();
+    if !net_domains.is_empty() {
+        let config = crate::inference::runtime_env::load_persisted_runtime_env_map_cached(root)
+            .map_err(native_error)?;
+        ctox_process_network::grants::authorize_domains(
+            config
+                .get(ctox_process_network::grants::CONFIG_KEY)
+                .map(String::as_str),
+            &ctx.app_id,
+            &ctx.app_ver,
+            &request.program,
+            &net_domains,
+        )
+        .map_err(|_| forbidden("network targets are not approved for this app version and tool"))?;
+    }
     if request.args.len() > 128
         || request
             .args
@@ -267,8 +291,6 @@ pub(super) fn execute(
         Some(_) => return Err(invalid("$.cwd_ref")),
     };
     let limits = entry.limits.effective(timeout)?;
-    let mut net_domains = entry.net_domains.clone();
-    net_domains.extend(request.net_domains.iter().cloned());
     let plan = super::sandbox::Plan {
         root,
         workspace: &base,

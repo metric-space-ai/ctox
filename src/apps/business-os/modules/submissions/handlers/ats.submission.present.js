@@ -44,7 +44,6 @@ export default async function handle(command, ctx) {
       status: 'sent',
       created_at_ms: now,
       updated_at_ms: now,
-      _deleted: false,
     });
     return { denied: false, id };
   });

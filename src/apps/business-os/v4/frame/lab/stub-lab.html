@@ -42,15 +42,27 @@ const publish = (id, ver, title) => kernel.sim.publishAppVersion(id, ver, { titl
 const known = new Set(kernel.apps.get().map((a) => a.id));
 // K-1d: artifacts.url/bind nehmen die aktive Shell des Kernels; ohne veröffentlichte Shell gibt es keine Instanz-URL.
 // Die Shell-Zeile filtert der Rahmen aus dem Launcher.
+// E48 (Stub 8265bd7): die Shell liest Fremd-Collections (shell_preferences, business_commands, …) nur mit der Deklaration
+// aus ihrem echten Manifest (v4/manifests/shell.manifest.json, Routen- und Rechteteil wie v4/tools/port/real-manifest.mjs).
+// Eigentümer-Apps (ctox, desktop) veröffentlicht das Labor nicht – das tut der Fall, der sie braucht; ctox-platform
+// veröffentlicht der Stub selbst.
+const SHELL_ROUTE_FIELDS = ['handlers', 'command_rights', 'commands_in', 'commands_out', 'foreign_collections', 'exports', 'collection_rights', 'collections'];
+const shellManifest = await (await fetch('/v4/manifests/shell.manifest.json', { cache: 'no-store' })).json();
+const shellRoutes = Object.fromEntries(SHELL_ROUTE_FIELDS.filter((key) => shellManifest[key] !== undefined).map((key) => [key, shellManifest[key]]));
 if (BOUND) {
   // §16.37/§16.39: Bibliotheken als eigene Artefakte lib:<name>@<M.m>, die Shell bindet ihre Majors (manifest.libs).
   for (const [name, ver] of Object.entries(LAB_LIBS)) {
     if (!known.has(`lib:${name}`)) await kernel.sim.publishAppVersion(`lib:${name}`, ver, { title: `lib:${name}`, styles: [] });
   }
-  if (!known.has('shell')) await kernel.sim.publishAppVersion('shell', 'lab', { title: 'Shell', styles: [], manifestExtra: { libs: Object.fromEntries(Object.entries(LAB_LIBS).map(([n, v]) => [n, v.split('.')[0]])) } });
+  if (!known.has('shell')) await kernel.sim.publishAppVersion('shell', 'lab', { title: 'Shell', styles: [], manifestExtra: { ...shellRoutes, libs: Object.fromEntries(Object.entries(LAB_LIBS).map(([n, v]) => [n, v.split('.')[0]])) } });
   frameBase = await import((kernel.artifacts ?? kernel.shell.artifacts).bind('shell', 'lab').url('v4/frame/index.js'));
 } else {
-  if (!known.has('shell')) await kernel.sim.publishAppVersion('shell', 'lab', { title: 'Shell', styles: [] });
+  // Vom Rohpfad ../index.js spricht der Rahmen die App-API als shell@dev an (frame/index.js shellVer); die Deklaration
+  // steht deshalb auch an dieser Version. Aktiv bleibt shell@lab.
+  if (!known.has('shell')) {
+    await kernel.sim.publishAppVersion('shell', 'dev', { title: 'Shell', styles: [], manifestExtra: shellRoutes });
+    await kernel.sim.publishAppVersion('shell', 'lab', { title: 'Shell', styles: [], manifestExtra: shellRoutes });
+  }
   frameBase = await import('../index.js');
 }
 for (const [id, title] of [['notes', 'Notizen'], ['tasks', 'Aufgaben'], ['ledger', 'Buchhaltung']]) {

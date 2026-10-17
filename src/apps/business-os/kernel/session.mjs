@@ -2,6 +2,7 @@
 import {withTimeout} from './vendor/async-timeout.js';
 import {decodeHelloFrame} from './vendor/hello.mjs';
 import {CtoxError} from './values.mjs';
+import {decodeAppGrant} from './app-grants.mjs';
 const COMMAND_CAPABILITY_TIMEOUT_MS = 120000;
 const COMMAND_CAPABILITY_TERMINAL_NEGATIVE_CACHE_MS = 10000;
 const COMMAND_CAPABILITY_TRANSIENT_ANTI_STORM_MS = 100;
@@ -169,10 +170,10 @@ function injectedBusinessOsCapabilityToken(now = Date.now()) {
  * Scope grants stay in memory; a denied V4 session never consumes V3 authority. */
 export function createKernelSession({instanceId,userId,hello,verifyScopeToken,resolveScope}) {
   if(!instanceId || !userId || typeof hello!=='function' || typeof verifyScopeToken!=='function')throw new CtoxError('forbidden','Authenticated bootstrap and scope verifier required');
-  let selected=null;
+  let selected=null;const appTokens=new Map();
   return Object.freeze({
     async hello(identity,challenge) {
-      selected=null;
+      selected=null;appTokens.clear();
       if(identity.instanceId!==instanceId || identity.userId!==userId)throw new CtoxError('forbidden','Session identity mismatch');
       const offer=decodeHelloFrame(JSON.stringify(await hello(identity,challenge)));
       if(offer.type!=='hello' || offer.instance_id!==instanceId || (challenge && offer.device_proof.nonce!==challenge.nonce))throw new CtoxError('forbidden','Device hello identity mismatch');
@@ -185,13 +186,20 @@ export function createKernelSession({instanceId,userId,hello,verifyScopeToken,re
       for(const token of value.scope_tokens)if(!await verifyScopeToken(token,{instanceId,userId,epoch:value.epoch,rights_ver:value.rights_ver}))throw new CtoxError('forbidden','Scope token verification failed');
       selected=value;
     },
+    async acceptAppGrant(appId,token) {
+      if(appId==='shell')throw new CtoxError('forbidden','Shell grant requires hello_ok');
+      if(!selected || !await verifyScopeToken(token,{instanceId,userId,epoch:selected.epoch,rights_ver:selected.rights_ver,appId}))throw new CtoxError('forbidden','Collection grant missing',{app_id:appId});
+      selected={...selected,scope_tokens:selected.scope_tokens.filter(t=>decodeAppGrant(t)?.claims.app_id!==appId)};
+      appTokens.set(appId,token);return token;
+    },
+    revokeApp(appId,rightsVer){if(typeof appId!=='string')return;const token=appTokens.get(appId)??selected?.scope_tokens.find(t=>decodeAppGrant(t)?.claims.app_id===appId);appTokens.delete(appId);if(selected)selected={...selected,scope_tokens:selected.scope_tokens.filter(t=>decodeAppGrant(t)?.claims.app_id!==appId),...(rightsVer===undefined?{}:{rights_ver:String(rightsVer)})};return token;},
     async scope(collection) {
       if(!selected || typeof resolveScope!=='function')throw new CtoxError('forbidden','Session has no admitted scope');
-      const scope=await resolveScope(collection,selected);
+      const scope=await resolveScope(collection,{...selected,app_scope_tokens:[...appTokens.values()]});
       if(!scope?.scope_hash || !Number.isSafeInteger(scope.gen))throw new CtoxError('forbidden','Collection grant missing');
       return {...scope,collection,epoch:selected.epoch};
     },
-    tokens(){if(!selected)throw new CtoxError('forbidden','No authenticated session');return [...selected.scope_tokens];},
-    close(){selected=null;},
+    tokens(){if(!selected)throw new CtoxError('forbidden','No authenticated session');return [...selected.scope_tokens,...appTokens.values()];},
+    close(){selected=null;appTokens.clear();},
   });
 }

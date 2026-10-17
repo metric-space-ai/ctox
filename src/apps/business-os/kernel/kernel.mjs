@@ -1,3 +1,5 @@
+import {createPreferencesApi,preferenceError,PREFERENCE_COLLECTION} from './preferences.mjs';
+import {PLATFORM_MANIFEST} from './platform-manifest.generated.mjs';
 import {commandTarget} from './command-routing.mjs';
 import { createCommandTimings } from './command-timings.mjs';
 import { PLATFORM_COLLECTIONS, PLATFORM_APP_ID } from './platform.mjs';
@@ -8,7 +10,7 @@ import { evictCollection, reclaimCache, CLIENT_CACHE_BUDGET } from './cache.mjs'
 import { KernelTransport, decimalSeq, seqGreater, maxSeq, checkpointKey } from './transport.mjs';
 import { assertLeader, acquireGeneration } from './leader.mjs';
 // Local App API 4.0 kernel. Derived from the reviewed executable contract; no legacy runtime imports.
-import { CtoxError, StaleLeader, cloneValue, deepFreeze, deepEqual, jsonEq, liveEqual, mergePatch, fnv1a, uuidv7, sha256Js, sha256Hex, hasBlob, isBlob, isPlainObject } from './values.mjs';
+import { CtoxError, StaleLeader, stripReadMetadata, cloneValue, deepFreeze, deepEqual, jsonEq, liveEqual, mergePatch, fnv1a, uuidv7, sha256Js, sha256Hex, hasBlob, isBlob, isPlainObject } from './values.mjs';
 import { compileQuery, runCompiledQuery, normalizeJson, validateSchema } from './app-api.mjs';
 import { openBackend, deleteBackend } from './store-idb-v5.mjs';
 import { emptyBase, byOpId, enqueueWrite, reserveWrites, docKey, nsName, applyOp, recompute } from './outbox.mjs';
@@ -132,9 +134,12 @@ export function createKernel(opts = {}) {
   let outboxStat = { count: 0, oldest_at: null };
   const waiters = new Map(); // op_id -> resolve(WriteResult)
   const cmdRejected = new Map();
+  const cmdSubmitFailed = new Map();
   const zone = [];
   const moduleCache = new Map();
   const routeListeners = new Map();
+  const fileReadGrants = new Map(); // E48: session-local, exact ref, consumed once, one hour.
+
   const windowStates = new Map();
   let locale = opts.locale ?? 'de';
   const translations = {};
@@ -202,11 +207,16 @@ export function createKernel(opts = {}) {
   }
   function makeLive(tags, compute) {
     const subs = new Set();
+    // Catalog changes can move an already open view to a new generation.
+    const depend = tag => {
+      if(tags.includes(tag))return;tags.push(tag);
+      if(subs.size){if(!tagIndex.has(tag))tagIndex.set(tag,new Set());tagIndex.get(tag).add(impl);}
+    };
     let last, has = false;
     const impl = {
       refresh() {
         if (!subs.size) return;
-        const v = deepFreeze(compute());
+        const v = deepFreeze(compute(depend));
         if (has && liveEqual(last, v)) return;
         last = v; has = true;
         for (const cb of [...subs]) { try { cb(v); } catch (e) { console.error('[ctox-kernel] subscriber', e); } }
@@ -214,13 +224,13 @@ export function createKernel(opts = {}) {
       dispose() { subs.clear(); for (const t of tags) tagIndex.get(t)?.delete(impl); },
     };
     return {
-      get: () => { guardAlive(); return deepFreeze(compute()); },
+      get: () => { guardAlive(); return deepFreeze(compute(depend)); },
       subscribe(cb) {
         if (typeof cb !== 'function') throw new CtoxError('invalid', 'subscribe braucht eine Funktion');
         if (closed || loggedOut) return () => {};
         if (!subs.size) { for (const t of tags) { if (!tagIndex.has(t)) tagIndex.set(t, new Set()); tagIndex.get(t).add(impl); } allLives.add(impl); }
         subs.add(cb);
-        last = deepFreeze(compute()); has = true;
+        last = deepFreeze(compute(depend)); has = true;
         try { cb(last); } catch (e) { console.error('[ctox-kernel] subscriber', e); }
         return () => {
           if (!subs.delete(cb) || subs.size) return;
@@ -241,6 +251,7 @@ export function createKernel(opts = {}) {
   // ---- Spiegel ----
   function mirrorGet(ns, id) { return mirror.get(ns)?.get(id) ?? null; }
   function visible(rec) { return rec && rec.data != null && !rec.deleted ? rec.data : null; }
+  function readDocument(rec, data = visible(rec)) { return data == null ? null : {...cloneValue(data), _rev:rec?.base?.rev ?? null, _pending:!!rec?.pending}; }
   function mirrorPut(rec) {
     if (!rec) return false;
     if(rec.cache_evicted)evicted.add(rec.collection);
@@ -452,7 +463,7 @@ export function createKernel(opts = {}) {
         revoke:receiveRevoke,
       })).then(async()=>{
         if(closed||!isLeader)return;
-        for(const collection of new Set(['business_apps','business_app_versions','business_commands','files','shell_preferences','app_drafts',...mirror.keys()]))await subscribeCollection(collection);
+        for(const collection of new Set(['business_apps','business_app_versions','business_commands','files','shell_preferences','app_user_preferences','app_drafts',...mirror.keys()]))await subscribeCollection(collection);
         await deliver();schedulePump();
       }).catch(error=>{if(!closed){link={...link,state:'offline'};netChanged();zoneReport('kernel',{level:'error',code:'transport.connect',text:error.message},'kernel');}});
   }
@@ -603,12 +614,15 @@ export function createKernel(opts = {}) {
     const prepare = () => {
       guardAlive();
       if (options.expected_revision !== undefined && (typeof options.expected_revision !== 'string' || !options.expected_revision)) throw new CtoxError('invalid','expected_revision must be a nonempty revision',{path:'expected_revision'});
+      if (collection === PREFERENCE_COLLECTION && options.preference !== true) throw new CtoxError('forbidden','Use api.prefs',{path:'collection'});
       if (typeof collection !== 'string' || !collection) throw new CtoxError('invalid', 'collection fehlt', { path: 'collection' });
       if(collection==='shell_preferences' && id!==userId)throw new CtoxError('forbidden','Only own shell preferences are writable',{path:'id'});
       if (typeof id !== 'string' || !id) throw new CtoxError('invalid', 'id (string) fehlt', { path: 'id' });
       if (!ownRowOk(collection, id)) throw new CtoxError('forbidden', `${collection}: nur die eigene Zeile (id = actor.id)`, { path: 'id' });
       if (collection === 'app_drafts' && app.id !== PLATFORM_APP.id) throw new CtoxError('forbidden', 'app_drafts nur über kernel.source(appId).draft.*', { path: 'collection' });
       const ns = resolveNs(app, collection);
+      body = stripReadMetadata(body);
+      if (isPlainObject(body) && Object.keys(body).some(key=>key.startsWith('_'))) throw new CtoxError('invalid','Underscore document fields are reserved',{path:Object.keys(body).find(key=>key.startsWith('_'))});
       let clean = null;
       if (op === 'put') {
         clean = normalizeJson(body, '');
@@ -616,6 +630,11 @@ export function createKernel(opts = {}) {
       } else if (op === 'patch') clean = normalizeJsonPatch(body);
       const cur = mirrorGet(ns, id);
       const st = applyOp(cur ? { data: cur.data, deleted: cur.deleted } : { data: null, deleted: false }, { op, body: clean, id });
+      if (collection===PREFERENCE_COLLECTION) {
+        const rows=[...(mirror.get(ns)?.values()??[])].map(visible).filter(Boolean);
+        const error=preferenceError(app.id,userId,id,st.deleted?null:st.data,rows);
+        if(error)throw new CtoxError(error,'Preference rejected',{path:'key'});
+      }
       if (st.data) validateSchema(st.data, schemaFor(app, collection), ''); // lokale Schemaprüfung am Ergebnisdokument
       entry = {
         op_id, prev_op_id: cur?.pending && cur.rev?.startsWith('op:') ? cur.rev.slice(3) : null,
@@ -641,6 +660,11 @@ export function createKernel(opts = {}) {
       const rec = await db.tx(async (t) => {
         if(isLeader)await assertGen(t);
         const stored = await t.get('docs', [ns, id]);
+        if (ns === PREFERENCE_COLLECTION) {
+          const rows=(await t.all('docs')).filter(r=>r.collection===ns&&!r.deleted&&r.data).map(r=>r.data);
+          const error=preferenceError(app.id,userId,id,entry.body,rows);
+          if(error)throw new CtoxError(error,'Preference rejected',{path:'key'});
+        }
         // E26: the IDB transaction arbitrates concurrent tabs and reloads.
         // Reuse the original operation/result, never enqueue another command.
         if (createOnly && visible(stored)) {
@@ -655,6 +679,9 @@ export function createKernel(opts = {}) {
         }
         await enqueueWrite(t, entry); // preserve E26 reuse plus durable enqueue/client order
         const r = recompute(ns, id, stored?.base ?? emptyBase(), await t.outboxFor(ns, id));
+        // Preserve the complete locally acknowledged version, not merely a patch.
+        entry.local_version={data:cloneValue(r.data),deleted:r.deleted};
+        await t.put('outbox',entry);
         await putDoc(t, r);
         return r;
       });
@@ -724,6 +751,7 @@ export function createKernel(opts = {}) {
     }
     const res = waiters.get(info.op_id);
     if (res) { waiters.delete(info.op_id); res(cloneValue(result)); }
+    if (result.local_archived_ref && result.status !== 'rejected') zoneReport(info.app_id,{level:'warn',code:`write.reconciled:${info.op_id}`,text:'Lokale Version wurde vom Kern geändert; Eingabe im lokalen Journal gesichert',ref:result.local_archived_ref},'kernel');
     if (result.status === 'rejected' && result.reason !== 'cancelled') {
       zoneReport(info.app_id, { level: 'error', code: `write.rejected:${info.op_id}`, text: `Änderung abgelehnt: ${result.reason}`, ref: result.archived_ref }, 'kernel');
       if (info.collection === 'business_commands') { cmdRejected.set(info.id, result.reason); notify('commands'); }
@@ -744,6 +772,7 @@ export function createKernel(opts = {}) {
     try {
       do {
         pumpAgain = false;
+        // E47/#905: push progress is the durable outbox/client_seq, independent of every pull cursor.
         const entries = await db.tx(async t => { await assertGen(t); return reserveWrites(t); });
         for (const e of entries) if (e.client_seq != null) reservedOps.add(e.op_id);
         // P8's bounded gap buffer holds 64 positions. A blocked document head
@@ -767,7 +796,13 @@ export function createKernel(opts = {}) {
   async function subscribeCollection(collection,priority='P2') {
     if (!isLeader || closed || !transportConnected) return;
     evicted.delete(collection);
-    const scope = transport.scope ? await transport.scope(collection) : {epoch:opts.epoch??'1',collection,scope_hash:opts.scopeHash??'local',gen:genOf(collection)};
+    let scope;
+    try {scope = transport.scope ? await transport.scope(collection) : {epoch:opts.epoch??'1',collection,scope_hash:opts.scopeHash??'local',gen:genOf(collection)};}
+    catch(error){
+      if(!transport.grantApp || error?.code!=='forbidden')throw error;
+      const base=collection.replace(/@g\d+$/,''),owner=SYSTEM_COLLECTIONS.has(base)?PLATFORM_APP_ID:[...mirror.get('business_apps')?.values()??[]].map(visible).find(d=>versionDoc(d?.id,d?.active_ver)?.manifest?.collections?.[base])?.id;
+      if(!owner)throw error;await transport.grantApp(owner);scope=await transport.scope(collection);
+    }
     expectedScopes.set(collection,scope);
     const cp = await db.get('meta', checkpointKey(scope));
     scopeCursors.set(collection,cp?.cursor_to??'0');
@@ -908,6 +943,13 @@ export function createKernel(opts = {}) {
     return !!base && !!result.seq && (result.gen===undefined || base.gen===result.gen) && !seqGreater(result.seq,base.seq??'0');
   }
   async function settleWrite(t,e,base,res) {
+    const local=e.local_version ?? {data:applyOp((await t.get('docs',[e.collection,e.id]))?.base??emptyBase(),e).data,deleted:e.op==='delete'};
+    const changed=e.collection!=='business_commands' && (!jsonEq(local.data,base.data)||!!local.deleted!==!!base.deleted);
+    if(res.status==='rejected' || changed){
+      res.local_archived_ref=`archive_local:${e.op_id}`;
+      if(res.status==='rejected')res.archived_ref=res.local_archived_ref;
+      await t.put('archive_local',{...e,ref:res.local_archived_ref,local_version:local,canonical_version:cloneValue(base),reason:res.code??res.reason??'canonical_changed',rejected_at:Date.now()});
+    }
     await t.del('outbox',e.op_id);
     const rec=recompute(e.collection,e.id,base,await t.outboxFor(e.collection,e.id));
     if (e.file_upload && (res.status === 'rejected' || (await t.get('meta',`upload_result:${e.file_upload_op}`))?.status === 'rejected') && !rec.pending) { rec.data={...e.body,state:'rejected'};rec.deleted=false;rec.local_file_rejection=true; }
@@ -943,10 +985,7 @@ export function createKernel(opts = {}) {
           return {replay:true,res};
         }
       }
-      if(res.status==='rejected'){
-        res.archived_ref=`archive_local:${e.op_id}`;
-        await t.put('archive_local',{...e,ref:res.archived_ref,reason:res.reason,rejected_at:Date.now()});
-      } else if(!canonical && !seqGreater(base.seq??'0',result.seq??'0')) {
+      if(res.status!=='rejected' && !canonical && !seqGreater(base.seq??'0',result.seq??'0')) {
         const state=result.doc!==undefined ? {data:result.doc,deleted:!!result.deleted} : applyOp(base,e);
         base={...state,rev:res.rev,seq:decimalSeq(res.seq),gen:e.gen};
       }
@@ -1006,16 +1045,16 @@ export function createKernel(opts = {}) {
   }
   function collectionVersion(app,collection) {
     const owner=SYSTEM_COLLECTIONS.has(collection)?PLATFORM_APP_ID:app.id;
-    const ver=owner===app.id?app.ver:activations.get(owner)?.activated_ver??visible(mirrorGet('business_apps',owner))?.active_ver;
+    const ver=owner===PLATFORM_APP_ID?visible(mirrorGet('business_apps',owner))?.active_ver:owner===app.id?app.ver:activations.get(owner)?.activated_ver??visible(mirrorGet('business_apps',owner))?.active_ver;
     const manifest=versionDoc(owner,ver)?.manifest;
     return {owner,ver,definition:manifest?.collections?.[collection],gen:manifest?.generations?.[collection]};
   }
-  function schemaFor(app, collection) { const {owner,definition}=collectionVersion(app,collection);return definition?.schema??(owner===PLATFORM_APP_ID?PLATFORM_SCHEMAS[collection]??null:null); }
+  function schemaFor(app, collection) { const {owner,ver,definition}=collectionVersion(app,collection);return (fakeCore && owner===PLATFORM_APP_ID && versionDoc(owner,ver)?.builtin ? PLATFORM_SCHEMAS[collection]??null : definition?.schema)??(fakeCore && owner===PLATFORM_APP_ID?PLATFORM_SCHEMAS[collection]??null:null); }
   function writeVersion(app,collection) {
     const {owner,ver,definition,gen}=collectionVersion(app,collection);
     // Wire versions describe the collection owner, never the calling app.
-    // The fixed platform bootstrap version is not the sender's app version.
-    // An outdated bootstrap is rejected/migrated by the core's registry CAS.
+    // Production needs the authoritative platform catalog before a local write.
+    if(!fakeCore&&owner===PLATFORM_APP_ID&&(!ver||!definition?.schema?.version))throw new CtoxError('unavailable','Active platform catalog missing',{collection});
     return {schema_ver:definition?.schema?.version??1,app_ver:ver??(owner===PLATFORM_APP_ID?PLATFORM_APP.ver:app.ver),...(gen===undefined?{}:{gen})};
   }
   // §16.19 Nr. 3: shell_preferences – eine Zeile je Nutzer (id = actor.id), lesen und schreiben nur die eigene.
@@ -1093,11 +1132,13 @@ export function createKernel(opts = {}) {
     } finally { publishing.delete(appId); }
   }
   function scheduleActivation(appId) {
+    if(appId==='ctox-platform' && versionDoc(appId,visible(mirrorGet('business_apps',appId))?.active_ver)?.builtin)return; // resident Core service, no app mount or eager data subscriptions
+
     if (!isLeader || closed || isLib(appId)) return; // §16.37: lib:<name> nie eager, nur dateiweise bei SW-Miss
     const prev = activationChains.get(appId) ?? Promise.resolve();
-    const next = prev.then(() => runActivation(appId)).catch((err) => {
+    const next = prev.then(() => runActivation(appId)).catch(async(err) => {
       if (err instanceof StaleLeader) stepDown();
-      else if (!closed) console.error('[ctox-kernel] activation', err);
+      else if (!closed) {await setActivation(appId,{state:'failed',error:err?.message??'Collection grant missing'});zoneReport(appId,{level:'error',code:err?.code??'unavailable',text:err?.message??'Collection grant missing'},'kernel');}
     });
     activationChains.set(appId, next);
     track(next);
@@ -1116,6 +1157,7 @@ export function createKernel(opts = {}) {
     const manifest = vdoc.manifest;
     const superseded = () => visible(mirrorGet('business_apps', appId))?.active_ver !== ver;
     await setActivation(appId, { target_ver: ver, state: 'received', error: null });
+    try{if(typeof transport.grantApp!=='function')throw new CtoxError('forbidden','Collection grant missing');const grant=await transport.grantApp(appId);if(typeof grant!=='string'||!grant)throw new CtoxError('forbidden','Collection grant missing');}catch(error){await setActivation(appId,{target_ver:ver,state:'failed',error:'Collection grant missing'});zoneReport(appId,{level:'error',code:'forbidden',text:'Collection grant missing'},'kernel');return;}
     // fetched: alle Dateien per Hash geprüft (aus „Spur 4“ = transport CAS)
     for(const [path,hash]of Object.entries(manifest.files??{})){
       const cached=await db.get('artifacts',hash);
@@ -1332,10 +1374,22 @@ export function createKernel(opts = {}) {
           zoneReport(appId, { level: 'error', code: 'shell.navigate.unknown_target', text: `Navigationsziel unbekannt: ${target}`, ref: String(target) }, 'kernel');
           return false;
         }
+        if (params.ref !== undefined) return (async () => {
+          const sel = typeof params.ref === 'string' ? {ref:params.ref} : params.ref;
+          const file = await readableFile(sel, false);
+          const grant = {from:appId,to:target,ref:file.ref,user_id:userId,expires_at:Date.now()+3600000,at_ms:Date.now()};
+          // Audit commits before delivery. A failed authorization never emits a route.
+          await db.tx(t=>t.put('meta',{key:`file-grant:${uuidv7()}`,value:{...grant,event:'granted'}}));
+          fileReadGrants.set(JSON.stringify([target,file.ref]),grant);
+          return emitRoute();
+        })();
+        return emitRoute();
+        function emitRoute() {
         const ev = Object.freeze({ from: appId, to: target, params: cloneValue(params) });
         simRecord.navigations.push(ev);
         for (const cb of [...(routeListeners.get(target) ?? [])]) { try { cb(ev); } catch (e) { console.error(e); } }
         return true;
+        }
       },
       onRoute(cb) {
         if (!routeListeners.has(appId)) routeListeners.set(appId, new Set());
@@ -1378,7 +1432,8 @@ export function createKernel(opts = {}) {
     function readableNamespace(ns) {
       const caller = readManifest(appId,app.ver);
       const c = ns.replace(/@g[1-9][0-9]*$/,'');
-      if (caller?.collections?.[c]) return ns === resolveNs(app,c);
+      if (c === PREFERENCE_COLLECTION) return false; // preferences never grant another app a file reference
+      if (caller?.collections?.[c] && (!SYSTEM_COLLECTIONS.has(c) || appId==='ctox-platform')) return ns === resolveNs(app,c);
       const f = caller?.foreign_collections?.[c];
       const owner = f?.owner_app ?? f?.app ?? f?.owner;
       const om = owner && currentManifest(owner);
@@ -1387,29 +1442,36 @@ export function createKernel(opts = {}) {
     // §16.13: known owners and declared foreign reads require both grants.
     // Published callers fail closed on undeclared names, even before the owner
     // manifest arrives. Only manifest-less contract/bootstrap names are local.
-    function assertReadableCollection(collection) {
+    function assertReadableCollection(collection, allowPending = false) {
       const c = collection.replace(/@g[1-9][0-9]*$/, '');
+      if (c === PREFERENCE_COLLECTION) throw new CtoxError('forbidden','Use api.prefs',{path:'collection'});
       const callerManifest = readManifest(appId,app.ver);
       const foreign = callerManifest?.foreign_collections?.[c];
+      const owner = foreign?.owner_app ?? foreign?.app ?? foreign?.owner;
+      const ownerRow = owner && mirrorGet('business_apps',owner);
+      const ownerVersion = ownerRow?.base?.data?.active_ver;
+      const versionRow = owner && mirrorGet('business_app_versions',`${owner}@${ownerVersion}`);
+      // A declared read can wait for installation; absence is never authority to read rows.
+      if(allowPending && foreign?.ops?.includes('read') && owner && !ownerRow?.revoked && !ownerRow?.base?.deleted && !versionRow?.revoked && !versionRow?.base?.deleted && !currentManifest(owner))return;
       const owners = [...(mirror.get('business_app_versions')?.values() ?? [])]
         .filter(row => !row.revoked && !row.base?.deleted).map(row => row.base?.data).filter(Boolean).filter(v => v.app_id !== appId && v.manifest?.collections?.[c]);
-      if ((foreign || owners.length || (callerManifest && !callerManifest.collections?.[c])) && !readableNamespace(resolveNs(app, collection)))
+      if ((foreign || owners.length || (SYSTEM_COLLECTIONS.has(c) && appId!=='ctox-platform') || (callerManifest && !callerManifest.collections?.[c])) && !readableNamespace(resolveNs(app, collection)))
         throw new CtoxError('forbidden', 'Foreign collection requires declaration and read export', {path:'collection'});
     }
     function readableLive(collection, tags, compute, empty) {
-      const live = makeLive([...tags,'c:business_apps','c:business_app_versions'], () => {
+      const live = makeLive([...tags,'c:business_apps','c:business_app_versions','activation'], depend => {
         try { assertReadableCollection(collection); }
         catch (error) { if (error.code === 'forbidden') return empty; throw error; }
-        return compute();
+        return compute(depend);
       });
       return {
-        get() { assertReadableCollection(collection); return live.get(); },
-        subscribe(cb) { assertReadableCollection(collection); return live.subscribe(cb); },
+        get() { assertReadableCollection(collection,true); return live.get(); },
+        subscribe(cb) { assertReadableCollection(collection,true); return live.subscribe(cb); },
       };
     }
     // E30: a CAS hash is not authority. Only canonical, still-readable rows
     // grant access; an optimistic reference cannot mint a read grant.
-    async function readableFile(sel) {
+    async function readableFile(sel, consumeGrant = true) {
       guardAlive();
       if (!isPlainObject(sel) || (typeof sel.id !== 'string' && typeof sel.ref !== 'string')) throw new CtoxError('invalid', 'files: {id} oder {ref} nötig', {path:'ref'});
       const docs = fileDocs().filter(d => sel.id ? d.id === sel.id : d.ref === sel.ref);
@@ -1443,6 +1505,13 @@ export function createKernel(opts = {}) {
       const ref = docs[0]?.ref ?? sel.ref;
       const containsRef = value => value !== null && typeof value === 'object' && (value.ref === ref || value.blob_ref === ref || Object.values(value).some(containsRef));
       if (typeof ref === 'string' && /^[a-f0-9]{64}$/.test(ref) && canonicalRows.some(([,d]) => containsRef(d))) return docs[0] ?? {ref,id:ref,name:null};
+      const grantKey = JSON.stringify([appId,ref]);
+      const grant = fileReadGrants.get(grantKey);
+      if (consumeGrant && grant?.user_id===userId && grant.expires_at>Date.now()) {
+        fileReadGrants.delete(grantKey); // consume before any await: concurrent reads cannot reuse it
+        await db.tx(t=>t.put('meta',{key:`file-grant:${uuidv7()}`,value:{...grant,event:'consumed',at_ms:Date.now()}}));
+        return docs[0] ?? {id:ref,ref,name:null};
+      }
       throw new CtoxError('forbidden','File needs ownership or a readable reference',{path:sel.id ? 'id' : 'ref'});
     }
     const fileInfo = (d) => ({ id: d.id, ref: d.ref, name: d.name ?? null, mime: d.mime ?? 'application/octet-stream', size: d.size ?? 0 });
@@ -1604,26 +1673,28 @@ export function createKernel(opts = {}) {
     return Object.freeze({
       version: APP_API_VERSION,
       app,
+      prefs: createPreferencesApi({appId,userId,read:id=>visible(mirrorGet(PREFERENCE_COLLECTION,id)),write:(op,id,body)=>localWrite(app,op,PREFERENCE_COLLECTION,id,body,false,{preference:true})}),
       query(collection, q = {}) {
-        assertReadableCollection(collection);
+        assertReadableCollection(collection,true);
         const cq = compileQuery(q);
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
         if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
-        return readableLive(collection, [`c:${ns}`, 'actor'], () => {
+        return readableLive(collection, [`c:${ns}`, 'actor'], depend => {
+          const ns=resolveNs(app,collection);depend(`c:${ns}`);lastUsed.set(ns,Date.now());
           const m = mirror.get(ns);
           if (!m) return [];
           const docs = [];
-          for (const r of m.values()) if (r.data != null && !r.deleted && ownRowOk(ns, r.id)) docs.push(withDefaults(app,collection,r.data));
+          for (const r of m.values()) if (r.data != null && !r.deleted && ownRowOk(ns, r.id)) docs.push(readDocument(r,withDefaults(app,collection,r.data)));
           return runCompiledQuery(docs, cq);
         }, []);
       },
       get(collection, id) {
-        assertReadableCollection(collection);
+        assertReadableCollection(collection,true);
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
         if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
-        return readableLive(collection, [`c:${ns}`, 'actor'], () => ownRowOk(ns,id) ? withDefaults(app,collection,visible(mirrorGet(ns,id))) : null, null);
+        return readableLive(collection, [`c:${ns}`, 'actor'], depend => {const ns=resolveNs(app,collection);depend(`c:${ns}`);lastUsed.set(ns,Date.now());return ownRowOk(ns,id) ? readDocument(mirrorGet(ns,id),withDefaults(app,collection,visible(mirrorGet(ns,id)))) : null;}, null);
       },
       put(collection, doc) { return localWrite(app, 'put', collection, doc?.id, doc); },
       patch(collection, id, patch, options = {}) { return localWrite(app, 'patch', collection, id, patch, false, {expected_revision:options.expected_revision}); },
@@ -1636,6 +1707,7 @@ export function createKernel(opts = {}) {
         // UUIDv8: first 128 SHA-256 bits, RFC variant/version bits normalized.
         const hash = key === undefined ? null : sha256Js(new TextEncoder().encode(`${appId}|${actor.id}|${key}`));
         const id = hash === null ? uuidv7() : `${hash.slice(0,8)}-${hash.slice(8,12)}-8${hash.slice(13,16)}-${((parseInt(hash[16],16)&3)|8).toString(16)}${hash.slice(17,20)}-${hash.slice(20,32)}`;
+        cmdSubmitFailed.delete(id);
         const write = localWrite(app, 'put', 'business_commands', id, {
           id, ...(commandOptions.record_id===undefined?{}:{record_id:commandOptions.record_id}),
           // §16.39 Nr. 3: Rückruf-Befehlstypen der auslösenden App als Felder am Befehlsdokument (Core-PR #848 liest sie dort)
@@ -1644,7 +1716,9 @@ export function createKernel(opts = {}) {
           type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
           ...(commandOptions.target_app!==undefined ? {target_app:commandOptions.target_app} : !route.error && !route.platform && route.target!==appId ? {target_app:route.target} : {}),
         }, key !== undefined);
+        write.local.catch(error=>{cmdSubmitFailed.set(id,{status:'submit_failed',error:{code:error?.code??'local_error',reason:error?.message??String(error)},local_inserted:false});notify('commands');});
         const status = makeLive(['c:business_commands', 'commands'], () => {
+          if(cmdSubmitFailed.has(id))return cmdSubmitFailed.get(id);
           const d = visible(mirrorGet('business_commands', id));
           if (!d) {
             if (cmdRejected.has(id)) return { status: 'failed', error: cmdRejected.get(id) };
@@ -1938,7 +2012,7 @@ export function createKernel(opts = {}) {
     const out = [];
     for (const r of mirror.get('business_apps')?.values() ?? []) {
       const d = visible(r);
-      if (!d || isLib(d.id)) continue;
+      if (!d || d.id==='ctox-platform' || isLib(d.id)) continue;
       if (Array.isArray(d.roles) && !d.roles.includes(actor.role)) continue;
       const a = activations.get(d.id);
       // §16.19 Nr. 6: layout/styles der laufenden (sonst der veröffentlichten) Version
@@ -2316,7 +2390,7 @@ export function createKernel(opts = {}) {
       link = { ...link, state: 'offline' }; inflight.clear(); inflightOps.clear(); netChanged();
       if (typeof transport.reconnect === 'function') {
         await transport.reconnect();
-        for (const c of new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', 'shell_preferences', 'app_drafts', ...mirror.keys()])) await subscribeCollection(c);
+        for (const c of new Set(['business_apps', 'business_app_versions', 'business_commands', 'files', 'shell_preferences', 'app_user_preferences', 'app_drafts', ...mirror.keys()])) await subscribeCollection(c);
         await deliver(); schedulePump();
       } else {
         try { transport.close(); } catch { /* egal */ }
@@ -2340,6 +2414,8 @@ export function createKernel(opts = {}) {
 
   // ---- Sim-Fassade (Test-Hooks) ----
   const sim = {
+    scopeGrants:()=>cloneValue(fakeCore?.grantMessages??[]),
+    failAppGrant:appId=>fakeCore?.deniedAppGrants.add(appId),
     rejectNext: (reason = 'simulated_rejection') => forward('rejectNext')(reason),
     rejectNextUpload: (reason = {code:'forbidden',reason:'Upload denied'}) => forward('rejectNextUpload')(reason),
     migrateNext: (o = {}) => forward('migrateNext')({ dropFields: o.dropFields ?? [] }),
@@ -2551,6 +2627,33 @@ export function createKernel(opts = {}) {
       if(db.kind!=='indexeddb')throw new CtoxError('invalid','V3 takeover requires IndexedDB');
       await takeoverV3Database(db,opts.legacyDatabase,{instanceId,userId});
     }
+    // E48.1: only the fake core owns a built-in catalog. Production consumes Core metadata.
+    const builtinPlatform = fakeCore ? await db.tx(async t=>{
+      const existing = await t.get('docs',['business_apps','ctox-platform']);
+      if (existing) return [];
+      const rows = [
+        ['business_app_versions',{id:'ctox-platform@1',app_id:'ctox-platform',app_ver:'1',manifest:PLATFORM_MANIFEST,builtin:true}],
+        ['business_apps',{id:'ctox-platform',active_ver:'1'}],
+      ];
+      const result=[];
+      for (const [collection,data] of rows) {
+        const base={data,deleted:false,rev:null,seq:'0'};
+        const row={collection,id:data.id,...base,pending:false,base};
+        await putDoc(t,row);result.push(row);
+      }
+      return result;
+    }) : await db.tx(async t=>{
+      // Retire bootstrap rows left by older clients, but preserve every native catalog row.
+      for(const row of await t.all('docs'))if(row.collection==='business_app_versions'&&row.data?.app_id===PLATFORM_APP_ID&&row.data?.builtin===true&&row.rev==null&&row.seq==='0'&&!row.pending){
+        await t.del('docs',[row.collection,row.id]);
+        const active=await t.get('docs',['business_apps',PLATFORM_APP_ID]);
+        if(active?.data?.active_ver===row.data.app_ver&&active.rev==null&&row.seq==='0')await t.del('docs',['business_apps',PLATFORM_APP_ID]);
+        const activation=await t.get('meta','activation:'+PLATFORM_APP_ID);
+        if(activation?.activated_ver===row.data.app_ver)await t.del('meta','activation:'+PLATFORM_APP_ID);
+      }
+      return [];
+    });
+    if (fakeCore) for (const row of builtinPlatform) if (!fakeCore.core.docs.has(fakeCore.key(row.collection,row.id))) await fakeCore.push(row.collection,[row.data]);
     await loadFromStorage();
     if (hasLocks) {
       bc = new BroadcastChannel(channelName);

@@ -1,69 +1,88 @@
-use super::NativeRoute;
-use crate::app_capabilities::schema::PayloadShape;
-
+//! Typed route catalog; native implementation lives in cap4.
+use super::{task::route, NativeRoute};
 pub(super) const ROUTES: &[NativeRoute] = &[
-    NativeRoute::new(
+    route(
         "agent.queue",
         "abort_turn",
         "ctox.queue.abort_turn",
-        "business_os::harness_cockpit::control",
+        "harness_cockpit::control",
         "src/core/business_os/harness_cockpit.rs:84",
-        PayloadShape::Object,
     ),
-    NativeRoute::new(
+    route(
         "agent.queue",
         "block",
         "ctox.queue.block",
-        "business_os::harness_cockpit::control",
+        "harness_cockpit::control",
         "src/core/business_os/harness_cockpit.rs:84",
-        PayloadShape::Object,
     ),
-    NativeRoute::new(
+    route(
         "agent.queue",
         "capacity",
         "ctox.queue.capacity",
-        "business_os::harness_cockpit::control",
+        "harness_cockpit::control",
         "src/core/business_os/harness_cockpit.rs:84",
-        PayloadShape::Object,
     ),
-    NativeRoute::new(
+    route(
         "agent.queue",
         "pause",
         "ctox.queue.pause",
-        "business_os::harness_cockpit::control",
+        "harness_cockpit::control",
         "src/core/business_os/harness_cockpit.rs:84",
-        PayloadShape::Object,
     ),
-    NativeRoute::new(
+    route(
         "agent.queue",
         "release",
         "ctox.queue.release",
-        "business_os::harness_cockpit::control",
+        "harness_cockpit::control",
         "src/core/business_os/harness_cockpit.rs:84",
-        PayloadShape::Object,
     ),
-    NativeRoute::new(
+    route(
         "agent.queue",
         "retry",
         "ctox.queue.retry",
-        "business_os::harness_cockpit::control",
+        "harness_cockpit::control",
         "src/core/business_os/harness_cockpit.rs:84",
-        PayloadShape::Object,
     ),
-    NativeRoute::new(
+    route(
         "agent.queue",
-        "task.delete",
-        "ctox.task.delete",
-        "business_os::store::handle_workspace_control_command",
-        "src/core/business_os/store.rs:15623",
-        PayloadShape::Object,
+        "task.get",
+        "cap.queue.get",
+        "channels::load_queue_task",
+        "src/core/mission/channels/mod.rs:3745",
     ),
-    NativeRoute::new(
+    route(
+        "agent.queue",
+        "task.for_command",
+        "cap.queue.for_command",
+        "channels::load_queue_task",
+        "src/core/mission/channels/mod.rs:3745",
+    ),
+    route(
+        "agent.queue",
+        "task.claim",
+        "cap.queue.claim",
+        "channels::lease_queue_task_if",
+        "src/core/mission/channels/mod.rs:4253",
+    ),
+    route(
         "agent.queue",
         "task.update",
-        "ctox.task.update",
-        "business_os::store::handle_workspace_control_command",
-        "src/core/business_os/store.rs:15623",
-        PayloadShape::Object,
+        "cap.queue.update",
+        "channels::update_queue_task",
+        "src/core/mission/channels/mod.rs:3874",
+    ),
+    route(
+        "agent.queue",
+        "task.set_status",
+        "cap.queue.set_status",
+        "channels::update_queue_task",
+        "src/core/mission/channels/mod.rs:3874",
+    ),
+    route(
+        "agent.queue",
+        "task.delete",
+        "cap.queue.delete",
+        "channels::delete_queue_task",
+        "src/core/mission/channels/mod.rs:3776",
     ),
 ];

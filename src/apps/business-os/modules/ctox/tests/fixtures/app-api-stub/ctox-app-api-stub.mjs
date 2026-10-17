@@ -1,3 +1,38 @@
+// E55: one instance-signed grant per app, acquired on the control lane.
+const APP_SCOPE_DOMAIN='ctox:v4:scope\0';
+const SHELL_APP_ID='shell';
+const grantRecord=v=>v!==null&&typeof v==='object'&&!Array.isArray(v);
+const grantText=v=>typeof v==='string'&&v.length>0;
+const grantCanonicalJson=v=>Array.isArray(v)?'['+v.map(grantCanonicalJson).join(',')+']':grantRecord(v)?'{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+grantCanonicalJson(v[k])).join(',')+'}':JSON.stringify(v);
+const grantKeys=(v,keys)=>grantRecord(v)&&Object.keys(v).sort().join(',')===[...keys].sort().join(',');
+export function decodeAppGrant(token){
+ if(typeof token!=='string'||token.length>96000||! /^[A-Za-z0-9_-]+$/.test(token))return null;
+ try{const b=token.replace(/-/g,'+').replace(/_/g,'/'),v=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Uint8Array.from(atob(b+'='.repeat((4-b.length%4)%4)),c=>c.charCodeAt(0))));return grantKeys(v,['claims','signature'])&&grantRecord(v.claims)&&/^[A-Za-z0-9_-]{86}$/.test(v.signature)?v:null;}catch{return null;}
+}
+export function validAppGrantClaims(c,{instanceId,userId,deviceId,rightsVer,appId,now=Date.now()}={}){
+ if(!grantKeys(c,['instance_id','user_id','app_id','scope_hash','rights_ver','device_id','exp','collections'])||![c.instance_id,c.user_id,c.app_id,c.scope_hash,c.device_id].every(grantText)||typeof c.rights_ver!=='string'||! /^(0|[1-9][0-9]*)$/.test(c.rights_ver)||BigInt(c.rights_ver)>18446744073709551615n||!Number.isSafeInteger(c.exp)||c.exp*1000<=now)return false;
+ if((instanceId!==undefined&&c.instance_id!==instanceId)||(userId!==undefined&&c.user_id!==userId)||(deviceId!==undefined&&c.device_id!==deviceId)||(rightsVer!==undefined&&c.rights_ver!==String(rightsVer))||(appId!==undefined&&c.app_id!==appId))return false;
+ const names=new Set();return Array.isArray(c.collections)&&c.collections.every(row=>{
+  if(!grantKeys(row,['collection','gen','rights','field_mask_digest'])||!grantText(row.collection)||names.has(row.collection)||!Number.isSafeInteger(row.gen)||row.gen<1||!grantText(row.field_mask_digest)||!Array.isArray(row.rights)||new Set(row.rights).size!==row.rights.length||!row.rights.length||row.rights.some(r=>!['read','write'].includes(r)))return false;
+  names.add(row.collection);return true;
+ });
+}
+function appGrantScope(collection,tokens,identity){
+ for(const token of tokens){const c=decodeAppGrant(token)?.claims;if(!validAppGrantClaims(c,identity))continue;const row=c.collections.find(row=>row.collection===collection&&row.rights.includes('read'));if(row)return {scope_hash:c.scope_hash,gen:row.gen,participant:c.user_id,app_id:c.app_id};}
+ return null;
+}
+
+// Explicit fake issuer; never reachable from the production entry points (E52).
+const grantEncode=s=>new TextEncoder().encode(s),grantUrl=bytes=>btoa(String.fromCharCode(...new Uint8Array(bytes))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+function createFakeAppGrantIssuer(){
+ let keys;
+ return async claims=>{
+  if(!validAppGrantClaims(claims))throw new Error('Invalid fake app grant claims');
+  keys??=crypto.subtle.generateKey({name:'Ed25519'},false,['sign','verify']);const pair=await keys;
+  const signature=grantUrl(await crypto.subtle.sign('Ed25519',pair.privateKey,grantEncode(APP_SCOPE_DOMAIN+grantCanonicalJson(claims))));
+  return grantUrl(grantEncode(grantCanonicalJson({claims,signature})));
+ };
+}
 // Generated from src/core/business_os/business_command_inventory.json. Check: tests/e39-inventory.test.mjs.
 const COMMAND_INVENTORY = {
   "exact_control_types": [
@@ -329,25 +364,23 @@ const COMMAND_INVENTORY = {
     "web_stack.auth_assist.complete"
   ],
   "browser_literal_types": [
-    "ats.consent.check",
-    "ats.deployment.check",
-    "ats.intake.capture",
-    "ats.leistungsnachweis.signoff",
-    "ats.placement.create",
-    "ats.placement.early_leave",
-    "ats.signature.request",
-    "ats.signature.sign",
-    "ats.submission.present",
     "browser.capture.extract",
-    "browser.credential.fill",
-    "business_os.chat.task",
+    "browser.http_auth.respond",
+    "browser.observer.grant",
+    "browser.observer.revoke",
+    "browser.upload.select",
+    "browser.webauthn.respond",
+    "business_os.data.modify",
     "business_os.i18n.translate",
     "ctox.app.action.run",
+    "ctox.app.publish",
+    "ctox.app.release",
+    "ctox.app.remove",
+    "ctox.app.rollback",
+    "ctox.app.update",
     "ctox.app_store.install",
-    "ctox.app_store.uninstall",
     "ctox.browser_context.capture",
     "ctox.business_os.app.create",
-    "ctox.business_os.app.modify",
     "ctox.business_os.audit.list",
     "ctox.business_os.branding.update",
     "ctox.business_os.support.export_diagnostics",
@@ -361,29 +394,10 @@ const COMMAND_INVENTORY = {
     "ctox.channel.settings.save",
     "ctox.channel.sync",
     "ctox.channel.test",
-    "ctox.coding.models",
-    "ctox.coding.turn",
     "ctox.command.cancel",
     "ctox.communication_policy.verify",
-    "ctox.crew.assign",
-    "ctox.crew.member.create",
-    "ctox.crew.member.update",
-    "ctox.crew.memory.update",
-    "ctox.cv_print.apply_parse",
     "ctox.file.materialize",
-    "ctox.knowledge.book.create",
-    "ctox.knowledge.book.export",
-    "ctox.knowledge.book.import",
-    "ctox.knowledge.document.modify",
-    "ctox.knowledge.runbook.execute",
-    "ctox.knowledge.runbook.modify",
     "ctox.knowledge.runbooks.manage",
-    "ctox.mailserver.delete_domain",
-    "ctox.mailserver.delete_user",
-    "ctox.mailserver.get_config",
-    "ctox.mailserver.save_domain",
-    "ctox.mailserver.save_runtime",
-    "ctox.mailserver.save_user",
     "ctox.maintenance.client_ready",
     "ctox.module.assign_founder",
     "ctox.module.check_updates",
@@ -394,111 +408,53 @@ const COMMAND_INVENTORY = {
     "ctox.module.rollback",
     "ctox.module.rollback_version",
     "ctox.module.save",
-    "ctox.module.update",
-    "ctox.queue.block",
-    "ctox.queue.capacity",
-    "ctox.queue.pause",
-    "ctox.queue.release",
-    "ctox.queue.retry",
+    "ctox.plan.step.retry",
     "ctox.runtime.switch",
     "ctox.runtime_settings.save",
-    "ctox.secret.delete",
-    "ctox.secret.list",
-    "ctox.secret.put",
     "ctox.source.rollback_snapshot",
     "ctox.subscription_auth.start",
-    "ctox.task.delete",
-    "ctox.task.update",
+    "ctox.workjet.calendar.connect.v1",
+    "ctox.workjet.calendar.read.v1",
     "ctox.workjet.computer.assign",
+    "ctox.workjet.computer.endpoint.disable",
+    "ctox.workjet.computer.endpoint.upsert",
     "ctox.workjet.computer.list",
     "ctox.workjet.computer.ssh_key.ensure",
     "ctox.workjet.computer.unassign",
+    "ctox.workjet.device.v1",
+    "ctox.workjet.grok.v1",
+    "ctox.workjet.jour_fixe.meeting.read",
+    "ctox.workjet.jour_fixe.speech.v1",
+    "ctox.workjet.project.chat.create",
     "ctox.workjet.project.init",
     "ctox.workjet.project.list",
     "ctox.workjet.project.supervisor.bind",
+    "ctox.workjet.project.supervisor.turn.cancel",
+    "ctox.workjet.project.supervisor.turn.capabilities",
     "ctox.workjet.project.supervisor.turn.history",
+    "ctox.workjet.project.supervisor.turn.input",
+    "ctox.workjet.project.supervisor.turn.submit",
+    "ctox.workjet.project.supervisor.turn.watch",
     "ctox.workjet.project.upsert",
+    "ctox.workjet.project.worker.add",
+    "ctox.workjet.speech.dictation.v1",
+    "ctox.workjet.speech.settings.v1",
     "ctox.workjet.working_copy.upsert",
-    "customers.account.archive",
-    "customers.account.create",
-    "customers.account.update",
-    "customers.contact.archive",
-    "customers.contact.create",
-    "customers.contact.update",
-    "customers.dedupe.resolve",
-    "customers.import.file",
-    "customers.import.from_outbound",
-    "customers.note.create",
-    "customers.note.update",
-    "customers.opportunity.create",
-    "customers.opportunity.move_stage",
-    "customers.opportunity.update",
-    "customers.task.complete",
-    "customers.task.create",
-    "customers.task.update",
-    "customers.view.save",
-    "document.extract-requirements",
-    "document.review-risks",
-    "document.summarize",
     "example.control.refresh",
     "example.work.execute",
     "external_sql.write",
-    "invoices.dunning.run",
-    "invoices.invoice.create",
-    "invoices.invoice.delete",
-    "invoices.invoice.post",
-    "invoices.invoice.update",
-    "invoices.payment.allocate",
     "knowledge.command",
     "knowledge.entry.delete",
     "mail.series_email.import",
-    "matching.match",
-    "matching.source.parse_object",
-    "matching.source.parse_requirement",
-    "native.sellify_lookup",
-    "news.issue.generate",
-    "news.source.adapter",
-    "news.source.auth_assist",
-    "news.topic.schedule",
     "outbound-lead-generation.import",
-    "outbound.campaign.apply_setup",
-    "outbound.campaign.briefing.update",
-    "outbound.company.research",
-    "outbound.engagement.create",
-    "outbound.lead.research_writeback",
-    "outbound.message.prepare",
-    "outbound.message.request_approval",
-    "outbound.pipeline.contact_research",
-    "outbound.pipeline.lead_qualification",
-    "outbound.pipeline.outreach_draft",
-    "outbound.pipeline.write_outreach_draft",
-    "outbound.research.adapters.reconcile",
-    "outbound.research_policy.publish",
-    "outbound.research_source.registry_read",
-    "outbound.sellify.lookup",
-    "outbound.source.import",
-    "outbound.update_digest.send_now",
-    "research.knowledge.refresh",
-    "research.systematic.report.create",
-    "research.systematic.run",
-    "spreadsheet.audit-formulas",
-    "spreadsheet.risk-review",
-    "spreadsheet.summarize",
-    "support.agent.writeback",
-    "support.conversation.assign",
-    "support.conversation.open_from_thread",
-    "support.conversation.snooze",
-    "support.note.create",
-    "support.ticket.create_from_conversation",
-    "threads.ctox_approval.request",
-    "web_stack.auth_assist.complete",
-    "web_stack.auth_assist.request",
-    "web_stack.person_research"
+    "web_stack.auth_assist.request"
   ]
 };
 
 const platformTypes = new Set(['exact_control_types','predicate_control_types','browser_runtime_types','browser_literal_types'].flatMap(k=>COMMAND_INVENTORY[k]));
 const chatTypes = new Set(['business_os.chat.task','business_os.context.ask','business_os.data.modify']);
+function stripReadMetadata(value) { if(!isPlainObject(value)||(!Object.hasOwn(value,'_rev')&&!Object.hasOwn(value,'_pending')))return value; return Object.fromEntries(Object.keys(value).filter(key=>key!=='_rev'&&key!=='_pending').map(key=>[key,value[key]])); }
+
 function isPlatformCommand(type) {
  if(typeof type!=='string')return false;
  return platformTypes.has(type) || COMMAND_INVENTORY.control_prefixes.some(p=>type.startsWith(p)) || chatTypes.has(type) || type.startsWith('ctox.app.') || type.startsWith('ctox.coding.') || /^ctox\.workjet\..+\.v1$/.test(type) || type==='ctox.plan.step.retry';
@@ -530,6 +486,34 @@ function commandRoute(body, manifestOf, user, testRoute=false) {
 
 // E26.5: observational, per-tab, bounded by command creation order.
 // No command payloads, durable state or authority are kept in diagnostics.
+export const PLATFORM_MANIFEST_SOURCE_SHA256 = 'c3aed8840f76571e9e0895d1feaf463440b25d25470563479fb812036c6a5d2b';
+const PLATFORM_MANIFEST = {"_format":"ctox-shell-v4-app-manifest-draft-1","app_id":"ctox-platform","title":"CTOX Plattform","app_ver":null,"author":null,"created_at":null,"entry":null,"min_app_api":"4.0","capabilities_required":[],"handlers":{},"triggers":[],"command_rights":{"ctox.machine.enroll.*":{"roles":["admin"],"permission":"machines.manage","assigned_users":false,"_note":"§16.41: begin/cancel/Transport-Schritte nur mit machines.manage; Rechner-Schritte (service_started|device_bound|peer_connected) über Token/gebundenen Geräteschlüssel, nicht über Rolle."},"ctox.device.unbind":{"roles":["admin"],"permission":"machines.manage","assigned_users":false,"_note":"§16.43: explizite Owner-/Admin-Aktion, nie automatisch."},"ctox.coding.*":{"roles":["admin"],"permission":"apps.source.edit","assigned_users":true,"_note":"§16.44: turn nur auf dem eigenen Entwurf (app_drafts.user_id = Auslöser, app_id gleich); cancel nur durch den Turn-Nutzer. Founder über App-Zuordnung (provenance.owner_id) wie apps.source.view."}},"collections":{"business_commands":{"class":"window","client_limit":null,"byte_budget":8192,"rights":{"read":"own|admin","write":"own"},"schema":{"version":2,"primaryKey":"id","type":"object","properties":{"id":{"type":"string","maxLength":128},"command_id":{"type":"string"},"module":{"type":"string"},"command_type":{"type":"string"},"record_id":{"type":"string"},"status":{"type":"string"},"inbound_channel":{"type":"string"},"payload":{"type":"object","additionalProperties":true},"client_context":{"type":"object","additionalProperties":true},"updated_at_ms":{"type":"number"},"result":{"type":"object","additionalProperties":true},"execution_progress":{"type":"object","additionalProperties":true},"task_id":{"type":"string"},"task_status":{"type":"string"}},"required":["id","command_id","module","command_type","status","updated_at_ms"],"additionalProperties":true,"indexes":["status","command_id",["status","updated_at_ms"],["module","command_type","status","updated_at_ms"]]},"_note":"§8: Befehl = Dokument; Nutzlast > 8 KiB als Artefakt-Verweis (Anf. 56). Fenster: letzte 7 Tage."},"ctox_queue_tasks":{"class":"window","client_limit":null,"byte_budget":16384,"rights":{"read":"role:admin|chef","write":"core"},"schema":{"version":3,"primaryKey":"id","type":"object","properties":{"id":{"type":"string","maxLength":128},"command_id":{"type":"string"},"command_type":{"type":"string"},"title":{"type":"string"},"status":{"type":"string"},"module":{"type":"string"},"source_module":{"type":"string"},"inbound_channel":{"type":"string"},"lease_owner":{"type":"string"},"lease_expires_at":{"type":"string"},"lease_worker_id":{"type":"string"},"first_pending_at":{"type":"string"},"failure_class":{"type":"string"},"failure_attempt_count":{"type":"number"},"retry_not_before":{"type":"string"},"hold_reason":{"type":"string"},"wait_entity_type":{"type":"string"},"wait_entity_id":{"type":"string"},"priority_time_credit_hours":{"type":"number"},"attempt":{"type":"number"},"crew_member_id":{"type":"string"},"crew_assigned_member_id":{"type":"string"},"ticket_key":{"type":["string","null"]},"execution_progress":{"type":"object","additionalProperties":true},"updated_at_ms":{"type":"number"}},"required":["id","title","status","module"],"indexes":["status","command_id","updated_at_ms",["status","updated_at_ms"],["command_id","status"]],"additionalProperties":true},"_note":"§8 Projektion der Core-Queue, nur Core schreibt."},"ctox_runtime_settings":{"class":"full","client_limit":null,"byte_budget":4096,"rights":{"read":"all","write":"role:admin"},"schema":{"version":0,"primaryKey":"id","type":"object","properties":{"id":{"type":"string","maxLength":128},"ok":{"type":"boolean"},"can_manage":{"type":"boolean"},"runtime":{"type":"object","additionalProperties":true},"auth":{"type":"object","additionalProperties":true},"service":{"type":"object","additionalProperties":true},"diagnostics":{"type":"object","additionalProperties":true},"updated_at_ms":{"type":"number"},"is_deleted":{"type":"boolean"}},"required":["id","runtime","auth","diagnostics","updated_at_ms"],"additionalProperties":true},"_note":""},"business_apps":{"class":"full","client_limit":null,"byte_budget":16384,"rights":{"read":"visible_roles","write":"core"},"schema":{"primaryKey":"id","type":"object","properties":{"id":{"type":"string","maxLength":180},"app_id":{"type":"string"},"title":{"type":"string"},"active_ver":{"type":"string"},"migrated_at_seq":{"type":"string"},"visible_roles":{"type":"array","items":{"type":"string"}},"layout":{"type":"object","additionalProperties":true},"provenance":{"type":"object","additionalProperties":true},"locally_modified":{"type":"boolean"},"state":{"type":"string"},"updated_at_ms":{"type":"number"}},"required":["id"],"additionalProperties":false,"indexes":["app_id","state"]},"_note":"§9.2/§16.14: ersetzt business_module_catalog (ein Dokument je App)."},"business_app_versions":{"class":"window","client_limit":null,"byte_budget":262144,"rights":{"read":"visible_roles","write":"core"},"schema":{"primaryKey":"id","type":"object","properties":{"id":{"type":"string","maxLength":180},"app_id":{"type":"string"},"app_ver":{"type":"string"},"manifest":{"type":"object","additionalProperties":true},"manifest_sha256":{"type":"string"},"signature":{"type":"string"},"base_app_ver":{"type":"string"},"state":{"type":"string"},"created_at_ms":{"type":"number"}},"required":["id"],"additionalProperties":false,"indexes":["app_id","state"]},"_note":"§9.1/9.2 signiertes Manifest; aktive + vorherige Version je App lokal."},"app_activations":{"class":"window","client_limit":null,"byte_budget":2048,"rights":{"read":"own|admin","write":"own"},"schema":{"primaryKey":"id","type":"object","properties":{"id":{"type":"string","maxLength":180},"app_id":{"type":"string"},"app_ver":{"type":"string"},"device_id":{"type":"string"},"user_id":{"type":"string"},"state":{"type":"string","enum":["received","fetched","data-ready","activated","failed"]},"reason":{"type":"string"},"at_seq":{"type":"string"},"updated_at_ms":{"type":"number"}},"required":["id"],"additionalProperties":false,"indexes":["app_id","device_id"]},"_note":"§9.3/§16.19: Client meldet Aktivierungszustand."},"shell_preferences":{"class":"full","client_limit":1,"byte_budget":65536,"rights":{"read":"own","write":"own"},"schema":{"primaryKey":"id","type":"object","properties":{"id":{"type":"string","maxLength":180},"user_id":{"type":"string"},"pins":{"type":"array","items":{"type":"string"}},"launcher_order":{"type":"array","items":{"type":"string"}},"settings":{"type":"object","additionalProperties":true},"updated_at_ms":{"type":"number"}},"required":["id"],"additionalProperties":false,"indexes":["user_id"]},"_note":"§16.19 Nr. 3"},"files":{"class":"full","client_limit":null,"byte_budget":4096,"rights":{"read":"owner_app_rights","write":"owner_app_rights"},"schema":{"primaryKey":"id","type":"object","properties":{"id":{"type":"string","maxLength":180},"name":{"type":"string"},"mime":{"type":"string"},"size":{"type":"number"},"ref":{"type":"string","pattern":"^[0-9a-f]{64}$"},"owner_app":{"type":"string"},"owner_user":{"type":"string"},"created_at_ms":{"type":"number"}},"required":["id"],"additionalProperties":false,"indexes":["owner_app","ref"]},"_note":"§10.2a Nr. 4: Metadaten lokal, Inhalt = Download über Spur 4."},"_bench":{"class":"window","client_limit":null,"byte_budget":4096,"rights":{"read":"role:admin","write":"role:admin"},"schema":{"primaryKey":"id","type":"object","properties":{"id":{"type":"string","maxLength":180},"payload":{"type":"string"},"core_sent_at_ms":{"type":"number"},"client_written_at_ms":{"type":"number"}},"required":["id"],"additionalProperties":false,"indexes":[]},"_note":"§16.18 Live-Push-Messung, Aufbewahrung 1 Tag."},"app_drafts":{"class":"full","client_limit":null,"byte_budget":1048576,"rights":{"read":"own+apps.source.view","write":"own+apps.source.edit"},"schema":{"primaryKey":"id","type":"object","additionalProperties":false,"required":["id","app_id","user_id"],"indexes":["app_id","user_id"],"properties":{"id":{"type":"string","maxLength":180},"app_id":{"type":"string"},"user_id":{"type":"string"},"base_app_ver":{"type":["string","null"]},"manifest_fields":{"type":"object","additionalProperties":true},"files":{"type":"object","additionalProperties":{"anyOf":[{"type":"string","pattern":"^[0-9a-f]{64}$"},{"type":"null"}]},"description":"Pfad → sha256 des Inhalts; null = im Entwurf gelöschte Datei (K-1c)."},"collections_schema":{"type":"object","additionalProperties":true},"updated_at_ms":{"type":"number"}}},"_note":"§16.22/§16.26: Entwurf je (App, Nutzer), Dateien als Hash (CAS), kein manifest.json im Entwurf."},"mail_server_state":{"class":"full","client_limit":null,"byte_budget":16384,"rights":{"read":"app:mail+role:mailserver.manage","write":"core"},"schema":{"primaryKey":"id","type":"object","additionalProperties":false,"required":["id","kind"],"indexes":["kind"],"properties":{"id":{"type":"string","maxLength":180},"kind":{"type":"string","enum":["runtime","domain","user"]},"name":{"type":"string"},"status":{"type":"string"},"data":{"type":"object","additionalProperties":true},"updated_at_ms":{"type":"number"}}},"_note":"§16.28: Projektion der Mailserver-Konfiguration, NIE Passwörter/Secrets; Schreiben nur Core über cap.mail.server.*"},"app_catalog":{"class":"full","client_limit":null,"byte_budget":16384,"rights":{"read":"role:apps.install","write":"core"},"schema":{"primaryKey":"id","type":"object","additionalProperties":false,"required":["id","app_id","app_ver","source"],"indexes":["app_id","source"],"properties":{"id":{"type":"string","maxLength":180},"app_id":{"type":"string"},"app_ver":{"type":"string"},"title":{"type":"string"},"layout":{"type":"object","additionalProperties":true},"source":{"type":"string","enum":["main","instance"]},"published_at":{"type":"number"}}},"_note":"§16.29 A"},"machine_enrollments":{"class":"full","client_limit":null,"byte_budget":8192,"rights":{"read":"role:machines.manage","write":"core"},"schema":{"primaryKey":"id","type":"object","additionalProperties":false,"required":["id","label","transport","created_by","created_at_ms","expires_at_ms","status","steps"],"indexes":["status","created_by"],"properties":{"id":{"type":"string","maxLength":128},"label":{"type":"string","maxLength":120},"transport":{"type":"string","enum":["local","ssh","tailscale"]},"created_by":{"type":"string"},"created_at_ms":{"type":"number"},"expires_at_ms":{"type":"number"},"status":{"type":"string","enum":["pending","running","green","failed","cancelled"]},"steps":{"type":"array","maxItems":8,"items":{"type":"object","additionalProperties":false,"required":["key","state","at_ms"],"properties":{"key":{"type":"string","enum":["token_issued","transport_connected","package_copied","installed","service_started","device_bound","peer_connected","green"]},"state":{"type":"string","enum":["pending","running","done","failed"]},"at_ms":{"type":"number"},"detail":{"type":"string","maxLength":512},"error_code":{"type":"string","maxLength":64}}}}}},"_note":"§16.41: Rechner-Beitritt. Schreiben nur über ctox.machine.enroll.begin|cancel|step (Core prüft Ersteller/Token/Geräteschlüssel); green setzt nur der Core. Token nie im Dokument (nur Hash, nicht synchronisiert)."},"devices":{"class":"full","client_limit":null,"byte_budget":2048,"rights":{"read":"own|role:machines.manage","write":"core"},"schema":{"primaryKey":"id","type":"object","additionalProperties":false,"required":["id","kind","kind_source","label","user_id","created_at_ms","connected","last_seen_at_ms"],"indexes":["user_id","kind"],"properties":{"id":{"type":"string","maxLength":256,"description":"device_pairing_id"},"kind":{"type":"string","enum":["mobile","desktop","browser","machine"]},"platform":{"type":"string","maxLength":64},"label":{"type":"string","maxLength":120},"user_id":{"type":"string"},"created_at_ms":{"type":"number"},"connected":{"type":"boolean"},"last_seen_at_ms":{"type":"number"},"kind_source":{"type":"string","enum":["client","legacy","enrollment"]}}},"_note":"§16.43: Projektion, schreibt nur der Core (Quelle business_mobile_invites-Gerätebindung + §16.41-Enrollments + gedrosselte Anwesenheit: connected sofort, last_seen_at_ms höchstens alle 30 s). own = user_id. Trennen nur über ctox.device.unbind (machines.manage), nie automatisch. kind/platform deklariert der Client beim ersten Binden (peerSession.deviceProof.kind/platform, feste Liste mobile|desktop|browser); ohne Angabe kind=mobile, kind_source=legacy; Rechner aus §16.41: kind_source=enrollment. Anwesenheit aus der Peer-Zulassung der bestehenden Replikation (kein Client-Heartbeat)."},"coding_turns":{"class":"window","client_limit":null,"byte_budget":65536,"rights":{"read":"own|role:admin","write":"core"},"schema":{"primaryKey":"id","type":"object","additionalProperties":false,"required":["id","app_id","draft_id","user_id","command_id","state","created_at_ms","updated_at_ms"],"indexes":["draft_id","user_id","state"],"properties":{"id":{"type":"string","maxLength":128},"app_id":{"type":"string","maxLength":128},"draft_id":{"type":"string","maxLength":180},"user_id":{"type":"string"},"command_id":{"type":"string","maxLength":128},"origin_app":{"type":"string","maxLength":128,"description":"App des auslösenden Befehlsdokuments (Callback-Ziel)."},"base_draft_rev":{"type":"string"},"state":{"type":"string","enum":["queued","running","done","failed","cancelled","conflict"]},"messages":{"type":"array","maxItems":200,"items":{"type":"object","additionalProperties":false,"required":["role","text","at_ms"],"properties":{"role":{"type":"string","enum":["user","assistant"]},"text":{"type":"string","maxLength":16384},"at_ms":{"type":"number"}}}},"tool_events":{"type":"array","maxItems":500,"items":{"type":"object","additionalProperties":false,"required":["kind","at_ms"],"properties":{"kind":{"type":"string","maxLength":64},"path":{"type":"string","maxLength":512},"at_ms":{"type":"number"}}}},"draft_rev_after":{"type":["string","null"]},"changed_files":{"type":"array","maxItems":2000,"items":{"type":"string","maxLength":512}},"patch":{"type":"object","additionalProperties":false,"required":["ref","file_id"],"properties":{"ref":{"type":"string","pattern":"^[0-9a-f]{64}$"},"file_id":{"type":"string","maxLength":180}},"description":"Nur bei state=conflict: Änderungen des Agenten als Patch (files-Datensatz, §16.32)."},"error":{"type":"object","additionalProperties":false,"required":["status","code"],"properties":{"status":{"type":"string","enum":["rejected","failed"]},"code":{"type":"string","maxLength":32},"reason":{"type":"string","maxLength":128},"path":{"type":"string","maxLength":256},"detail":{"type":"string","maxLength":2048}}},"callback":{"type":["object","null"],"additionalProperties":false,"properties":{"on_complete":{"type":["string","null"]},"on_failed":{"type":["string","null"]}}},"callback_command_id":{"type":"string","maxLength":180},"created_at_ms":{"type":"number"},"updated_at_ms":{"type":"number"},"finished_at_ms":{"type":"number"}}},"_note":"§16.44: Coding-Agent-Turns im Quelltext-Modus. Schreibt nur der Core (ctox.coding.turn|cancel), gedrosselt ≤ 4/s; Aufbewahrung 30 Tage ab finished_at_ms (nutzlastfreie Grabsteine, §16.23). 'Klasse runtime' aus §16.44 = Store-Klasse window (runtime ist keine Store-Klasse). own = user_id."},"app_user_preferences":{"schema":{"version":0,"primaryKey":"id","type":"object","additionalProperties":false,"required":["id","app_id","user_id","key","value"],"indexes":[["app_id","user_id"]],"properties":{"id":{"type":"string","maxLength":579},"app_id":{"type":"string","minLength":1,"maxLength":256},"user_id":{"type":"string","minLength":1,"maxLength":256},"key":{"type":"string","minLength":1,"maxLength":64,"pattern":"^[a-z0-9._-]+$"},"value":{}}},"class":"full","client_limit":null,"byte_budget":17408,"rights":{"read":"own","write":"own"}}},"exports":{"business_commands":["read","write"],"business_apps":["read"],"business_app_versions":["read"],"app_activations":["read","write"],"shell_preferences":["read","write"],"files":["read","write"],"ctox_queue_tasks":["read"],"ctox_runtime_settings":["read"],"mail_server_state":["read"],"app_catalog":["read"],"machine_enrollments":["read"],"devices":["read"],"coding_turns":["read"],"app_drafts":["read"]},"foreign_collections":{},"migrations":{},"provenance":{"base_release":null,"base_hash":null,"locally_modified":false},"_notes":["Eigentum Sitzung ctox sync v4 (§16.17).","business_module_catalog entfällt (Generation → business_apps/business_app_versions, §16.14).","rights-Syntax vorläufig; P6 überführt sie in _rights/scope (§2.4, §16.2)."],"row_filters":{"app_user_preferences":{"op":"eq","path":"/user_id","value":{"kind":"actor_id"}},"app_drafts":{"op":"eq","path":"/user_id","value":{"kind":"actor_id"}}}};
+
+// E51: app/user identity comes exclusively from the bound API context.
+const PREFERENCE_COLLECTION='app_user_preferences';
+function preferenceId(appId,userId,key){
+ if(typeof key!=='string'||!key.length||key.length>64||!/^[a-z0-9._-]+$/.test(key))throw new CtoxError('invalid','Invalid preference key',{path:'key'});
+ return `${appId}/${userId}/${key}`;
+}
+function preferenceError(appId,userId,id,doc,rows){
+ if(!appId||!userId||!id.startsWith(`${appId}/${userId}/`))return 'forbidden';
+ if(doc){
+  if(doc.app_id!==appId||doc.user_id!==userId||doc.id!==id)return 'forbidden';
+  try{if(preferenceId(appId,userId,doc.key)!==id)return 'invalid';}catch{return 'invalid';}
+  if(Object.keys(doc).sort().join(',')!=='app_id,id,key,user_id,value')return 'invalid';
+  let encoded;try{encoded=JSON.stringify(normalizeJson(doc.value,'value'));}catch{return 'invalid';}
+  if(new TextEncoder().encode(encoded).length>16384)return 'quota';
+  if(rows.filter(r=>r.id!==id&&r.app_id===appId&&r.user_id===userId).length>=64)return 'quota';
+ }
+ return null;
+}
+function createPreferencesApi({appId,userId,read,write}){
+ return Object.freeze({
+  get(key){const id=preferenceId(appId,userId,key),doc=read(id);return doc&&doc.app_id===appId&&doc.user_id===userId?cloneValue(doc.value):null;},
+  set(key,value){const id=preferenceId(appId,userId,key),doc={id,app_id:appId,user_id:userId,key,value:normalizeJson(value,'value')};const error=preferenceError(appId,userId,id,doc,[]);if(error)throw new CtoxError(error,'Preference rejected',{path:'value'});return write('put',id,doc);},
+  delete(key){return write('delete',preferenceId(appId,userId,key),null);},
+ });
+}
 function createCommandTimings(changed) {
   const rows = new Map();
   const stages = ['queued', 'sent', 'acked', 'completed'];
@@ -579,7 +563,7 @@ const STORES = {
 };
 const STORE_NAMES = Object.keys(STORES);
 const SNAPSHOT_MAX_BYTES = 1024 * 1024;
-const SYSTEM_COLLECTIONS = new Set(['business_commands', 'files', 'business_apps', 'business_app_versions', 'shell_preferences', 'app_drafts']);
+const SYSTEM_COLLECTIONS = new Set(['business_commands', 'files', 'business_apps', 'business_app_versions', 'shell_preferences', 'app_drafts', 'app_user_preferences']);
 const LAYOUT_KEYS = ['icon_asset', 'icon_svg', 'category', 'frame_palette', 'default_width', 'default_height', 'min_width', 'min_height', 'presentation'];
 // Tab-Identität für window_state: überlebt Neuladen desselben Tabs (sessionStorage), sonst je Kernel neu.
 function sessionTabKey() {
@@ -1226,6 +1210,8 @@ export function createStubKernel(opts = {}) {
   const cmdRejected = new Map();
   const zone = [];
   const routeListeners = new Map();
+  const fileReadGrants = new Map(); // E48: session-local, exact ref, consumed once, one hour.
+
   const windowStates = new Map();
   let locale = opts.locale ?? 'de';
   const translations = {};
@@ -1242,6 +1228,7 @@ export function createStubKernel(opts = {}) {
   const publishing = new Set();
   const doubleWrite = new Map(); // ns_old -> {ns_new, migrate}
   const sim0 = { reject: [], rejectUpload: [], migrate: [], failCmd: new Map(), cmdHandlers: new Map(), cmdTypes: new Set() };
+  const appGrantTokens=new Map(),appGrantAcquisitions=new Map(),grantMessages=[],deniedAppGrants=new Set(),issueAppGrant=createFakeAppGrantIssuer();
   const simRecord = { lastVisible: null, activationReports: [], navigations: [], dialogs: [], openedFiles: [], staleDiscards: 0, refetches: 0, connects: 1 };
   let readyResolve;
   const ready = new Promise((r) => { readyResolve = r; });
@@ -1291,11 +1278,16 @@ export function createStubKernel(opts = {}) {
   }
   function makeLive(tags, compute) {
     const subs = new Set();
+    // Catalog changes can move an already open view to a new generation.
+    const depend = tag => {
+      if(tags.includes(tag))return;tags.push(tag);
+      if(subs.size){if(!tagIndex.has(tag))tagIndex.set(tag,new Set());tagIndex.get(tag).add(impl);}
+    };
     let last, has = false;
     const impl = {
       refresh() {
         if (!subs.size) return;
-        const v = compute();
+        const v = compute(depend);
         if (has && liveEqual(last, v)) return;
         last = v; has = true;
         for (const cb of [...subs]) { try { cb(v); } catch (e) { console.error('[ctox-stub] subscriber', e); } }
@@ -1303,13 +1295,13 @@ export function createStubKernel(opts = {}) {
       dispose() { subs.clear(); for (const t of tags) tagIndex.get(t)?.delete(impl); },
     };
     return {
-      get: () => compute(),
+      get: () => compute(depend),
       subscribe(cb) {
         if (typeof cb !== 'function') throw new CtoxError('invalid', 'subscribe braucht eine Funktion');
         if (closed || loggedOut) return () => {};
         if (!subs.size) { for (const t of tags) { if (!tagIndex.has(t)) tagIndex.set(t, new Set()); tagIndex.get(t).add(impl); } allLives.add(impl); }
         subs.add(cb);
-        last = compute(); has = true;
+        last = compute(depend); has = true;
         try { cb(last); } catch (e) { console.error('[ctox-stub] subscriber', e); }
         return () => {
           if (!subs.delete(cb) || subs.size) return;
@@ -1330,6 +1322,7 @@ export function createStubKernel(opts = {}) {
   // ---- Spiegel ----
   function mirrorGet(ns, id) { return mirror.get(ns)?.get(id) ?? null; }
   function visible(rec) { return rec && rec.data != null && !rec.deleted ? rec.data : null; }
+  function readDocument(rec, data = visible(rec)) { return data == null ? null : Object.freeze({...cloneValue(data), _rev:rec?.base?.rev ?? null, _pending:!!rec?.pending}); }
   function mirrorPut(rec) {
     if (!rec) return false;
     let m = mirror.get(rec.collection);
@@ -1622,11 +1615,14 @@ export function createStubKernel(opts = {}) {
     const prepare = () => {
       guardAlive();
       if (options.expected_revision !== undefined && (typeof options.expected_revision !== 'string' || !options.expected_revision)) throw new CtoxError('invalid','expected_revision must be a nonempty revision',{path:'expected_revision'});
+      if (collection === PREFERENCE_COLLECTION && options.preference !== true) throw new CtoxError('forbidden','Use api.prefs',{path:'collection'});
       if (typeof collection !== 'string' || !collection) throw new CtoxError('invalid', 'collection fehlt', { path: 'collection' });
       if (typeof id !== 'string' || !id) throw new CtoxError('invalid', 'id (string) fehlt', { path: 'id' });
       if (collection === 'shell_preferences' && id !== actor.id) throw new CtoxError('forbidden', 'shell_preferences: nur die eigene Zeile (id = actor.id)', { path: 'id' });
       if (collection === 'app_drafts' && app.id !== 'ctox-platform') throw new CtoxError('forbidden', 'app_drafts nur über kernel.source(appId).draft.*', { path: 'collection' });
       const ns = resolveNs(app, collection);
+      body = stripReadMetadata(body);
+      if (isPlainObject(body) && Object.keys(body).some(key=>key.startsWith('_'))) throw new CtoxError('invalid','Underscore document fields are reserved',{path:Object.keys(body).find(key=>key.startsWith('_'))});
       let clean = null;
       if (op === 'put') {
         clean = normalizeJson(body, '');
@@ -1634,6 +1630,11 @@ export function createStubKernel(opts = {}) {
       } else if (op === 'patch') clean = normalizeJsonPatch(body);
       const cur = mirrorGet(ns, id);
       const st = applyOp(cur ? { data: cur.data, deleted: cur.deleted } : { data: null, deleted: false }, { op, body: clean, id });
+      if (collection===PREFERENCE_COLLECTION) {
+        const rows=[...(mirror.get(ns)?.values()??[])].map(visible).filter(Boolean);
+        const error=preferenceError(app.id,userId,id,st.deleted?null:st.data,rows);
+        if(error)throw new CtoxError(error,'Preference rejected',{path:'key'});
+      }
       if (st.data) validateSchema(st.data, schemaFor(app, collection), ''); // lokale Schemaprüfung am Ergebnisdokument
       entry = {
         op_id, prev_op_id: cur?.pending && cur.rev?.startsWith('op:') ? cur.rev.slice(3) : null,
@@ -1658,6 +1659,11 @@ export function createStubKernel(opts = {}) {
       const ns = entry.collection;
       const rec = await db.tx(async (t) => {
         const stored = await t.get('docs', [ns, id]);
+        if (ns === PREFERENCE_COLLECTION) {
+          const rows=(await t.all('docs')).filter(r=>r.collection===ns&&!r.deleted&&r.data).map(r=>r.data);
+          const error=preferenceError(app.id,userId,id,entry.body,rows);
+          if(error)throw new CtoxError(error,'Preference rejected',{path:'key'});
+        }
         // E26: the IDB transaction arbitrates concurrent tabs and reloads.
         // Reuse the original operation/result, never enqueue another command.
         if (createOnly && visible(stored)) {
@@ -1672,6 +1678,9 @@ export function createStubKernel(opts = {}) {
         }
         await t.put('outbox', entry); // docs + outbox in EINER Transaktion
         const r = recompute(ns, id, stored?.base ?? emptyBase(), await t.outboxFor(ns, id));
+        // Preserve the complete locally acknowledged version, not merely a patch.
+        entry.local_version={data:cloneValue(r.data),deleted:r.deleted};
+        await t.put('outbox',entry);
         await putDoc(t, r);
         return r;
       });
@@ -1745,6 +1754,7 @@ export function createStubKernel(opts = {}) {
     }
     const res = waiters.get(info.op_id);
     if (res) { waiters.delete(info.op_id); res(cloneValue(result)); }
+    if (result.local_archived_ref && result.status !== 'rejected') zoneReport(info.app_id,{level:'warn',code:`write.reconciled:${info.op_id}`,text:'Lokale Version wurde vom Kern geändert; Eingabe im lokalen Journal gesichert',ref:result.local_archived_ref},'kernel');
     if (result.status === 'rejected' && result.reason !== 'cancelled') {
       zoneReport(info.app_id, { level: 'error', code: `write.rejected:${info.op_id}`, text: `Änderung abgelehnt: ${result.reason}`, ref: result.archived_ref }, 'kernel');
       if (info.collection === 'business_commands') { cmdRejected.set(info.id, result.reason); notify('commands'); }
@@ -1836,6 +1846,8 @@ export function createStubKernel(opts = {}) {
         let newBase = base;
         if (!res) {
           res = outcome;
+          e.body = stripReadMetadata(e.body);
+          if (!res && e.body && Object.keys(e.body).some(key=>key.startsWith('_'))) res={status:'rejected',code:'invalid',reason:'Underscore document fields are reserved'};
           if (!res && e.expected_revision !== undefined && e.expected_revision !== base.rev) res = {status:'rejected',code:'revision_conflict',reason:'Expected revision differs from current revision'};
           if (!res && e.op === 'patch' && (base.data == null || base.deleted)) res = { status: 'rejected', reason: 'not_found' };
           if (!res && e.op === 'delete') {
@@ -1854,6 +1866,11 @@ export function createStubKernel(opts = {}) {
           // K-WJ-B2 (E27.2): Befehlstyp ohne veröffentlichte Route → beim Schreiben abgelehnt, nie erst angenommen
           if (!res && e.collection === 'business_commands' && e.op === 'put' && e.body?.status === 'queued' && !commandRouteKnown(e.body.app_id, String(e.body.type))) {
             res = { status: 'rejected', code: 'unknown_command', reason: `unknown_command:${e.body.type}` };
+          }
+          if (!res && e.collection===PREFERENCE_COLLECTION) {
+            const rows=(await t.all('docs')).filter(r=>r.collection===PREFERENCE_COLLECTION&&r.base?.data&&!r.base.deleted).map(r=>r.base.data);
+            const code=preferenceError(e.app_id,userId,e.id,e.op==='delete'?null:e.body,rows);
+            if(code)res={status:'rejected',code,reason:code};
           }
           if (!res) res = { status: 'accepted' };
           if (res.status !== 'rejected') {
@@ -1875,12 +1892,11 @@ export function createStubKernel(opts = {}) {
           } else res = { status: 'rejected', reason: res.reason, ...(res.code ? { code: res.code } : {}) };
           await t.put('sim_core', { key: `op:${e.op_id}`, result: res });
         }
-        if (res.status === 'rejected') {
-          res = { ...res, archived_ref: `archive_local:${e.op_id}` };
-          await t.put('archive_local', {
-            ref: res.archived_ref, op_id: e.op_id, collection: e.collection, id: e.id, op: e.op, body: e.body,
-            reason: res.reason, app_id: e.app_id, app_ver: e.app_ver, created_at: e.created_at, rejected_at: Date.now(),
-          });
+        const local=e.local_version ?? {data:applyOp(base,e).data,deleted:e.op==='delete'};
+        const changed=e.collection!=='business_commands' && (!jsonEq(local.data,newBase.data)||!!local.deleted!==!!newBase.deleted);
+        if (res.status === 'rejected' || changed) {
+          res = { ...res, local_archived_ref: `archive_local:${e.op_id}`, ...(res.status==='rejected'?{archived_ref:`archive_local:${e.op_id}`}:{}) };
+          await t.put('archive_local', {...e,ref:res.local_archived_ref,local_version:local,canonical_version:cloneValue(newBase),reason:res.code??res.reason??'canonical_changed',rejected_at:Date.now()});
         }
         await t.put('meta',{key:`result:${e.op_id}`,info:{op_id:e.op_id,app_id:e.app_id,collection:e.collection,id:e.id},result:res});
         await t.del('outbox', e.op_id);
@@ -2248,7 +2264,7 @@ export function createStubKernel(opts = {}) {
   }
   async function runCommand(doc) {
     const id = doc.id, type = doc.type;
-    if (type === 'ctox.coding.turn' || type === 'ctox.coding.cancel') {
+    if ((type === 'ctox.coding.turn' || type === 'ctox.coding.cancel') && !sim0.cmdHandlers.has(type) && !sim0.failCmd.has(type)) {
       await sleep(latencyMs);
       await coreMerge('business_commands', id, { status: 'accepted' });
       await coreMerge('business_commands', id, { status: 'running' });
@@ -2274,15 +2290,22 @@ export function createStubKernel(opts = {}) {
         if(route.error)throw new CtoxError(route.error,route.error);
         const manifest=routingManifest(route.target);
         const path=manifest?.handlers?.[type];
-        const artifact=path ? await readArtifactContent(manifest.files[path]) : null;
+        const artifact=!h && !route.platform && path ? await readArtifactContent(manifest.files[path]) : null;
         const handler=artifact===null?null:(await import(`data:text/javascript;base64,${btoa(String.fromCharCode(...new TextEncoder().encode(typeof artifact==='string'?artifact:await artifact.text())))}`)).default;
-        const result = !route.platform && handler ? await handler({...cloneValue(doc),actor:{id:actor.id,role:actor.role}}, {app_id:route.target}) : !route.platform && h ? await h(cloneValue(doc.payload), { app_id: doc.app_id, command_id: id, model: (req) => Promise.resolve().then(() => simulatedModelRun(doc.app_id, req)),
-          cap: { process: { run: capProcessRun(doc.app_id) } } }) : { ok: true }; // CAP-3d process.run (simuliert)
+        const result = h ? await h(cloneValue(doc.payload), { app_id: doc.app_id, command_id: id, model: (req) => Promise.resolve().then(() => simulatedModelRun(doc.app_id, req)),
+          cap: { process: { run: capProcessRun(doc.app_id) } } }) : !route.platform && handler ? await handler({...cloneValue(doc),actor:{id:actor.id,role:actor.role}}, {app_id:route.target}) : { ok: true }; // CAP-3d process.run (simuliert)
         patch = { status: 'done', progress: 1, result: result ?? null };
       } catch (err) { patch = { status: 'failed', error: String(err?.message ?? err) }; }
     }
     await sleep(latencyMs);
     await coreMerge('business_commands', id, patch);
+    // An explicit simulator completes the command without the built-in turn runner.
+    // Release exactly its own writer reservation after the terminal result.
+    if(type==='ctox.coding.turn'){
+      const draft=doc.payload?.draft_id,turn=turnByCommand.get(id);
+      if(turn && activeTurns.get(draft)===turn)activeTurns.delete(draft);
+      turnByCommand.delete(id);
+    }
   }
 
   // ---- App-Versionen, Generationen, Aktivierung (§9.3, §16.4) ----
@@ -2309,7 +2332,7 @@ export function createStubKernel(opts = {}) {
     if (ns === 'app_drafts') return typeof id === 'string' && id.startsWith(`${actor.id}/`);
     return true;
   }
-  function schemaFor(app, collection) { return versionDoc(app.id, app.ver)?.manifest?.collections?.[collection]?.schema ?? null; }
+  function schemaFor(app, collection) { const row=versionDoc(app.id,app.ver); if(collection==='app_drafts' && app.id==='ctox-platform' && row?.builtin)return {"primaryKey":"id","type":"object","additionalProperties":false,"required":["id","app_id","user_id"],"indexes":["app_id","user_id"],"properties":{"id":{"type":"string","maxLength":180},"app_id":{"type":"string"},"user_id":{"type":"string"},"base_app_ver":{"type":["string","null"]},"manifest_fields":{"type":"object","additionalProperties":true},"files":{"type":"object","additionalProperties":{"type":["string","null"]}},"collections_schema":{"type":"object","additionalProperties":true},"updated_at_ms":{"type":"number"}}}; return row?.manifest?.collections?.[collection]?.schema ?? null; }
 
   async function publishInternal(appId, ver, o = {}) {
     if (publishing.has(appId)) throw new CtoxError('conflict', `Veröffentlichung von ${appId} läuft bereits (busy)`);
@@ -2360,6 +2383,8 @@ export function createStubKernel(opts = {}) {
     } finally { publishing.delete(appId); }
   }
   function scheduleActivation(appId) {
+    if(appId==='ctox-platform' && versionDoc(appId,visible(mirrorGet('business_apps',appId))?.active_ver)?.builtin)return; // resident Core service, no app mount or eager data subscriptions
+
     if (!isLeader || closed) return;
     const prev = activationChains.get(appId) ?? Promise.resolve();
     const next = prev.then(() => runActivation(appId)).catch((err) => {
@@ -2373,6 +2398,18 @@ export function createStubKernel(opts = {}) {
     const a = activations.get(appId);
     return a && a.target_ver === ver && (a.state === 'activated' || a.state === 'failed');
   }
+  async function grantApp(app_id){
+    const app=visible(mirrorGet('business_apps',app_id));
+    const cacheKey=`${app_id}@${app?.active_ver??''}`;
+    if(appGrantAcquisitions.has(cacheKey))return appGrantAcquisitions.get(cacheKey);
+    const acquire=(async()=>{
+    if(app_id!=='shell')grantMessages.push({type:'scope.grant.request',app_id});
+    if(deniedAppGrants.has(app_id)){grantMessages.push({type:'forbidden',app_id,reason:'forbidden'});throw new CtoxError('forbidden','Collection grant missing');}
+    const manifest=versionDoc(app_id,app?.active_ver)?.manifest;
+    const claims={instance_id:instanceId,user_id:userId,app_id,scope_hash:`scope:${app_id}`,rights_ver:'1',device_id:opts.deviceId??`dev-${fnv1a(`${instanceId}|${userId}|${opts.deviceLabel??'browser'}`)}`,exp:Math.floor(Date.now()/1000)+3600,collections:Object.keys(manifest?.collections??{}).map(c=>({collection:c.includes('@g')||!(manifest.generations?.[c]>1)?c:`${c}@g${manifest.generations[c]}`,gen:manifest.generations?.[c]??1,rights:['read','write'],field_mask_digest:'fake:all'}))};
+    const token=await issueAppGrant(claims);appGrantTokens.set(app_id,token);if(app_id!=='shell')grantMessages.push({type:'scope.grant',token});return token;
+    })();appGrantAcquisitions.set(cacheKey,acquire);return acquire;
+  }
   async function runActivation(appId) {
     const appDoc = visible(mirrorGet('business_apps', appId));
     if (!appDoc?.active_ver || !isLeader) return;
@@ -2383,6 +2420,7 @@ export function createStubKernel(opts = {}) {
     const manifest = vdoc.manifest;
     const superseded = () => visible(mirrorGet('business_apps', appId))?.active_ver !== ver;
     await setActivation(appId, { target_ver: ver, state: 'received', error: null });
+    try{await grantApp(appId);}catch(error){await setActivation(appId,{target_ver:ver,state:'failed',error:'Collection grant missing'});zoneReport(appId,{level:'error',code:'forbidden',text:'Collection grant missing'},'kernel');return;}
     // fetched: alle Dateien per Hash geprüft (aus „Spur 4“ = sim_core-CAS)
     for (const [path, hash] of Object.entries(manifest.files ?? {})) {
       if (await db.get('artifacts', hash)) continue;
@@ -2528,10 +2566,22 @@ export function createStubKernel(opts = {}) {
           zoneReport(appId, { level: 'error', code: 'shell.navigate.unknown_target', text: `Navigationsziel unbekannt: ${target}`, ref: String(target) }, 'kernel');
           return false;
         }
+        if (params.ref !== undefined) return (async () => {
+          const sel = typeof params.ref === 'string' ? {ref:params.ref} : params.ref;
+          const file = await readableFile(sel, false);
+          const grant = {from:appId,to:target,ref:file.ref,user_id:userId,expires_at:Date.now()+3600000,at_ms:Date.now()};
+          // Audit commits before delivery. A failed authorization never emits a route.
+          await db.tx(t=>t.put('meta',{key:`file-grant:${uuidv7()}`,value:{...grant,event:'granted'}}));
+          fileReadGrants.set(JSON.stringify([target,file.ref]),grant);
+          return emitRoute();
+        })();
+        return emitRoute();
+        function emitRoute() {
         const ev = Object.freeze({ from: appId, to: target, params: cloneValue(params) });
         simRecord.navigations.push(ev);
         for (const cb of [...(routeListeners.get(target) ?? [])]) { try { cb(ev); } catch (e) { console.error(e); } }
         return true;
+        }
       },
       onRoute(cb) {
         if (!routeListeners.has(appId)) routeListeners.set(appId, new Set());
@@ -2656,7 +2706,8 @@ export function createStubKernel(opts = {}) {
     function readableNamespace(ns) {
       const caller = readManifest(appId,app.ver);
       const c = ns.replace(/@g[1-9][0-9]*$/,'');
-      if (caller?.collections?.[c]) return ns === resolveNs(app,c);
+      if (c === PREFERENCE_COLLECTION) return false; // preferences never grant another app a file reference
+      if (caller?.collections?.[c] && (!SYSTEM_COLLECTIONS.has(c) || appId==='ctox-platform')) return ns === resolveNs(app,c);
       const f = caller?.foreign_collections?.[c];
       const owner = f?.owner_app ?? f?.app ?? f?.owner;
       const om = owner && currentManifest(owner);
@@ -2665,29 +2716,36 @@ export function createStubKernel(opts = {}) {
     // §16.13: known owners and declared foreign reads require both grants.
     // Published callers fail closed on undeclared names, even before the owner
     // manifest arrives. Only manifest-less contract/bootstrap names are local.
-    function assertReadableCollection(collection) {
+    function assertReadableCollection(collection, allowPending = false) {
       const c = collection.replace(/@g[1-9][0-9]*$/, '');
+      if (c === PREFERENCE_COLLECTION) throw new CtoxError('forbidden','Use api.prefs',{path:'collection'});
       const callerManifest = readManifest(appId,app.ver);
       const foreign = callerManifest?.foreign_collections?.[c];
+      const owner = foreign?.owner_app ?? foreign?.app ?? foreign?.owner;
+      const ownerRow = owner && mirrorGet('business_apps',owner);
+      const ownerVersion = ownerRow?.base?.data?.active_ver;
+      const versionRow = owner && mirrorGet('business_app_versions',`${owner}@${ownerVersion}`);
+      // A declared read can wait for installation; absence is never authority to read rows.
+      if(allowPending && foreign?.ops?.includes('read') && owner && !ownerRow?.revoked && !ownerRow?.base?.deleted && !versionRow?.revoked && !versionRow?.base?.deleted && !currentManifest(owner))return;
       const owners = [...(mirror.get('business_app_versions')?.values() ?? [])]
         .filter(row => !row.revoked && !row.base?.deleted).map(row => row.base?.data).filter(Boolean).filter(v => v.app_id !== appId && v.manifest?.collections?.[c]);
-      if ((foreign || owners.length || (callerManifest && !callerManifest.collections?.[c])) && !readableNamespace(resolveNs(app, collection)))
+      if ((foreign || owners.length || (SYSTEM_COLLECTIONS.has(c) && appId!=='ctox-platform') || (callerManifest && !callerManifest.collections?.[c])) && !readableNamespace(resolveNs(app, collection)))
         throw new CtoxError('forbidden', 'Foreign collection requires declaration and read export', {path:'collection'});
     }
     function readableLive(collection, tags, compute, empty) {
-      const live = makeLive([...tags,'c:business_apps','c:business_app_versions'], () => {
+      const live = makeLive([...tags,'c:business_apps','c:business_app_versions','activation'], depend => {
         try { assertReadableCollection(collection); }
         catch (error) { if (error.code === 'forbidden') return empty; throw error; }
-        return compute();
+        return compute(depend);
       });
       return {
-        get() { assertReadableCollection(collection); return live.get(); },
-        subscribe(cb) { assertReadableCollection(collection); return live.subscribe(cb); },
+        get() { assertReadableCollection(collection,true); return live.get(); },
+        subscribe(cb) { assertReadableCollection(collection,true); return live.subscribe(cb); },
       };
     }
     // E30: a CAS hash is not authority. Only canonical, still-readable rows
     // grant access; an optimistic reference cannot mint a read grant.
-    async function readableFile(sel) {
+    async function readableFile(sel, consumeGrant = true) {
       guardAlive();
       if (!isPlainObject(sel) || (typeof sel.id !== 'string' && typeof sel.ref !== 'string')) throw new CtoxError('invalid', 'files: {id} oder {ref} nötig', {path:'ref'});
       const docs = fileDocs().filter(d => sel.id ? d.id === sel.id : d.ref === sel.ref);
@@ -2721,6 +2779,13 @@ export function createStubKernel(opts = {}) {
       const ref = docs[0]?.ref ?? sel.ref;
       const containsRef = value => value !== null && typeof value === 'object' && (value.ref === ref || value.blob_ref === ref || Object.values(value).some(containsRef));
       if (typeof ref === 'string' && /^[a-f0-9]{64}$/.test(ref) && canonicalRows.some(([,d]) => containsRef(d))) return docs[0] ?? {ref,id:ref,name:null};
+      const grantKey = JSON.stringify([appId,ref]);
+      const grant = fileReadGrants.get(grantKey);
+      if (consumeGrant && grant?.user_id===userId && grant.expires_at>Date.now()) {
+        fileReadGrants.delete(grantKey); // consume before any await: concurrent reads cannot reuse it
+        await db.tx(t=>t.put('meta',{key:`file-grant:${uuidv7()}`,value:{...grant,event:'consumed',at_ms:Date.now()}}));
+        return docs[0] ?? {id:ref,ref,name:null};
+      }
       throw new CtoxError('forbidden','File needs ownership or a readable reference',{path:sel.id ? 'id' : 'ref'});
     }
     const fileInfo = (d) => ({ id: d.id, ref: d.ref, name: d.name ?? null, mime: d.mime ?? 'application/octet-stream', size: d.size ?? 0 });
@@ -2794,24 +2859,26 @@ export function createStubKernel(opts = {}) {
     return Object.freeze({
       version: APP_API_VERSION,
       app,
+      prefs: createPreferencesApi({appId,userId,read:id=>{subscribeNs(PREFERENCE_COLLECTION);return visible(mirrorGet(PREFERENCE_COLLECTION,id));},write:(op,id,body)=>localWrite(app,op,PREFERENCE_COLLECTION,id,body,false,{preference:true})}),
       query(collection, q = {}) {
-        assertReadableCollection(collection);
+        assertReadableCollection(collection,true);
         const cq = compileQuery(q);
         const ns = resolveNs(app, collection);
         subscribeNs(ns);
-        return readableLive(collection, [`c:${ns}`], () => {
+        return readableLive(collection, [`c:${ns}`], depend => {
+          const ns=resolveNs(app,collection);depend(`c:${ns}`);subscribeNs(ns);
           const m = mirror.get(ns);
           if (!m) return [];
           const docs = [];
-          for (const r of m.values()) if (r.data != null && !r.deleted && ownRowOk(ns, r.id)) docs.push(r.data);
+          for (const r of m.values()) if (r.data != null && !r.deleted && ownRowOk(ns, r.id)) docs.push(readDocument(r));
           return runCompiledQuery(docs, cq);
         }, []);
       },
       get(collection, id) {
-        assertReadableCollection(collection);
+        assertReadableCollection(collection,true);
         const ns = resolveNs(app, collection);
         subscribeNs(ns);
-        return readableLive(collection, [`c:${ns}`, 'actor'], () => ownRowOk(ns,id) ? visible(mirrorGet(ns,id)) : null, null);
+        return readableLive(collection, [`c:${ns}`, 'actor'], depend => {const ns=resolveNs(app,collection);depend(`c:${ns}`);subscribeNs(ns);return ownRowOk(ns,id) ? readDocument(mirrorGet(ns,id)) : null;}, null);
       },
       put(collection, doc) { return localWrite(app, 'put', collection, doc?.id, doc); },
       patch(collection, id, patch, options = {}) { return localWrite(app, 'patch', collection, id, patch, false, {expected_revision:options.expected_revision}); },
@@ -2890,7 +2957,8 @@ export function createStubKernel(opts = {}) {
       styles: [...(m.styles ?? baseMan?.styles ?? [])],
     };
   }
-  const draftOf = (appId) => visible(mirrorGet('app_drafts', draftId(appId)));
+  const draftOf = (appId) => {const d=visible(mirrorGet('app_drafts',draftId(appId)));return d?{...d,manifest:d.manifest_fields??d.manifest??{},updated_at:d.updated_at_ms??d.updated_at}:null;};
+  function draftDocument(d){return {id:d.id,app_id:d.app_id,user_id:d.user_id,base_app_ver:d.base_app_ver??null,files:d.files,manifest_fields:d.manifest??{},updated_at_ms:d.updated_at};}
   const activeVerOf = (appId) => visible(mirrorGet('business_apps', appId))?.active_ver ?? null;
   async function readVersionFile(appId, ver, path) {
     const hash = versionDoc(appId, ver)?.manifest?.files?.[path];
@@ -2912,7 +2980,7 @@ export function createStubKernel(opts = {}) {
     }
     mutate(d);
     d.updated_at = Date.now();
-    return localWrite(PLATFORM_APP, 'put', 'app_drafts', d.id, d).local;
+    return localWrite(PLATFORM_APP, 'put', 'app_drafts', d.id, draftDocument(d)).local;
   }
   // §16.44-Ergänzung (3): wie draftMutate, liefert aber {local, result}; result = vom Core bestätigte Revision {status, rev}
   // bzw. rejected{code}. Rückgabe ist weiterhin ein Promise (await/.catch wie bisher) mit den Feldern local und result.
@@ -2931,7 +2999,7 @@ export function createStubKernel(opts = {}) {
       }
       mutate(d);
       d.updated_at = Date.now();
-      h = localWrite(PLATFORM_APP, 'put', 'app_drafts', d.id, d);
+      h = localWrite(PLATFORM_APP, 'put', 'app_drafts', d.id, draftDocument(d));
       await h.local;
     })();
     const result = local.then(async () => {
@@ -3087,6 +3155,7 @@ export function createStubKernel(opts = {}) {
     for (const r of mirror.get('business_apps')?.values() ?? []) {
       const d = visible(r);
       if (!d) continue;
+      if(d.id==='ctox-platform' && versionDoc(d.id,d.active_ver)?.builtin)continue; // resident platform service
       if (Array.isArray(d.roles) && !d.roles.includes(actor.role)) continue;
       const a = activations.get(d.id);
       const man = versionDoc(d.id, a?.activated_ver ?? d.active_ver)?.manifest ?? versionDoc(d.id, d.active_ver)?.manifest;
@@ -3227,6 +3296,7 @@ export function createStubKernel(opts = {}) {
 
   // ---- Sim-Implementierung (läuft im Leiter) ----
   const simImpl = {
+    async fileGrants(){return (await db.all('meta')).filter(x=>x.key.startsWith('file-grant:')).map(x=>x.value);},
     push: (collection, docs) => corePush(collection, docs),
     setLink(partial = {}) {
       if (partial.state !== undefined && partial.state !== 'online' && partial.state !== 'offline') {
@@ -3337,6 +3407,8 @@ export function createStubKernel(opts = {}) {
 
   // ---- Sim-Fassade (Test-Hooks) ----
   const sim = {
+    scopeGrants:()=>cloneValue(grantMessages),
+    failAppGrant:appId=>deniedAppGrants.add(appId),
     rejectNext: (reason = 'simulated_rejection') => forward('rejectNext')(reason),
     rejectNextUpload: (reason = {code:'forbidden',reason:'Upload denied'}) => forward('rejectNextUpload')(reason),
     migrateNext: (o = {}) => forward('migrateNext')({ dropFields: o.dropFields ?? [] }),
@@ -3413,6 +3485,7 @@ export function createStubKernel(opts = {}) {
     async bumpLeaderGen() { await db.tx(async (t) => { const g = ((await t.get('meta', 'leader_gen'))?.value ?? 0) + 1; await t.put('meta', { key: 'leader_gen', value: g }); }); },
     dropBroadcasts(on = true) { dropBroadcasts = !!on; },
     reconcile: () => reconcile(),
+    fileGrants: () => simImpl.fileGrants(),
     async inspect(collection, id) { return db.get('docs', [collection, id]); },
     outbox: async () => (await db.all('outbox')).sort(byOpId),
     archiveLocal: async () => db.all('archive_local'),
@@ -3503,6 +3576,22 @@ export function createStubKernel(opts = {}) {
   (async () => {
     db = await openBackend(dbName, opts.storage);
     if (closed) return;
+    // E48: trusted built-in platform publication; never replaces a Core catalog row.
+    const builtinPlatform = await db.tx(async t=>{
+      const existing = await t.get('docs',['business_apps','ctox-platform']);
+      if (existing) return [];
+      const rows = [
+        ['business_app_versions',{id:'ctox-platform@1',app_id:'ctox-platform',app_ver:'1',manifest:PLATFORM_MANIFEST,builtin:true}],
+        ['business_apps',{id:'ctox-platform',active_ver:'1'}],
+      ];
+      const result=[];
+      for (const [collection,data] of rows) {
+        const base={data,deleted:false,rev:null,seq:'0'};
+        const row={collection,id:data.id,...base,pending:false,base};
+        await putDoc(t,row);result.push(row);
+      }
+      return result;
+    });
     await loadFromStorage();
     if (hasLocks) {
       bc = new BroadcastChannel(channelName);

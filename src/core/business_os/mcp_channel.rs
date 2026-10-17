@@ -46,6 +46,8 @@ mod crew_plan;
 mod metadata_read;
 #[path = "mcp_native_startup.rs"]
 pub(crate) mod native_startup;
+#[path = "mcp_native_tasks.rs"]
+pub(crate) mod native_tasks;
 #[path = "mcp_project_crew.rs"]
 mod project_crew_request;
 #[path = "mcp_remote_worker.rs"]

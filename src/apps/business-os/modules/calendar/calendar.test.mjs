@@ -302,6 +302,22 @@ test('selecting a booking page is an in-place class flip, never a list rebuild',
   assert.doesNotMatch(selectFn[0], /renderLeftList\(/);
 });
 
+test('opening a calendar row marks it selected in place, so a narrow window opens the calendar view (G11)', async () => {
+  const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+  // The row itself (not only its checkbox) is the tap target; pane-narrow.js opens the detail when the tapped row
+  // carries the selection mark.
+  assert.match(js, /class="ctox-list-item calendar-item\$\{focused \? ' is-selected' : ''\}" data-action="focus-cal"/);
+  const clickFn = js.match(/function onLeftListClick\(event\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(clickFn, 'onLeftListClick present');
+  assert.match(clickFn[0], /focusCalendar\(/);
+  const focusFn = js.match(/function focusCalendar\(id\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(focusFn, 'focusCalendar present');
+  assert.match(focusFn[0], /classList\.toggle\('is-selected'/);
+  assert.match(focusFn[0], /aria-current/);
+  assert.match(focusFn[0], /selectedCalendarIds\.add\(id\)/);
+  assert.doesNotMatch(focusFn[0], /renderLeftList\(/);
+});
+
 test('calendar does not advertise an unavailable public booking route', async () => {
   const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
   assert.doesNotMatch(js, /window\.location\.origin\}\/book\//);

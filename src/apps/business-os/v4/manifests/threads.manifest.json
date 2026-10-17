@@ -739,7 +739,11 @@
   "commands_out": [],
   "created_at": null,
   "entry": "index.js",
-  "exports": {},
+  "exports": {
+    "ctox_task_approval_requests": [
+      "read"
+    ]
+  },
   "files": {
     "HUB-CONTRACT.md": "e3bc15d90241dc1b0d1711f22559c09ad292b3b5b175e149bb02a48b17c7b830",
     "V4-HANDLERS.md": "dfaecda8997907c1d5e276847f9d151ac8ab5baa91983dad4352e6cf66772393",

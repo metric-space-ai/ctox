@@ -760,18 +760,29 @@ mod sqlite_build_flags_tests {
     /// Guards `.cargo/config.toml` `LIBSQLITE3_FLAGS`: the bundled SQLite must
     /// not share one page cache and one allocation mutex across all daemon
     /// connections (see the comment there; customer on-prem, 06.10.2026).
-    #[test]
-    fn bundled_sqlite_has_no_global_page_cache_or_memstatus_mutex() {
-        let conn = rusqlite::Connection::open_in_memory().expect("sqlite");
-        let used = |option: &str| -> i64 {
-            conn.query_row("SELECT sqlite_compileoption_used(?1)", [option], |row| {
-                row.get(0)
+    #[tokio::test]
+    async fn bundled_sqlite_has_no_global_page_cache_or_memstatus_mutex() {
+        let root = tempfile::tempdir().unwrap();
+        let fixture = ctox_store::testkit::StoreFixture::open(
+            ctox_store::DbId::new(root.path().join("flags.sqlite3")).unwrap(),
+        )
+        .await
+        .unwrap();
+        fixture
+            .read(Default::default(), |conn| {
+                let used = |option: &str| -> rusqlite::Result<i64> {
+                    conn.query_row("SELECT sqlite_compileoption_used(?1)", [option], |row| {
+                        row.get(0)
+                    })
+                };
+                assert_eq!(used("ENABLE_MEMORY_MANAGEMENT")?, 0);
+                assert_eq!(used("DEFAULT_MEMSTATUS=0")?, 1);
+                assert_eq!(used("THREADSAFE=1")?, 1);
+                Ok(())
             })
-            .expect("compileoption")
-        };
-        assert_eq!(used("ENABLE_MEMORY_MANAGEMENT"), 0);
-        assert_eq!(used("DEFAULT_MEMSTATUS=0"), 1);
-        assert_eq!(used("THREADSAFE=1"), 1);
+            .await
+            .unwrap();
+        fixture.shutdown().await.unwrap();
     }
 }
 

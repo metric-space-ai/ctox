@@ -1,3 +1,4 @@
+import {installFixtureApp} from './platform-fixture.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
@@ -10,7 +11,7 @@ function waitCommandDone(handle){return new Promise((resolve,reject)=>{
 });}
 test('E26 idempotency: SHA UUID, one durable intent across repeat and reload',async()=>{
  const opts={instanceId:`e26-${process.pid}-${++next}`,userId:'u1',latencyMs:2,multiTab:false};
- let k=createStubKernel(opts);await k.ready;routes(k);
+ let k=createStubKernel(opts);await k.ready;routes(k);await installFixtureApp(k,'notes',{platform:['business_commands']});
  try{
   await k.sim.setLink({state:'offline'});
   const api=k.appApi('notes','1'),h=api.command('notes.run',{original:true},{idempotency_key:'persist'});

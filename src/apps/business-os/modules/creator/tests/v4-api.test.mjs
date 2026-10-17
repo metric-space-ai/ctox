@@ -1,7 +1,7 @@
 // creator gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium.
 // Muster: modules/knowledge/tests/v4-api.test.mjs. Stub-Pfad aus CTOX_APP_API_STUB (Pflicht-Pin
-// ~/.local/state/shell-v4/stub-pins/68b83a3), read-only unter /__stub/ ausgeliefert.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/creator/tests/v4-api.test.mjs
+// ~/.local/state/shell-v4/stub-pins/64acc2c), read-only unter /__stub/ ausgeliefert.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node --test src/apps/business-os/modules/creator/tests/v4-api.test.mjs
 // Playwright: aus PLAYWRIGHT_MODULE, sonst ~/Documents/ctox/src/apps/business-os/node_modules/playwright.
 // Screenshots (1280 und 420) landen in tests/shots/.
 import { test, before, after } from 'node:test';
@@ -12,9 +12,10 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'creator';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -55,18 +56,27 @@ before(async () => {
   page.on('response', (r) => { if (r.status() >= 400) console.error('[page] HTTP', r.status(), r.url()); });
   page.__errors = errors;
   await page.goto(base);
+  // FIXT-8265 (E48): echte Deklarationen der creator-Version (v4/manifests/creator.manifest.json: business_apps und
+  // business_commands lesend von ctox-platform); ohne veröffentlichte Version sperrt der Kern Plattform-Collections.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes(APP));
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, actor: { id: 'michael', role: 'admin' } });
     await kernel.ready;
+    // FIXT-8265: business_apps-Zeilen nach dem ctox-platform-Schema (additionalProperties:false). creator erkennt Eigenbau-
+    // Apps in v4 an fehlender Release-Basis (provenance.base_release), nicht an V2-Feldern source/entry.
     await kernel.sim.push('business_apps', [
-      { id: 'creator', title: 'App Creator', source: 'core' },
-      { id: 'crm-kontakte', title: 'CRM Kontakte', description: 'Kunden und Kontakte', category: 'Sales', version: '0.3.0', source: 'installed' },
-      { id: 'lager', title: 'Lager & Bestand mit einem sehr langen Titel', description: 'Artikel', version: '1.0.0', source: 'installed' },
+      { id: 'creator', app_id: 'creator', title: 'App Creator', updated_at_ms: 1 },
+      { id: 'crm-kontakte', app_id: 'crm-kontakte', title: 'CRM Kontakte', active_ver: '0.3.0', updated_at_ms: 1 },
+      { id: 'lager', app_id: 'lager', title: 'Lager & Bestand mit einem sehr langen Titel', active_ver: '1.0.0', updated_at_ms: 1 },
+      // Kern-App aus dem Release (provenance.base_release gesetzt) → keine Eigenbau-App.
+      { id: 'notes', app_id: 'notes', title: 'Notizen', active_ver: '1.0.0', provenance: { base_release: '0.2.0-beta.2', base_hash: 'sha256-notes', locally_modified: false }, updated_at_ms: 1 },
     ]);
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion(APP, '1', { title: 'App Creator', manifestExtra: window.__routes });
     await kernel.sim.push('business_commands', [
-      { id: 'cmd_old', type: 'ctox.business_os.app.create', status: 'done', module: 'creator', payload: { title: 'Create Lager', instruction: 'Baue eine Lager-App mit Bestand.' }, updated_at_ms: 5 },
+      { id: 'cmd_old', command_id: 'cmd_old', command_type: 'ctox.business_os.app.create', type: 'ctox.business_os.app.create', status: 'done', module: 'creator', app_id: 'creator', created_at: '2026-10-15T08:00:00.000Z', payload: { title: 'Create Lager', instruction: 'Baue eine Lager-App mit Bestand.' }, updated_at_ms: 5 },
     ]);
     await kernel.sim.settle();
     window.__k = kernel;
@@ -100,6 +110,7 @@ test('mount: Bibliothek zeigt installierte Apps live (business_apps), Titel übe
   const list = await text('[data-creator-list]');
   assert.match(list, /CRM Kontakte/);
   assert.doesNotMatch(list, /App Creator/, 'Kern-Apps sind keine Eigenbau-Apps');
+  assert.doesNotMatch(list, /Notizen/, 'App mit Release-Basis (provenance.base_release) ist keine Eigenbau-App');
   assert.equal(await page.$eval('#win', (el) => el.dataset.app), APP);
   assert.equal(await page.evaluate(() => window.__k.shell.window('creator').state.get().title), 'App Creator');
   assert.equal(await page.evaluate(() => window.__c.subscribers('business_apps')), 1);
@@ -109,7 +120,7 @@ test('mount: Bibliothek zeigt installierte Apps live (business_apps), Titel übe
 });
 
 test('Live-Änderung: neue App im Katalog erscheint, Löschung verschwindet; Aufträge-Band zeigt Befehle', async () => {
-  await page.evaluate(() => window.__k.sim.push('business_apps', { id: 'live-app', title: 'Live App', source: 'installed' }));
+  await page.evaluate(() => window.__k.sim.push('business_apps', { id: 'live-app', app_id: 'live-app', title: 'Live App', updated_at_ms: 2 }));
   await settle();
   assert.match(await text('[data-creator-list]'), /Live App/);
   await page.evaluate(() => window.__k.sim.push('business_apps', { id: 'live-app', _deleted: true }));
@@ -127,6 +138,9 @@ test('leere Collections rendern keinen Zustandstext und keine Zone', async () =>
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     const k2 = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, instanceId: 'empty' });
     await k2.ready;
+    // FIXT-8265: auch der leere Kern braucht die veröffentlichte creator-Version (Fremdlesen deklariert).
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await k2.sim.inspect('business_apps', o.app))?.data?.active_ver) await k2.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await k2.sim.publishAppVersion('creator', '1', { title: 'App Creator', manifestExtra: window.__routes });
     const host = document.createElement('div');
     host.style.cssText = 'width:900px;height:500px';
     document.body.append(host);
@@ -243,7 +257,7 @@ test('Screenshots 1280 und 420 gegen den Stub', async () => {
 test('unmount meldet alle Abos ab und leert root', async () => {
   const res = await page.evaluate(async () => {
     await window.__app.unmount();
-    await window.__k.sim.push('business_apps', { id: 'late', title: 'Late', source: 'installed' });
+    await window.__k.sim.push('business_apps', { id: 'late', app_id: 'late', title: 'Late', updated_at_ms: 3 });
     await window.__k.sim.settle();
     return { subs: ['business_apps', 'business_commands'].map((c) => window.__c.subscribers(c)), children: document.getElementById('win').children.length };
   });

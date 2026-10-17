@@ -4,9 +4,12 @@ mod authority;
 mod codec;
 mod feed;
 mod origin;
+mod routing;
 #[cfg(test)]
 pub(super) use feed::check_model_fence;
 pub(crate) use origin::{enqueue_core_command, CoreCommandSource};
+#[cfg(all(test, unix, feature = "app-runtime-node"))]
+mod e42_proof;
 #[cfg(all(test, unix, feature = "app-runtime-node"))]
 mod native_proof;
 #[cfg(test)]
@@ -313,6 +316,7 @@ fn error_code(message: &str) -> &str {
         "invalid" => "invalid",
         "forbidden" => "forbidden",
         "not_found" => "not_found",
+        "unknown_command" => "unknown_command",
         "conflict" => "conflict",
         "revoked" => "revoked",
         "expired" => "expired",
@@ -347,6 +351,15 @@ impl RuntimeOwners {
 
 pub(super) fn store_command(tx: &rusqlite::Transaction<'_>, doc: &Value) -> Result<(), StoreError> {
     let id = text(doc, "id").map_err(sql_error)?;
+    if document(tx, "business_commands", id)?.is_none() {
+        routing::known_target(tx, doc)?;
+    }
+    store_runtime_event(tx, doc)
+}
+// Only the in-process native event owner enters here before stamping its private
+// receipt. No serialized runtime_event flag can bypass write-time type validation.
+fn store_runtime_event(tx: &rusqlite::Transaction<'_>, doc: &Value) -> Result<(), StoreError> {
+    let id = text(doc, "id").map_err(sql_error)?;
     let provenance = origin::before_native_write(tx, doc)?;
     super::commands::put(tx, "business_commands", id, doc)?;
     origin::after_native_write(tx, doc, provenance)?;
@@ -369,7 +382,23 @@ pub(super) fn publish_rights(
     version: &str,
     manifest: &Value,
 ) -> Result<(), StoreError> {
+    publish_rights_with_fence(tx, app, version, manifest, None)
+}
+
+pub(super) fn publish_rights_with_fence(
+    tx: &rusqlite::Transaction<'_>,
+    app: &str,
+    version: &str,
+    manifest: &Value,
+    publication: Option<&(dyn Fn() -> Result<(), StoreError> + Send + Sync)>,
+) -> Result<(), StoreError> {
     let mut current = sync_rights::read(tx)?;
+    eprintln!(
+        "APP_FEED_EVENT ts={} event=rights_publish app={} prior_ver={}",
+        now(),
+        app,
+        current.rights_ver
+    );
     let owned = manifest["collections"]
         .as_object()
         .ok_or_else(|| invalid("invalid: manifest collections"))?
@@ -392,6 +421,11 @@ pub(super) fn publish_rights(
             .map_err(sql_error)?;
     current.manifests.retain(|m| m.app_id() != app);
     current.manifests.push(rules);
+    // Suspend the existing P6 router only for an actual rights write, after
+    // validation. An unchanged/rejected/preparing request is not a revocation.
+    if let Some(publication) = publication {
+        publication()?;
+    }
     sync_rights::replace_with_manifests(
         tx,
         current.rights_ver,

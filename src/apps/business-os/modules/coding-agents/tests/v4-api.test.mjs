@@ -1,7 +1,7 @@
 // coding-agents (Strang AGENT: Übersicht aller Agent-Läufe aus coding_turns, Klick → Code-Ansicht der App) gegen den
 // verbindlichen App-API-4.0-Stub des Kerns (createStubKernel, Stub-Pin, read-only unter /__stub/) in echtem Chromium.
 // coding_turns simuliert kein Stub-Pin als Kern-Collection; die Zeilen kommen per sim.push (Form wie draft_turn.rs).
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 \
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c \
 //       node --test src/apps/business-os/modules/coding-agents/tests/v4-api.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,8 +11,9 @@ import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/68b83a3');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const BOS = normalize(join(dirname(fileURLToPath(import.meta.url)), '../../..'));
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/playwright'));
@@ -48,6 +49,9 @@ before(async () => {
   page.on('console', (m) => { if (m.type() === 'error') console.error('[page]', m.text()); });
   page.__errors = errors;
   await page.goto(base);
+  // FIXT-8265 (E48): echte Deklarationen der coding-agents-Version (v4/manifests/coding-agents.manifest.json: business_apps,
+  // business_commands, coding_turns von ctox-platform); ohne veröffentlichte Version sperrt der Kern Plattform-Collections.
+  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes('coding-agents'));
   await page.evaluate(async () => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import('/modules/coding-agents/index.js');
@@ -57,11 +61,13 @@ before(async () => {
       { id: 'notes', title: 'Notes', updated_at_ms: 2 },
       { id: 'invoices', title: 'Invoices', updated_at_ms: 1 },
     ]);
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('coding-agents', '0.2.6', { title: 'Coding-Agenten', manifestExtra: window.__routes });
     const now = Date.now();
     await kernel.sim.push('coding_turns', [
-      { id: 't-old', app_id: 'invoices', draft_id: 'u/invoices', state: 'done', created_at_ms: now - 60000, changed_files: ['index.js', 'a.js'], messages: [{ role: 'user', text: 'Rechnungsnummer fett' }, { role: 'assistant', text: 'ok' }] },
-      { id: 't-run', app_id: 'notes', draft_id: 'u/notes', state: 'running', created_at_ms: now - 120000, changed_files: [], messages: [{ role: 'user', text: 'Suche nach Datum' }] },
-      { id: 't-new', app_id: 'notes', draft_id: 'u/notes', state: 'conflict', created_at_ms: now - 1000, changed_files: ['index.js'], messages: [{ role: 'user', text: 'Titel kürzen\nund mehr' }], patch: { file_id: 'coding-patch:t-new' } },
+      { id: 't-old', app_id: 'invoices', draft_id: 'u/invoices', user_id: 'u', command_id: 'cmd-t-old', state: 'done', created_at_ms: now - 60000, updated_at_ms: now - 50000, finished_at_ms: now - 50000, changed_files: ['index.js', 'a.js'], messages: [{ role: 'user', text: 'Rechnungsnummer fett', at_ms: now - 60000 }, { role: 'assistant', text: 'ok', at_ms: now - 50000 }] },
+      { id: 't-run', app_id: 'notes', draft_id: 'u/notes', user_id: 'u', command_id: 'cmd-t-run', state: 'running', created_at_ms: now - 120000, updated_at_ms: now - 110000, changed_files: [], messages: [{ role: 'user', text: 'Suche nach Datum', at_ms: now - 120000 }] },
+      { id: 't-new', app_id: 'notes', draft_id: 'u/notes', user_id: 'u', command_id: 'cmd-t-new', state: 'conflict', created_at_ms: now - 1000, updated_at_ms: now - 500, finished_at_ms: now - 500, changed_files: ['index.js'], messages: [{ role: 'user', text: 'Titel kürzen\nund mehr', at_ms: now - 1000 }], patch: { ref: 'a'.repeat(64), file_id: 'coding-patch:t-new' } },
     ]);
     await kernel.sim.settle();
     const api = kernel.appApi('coding-agents', '0.2.6');
@@ -117,11 +123,11 @@ test('Klick auf einen Lauf öffnet die Code-Ansicht der betreffenden App (api.sh
 });
 
 test('Live: neuer Lauf erscheint oben, Zustandswechsel und Löschung ohne Neuladen', async () => {
-  await page.evaluate(() => window.__k.sim.push('coding_turns', { id: 't-live', app_id: 'invoices', draft_id: 'u/invoices', state: 'queued', created_at_ms: Date.now(), messages: [{ role: 'user', text: 'Neu' }] }));
+  await page.evaluate(() => window.__k.sim.push('coding_turns', { id: 't-live', app_id: 'invoices', draft_id: 'u/invoices', user_id: 'u', command_id: 'cmd-t-live', state: 'queued', created_at_ms: Date.now(), updated_at_ms: Date.now(), messages: [{ role: 'user', text: 'Neu', at_ms: Date.now() }] }));
   await settle();
   let r = await runs();
   assert.equal(r[0].id, 't-live');
-  await page.evaluate(() => window.__k.sim.push('coding_turns', [{ id: 't-run', app_id: 'notes', draft_id: 'u/notes', state: 'done', created_at_ms: Date.now() - 120000, changed_files: ['x.js'], messages: [{ role: 'user', text: 'Suche nach Datum' }] }, { id: 't-live', _deleted: true }]));
+  await page.evaluate(() => window.__k.sim.push('coding_turns', [{ id: 't-run', app_id: 'notes', draft_id: 'u/notes', user_id: 'u', command_id: 'cmd-t-run', state: 'done', created_at_ms: Date.now() - 120000, updated_at_ms: Date.now(), finished_at_ms: Date.now(), changed_files: ['x.js'], messages: [{ role: 'user', text: 'Suche nach Datum', at_ms: Date.now() - 120000 }] }, { id: 't-live', _deleted: true }]));
   await settle();
   r = await runs();
   assert.equal(r.some((x) => x.id === 't-live'), false);
@@ -157,6 +163,9 @@ test('leer: ein Satz, was hier erscheint; keine Zone, kein Zustandskasten', asyn
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     const k2 = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false, instanceId: 'empty' });
     await k2.ready;
+    // FIXT-8265: auch der leere Kern braucht die veröffentlichte coding-agents-Version (Fremdlesen deklariert).
+    for (const o of window.__routes?._fixture_owners ?? []) if (!(await k2.sim.inspect('business_apps', o.app))?.data?.active_ver) await k2.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await k2.sim.publishAppVersion('coding-agents', '0.2.6', { title: 'Coding-Agenten', manifestExtra: window.__routes });
     const host = document.createElement('div');
     document.body.append(host);
     const app = await window.__mod.mount(host, k2.appApi('coding-agents', '0.2.6'), {});

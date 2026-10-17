@@ -32,6 +32,7 @@ pub(crate) struct RuntimeAuthority {
     pub(super) codec: Arc<RuntimeCodec>,
     held: RwLock<HashMap<String, Held>>,
     myself: Weak<RuntimeAuthority>,
+    health: RwLock<Option<tokio::sync::watch::Sender<feed::FeedHealth>>>,
 }
 impl RuntimeAuthority {
     pub(super) fn new(
@@ -47,16 +48,75 @@ impl RuntimeAuthority {
             codec,
             held: Default::default(),
             myself: myself.clone(),
+            health: RwLock::new(None),
         })
+    }
+    pub(super) fn set_health(
+        &self,
+        health: tokio::sync::watch::Sender<feed::FeedHealth>,
+    ) -> Result<()> {
+        *self
+            .health
+            .write()
+            .map_err(|_| anyhow!("unavailable: health lock"))? = Some(health);
+        Ok(())
+    }
+    pub(super) fn health(&self) -> tokio::sync::watch::Sender<feed::FeedHealth> {
+        self.health
+            .read()
+            .ok()
+            .and_then(|v| v.clone())
+            .unwrap_or_else(|| tokio::sync::watch::channel(feed::FeedHealth::Healthy).0)
+    }
+    pub(super) fn effect_uncertain(&self, id: &str) -> Result<()> {
+        let status = feed::FeedHealth::ReconciliationRequired {
+            code: "effect_uncertain",
+            command_id: id.into(),
+        };
+        eprintln!("native app feed health={}", serde_json::to_string(&status)?);
+        self.health().send_replace(status);
+        Ok(())
     }
     fn query<T: Send + 'static>(
         &self,
         stage: &'static str,
-        read: impl FnOnce(&Connection) -> Result<T, StoreError> + Send + 'static,
+        read: impl Fn(&Connection) -> Result<T, StoreError> + Send + Sync + 'static,
     ) -> Result<T> {
         let pool = self.database.readers.clone();
+        let health = self.health();
+        let read = Arc::new(read);
         wait(&self.runtime, async move {
-            observed_read(pool, stage, ReadJob::new(JobOptions::default(), read)).await
+            tokio::time::timeout(
+                Duration::from_secs(12),
+                feed::resilient_read(pool, stage, &health, &mut 1, |_| {
+                    let read = read.clone();
+                    ReadJob::new(JobOptions::default(), move |db| {
+                        #[cfg(test)]
+                        if stage == "authority.admit" {
+                            feed::load_source::before_admission(db);
+                        }
+                        read(db)
+                    })
+                }),
+            )
+            .await
+            .unwrap_or(Err(StoreError::Busy))
+        })
+        .map_err(|error| {
+            if matches!(
+                error.downcast_ref::<StoreError>(),
+                Some(StoreError::Busy | StoreError::DeadlineExceeded)
+            ) {
+                ctox_app_runtime::HandlerError {
+                    code: "quota".into(),
+                    message: "read_overload".into(),
+                    uncertain: false,
+                    path: None,
+                }
+                .into()
+            } else {
+                error
+            }
         })
     }
     pub(super) fn binding(
@@ -66,22 +126,13 @@ impl RuntimeAuthority {
         lease: &write_contract::CommandLease,
     ) -> Result<Value, StoreError> {
         let a = actor(db, text(doc, "actor_id").map_err(sql_error)?)?;
-        let app = text(doc, "app_id").map_err(sql_error)?;
-        let manifest = if super::super::commands::handles(text(doc, "type").map_err(sql_error)?) {
-            json!({"app_id":app,"app_ver":"native-platform"})
-        } else if doc["runtime_completion"] == true {
-            self.codec
-                .version(db, app, text(doc, "native_version").map_err(sql_error)?)?["manifest"]
-                .clone()
-        } else {
-            self.codec.manifest(db, app)?
-        };
-        if !super::super::commands::handles(text(doc, "type").map_err(sql_error)?) {
-            origin::delivery_permit(db, doc, &a)?;
-        }
+        let manifest = self.codec.route(db, doc)?;
         let mut command = doc.clone();
         command["actor"] = actor_json(&a);
         command["app_ver"] = manifest["app_ver"].clone();
+        if manifest["app_id"] != command["app_id"] {
+            command["target_app"] = manifest["app_id"].clone();
+        }
         Ok(
             json!({"command":command,"manifest":manifest,"fence":{"run_id":format!("app-runtime:{}",lease.command_id),"participant":lease.participant,"fence":lease.fence.0,"expires_at_core_ms":lease.expires_at_core,"rights_ver":rights(db)?.rights_ver}}),
         )
@@ -97,10 +148,8 @@ impl RuntimeAuthority {
         };
         let command_id = id.clone();
         let owner = self.clone();
-        let binding = self
-            .database
-            .writer
-            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+        let binding =
+            feed::retry_write(&self.database, &self.health(), "command.claim", move |tx| {
                 let mut saved = document(tx, "business_commands", &command_id)?
                     .ok_or_else(|| invalid("not_found: command"))?;
                 if saved != doc {
@@ -118,7 +167,7 @@ impl RuntimeAuthority {
                 saved["status"] = json!("running");
                 store_command(tx, &saved)?;
                 owner.binding(tx, &saved, &lease)
-            }))?
+            })
             .await?;
         let run = text(&binding["fence"], "run_id")?.to_owned();
         let spec = ExecutionSpec {
@@ -263,21 +312,18 @@ impl RuntimeAuthority {
             participant: participant.clone(),
         };
         let command_id = id.clone();
-        let lease = self
-            .database
-            .writer
-            .submit(WriteJob::new(JobOptions::default(), move |tx| {
-                Ok(write_contract::claim_command(
-                    tx,
-                    &participant,
-                    &command_id,
-                    Some(Seq(expected)),
-                    now(),
-                    &gate,
-                )?
-                .map_err(|e| invalid(format!("{}: {}", e.code, e.reason)))?)
-            }))?
-            .await?;
+        let lease = feed::retry_write(&self.database, &self.health(), "command.renew", move |tx| {
+            Ok(write_contract::claim_command(
+                tx,
+                &participant,
+                &command_id,
+                Some(Seq(expected)),
+                now(),
+                &gate,
+            )?
+            .map_err(|e| invalid(format!("{}: {}", e.code, e.reason)))?)
+        })
+        .await?;
         if let Some(held) = self
             .held
             .write()
@@ -327,6 +373,11 @@ impl RuntimeAuthority {
             .strip_prefix("app-runtime:")
             .context("invalid: invocation run")?;
         let h = h.get(parent).context("revoked: invocation")?;
+        let scoped = h
+            .callback
+            .as_ref()
+            .filter(|c| c["id"] == ctx.command_id)
+            .unwrap_or(&h.command);
         anyhow::ensure!(
             h.command["id"] == ctx.command_id
                 || h.callback
@@ -335,7 +386,7 @@ impl RuntimeAuthority {
             "revoked: callback identity differs"
         );
         anyhow::ensure!(
-            h.command["app_id"] == ctx.app_id
+            ctox_app_runtime::execution_app(scoped)? == ctx.app_id
                 && h.command["app_ver"] == ctx.app_ver
                 && h.command["actor"]["id"] == ctx.actor.id
                 && h.fence["fence"] == ctx.fence.fence
@@ -347,6 +398,30 @@ impl RuntimeAuthority {
     }
 }
 impl CoreAuthority for RuntimeAuthority {
+    fn read_pressure(&self, stage: &'static str, attempts: u32) {
+        let health = self.health();
+        if matches!(
+            &*health.borrow(),
+            feed::FeedHealth::ReconciliationRequired { .. }
+        ) {
+            return;
+        }
+        if attempts > 0 {
+            health.send_replace(feed::FeedHealth::Degraded {
+                code: "read_overload",
+                stage,
+                attempts,
+                callback_cpu_us: None,
+                page_limit: 1,
+            });
+        } else if matches!(&*health.borrow(), feed::FeedHealth::Degraded { code: "read_overload", stage: prior, .. } if *prior == stage)
+        {
+            health.send_replace(feed::FeedHealth::Healthy);
+        }
+    }
+    fn platform_command(&self, kind: &str) -> bool {
+        routing::core_route(kind)
+    }
     fn admit(&self, manifest: &Value, binding: &Value) -> Result<()> {
         let _held = self.live(binding)?;
         let codec = self.codec.clone();
@@ -373,7 +448,7 @@ impl CoreAuthority for RuntimeAuthority {
             if current != expected {
                 return Err(invalid("revoked: manifest changed"));
             }
-            origin::delivery_permit_with_rights(db, &b["command"], &a, &snapshot)?;
+            let _ = (a, snapshot);
             Ok(())
         })
     }
@@ -460,7 +535,7 @@ impl CoreAuthority for RuntimeAuthority {
             json!({"run_id":held.fence["run_id"],"participant":held.fence["participant"],"fence":held.fence["fence"],"expires_at_core_ms":held.fence["expires_at_core_ms"]}),
         )?;
         Ok(CapCallContext {
-            app_id: text(&held.command, "app_id")?.into(),
+            app_id: ctox_app_runtime::execution_app(&binding["command"])?.into(),
             app_ver: text(&held.command, "app_ver")?.into(),
             actor: Actor {
                 id: text(&held.command["actor"], "id")?.into(),
@@ -527,12 +602,7 @@ impl WriteAuthority for ExecutorGate {
                 participant == self.participant,
                 "forbidden: executor differs"
             );
-            let a = actor(tx, text(command, "actor_id")?)?;
-            let app = text(command, "app_id")?;
-            if !super::super::commands::handles(text(command, "type")?) {
-                self.codec.manifest(tx, app)?;
-                origin::delivery_permit(tx, command, &a)?;
-            }
+            self.codec.route(tx, command)?;
             Ok(())
         })();
         Ok(match result {
@@ -598,7 +668,7 @@ impl RuntimeAuthority {
             let payload=if event["kind"]=="trigger"{event["event"].clone()}else{event.clone()};
             let doc=json!({"id":command_id,"app_id":app,"type":kind,"actor_id":a.id,"status":"queued","payload":payload,"client_context":{"trigger_id":event["trigger_id"]},"created_at":chrono::Utc::now().to_rfc3339(),"runtime_event":true,"runtime_completion":expected_callback.is_some(),"native_version":version});
             if document(tx,"business_commands",&command_id)?.is_some(){return Err(invalid("conflict: native event already admitted; reconcile"));}
-            store_command(tx,&doc)?;origin::stamp(tx,"runtime_event",&doc)?;Ok(doc)
+            store_runtime_event(tx,&doc)?;origin::stamp(tx,"runtime_event",&doc)?;Ok(doc)
         }))?;
         let doc = wait(&self.runtime, async move { job.await })?;
         let myself = self
@@ -636,15 +706,17 @@ impl RuntimeAuthority {
             return Ok(());
         }
         for binding in bindings {
-            let b = binding.clone();
-            let settled = self.database.readers.read_job(ReadJob::new(Default::default(), move |db| {
+            let health = self.health();
+            let settled = feed::resilient_read(self.database.readers.clone(), "event.finalize", &health, &mut 1, |_| {
+                let b = binding.clone();
+                ReadJob::new(Default::default(), move |db| {
                 let app=text(&b["command"],"app_id").map_err(sql_error)?;
                 let trigger=text(&b["command"]["client_context"],"trigger_id").map_err(sql_error)?;
                 let row: Option<(bool,String,u64,Option<String>)> = db.query_row(
                     "SELECT running,run_id,fence,outcome FROM _app_runtime_triggers WHERE app_id=?1 AND trigger_id=?2",
                     params![app,trigger],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?))).optional()?;
                 Ok(row.is_some_and(|(running,run,fence,outcome)| !running && b["fence"]["run_id"]==run && b["fence"]["fence"]==fence && outcome.as_deref().and_then(|s|serde_json::from_str::<Value>(s).ok()).is_some_and(|v|v["status"]=="completed" && v["uncertain"]!=true)))
-            })).await?;
+            })}).await?;
             if settled {
                 self.finish_event_record(&binding, "done").await?;
                 self.release(&binding).await?;
@@ -682,17 +754,15 @@ impl RuntimeAuthority {
         let status = status.to_owned();
         let codec = self.codec.clone();
         let b = binding.clone();
-        self.database
-            .writer
-            .submit(WriteJob::new(JobOptions::default(), move |tx| {
-                codec.check_fence(tx, &b)?;
-                let mut doc = document(tx, "business_commands", &id)?
-                    .ok_or_else(|| invalid("not_found: event"))?;
-                doc["status"] = json!(status);
-                store_command(tx, &doc)?;
-                Ok(())
-            }))?
-            .await?;
+        feed::retry_write(&self.database, &self.health(), "event.result", move |tx| {
+            codec.check_fence(tx, &b)?;
+            let mut doc = document(tx, "business_commands", &id)?
+                .ok_or_else(|| invalid("not_found: event"))?;
+            doc["status"] = json!(status);
+            store_command(tx, &doc)?;
+            Ok(())
+        })
+        .await?;
         Ok(())
     }
     pub(super) fn completion_binding(&self, id: &str) -> Result<Option<Value>> {
@@ -700,7 +770,7 @@ impl RuntimeAuthority {
         let task = format!("command:{id}");
         let codec = self.codec.clone();
         let saved=self.query("authority.completion_binding", move |db| {
-            let row:Option<(String,String,String,Option<String>,Option<String>)>=db.query_row("SELECT app_id,app_ver,actor_id,on_complete,on_failed FROM _app_runtime_completions WHERE task_id=?1 AND state='pending'",[task],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
+            let row:Option<(String,String,String,Option<String>,Option<String>)>=db.query_row("SELECT app_id,app_ver,actor_id,on_complete,on_failed FROM _app_runtime_completions WHERE task_id=?1 AND state='pending'",[task.as_str()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional()?;
             let Some((app,ver,actor_id,complete,failed))=row else{return Ok(None)};
             let target=document(db,"business_commands",&id)?.ok_or_else(||invalid("not_found: completed command"))?;
             let status=match target["status"].as_str(){Some("done"|"completed")=>"completed",Some("cancelled")=>"cancelled",Some("failed"|"rejected")=>"failed",_=>return Err(invalid("conflict: command is not terminal"))};
@@ -757,17 +827,20 @@ impl RuntimeAuthority {
         let b = binding.clone();
         let codec = self.codec.clone();
         let id = format!("command-callback:{target}");
-        self.database
-            .writer
-            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+        feed::retry_write(
+            &self.database,
+            &self.health(),
+            "callback.result",
+            move |tx| {
                 codec.check_fence(tx, &b)?;
                 let mut doc = document(tx, "business_commands", &id)?
                     .ok_or_else(|| invalid("not_found: callback record"))?;
                 doc["status"] = json!(if succeeded { "done" } else { "failed" });
                 store_command(tx, &doc)?;
                 Ok(())
-            }))?
-            .await?;
+            },
+        )
+        .await?;
         Ok(())
     }
 }

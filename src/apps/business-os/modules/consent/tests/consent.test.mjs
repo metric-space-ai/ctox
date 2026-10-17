@@ -224,7 +224,7 @@ test('consent: prepareImport fills the schema-required fields for upsert', async
   assert.equal(rec.purpose, 'p');
   assert.equal(rec.updated_at_ms, now, 'updated_at_ms stamped');
   assert.ok(rec.id, 'id is generated when missing');
-  assert.equal(rec._deleted, false);
+  assert.equal(Object.hasOwn(rec, '_deleted'), false, '_deleted ist reserviert (Kern-Tombstone, E47) und wird nie geschrieben');
   // A round-tripped export keeps its id.
   assert.equal(mod.prepareImport({ id: 'keep', subject_id: 'x', purpose: 'p' }, now).id, 'keep');
 });

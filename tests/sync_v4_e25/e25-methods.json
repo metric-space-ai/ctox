@@ -1141,5 +1141,89 @@
       "ctox.workjet.computer.list",
       "ctox.workjet.session.list"
     ]
-  }
+  },
+  "app_decision": {
+    "method": "threads.ctox_approval.request",
+    "native_handler": "src/core/business_os/threads.rs::request_approval; approve_approval; decide_without_queue",
+    "test": "e54_app_decision_preserves_privileged_self_review_boundary",
+    "scope": "native registered CLI owner; productive P4 command-to-completion not measured",
+    "options_contract": "1..32 unique string IDs or {id,label?,description?}; app principal from authorized source_context.module; selection decision_option_id (decision_option alias)",
+    "schema_contract": "target_command_type remains a string; app choice has no delegated target payload",
+    "mutations": [
+      "remove app-choice exception -> native assertion red",
+      "remove original optionless self-review gate -> native assertion red",
+      "bypass no-execution decision branch -> native assertion red"
+    ],
+    "source_sha256": "ef1344c6ebbd7c77b22e1b8d8b92f3b059571aea810af9fd9e74c3fe209363a6"
+  },
+  "platform_routes": [
+    {
+      "method": "ctox.secret.request.list",
+      "route": "ctox.secret.request.list",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "component verified: native Platform contract, rights gate mutation red and clean restoration green",
+      "productive": "not_run",
+      "gap": "request metadata producer and productive peer execution not exercised",
+      "component_source_sha256": "728051911bb01ebb58f7c370f15a340aa88700f01840b26f4b2fb4864bac84e7"
+    },
+    {
+      "method": "ctox.secret.request.fulfill",
+      "route": "ctox.secret.request.fulfill",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "component verified: native Platform contract, rights gate mutation red and clean restoration green",
+      "productive": "not_run",
+      "gap": "protected pre-outbox Kernel/P4 intake and native SecretStore effect/commit binding missing; returns unavailable",
+      "component_source_sha256": "728051911bb01ebb58f7c370f15a340aa88700f01840b26f4b2fb4864bac84e7",
+      "post_m7": true
+    },
+    {
+      "method": "ctox.secret.request.decline",
+      "route": "ctox.secret.request.decline",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "component verified: native Platform contract, rights gate mutation red and clean restoration green",
+      "productive": "not_run",
+      "gap": "request metadata producer and productive peer execution not exercised",
+      "component_source_sha256": "728051911bb01ebb58f7c370f15a340aa88700f01840b26f4b2fb4864bac84e7"
+    },
+    {
+      "method": "ctox.workjet.remote_worker.admit",
+      "route": "ctox.workjet.remote_worker.admit",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "GPU4 registered BOS/sync baseline green; canonical/native revocation-predicate mutations fail the intended assertions with matching compiled-source markers. Earlier direct-binding predicate mutation remains a local GPU3 observation; GPU3 final round is lost.",
+      "productive": "not_run(peer)",
+      "gap": "GPU4 cold build failed ENOSPC; serial retry verified the native baseline and status-filter/restart counterfactuals. Sources restored byte-identically; restoration rebuild hit its component time cap and follow-up was canceled while queued. Restored executable/direct regressions, fresh direct-binding predicate mutation and productive peer/worker execution remain unverified.",
+      "component_source_sha256": "8fb469a5df3c611e063a68ee4e21ec79ee494f83aedb0178b021416e197c939f",
+      "native_resolver": "devices::active_machine_enrollment; Platform borrows registered BOS reader; schema/feed unchanged; canonical command validation/idempotency retained; Platform::worker_grant rechecks source at consumption"
+    },
+    {
+      "method": "ctox.maintenance.restart",
+      "route": "ctox.maintenance.restart",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "GPU4 native baseline: admin-only unavailable response and no restart intent; substituting a restart-success value fails the intended assertion with matching compiled-source markers.",
+      "productive": "not_run",
+      "gap": "post-M7: native completion publication plus bounded service consumer",
+      "component_source_sha256": "8fb469a5df3c611e063a68ee4e21ec79ee494f83aedb0178b021416e197c939f",
+      "capability_filter": {
+        "entry": "Platform::filter_session_capabilities",
+        "status": "native_component_verified",
+        "attachment": "src/core/rxdb/src/plugins/replication_webrtc/connection_lifecycle.rs:395",
+        "gap": "hello owner must filter selected capabilities after current authenticated user lookup; no caller role"
+      },
+      "post_m7": true
+    },
+    {
+      "method": "instance.providers.models.check",
+      "route": "instance.providers.models.check",
+      "handler": "src/core/business_os/app_platform/provider_model_check.rs",
+      "test": "native_model_check_is_permissioned_bound_and_not_reexecuted",
+      "verification": "Native model owner permission, dedup and commit-fence invariant verified on integration f5f3fcb11, using the built native test executable",
+      "productive": "not_run",
+      "gap": "Native owner contract verified; productive peer/provider probe and installed acceptance remain not_run."
+    }
+  ]
 }

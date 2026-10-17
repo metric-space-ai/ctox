@@ -2,22 +2,22 @@
 
 Quellen: module.json, collections.schema.json (Vorrang v4/schemas/<app_id>.collections.schema.json), handlers/*.js,
 Code (commands_out, Trigger-Exporte, net.ingest), je App v4-manifest.json (commands_in, exports, Rechte, multi_instance, Fremdzugriffs-ops, Trigger),
-ownership-baseline.json (eingefrorene Eigentümer-Zuordnung), Plattform-exports aus /Volumes/tmp/ctox-sync-v4/clones/integration3/src/core/business_os/v4/ctox-platform.manifest.json.
+ownership-baseline.json (eingefrorene Eigentümer-Zuordnung), Plattform-exports aus src/core/business_os/v4/ctox-platform.manifest.json.
 Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.mjs`; `node src/apps/business-os/v4/tools/manifest/gen-manifest.mjs --check`.
 
 ## Zahlen
 
 | Merkmal | Wert |
 |---|---|
-| Apps (modules + customer-modules) | 41 |
-| Manifeste gesamt (Apps + shell) | 42 |
-| Collections gesamt / App-eigen / ctox-platform | 237 / 221 / 16 |
-| Handler gesamt (Apps mit Handlern) | 116 (15) |
+| Apps (modules + customer-modules) | 42 |
+| Manifeste gesamt (Apps + shell) | 43 |
+| Collections gesamt / App-eigen / ctox-platform | 242 / 226 / 16 |
+| Handler gesamt (Apps mit Handlern) | 117 (16) |
 | Legacy-Rest gesamt (ctx.cap.legacy) | 0 |
-| Capabilities gesamt (verschieden, ohne legacy) | 41 |
+| Capabilities gesamt (verschieden, ohne legacy) | 40 |
 | Trigger | 10 |
-| command_rights-Einträge | 42 |
-| foreign-Deklarationen (davon write / nur Code-Scan) | 295 (32 / 94) |
+| command_rights-Einträge | 43 |
+| foreign-Deklarationen (davon write / nur Code-Scan) | 301 (32 / 94) |
 | **foreign ohne passendes exports (Soll 0)** | **0** |
 | Plattformzugriffe auf exports beschränkt | 0 |
 | Befehlstypen mit Handlern in mehreren Apps | 0 |
@@ -25,16 +25,16 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | schema.js noch vorhanden / nicht ladbar | 3 / 0 |
 | Shell-Dateien | 126 |
 | Apps mit styles / write_guard-Collections | 41 / 1 |
-| offene _todo gesamt | 181 |
-| Deklarationsdateien v4-manifest.json | 40 |
+| offene _todo gesamt | 185 |
+| Deklarationsdateien v4-manifest.json | 41 |
 | commands_out / commands_in | 20 / 7 |
 | **commands ohne Gegenstück (Soll 0)** | **0** |
 | ctx.command mit nicht auflösbarem Ziel | 1 |
 | **UI-Befehle ohne Route (E40, Soll 0)** / mehrdeutig | **0** / 0 |
 | Plattformroute gemeldet (PLATFORM_ROUTES_PENDING) / commands_in aus UI abgeleitet | 13 / 1 |
 | net.ingest-Anmeldungen | 2 |
-| Apps mit multi_instance:false | 40 |
-| Icons: Rasterbild im Paket / nur SVG / generiert (MAN2) | 40 / 1 / 0 |
+| Apps mit multi_instance:false | 41 |
+| Icons: Rasterbild im Paket / nur SVG / generiert (MAN2) | 40 / 2 / 0 |
 
 ## Je App
 
@@ -79,13 +79,14 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | spreadsheets | 5 | 0 | 4 | 0 | 0 | 6 | 3 | 3 |
 | submissions | 0 | 0 | 0 | 0 | 0 | 13 | 1 | 4 |
 | support | 4 | 0 | 2 | 2 | 37 | 11 | 3 | 37 |
-| threads | 4 | 0 | 3 | 0 | 1 | 21 | 0 | 6 |
+| threads | 4 | 0 | 3 | 0 | 1 | 21 | 1 | 6 |
 | tickets | 0 | 0 | 0 | 0 | 0 | 4 | 5 | 3 |
+| workjet | 1 | 0 | 0 | 0 | 1 | 4 | 0 | 4 |
 
 ## Legacy-Rest je App
 
 
-## Capabilities gesamt (41)
+## Capabilities gesamt (40)
 
 | Capability | Apps |
 |---|---|
@@ -100,7 +101,6 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | `agent.task.set_metadata` | outbound-lead-generation |
 | `agent.task.update` | outbound-lead-generation |
 | `agent.task.workspace.read` | documents, knowledge, outbound-lead-generation, research |
-| `artifact.write` | outbound |
 | `audit.event` | outbound, threads |
 | `blob.materialize` | mail |
 | `browser.auth_assist.request` | outbound, outbound-lead-generation |
@@ -113,7 +113,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | `fence.claim` | outbound-lead-generation |
 | `fence.release` | outbound-lead-generation |
 | `files.get` | outbound, outbound-lead-generation |
-| `files.put` | outbound-lead-generation |
+| `files.put` | outbound, outbound-lead-generation |
 | `identity.users.list` | kundenpipeline |
 | `knowledge.query` | iot, outbound, research |
 | `mail.delivery_log.query` | outbound |
@@ -150,10 +150,10 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 
 | Absender | Ziel-App | Typ | Beleg |
 |---|---|---|---|
-| buchhaltung | ctox | `ctox.app.modify.request` | index.js:4389 |
-| buchhaltung | ctox | `ctox.chat.task` | index.js:4389 |
-| desktop | ctox | `ctox.app.modify.request` | index.js:469 |
-| desktop | ctox | `ctox.chat.task` | index.js:469 |
+| buchhaltung | ctox | `ctox.app.modify.request` | index.js:4415 |
+| buchhaltung | ctox | `ctox.chat.task` | index.js:4415 |
+| desktop | ctox | `ctox.app.modify.request` | index.js:522 |
+| desktop | ctox | `ctox.chat.task` | index.js:522 |
 | documents | ctox | `ctox.app.modify.request` | index.js:658 |
 | documents | ctox | `ctox.chat.task` | index.js:658 |
 | knowledge | ctox | `ctox.app.modify.request` | index.js:2857 |
@@ -615,6 +615,10 @@ keine
 - command_rights threads.ctox_approval.approve: kein passender Handler.
 - command_rights threads.ctox_approval.reject: kein passender Handler.
 - Projektions-Auslöser (W-4) noch nicht im Vertrag: siehe _proposed_triggers.
+
+### workjet
+
+- index.js exportiert kein mount(); Einstieg klären.
 
 ## Regeln dieses Strangs
 

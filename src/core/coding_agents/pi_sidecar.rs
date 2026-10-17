@@ -513,9 +513,27 @@ pub fn run_pi_turn(dist: &Path, request: &Value, faux: bool) -> anyhow::Result<V
 fn fresh_transport() -> LocalTransport {
     let endpoint_id = Uuid::new_v4();
     LocalTransport::ipc_for_host(
-        std::env::temp_dir().join(format!("ctox-pi-{endpoint_id}.sock")),
+        sidecar_socket_path(&std::env::temp_dir(), endpoint_id),
         format!("ctox-pi-{endpoint_id}"),
     )
+}
+
+/// Unix socket addresses must fit SUN_LEN (104 bytes on macOS/BSD, 108 on
+/// Linux), while TMPDIR may be arbitrarily deep (build lanes, sandboxes). A
+/// too-long temp path falls back to /tmp, as managed runtime sockets do; the
+/// random endpoint id keeps the name unguessable.
+fn sidecar_socket_path(temp_dir: &Path, endpoint_id: Uuid) -> PathBuf {
+    let name = format!("ctox-pi-{endpoint_id}.sock");
+    let preferred = temp_dir.join(&name);
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        const MAX_UNIX_SOCKET_PATH_LEN: usize = 100;
+        if preferred.as_os_str().as_bytes().len() >= MAX_UNIX_SOCKET_PATH_LEN {
+            return Path::new("/tmp").join(name);
+        }
+    }
+    preferred
 }
 
 /// §16.44 variant of [`run_pi_turn`]: the fresh daemon is owned by `control`,
@@ -1401,6 +1419,26 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use tiny_http::{Header, Response, Server};
+
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_socket_path_fits_sun_len_under_a_deep_temp_dir() {
+        use std::os::unix::ffi::OsStrExt;
+        let id = Uuid::new_v4();
+        let short = Path::new("/tmp");
+        assert_eq!(
+            sidecar_socket_path(short, id),
+            short.join(format!("ctox-pi-{id}.sock"))
+        );
+        let deep = Path::new("/home/runner/build-lane/target/v4-train12/tmp").join("x".repeat(60));
+        let path = sidecar_socket_path(&deep, id);
+        assert!(
+            path.as_os_str().as_bytes().len() < 104,
+            "socket path exceeds SUN_LEN: {}",
+            path.display()
+        );
+        assert!(path.ends_with(format!("ctox-pi-{id}.sock")));
+    }
 
     fn seed_coding_source_records(
         root: &Path,

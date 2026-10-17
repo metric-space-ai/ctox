@@ -1,7 +1,7 @@
 // E38: Einstiegsseite der Shell v4 im echten Browser. Der Laborserver bildet die Daemon-Routen nach:
 //   GET /             → v4/index.html        GET /sw.js → v4/sw.js
 //   GET /kernel/*     → Kern-Bootstrap (hier fixtures/kernel/boot.mjs, bis bootV4 geliefert ist)
-//   GET /business-os/* → Slot-Baum (src/apps/business-os)   GET /~stub/* → App-API-Stub (Pin b6624eb)
+//   GET /business-os/* → Slot-Baum (src/apps/business-os)   GET /~stub/* → App-API-Stub (Pin 8265bd7)
 // Prüft: Seite lädt boot.js, bootV4 genau einmal mit genau {launchContextUrl:'/api/business-os/launch-context'},
 // der Rahmen steht, keine Seitenfehler, kein Inhalt außer dem Rahmen. Gegenprobe (Argument counter): unter / liegt
 // das V2-index.html → bootV4 wird nie gerufen.
@@ -12,10 +12,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { realManifestRoutes } from '../port/real-manifest.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BOS = path.resolve(HERE, '../../..');
-const STUB = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
+const STUB = process.env.CTOX_APP_API_STUB || path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const COUNTER = process.argv[2] === 'counter';
 const require = createRequire(path.join(os.homedir(), 'Documents/ctox/src/apps/business-os/package.json'));
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright');
@@ -29,10 +30,14 @@ function route(urlPath) {
   if (urlPath.startsWith('/~stub/')) return path.join(STUB, urlPath.slice('/~stub/'.length));
   return null;
 }
+// E48 (Pin 8265bd7): Routen- und Rechteteil des echten Shell-Manifests (foreign_collections u. a.) samt Eigentümern für
+// die Labor-Veröffentlichung in fixtures/kernel/boot.mjs; ohne Deklaration liest die Shell shell_preferences nicht.
+const SHELL_ROUTES = JSON.stringify(realManifestRoutes('shell'));
 const requests = [];
 const server = createServer((req, res) => {
   const urlPath = decodeURIComponent(new URL(req.url, 'http://x').pathname);
   requests.push(urlPath);
+  if (urlPath === '/kernel/shell-routes.json') { res.writeHead(200, { 'content-type': MIME['.json'] }).end(SHELL_ROUTES); return; }
   const file = route(urlPath);
   if (!file || !fs.existsSync(file) || !fs.statSync(file).isFile()) { res.writeHead(404).end('not found'); return; }
   res.writeHead(200, { 'content-type': MIME[path.extname(file)] || 'application/octet-stream' });

@@ -1,7 +1,7 @@
 // nachweise gegen den eingefrorenen App-API-4.0-Kern-Stub (createStubKernel) in echtem Chromium.
 // Muster: modules/knowledge/tests/v4-api.test.mjs. Stub-Pfad aus CTOX_APP_API_STUB (Pflicht-Pin
-// ~/.local/state/shell-v4/stub-pins/f967baf), read-only unter /__stub/ ausgeliefert.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/nachweise/tests/v4-api.test.mjs
+// ~/.local/state/shell-v4/stub-pins/64acc2c), read-only unter /__stub/ ausgeliefert.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node --test src/apps/business-os/modules/nachweise/tests/v4-api.test.mjs
 // Playwright: aus PLAYWRIGHT_MODULE, sonst ~/Documents/ctox/src/apps/business-os/node_modules/playwright.
 // Screenshots (1280 und 420) landen in tests/shots/.
 import { test, before, after } from 'node:test';
@@ -15,7 +15,7 @@ import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'nachweise';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -57,7 +57,12 @@ before(async () => {
   page.__errors = errors;
   await page.goto(base);
   // FIXT-R: echte Routen/Rechte/Collections aus v4/manifests/nachweise.manifest.json (strikter Kern seit E26/E48).
-  await page.evaluate((routes) => { window.__routes = routes; }, realManifestRoutes(APP));
+  // Stub 8265bd7 liest in runCommand das Handler-Artefakt (manifest.files[path]) VOR dem sim.onCommand-Simulator; die
+  // Fixture veröffentlicht keine Dateien („Artefakt undefined fehlt“). Die simulierten Typen daher ohne Handler-Pfad
+  // veröffentlichen – Routen und command_rights bleiben die echten.
+  const routes = realManifestRoutes(APP);
+  for (const type of ['ats.deployment.check', 'ats.leistungsnachweis.signoff']) if (routes.handlers) delete routes.handlers[type];
+  await page.evaluate((routes) => { window.__routes = routes; }, routes);
   await page.evaluate(async (APP) => {
     const { createStubKernel } = await import('/__stub/ctox-app-api-stub.mjs');
     window.__mod = await import(`/modules/${APP}/index.js`);

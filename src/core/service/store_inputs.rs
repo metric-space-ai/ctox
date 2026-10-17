@@ -126,13 +126,12 @@ pub(crate) struct ActivationSnapshot<T> {
     pub commits: CommitReceiver,
 }
 impl StoreInputs {
-    pub(crate) async fn ensure_browser_ingress(self: &Arc<Self>) -> Result<(), StoreError> {
+    pub(crate) fn browser_ingress_ready(&self) -> Result<(), StoreError> {
         self.check()?;
         self.browser_ingress
             .get()
             .ok_or(StoreError::Closed)?
-            .start()
-            .await?;
+            .ready()?;
         self.check()
     }
     pub(crate) fn browser_admission(

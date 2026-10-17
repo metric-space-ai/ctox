@@ -74,6 +74,8 @@ try {
     await context.addCookies([{name:'ctox_business_os_auth',value:enrolled.cookie,url:origin,httpOnly:true,sameSite:'Strict'}]);
     const connect=await installBrowserEntry(context,origin);
     const p=await context.newPage();
+    p.on('console',message=>{if(message.type()==='error'){(report.consoleErrors??=[]).push(message.text().replace(/(?:https?|wss?):\/\/\S+/g,'[endpoint]').slice(0,400));save();}});
+    p.on('pageerror',error=>{(report.pageErrors??=[]).push(String(error.message).slice(0,400));save();});
     p.on('response',response=>{const url=new URL(response.url());if(url.origin===origin && ['/api/business-os/launch-context','/kernel/boot.mjs','/business-os/v4/boot.js','/sw.js'].includes(url.pathname)){report.bootstrapResponses.push({userId:enrolled.id,path:url.pathname,status:response.status()});save();}});
     await p.exposeBinding('__p6NativeControl',(_source,{operation,args})=>call(enrolled,operation,args));
     bindings.set(p,()=>connect(p,enrolled,native.fixture));
