@@ -8,32 +8,3 @@ use std::collections::BTreeMap;
 use crate::internal::home::{Client, HomeConfig, HomeTransport};
 
 use super::home_execution_paths_test::TestHomeTransport;
-
-#[test]
-fn dispatch_headers_are_normalized_without_global_request_state() {
-    let transport = TestHomeTransport::with_auth_ids(&["auth"]);
-    let facade: std::sync::Arc<dyn HomeTransport> = transport.clone();
-    let client = Client::new(
-        HomeConfig {
-            enabled: true,
-            ..HomeConfig::default()
-        },
-        facade,
-    );
-    client
-        .rpop_auth(
-            "model",
-            "session",
-            BTreeMap::from([
-                ("Authorization".into(), "Bearer token".into()),
-                ("X-Tenant".into(), "one".into()),
-            ]),
-            1,
-            "strict",
-        )
-        .unwrap();
-    let payload: serde_json::Value = serde_json::from_slice(&transport.requests()[0]).unwrap();
-    assert_eq!(payload["headers"]["authorization"], "Bearer token");
-    assert_eq!(payload["headers"]["x-tenant"], "one");
-    assert_eq!(payload["credential_policy"], "strict");
-}

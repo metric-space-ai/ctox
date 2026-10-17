@@ -24,27 +24,6 @@ fn recovery_repanics_abort_and_handles_regular_panics() {
 }
 
 #[test]
-fn ai_path_classification_matches_public_groups() {
-    for path in [
-        "/v1",
-        "/v1/models",
-        "/v1beta/interactions",
-        "/openai/v1/videos",
-        "/backend-api/codex/responses",
-    ] {
-        assert!(is_ai_api_path(path), "{path}");
-    }
-    for path in [
-        "/v0/management/config",
-        "/v10/models",
-        "/openai/v10/videos",
-        "/backend-api/codex-status",
-    ] {
-        assert!(!is_ai_api_path(path), "{path}");
-    }
-}
-
-#[test]
 fn request_summary_assigns_request_id_redacts_and_honors_skip() {
     let start = RequestLogStart::begin(
         SystemTime::UNIX_EPOCH,

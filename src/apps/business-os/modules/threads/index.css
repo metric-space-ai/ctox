@@ -956,3 +956,8 @@
 [data-app="threads"] .threads-msg-link.is-rework { color: var(--warning, #d8a03a); }
 /* Decide cluster sits below the always-on link cluster on approval cards. */
 [data-app="threads"] .threads-card-actions.is-decide { top: 40px; }
+
+/* Keine Zahlen hinter Tabs (UI-Regel, workjet#801; aus main 2ce94bd22, Zug 16m). Die Knoten bleiben für den Pane-Grammar-Vertrag. */
+[data-app="threads"] .ctox-pane-tab .view-count {
+  display: none;
+}

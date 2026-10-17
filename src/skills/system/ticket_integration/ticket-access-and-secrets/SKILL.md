@@ -90,3 +90,22 @@ Do not put raw secret values in the clarification request. Ask for a local secre
 - Do not store raw secrets in ticket metadata.
 - Do not request broad access when a narrower scope is sufficient.
 - Do not treat operator silence as implied approval.
+
+## Asking the user for a secret
+
+Never ask for a password or token in chat text. Request it instead:
+
+```sh
+ctox secret request --scope "<scope>" --name "<name>" --label "<what the user sees>" [--reason "<why>"] [--thread "<thread key>"]
+ctox secret request-status --request-id "<id>"   # pending | stored | declined
+```
+
+The user enters the value in a masked card; it goes straight to the encrypted store and you only ever see `[secret-ref:<scope>/<name>]`.
+
+Use a stored secret without reading it:
+
+```sh
+ctox secret exec --env PASSWORD=<scope>/<name> -- <command> [args...]
+```
+
+The value is injected into the child environment only, and every exact occurrence is replaced with its `[secret-ref:...]` in the child's stdout and stderr.

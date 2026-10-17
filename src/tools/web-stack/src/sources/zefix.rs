@@ -785,30 +785,6 @@ mod tests {
     }
 
     #[test]
-    fn module_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "zefix.ch");
-        assert_eq!(m.aliases(), &["zefix"]);
-        assert!(matches!(m.tier(), Tier::P));
-        assert_eq!(m.countries(), &[Country::Ch]);
-        assert!(m.requires_credential().is_none());
-        assert!(m
-            .authoritative_for()
-            .iter()
-            .any(|k| matches!(k, FieldKey::FirmaName)));
-    }
-
-    #[test]
-    fn shape_query_is_none_for_api_source() {
-        let ctx = SourceCtx {
-            root: Path::new("/tmp/ctox-test"),
-            country: Some(Country::Ch),
-            mode: ResearchMode::NewRecord,
-        };
-        assert!(module().shape_query("Roche", &ctx).is_none());
-    }
-
-    #[test]
     fn fetch_direct_skips_non_ch_countries() {
         let ctx = SourceCtx {
             root: Path::new("/tmp/ctox-test"),

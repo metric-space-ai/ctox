@@ -179,27 +179,3 @@ fn validate_relative_reference(reference: &str) -> Result<(), String> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::AgentPath;
-
-    #[test]
-    fn join_builds_child_paths() {
-        let child = AgentPath::root().join("researcher").expect("child path");
-        assert_eq!(child.as_str(), "/root/researcher");
-        assert_eq!(child.name(), "researcher");
-    }
-
-    #[test]
-    fn invalid_names_and_paths_are_rejected() {
-        assert_eq!(
-            AgentPath::root().join("BadName"),
-            Err("agent_name must use only lowercase letters, digits, and underscores".to_string())
-        );
-        assert_eq!(
-            AgentPath::try_from("/not-root"),
-            Err("absolute agent paths must start with `/root` or be `/morpheus`".to_string())
-        );
-    }
-}

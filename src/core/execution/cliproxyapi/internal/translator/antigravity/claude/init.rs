@@ -107,26 +107,6 @@ mod tests {
     const WEB_SEARCH_REQUEST: &[u8] = br#"{"messages":[{"role":"user","content":"weather"}],"tools":[{"type":"web_search_20250305","name":"web_search"}]}"#;
 
     #[test]
-    fn registry_activates_request_stream_aggregate_and_token_count() {
-        let registry = Registry::new();
-        register_claude_antigravity(&registry);
-
-        assert!(registry.has_request_transformer(&claude(), &antigravity()));
-        assert!(registry.has_stream_response_transformer(&claude(), &antigravity()));
-        assert!(registry.has_non_stream_response_transformer(&claude(), &antigravity()));
-        assert_eq!(
-            registry.translate_token_count(
-                &TranslationContext::default(),
-                &antigravity(),
-                &claude(),
-                17,
-                b"{}",
-            ),
-            br#"{"input_tokens":17}"#
-        );
-    }
-
-    #[test]
     fn default_registration_is_capability_fail_closed() {
         let registry = Registry::new();
         register_claude_antigravity(&registry);

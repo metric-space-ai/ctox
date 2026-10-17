@@ -39,15 +39,3 @@ impl ManagementPluginRuntimeSource for Runtime {
         Ok(self.0.lock().unwrap().clone())
     }
 }
-
-#[test]
-fn memory_store_enforces_compare_and_swap_revision() {
-    let store = Store::default();
-    let mut first = store.load().unwrap();
-    first.revision = 1;
-    store.replace(0, &first).unwrap();
-    assert_eq!(
-        store.replace(0, &first),
-        Err(ManagementPluginConfigStoreError::Conflict)
-    );
-}

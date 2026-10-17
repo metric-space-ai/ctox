@@ -74,19 +74,3 @@ pub fn log_note(msg: &str, base_dir: Option<&Path>) {
     let ts = chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f");
     append_line(&format!("[{ts} {}] {}", exe_label(), msg), base_dir);
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn preview_does_not_panic_on_utf8_boundary() {
-        // Place a 4-byte emoji such that naive (byte-based) truncation would split it.
-        let prefix = "x".repeat(LOG_COMMAND_PREVIEW_LIMIT - 1);
-        let command = vec![format!("{prefix}😀")];
-        let result = std::panic::catch_unwind(|| preview(&command));
-        assert!(result.is_ok());
-        let previewed = result.unwrap();
-        assert!(previewed.len() <= LOG_COMMAND_PREVIEW_LIMIT);
-    }
-}

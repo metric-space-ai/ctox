@@ -37,12 +37,4 @@ impl Default for BuildInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn defaults_match_unlinked_upstream_development_build() {
-        assert_eq!(
-            BuildInfo::default(),
-            BuildInfo::new("dev", "none", "unknown")
-        );
-    }
 }

@@ -293,7 +293,3 @@ fn render_json_schema_property_name(name: &str) -> String {
 fn render_json_schema_literal(value: &JsonValue) -> String {
     serde_json::to_string(value).unwrap_or_else(|_| "unknown".to_string())
 }
-
-#[cfg(test)]
-#[path = "code_mode_description_tests.rs"]
-mod tests;

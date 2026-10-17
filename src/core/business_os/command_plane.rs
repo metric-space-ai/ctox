@@ -2223,6 +2223,12 @@ fn dispatch_business_command(
                 )),
             }
         }
+        "ctox.secret.request.list"
+        | "ctox.secret.request.fulfill"
+        | "ctox.secret.request.decline" => {
+            super::store_secret_request_commands::handle_secret_request_command(root, command)
+                .map(BusinessCommandDispatchOutcome::Returned)
+        }
         "ctox.secret.list"
         | "ctox.secret.put"
         | "ctox.secret.delete"

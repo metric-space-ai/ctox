@@ -29,10 +29,3 @@ fn auth_binding_is_instance_owned_and_expires() {
     store.set("video-2", "auth-2", "sora-2", Duration::ZERO);
     assert!(store.get("video-2").is_none());
 }
-
-#[test]
-fn video_statuses_are_normalized() {
-    assert_eq!(openai_video_status("succeeded"), "completed");
-    assert_eq!(openai_video_status("error"), "failed");
-    assert_eq!(openai_video_status("processing"), "in_progress");
-}

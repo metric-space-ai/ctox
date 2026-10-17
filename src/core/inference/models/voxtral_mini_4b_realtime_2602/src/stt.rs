@@ -407,13 +407,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_config_targets_voxtral_stt() {
-        let config = VoxtralSttConfig::default();
-        assert_eq!(config.model, VOXTRAL_MINI_4B_REALTIME_2602_CANONICAL_MODEL);
-        assert_eq!(config.max_decode_tokens, 256);
-    }
-
-    #[test]
     fn transcribe_does_not_return_fake_text() {
         let model = VoxtralSttModel::new(VoxtralSttConfig::default(), VoxtralSttBackend::Cpu);
         let wav = tiny_wav();

@@ -124,26 +124,6 @@ impl<'a> FeedbackRequestSnapshot<'a> {
     }
 }
 
-#[cfg(test)]
-pub(crate) fn emit_feedback_request_tags(tags: &FeedbackRequestTags<'_>) {
-    let snapshot = FeedbackRequestSnapshot::from_tags(tags);
-    feedback_tags!(
-        endpoint = snapshot.endpoint,
-        auth_header_attached = snapshot.auth_header_attached,
-        auth_header_name = snapshot.auth_header_name,
-        auth_mode = snapshot.auth_mode,
-        auth_retry_after_unauthorized = snapshot.auth_retry_after_unauthorized,
-        auth_recovery_mode = snapshot.auth_recovery_mode,
-        auth_recovery_phase = snapshot.auth_recovery_phase,
-        auth_connection_reused = snapshot.auth_connection_reused,
-        auth_request_id = snapshot.auth_request_id,
-        auth_cf_ray = snapshot.auth_cf_ray,
-        auth_error = snapshot.auth_error,
-        auth_error_code = snapshot.auth_error_code,
-        auth_recovery_followup_success = snapshot.auth_recovery_followup_success,
-        auth_recovery_followup_status = snapshot.auth_recovery_followup_status
-    );
-}
 
 pub(crate) fn emit_feedback_request_tags_with_auth_env(
     tags: &FeedbackRequestTags<'_>,

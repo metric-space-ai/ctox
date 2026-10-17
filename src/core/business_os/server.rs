@@ -36,7 +36,7 @@ use tiny_http::Server;
 use url::Url;
 use uuid::Uuid;
 
-use super::module_manifest_loader::{load_module_manifests, upsert_module_manifest};
+use super::module_manifest_loader::load_module_manifests;
 use super::policy;
 use super::store;
 
@@ -159,7 +159,10 @@ fn serve_owned_business_os(root: &Path, options: BusinessOsServeOptions) -> anyh
     let app_root = crate::persistence::run_core_blocking_at(root, move || {
         resolve_business_os_app_root(&work)
     })?;
-    if !app_root.join(business_os_entry_document(&app_root, None)).is_file() {
+    if !app_root
+        .join(business_os_entry_document(&app_root, None))
+        .is_file()
+    {
         anyhow::bail!(
             "native Business OS app is missing at {}",
             app_root.display()
@@ -320,7 +323,11 @@ pub(crate) fn resolve_business_os_app_root(root: &Path) -> anyhow::Result<PathBu
     }
     [root.join("business-os"), root.join("src/apps/business-os")]
         .into_iter()
-        .find(|candidate| candidate.join(business_os_entry_document(candidate, None)).is_file())
+        .find(|candidate| {
+            candidate
+                .join(business_os_entry_document(candidate, None))
+                .is_file()
+        })
         .context("no Business OS shell is installed")
 }
 
@@ -468,9 +475,6 @@ fn handle_admitted_request(
                 }
                 None => respond_status(request, 404, "tracking token not found")?,
             }
-        }
-        (Method::Get, "/api/business-os/status") => {
-            respond_json(request, &store::status(root)?)?;
         }
         (Method::Get, "/api/business-os/launch-context") => {
             let session = request_session(root, &request)?;
@@ -700,34 +704,6 @@ fn handle_admitted_request(
                 respond_shell_update_operation(request, root, &session, "rollback", result)?;
             }
         }
-        (Method::Post, "/api/business-os/ctox/tasks/update") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let mutation = serde_json::from_value(body)?;
-                respond_json_value(request, store::update_ctox_task(root, &session, mutation)?)?;
-            }
-        }
-        (Method::Post, "/api/business-os/ctox/tasks/delete") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let mutation = serde_json::from_value(body)?;
-                respond_json_value(request, store::delete_ctox_task(root, &session, mutation)?)?;
-            }
-        }
-        (Method::Get, "/api/business-os/session") => {
-            let session = request_session(root, &request)?;
-            respond_json(request, &session)?;
-        }
         (Method::Post, "/login") => {
             handle_login_request(root, request)?;
         }
@@ -738,183 +714,6 @@ fn handle_admitted_request(
                 let _ = store::revoke_business_session(root, &token);
             }
             respond_redirect_with_cookie(request, "/", "", 0)?;
-        }
-        (Method::Get, "/api/business-os/users") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                respond_json_value(request, store::list_users(root, &session)?)?;
-            }
-        }
-        (Method::Post, "/api/business-os/users") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !session
-                .user
-                .as_ref()
-                .map(|user| user.is_admin)
-                .unwrap_or(false)
-            {
-                respond_status(request, 403, "admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let mutation = serde_json::from_value(body)?;
-                respond_json_value(request, store::upsert_user(root, &session, mutation)?)?;
-            }
-        }
-        (Method::Get, "/api/business-os/modules") => {
-            let session = request_session(root, &request)?;
-            let installed_app_root = resolve_business_os_installed_app_root(root);
-            respond_json(
-                request,
-                &serde_json::json!({
-                    "ok": true,
-                    "modules": load_module_manifests(root, app_root, &installed_app_root)?.manifests,
-                    "governance": store::module_governance_map(root, &session)?
-                }),
-            )?;
-        }
-        (Method::Get, "/api/business-os/module-governance") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                respond_json_value(request, store::module_governance_map(root, &session)?)?;
-            }
-        }
-        (Method::Post, "/api/business-os/modules") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let mutation: store::ModuleUpsertRequest = serde_json::from_value(body)?;
-                if !store::session_can_modify_module(root, &session, &mutation.id)? {
-                    respond_status(request, 403, "module modification rights required")?;
-                    return Ok(());
-                }
-                let installed_app_root = resolve_business_os_installed_app_root(root);
-                let manifest = upsert_module_manifest(app_root, &installed_app_root, mutation)?;
-                respond_json(
-                    request,
-                    &serde_json::json!({
-                        "ok": true,
-                        "module": manifest
-                    }),
-                )?;
-            }
-        }
-        (Method::Get, "/api/business-os/module-layout") => {
-            respond_json_value(request, load_module_layout(root)?)?;
-        }
-        (Method::Post, "/api/business-os/module-layout") => {
-            let body = read_json(&mut request)?;
-            save_module_layout(root, &body)?;
-            respond_json(
-                request,
-                &serde_json::json!({
-                    "ok": true,
-                    "layout": body
-                }),
-            )?;
-        }
-        (Method::Get, "/api/business-os/templates") => {
-            respond_json(
-                request,
-                &serde_json::json!({
-                    "ok": true,
-                    "templates": load_template_manifests(app_root)?
-                }),
-            )?;
-        }
-        (Method::Get, "/api/business-os/knowledge") => {
-            respond_json_value(request, knowledge_index_payload(root)?)?;
-        }
-        (Method::Get, "/api/business-os/knowledge/document") => {
-            let id = query_param(&url, "id").unwrap_or_default();
-            respond_json_value(request, knowledge_document_payload(root, &id)?)?;
-        }
-        (Method::Get, "/api/business-os/knowledge/dataframe/schema") => {
-            let id = query_param(&url, "id").unwrap_or_default();
-            respond_json_value(request, knowledge_dataframe_schema_payload(root, &id)?)?;
-        }
-        (Method::Get, "/api/business-os/knowledge/dataframe/rows") => {
-            let query = parse_query(&url);
-            let id = query.get("id").cloned().unwrap_or_default();
-            let offset = parse_usize_query(&query, "offset", 0);
-            let limit = parse_usize_query(&query, "limit", 120).clamp(1, 500);
-            respond_json_value(
-                request,
-                knowledge_dataframe_rows_payload(root, &id, offset, limit)?,
-            )?;
-        }
-        _ if path.starts_with("/api/business-os/knowledge") => {
-            respond_status(request, 404, "unknown Business OS knowledge endpoint")?;
-        }
-        (Method::Post, "/api/business-os/modules/install-template") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let install: store::ModuleInstallTemplateRequest = serde_json::from_value(body)?;
-                let installed_app_root = resolve_business_os_installed_app_root(root);
-                let result = store::install_template_module_command(
-                    root,
-                    app_root,
-                    &installed_app_root,
-                    &session,
-                    install,
-                )?;
-                respond_json_value(request, result)?;
-            }
-        }
-        (Method::Post, "/api/business-os/modules/delete") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let delete: DeleteModuleRequest = serde_json::from_value(body)?;
-                if !store::session_can_modify_module(root, &session, &delete.module_id)? {
-                    respond_status(request, 403, "module modification rights required")?;
-                    return Ok(());
-                }
-                delete_installed_module(app_root, root, delete)?;
-                respond_json(
-                    request,
-                    &serde_json::json!({
-                        "ok": true
-                    }),
-                )?;
-            }
-        }
-        (Method::Post, "/api/business-os/modules/assign-founder") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let assignment = serde_json::from_value(body)?;
-                respond_json_value(
-                    request,
-                    store::assign_module_founder(root, &session, assignment)?,
-                )?;
-            }
-        }
-        (Method::Post, "/api/business-os/reports") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let report = serde_json::from_value(body)?;
-                respond_json_value(request, store::record_report(root, &session, report)?)?;
-            }
         }
         (Method::Get, "/api/business-os/sync/config") => {
             let session = request_session(root, &request)?;
@@ -935,9 +734,6 @@ fn handle_admitted_request(
             } else {
                 respond_json_value(request, super::rxdb_peer::restart_native_peer(root)?)?;
             }
-        }
-        (Method::Get, "/api/business-os/ctox/harness-flow") => {
-            respond_json_value(request, latest_harness_flow_payload(root))?;
         }
         // Mail account settings are an explicit control-plane endpoint. The
         // old channel-account record listing is deliberately absent here; its
@@ -1101,146 +897,6 @@ fn handle_admitted_request(
                             )?,
                             Err(error) => respond_status(request, 400, &error.to_string())?,
                         }
-                    }
-                }
-            }
-        }
-        (Method::Post, "/api/business-os/channels/test") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let channel = body.get("channel").and_then(Value::as_str).unwrap_or("");
-                let account_key = body
-                    .get("account_key")
-                    .and_then(Value::as_str)
-                    .filter(|value| !value.is_empty());
-                match crate::mission::channels::test_channel_for_business_os(
-                    root,
-                    channel,
-                    account_key,
-                ) {
-                    Ok(value) => respond_json_value(request, value)?,
-                    Err(error) => respond_status(request, 400, &error.to_string())?,
-                }
-            }
-        }
-        (Method::Post, "/api/business-os/channels/sync") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let channel = body.get("channel").and_then(Value::as_str).unwrap_or("");
-                match crate::mission::channels::sync_channel_for_business_os(root, channel) {
-                    Ok(value) => respond_json_value(request, value)?,
-                    Err(error) => respond_status(request, 400, &error.to_string())?,
-                }
-            }
-        }
-        (Method::Post, "/api/business-os/channels/settings") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let channel = body.get("channel").and_then(Value::as_str).unwrap_or("");
-                let config = body.get("config").cloned().unwrap_or_else(|| Value::Null);
-                match crate::mission::channels::save_channel_settings_for_business_os(
-                    root, channel, &config,
-                ) {
-                    Ok(value) => respond_json_value(request, value)?,
-                    Err(error) => respond_status(request, 400, &error.to_string())?,
-                }
-            }
-        }
-        (Method::Post, "/api/business-os/channels/disconnect") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let account_key = body
-                    .get("account_key")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                match crate::mission::channels::disconnect_communication_account_for_business_os(
-                    root,
-                    account_key,
-                ) {
-                    Ok(value) => respond_json_value(request, value)?,
-                    Err(error) => respond_status(request, 400, &error.to_string())?,
-                }
-            }
-        }
-        (Method::Post, "/api/business-os/channels/pair/start") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let channel = body.get("channel").and_then(Value::as_str).unwrap_or("");
-                match crate::mission::channels::start_pairing_for_business_os(root, channel) {
-                    Ok(value) => respond_json_value(request, value)?,
-                    Err(error) => respond_status(request, 400, &error.to_string())?,
-                }
-            }
-        }
-        (Method::Get, "/api/business-os/channels/pair/state") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else {
-                let channel = query_param(&url, "channel").unwrap_or_default();
-                let payload =
-                    crate::mission::channels::read_pairing_state_for_business_os(root, &channel);
-                respond_json_value(request, payload)?;
-            }
-        }
-        (Method::Post, "/api/business-os/channels/jami/export") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let payload = crate::mission::channels::export_jami_archive_for_business_os(root);
-                respond_json_value(request, payload)?;
-            }
-        }
-        (Method::Post, "/api/business-os/channels/jami/create") => {
-            let session = request_session(root, &request)?;
-            if !session.authenticated {
-                respond_status(request, 401, "login required")?;
-            } else if !store::session_can_manage_all(&session) {
-                respond_status(request, 403, "chef or admin role required")?;
-            } else {
-                let body = read_json(&mut request)?;
-                let display_name = body
-                    .get("display_name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("CTOX");
-                let config = serde_json::json!({ "profile_name": display_name });
-                let save_result = crate::mission::channels::save_channel_settings_for_business_os(
-                    root, "jami", &config,
-                );
-                if let Err(error) = save_result {
-                    respond_status(request, 400, &error.to_string())?;
-                } else {
-                    match crate::mission::channels::start_pairing_for_business_os(root, "jami") {
-                        Ok(value) => respond_json_value(request, value)?,
-                        Err(error) => respond_status(request, 400, &error.to_string())?,
                     }
                 }
             }
@@ -3532,8 +3188,7 @@ fn business_os_entry_document(app_root: &Path, version: Option<&str>) -> &'stati
     if version.map_or_else(
         || app_root.join("v4").is_dir(),
         |version| version.starts_with("0.2."),
-    )
-    {
+    ) {
         "v4/index.html"
     } else {
         "index.html"
@@ -3579,6 +3234,16 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         .as_ref()
         .map(|address| address.relative.as_str())
         .unwrap_or(rel);
+    // Installed/local modules and design templates are instance state in the
+    // installed app root, never part of a signed shell slot. A document whose
+    // base is `_shell/<version>/` still requests them relative to that base,
+    // so under a release address they resolve, authorize and cache exactly as
+    // without one (welsch 15.10.2026: invoices/support 404 under beta.102).
+    let release = if business_os_instance_state_asset(rel) {
+        None
+    } else {
+        release
+    };
     let mut selected_app_root = app_root.to_path_buf();
     if let Some(release) = release.as_ref() {
         selected_app_root = release.root.clone();
@@ -3591,10 +3256,25 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
         }
     }
     let rel = if rel == "index.html" {
-        business_os_entry_document(&selected_app_root, release.as_ref().map(|value| value.version.as_str()))
+        business_os_entry_document(
+            &selected_app_root,
+            release.as_ref().map(|value| value.version.as_str()),
+        )
     } else {
         rel
     };
+    // Installed copies from the standard app bundle import system modules as
+    // siblings (`installed-modules/invoices/schema.js` -> `../desktop/schema.js`),
+    // but those live only in the active shell under `modules/<id>/` (welsch
+    // 16.10.2026). When the installed root has no such file, serve the shell
+    // module file under the global-module gate; a missing customer package has
+    // no shell counterpart and stays 404. Cache policy keeps the requested path.
+    let cache_rel = rel;
+    let shell_module_rel = release
+        .is_none()
+        .then(|| installed_module_shell_fallback(root, &selected_app_root, rel))
+        .flatten();
+    let rel = shell_module_rel.as_deref().unwrap_or(rel);
     if !runtime_module_static_authorized(root, &selected_app_root, rel, release.as_deref()) {
         // Do not reveal whether a customer package exists on this instance.
         return respond_status(request, 404, "not found");
@@ -3685,7 +3365,7 @@ fn serve_static(root: &Path, app_root: &Path, request: Request, path: &str) -> a
     let cache_control = if release.is_some() && !is_index {
         "public, max-age=31536000, immutable"
     } else {
-        business_os_static_cache_control(is_index, &rel, request.url())
+        business_os_static_cache_control(is_index, cache_rel, request.url())
     };
     if is_index {
         // Personalized per session: no ETag sharing across users.
@@ -3935,11 +3615,29 @@ fn business_os_static_cache_control(is_index: bool, rel: &str, request_url: &str
     }
 }
 
-fn resolve_business_os_static_file(root: &Path, app_root: &Path, rel: &str) -> PathBuf {
-    if rel.starts_with("installed-modules/")
+fn installed_module_shell_fallback(root: &Path, app_root: &Path, rel: &str) -> Option<String> {
+    let (module_id, path) = rel.strip_prefix("installed-modules/")?.split_once('/')?;
+    if module_id.is_empty() || path.is_empty() {
+        return None;
+    }
+    if resolve_business_os_installed_app_root(root)
+        .join(rel)
+        .exists()
+    {
+        return None;
+    }
+    let shell_rel = format!("modules/{module_id}/{path}");
+    app_root.join(&shell_rel).is_file().then_some(shell_rel)
+}
+
+fn business_os_instance_state_asset(rel: &str) -> bool {
+    rel.starts_with("installed-modules/")
         || rel.starts_with("local-modules/")
         || rel.starts_with("design-templates/")
-    {
+}
+
+fn resolve_business_os_static_file(root: &Path, app_root: &Path, rel: &str) -> PathBuf {
+    if business_os_instance_state_asset(rel) {
         return resolve_business_os_installed_app_root(root).join(rel);
     }
 
@@ -4461,7 +4159,7 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn v4_bootstrap_entry_never_falls_back_to_v2() -> anyhow::Result<()> {
-        use crate::service::store_startup::{Foreground, isolate_test_roots};
+        use crate::service::store_startup::{isolate_test_roots, Foreground};
         let _scope = isolate_test_roots().await;
         let fixture = tempfile::Builder::new().prefix("e31-").tempdir_in("/tmp")?;
         let root = fixture.path().to_owned();
@@ -4470,7 +4168,8 @@ mod tests {
         fs::write(app.join("index.html"), "legacy V2 must not be served")?;
         let loader = "<!doctype html><html><head></head><body>real-v4-loader-fixture</body></html>";
         fs::write(app.join("v4/index.html"), loader)?;
-        let mut foreground = Foreground::start(root.clone(), tokio::runtime::Handle::current()).await?;
+        let mut foreground =
+            Foreground::start(root.clone(), tokio::runtime::Handle::current()).await?;
         // Exercise E36's real foreground-owned listener, not the retired
         // standalone HTTP handler. IPC can request a listener, never own a store.
         let reply = ctox_store::ipc::request(
@@ -4482,11 +4181,17 @@ mod tests {
                 payload: serde_json::to_vec(&serde_json::json!({"addr":"127.0.0.1:0"}))?,
             },
             Default::default(),
-        )?.await?;
+        )?
+        .await?;
         let listener: serde_json::Value = serde_json::from_slice(&reply)?;
-        let address = listener["addr"].as_str().context("foreground HTTP address")?.to_owned();
+        let address = listener["addr"]
+            .as_str()
+            .context("foreground HTTP address")?
+            .to_owned();
         let observed = tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
-            let client = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(5)).build();
+            let client = ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_secs(5))
+                .build();
             let mut times = Vec::new();
             for _ in 0..20 {
                 let start = std::time::Instant::now();
@@ -4494,23 +4199,33 @@ mod tests {
                 let status = response.status();
                 let body = response.into_string()?;
                 let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
-                eprintln!("E31_HTTP_RESPONSE {}", serde_json::json!({
-                    "status": status, "elapsed_ms": elapsed_ms, "body_bytes": body.len(),
-                    "is_expected_loader": body == loader,
-                    "is_legacy_fixture": body.contains("legacy V2 must not be served")
-                }));
+                eprintln!(
+                    "E31_HTTP_RESPONSE {}",
+                    serde_json::json!({
+                        "status": status, "elapsed_ms": elapsed_ms, "body_bytes": body.len(),
+                        "is_expected_loader": body == loader,
+                        "is_legacy_fixture": body.contains("legacy V2 must not be served")
+                    })
+                );
                 anyhow::ensure!(status == 200, "V4 root failed with {status}");
                 anyhow::ensure!(body == loader, "GET / served V2 or legacy launch context");
                 times.push(elapsed_ms);
             }
             fs::remove_file(app.join("v4/index.html"))?;
             let missing = client.get(&format!("http://{address}/")).call();
-            anyhow::ensure!(matches!(missing, Err(ureq::Error::Status(404, _))), "missing V4 loader fell back to V2");
+            anyhow::ensure!(
+                matches!(missing, Err(ureq::Error::Status(404, _))),
+                "missing V4 loader fell back to V2"
+            );
             times.sort_by(f64::total_cmp);
-            eprintln!("E31_HTTP_RECEIPT {}", serde_json::json!({"p99_ms": times[19], "missingLoaderStatus": 404}));
+            eprintln!(
+                "E31_HTTP_RECEIPT {}",
+                serde_json::json!({"p99_ms": times[19], "missingLoaderStatus": 404})
+            );
             anyhow::ensure!(times[19] < 500.0, "GET / p99 >=500ms");
             Ok(())
-        }).await?;
+        })
+        .await?;
         foreground.shutdown().await?;
         observed?;
         Ok(())
@@ -4622,6 +4337,79 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn retired_http_data_paths_return_gone_before_store_access() {
+        use std::io::Read;
+
+        let root = tempfile::tempdir().expect("isolated root");
+        let app_root = root.path().join("shell");
+        let server = Server::http("127.0.0.1:0").expect("isolated HTTP listener");
+        let addr = server.server_addr().to_ip().expect("TCP address");
+        let paths = [
+            "/api/business-os/status",
+            "/api/business-os/ctox/tasks/update",
+            "/api/business-os/ctox/tasks/delete",
+            "/api/business-os/session",
+            "/api/business-os/users",
+            "/api/business-os/modules",
+            "/api/business-os/module-governance",
+            "/api/business-os/module-layout",
+            "/api/business-os/templates",
+            "/api/business-os/knowledge",
+            "/api/business-os/knowledge/document",
+            "/api/business-os/knowledge/dataframe/schema",
+            "/api/business-os/knowledge/dataframe/rows",
+            "/api/business-os/knowledge/unknown",
+            "/api/business-os/modules/install-template",
+            "/api/business-os/modules/delete",
+            "/api/business-os/modules/assign-founder",
+            "/api/business-os/reports",
+            "/api/business-os/ctox/harness-flow",
+            "/api/business-os/channels/test",
+            "/api/business-os/channels/sync",
+            "/api/business-os/channels/settings",
+            "/api/business-os/channels/disconnect",
+            "/api/business-os/channels/pair/start",
+            "/api/business-os/channels/pair/state",
+            "/api/business-os/channels/jami/export",
+            "/api/business-os/channels/jami/create",
+        ];
+        let root_path = root.path().to_path_buf();
+        let handler = thread::spawn(move || {
+            for _ in 0..paths.len() * 2 {
+                let request = server
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("receive HTTP request")
+                    .expect("bounded HTTP request");
+                // v4: Core owner admission wraps handle_request (its missing-owner
+                // 503 is guarded separately); the 410 data-plane gate itself lives
+                // in the admitted handler and must answer before any store access.
+                handle_admitted_request(&root_path, &app_root, request).expect("410 response");
+            }
+        });
+        for path in paths {
+            for method in ["GET", "POST"] {
+                let mut stream = std::net::TcpStream::connect(addr).expect("connect");
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .expect("bounded read");
+                write!(
+                    stream,
+                    "{method} {path}?probe=1 HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n"
+                )
+                .expect("send HTTP request");
+                let mut response = String::new();
+                stream.read_to_string(&mut response).expect("read response");
+                assert!(response.starts_with("HTTP/1.1 410"), "{method} {path}");
+                assert!(
+                    response.contains("Business OS HTTP data APIs are disabled; use RxDB/WebRTC.")
+                );
+            }
+        }
+        handler.join().expect("HTTP handler terminal");
+        assert_eq!(fs::read_dir(root.path()).expect("root entries").count(), 0);
+    }
 
     #[test]
     fn mail_share_input_requires_admin_and_explicit_array() {
@@ -4892,6 +4680,188 @@ mod tests {
             "modules/rem-source/index.js",
             None
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn installed_modules_resolve_from_instance_state_under_a_shell_release_url(
+    ) -> anyhow::Result<()> {
+        use std::io::Read;
+
+        let root = tempfile::tempdir()?;
+        fs::create_dir_all(root.path().join("runtime"))?;
+        fs::write(
+            root.path().join("runtime/business-os-instance-id"),
+            "biz_local\n",
+        )?;
+        let installed = root.path().join("runtime/business-os/installed-modules");
+        for (id, schema) in [("invoices", "installed-schema"), ("rem-private", "private")] {
+            fs::create_dir_all(installed.join(id))?;
+            fs::write(
+                installed.join(id).join("module.json"),
+                format!(r#"{{"id":"{id}","version":"1.0.0"}}"#),
+            )?;
+            fs::write(installed.join(id).join("schema.js"), schema)?;
+        }
+        let version = "0.1.46-beta.102";
+        let slot = root
+            .path()
+            .join("runtime/business-os-shell/slots")
+            .join(version);
+        fs::create_dir_all(&slot)?;
+        fs::write(slot.join("app.js"), "slot-app")?;
+        super::super::shell_update::admit_release_for_test(root.path(), version, &["app.js"])?;
+
+        let get = |path: &str| -> anyhow::Result<String> {
+            let server = Server::http("127.0.0.1:0").expect("isolated HTTP listener");
+            let addr = server.server_addr().to_ip().expect("TCP address");
+            let (root_path, app_root, path_owned) =
+                (root.path().to_path_buf(), slot.clone(), path.to_owned());
+            let handler = thread::spawn(move || {
+                let request = server
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("receive HTTP request")
+                    .expect("bounded HTTP request");
+                serve_static(&root_path, &app_root, request, &path_owned).expect("static response");
+            });
+            let mut stream = std::net::TcpStream::connect(addr)?;
+            stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+            write!(
+                stream,
+                "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+            )?;
+            let mut response = String::new();
+            stream.read_to_string(&mut response)?;
+            handler.join().expect("static handler terminal");
+            Ok(response)
+        };
+
+        let release_url =
+            format!("/business-os/_shell/{version}/installed-modules/invoices/schema.js");
+        let response = get(&release_url)?;
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        assert!(response.ends_with("installed-schema"), "{response}");
+        assert!(
+            response.contains("no-cache, must-revalidate"),
+            "instance state must revalidate, never be immutable: {response}"
+        );
+        assert!(!response.contains("immutable"), "{response}");
+
+        // Parity: identical bytes without the release address.
+        let plain = get("/business-os/installed-modules/invoices/schema.js")?;
+        assert!(plain.starts_with("HTTP/1.1 200") && plain.ends_with("installed-schema"));
+
+        // No widening: an unauthorized customer module stays hidden under the release URL.
+        let private = get(&format!(
+            "/business-os/_shell/{version}/installed-modules/rem-private/schema.js"
+        ))?;
+        assert!(private.starts_with("HTTP/1.1 404"), "{private}");
+        let private_plain = get("/business-os/installed-modules/rem-private/schema.js")?;
+        assert!(private_plain.starts_with("HTTP/1.1 404"), "{private_plain}");
+
+        // Slot assets keep coming from the verified slot, immutable.
+        let slot_asset = get(&format!("/business-os/_shell/{version}/app.js"))?;
+        assert!(slot_asset.starts_with("HTTP/1.1 200"), "{slot_asset}");
+        assert!(slot_asset.ends_with("slot-app"), "{slot_asset}");
+        assert!(slot_asset.contains("immutable"), "{slot_asset}");
+        Ok(())
+    }
+
+    #[test]
+    fn installed_modules_import_system_module_siblings_from_the_active_shell() -> anyhow::Result<()>
+    {
+        use std::io::Read;
+
+        let root = tempfile::tempdir()?;
+        fs::create_dir_all(root.path().join("runtime"))?;
+        fs::write(
+            root.path().join("runtime/business-os-instance-id"),
+            "biz_local\n",
+        )?;
+        let installed = root.path().join("runtime/business-os/installed-modules");
+        for (id, file, body) in [
+            ("invoices", "schema.js", "installed-invoices"),
+            ("rem-private", "index.js", "private"),
+        ] {
+            fs::create_dir_all(installed.join(id))?;
+            fs::write(
+                installed.join(id).join("module.json"),
+                format!(r#"{{"id":"{id}","version":"1.0.0"}}"#),
+            )?;
+            fs::write(installed.join(id).join(file), body)?;
+        }
+        let version = "0.1.46-beta.103";
+        let slot = root
+            .path()
+            .join("runtime/business-os-shell/slots")
+            .join(version);
+        for (id, body) in [("desktop", "shell-desktop"), ("invoices", "shell-invoices")] {
+            fs::create_dir_all(slot.join("modules").join(id))?;
+            fs::write(
+                slot.join("modules").join(id).join("module.json"),
+                format!(r#"{{"id":"{id}","version":"1.0.0"}}"#),
+            )?;
+            fs::write(slot.join("modules").join(id).join("schema.js"), body)?;
+        }
+        fs::write(slot.join("app.js"), "slot-app")?;
+        super::super::shell_update::admit_release_for_test(root.path(), version, &["app.js"])?;
+
+        let get = |url: &str| -> anyhow::Result<String> {
+            let server = Server::http("127.0.0.1:0").expect("isolated HTTP listener");
+            let addr = server.server_addr().to_ip().expect("TCP address");
+            let path = url.split('?').next().unwrap_or(url).to_owned();
+            let (root_path, app_root) = (root.path().to_path_buf(), slot.clone());
+            let handler = thread::spawn(move || {
+                let request = server
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("receive HTTP request")
+                    .expect("bounded HTTP request");
+                serve_static(&root_path, &app_root, request, &path).expect("static response");
+            });
+            let mut stream = std::net::TcpStream::connect(addr)?;
+            stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+            write!(
+                stream,
+                "GET {url} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+            )?;
+            let mut response = String::new();
+            stream.read_to_string(&mut response)?;
+            handler.join().expect("static handler terminal");
+            Ok(response)
+        };
+
+        // Sibling import of a system module: with and without the release
+        // address and with a shell generation query, the active shell file.
+        for url in [
+            "/business-os/installed-modules/desktop/schema.js".to_owned(),
+            format!("/business-os/_shell/{version}/installed-modules/desktop/schema.js"),
+            "/business-os/installed-modules/desktop/schema.js?v=20261016-shell-v2-x".to_owned(),
+        ] {
+            let response = get(&url)?;
+            assert!(response.starts_with("HTTP/1.1 200"), "{url}: {response}");
+            assert!(response.ends_with("shell-desktop"), "{url}: {response}");
+            assert!(
+                response.contains("no-cache, must-revalidate"),
+                "{url}: {response}"
+            );
+        }
+        // An installed file always wins over the shell copy.
+        let installed_file = get("/business-os/installed-modules/invoices/schema.js")?;
+        assert!(
+            installed_file.ends_with("installed-invoices"),
+            "{installed_file}"
+        );
+        // No system module of that id: still 404.
+        for url in [
+            "/business-os/installed-modules/nonexistent/schema.js".to_owned(),
+            format!("/business-os/_shell/{version}/installed-modules/nonexistent/schema.js"),
+            // Installed customer package without the requested file.
+            "/business-os/installed-modules/rem-private/schema.js".to_owned(),
+            "/business-os/installed-modules/rem-private/index.js".to_owned(),
+        ] {
+            let response = get(&url)?;
+            assert!(response.starts_with("HTTP/1.1 404"), "{url}: {response}");
+        }
         Ok(())
     }
 

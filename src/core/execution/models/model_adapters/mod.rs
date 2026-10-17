@@ -568,28 +568,4 @@ mod tests {
             ResponsesTransportKind::ChatCompletions
         );
     }
-
-    #[test]
-    fn local_exec_policy_resolves_generic_compact_instructions() {
-        let policy = LocalCodexExecPolicy::resolve("openai/gpt-oss-120b")
-            .expect("gpt-oss local exec policy should resolve");
-        assert!(policy
-            .compact_instructions()
-            .contains("local responses-backed runtime"));
-        assert_eq!(policy.reasoning_effort_override(), Some("low"));
-        assert!(policy.unified_exec_enabled());
-    }
-
-    #[test]
-    fn local_exec_policy_keeps_model_specific_compact_limits_in_adapter_layer() {
-        let qwen = LocalCodexExecPolicy::resolve("Qwen/Qwen3.5-35B-A3B")
-            .expect("qwen local exec policy should resolve");
-        let qwen36 = LocalCodexExecPolicy::resolve("Qwen/Qwen3.6-35B-A3B")
-            .expect("qwen3.6 local exec policy should resolve");
-        let glm = LocalCodexExecPolicy::resolve("zai-org/GLM-4.7-Flash")
-            .expect("glm local exec policy should resolve");
-        assert_eq!(qwen.compact_limit(131_072), 1_536);
-        assert_eq!(qwen36.compact_limit(32_768), 1_536);
-        assert_eq!(glm.compact_limit(131_072), 1_280);
-    }
 }

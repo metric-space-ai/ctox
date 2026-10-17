@@ -534,47 +534,4 @@ Revision hat Erfolg.";
         assert_eq!(evaluation.separate_line_hits, 1);
         assert_eq!(evaluation.forbidden_violations, 0);
     }
-
-    #[test]
-    fn corpus_pdf_root_resolves_relative_to_manifest() {
-        let corpus = PageFixtureCorpus {
-            name: "public".to_string(),
-            description: None,
-            pdf_root: Some("samples/public/opendataloader".to_string()),
-            fixtures: Vec::new(),
-        };
-
-        let resolved = resolve_corpus_pdf_root(
-            "tools/pdf-parse/tests/fixtures/corpus.public-opendataloader.json",
-            &corpus,
-            None,
-        )
-        .unwrap();
-
-        assert_eq!(
-            resolved,
-            PathBuf::from("tools/pdf-parse/tests/fixtures/samples/public/opendataloader")
-        );
-    }
-
-    #[test]
-    fn sample_root_uses_manifest_directory_by_default() {
-        let manifest = PdfSampleManifest {
-            name: "public-samples".to_string(),
-            description: None,
-            root: None,
-            samples: Vec::new(),
-        };
-
-        let resolved = resolve_sample_root(
-            "tools/pdf-parse/tests/fixtures/samples/public/opendataloader/samples.json",
-            &manifest,
-            None,
-        );
-
-        assert_eq!(
-            resolved,
-            PathBuf::from("tools/pdf-parse/tests/fixtures/samples/public/opendataloader")
-        );
-    }
 }

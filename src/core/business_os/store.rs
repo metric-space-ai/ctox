@@ -15155,6 +15155,26 @@ pub fn refresh_business_command_queue_task_projection(
             payload,
         )?;
     }
+    // A news run that ends on a hold (e.g. a technical hold after repeated
+    // "direct session timeout" attempts) never reaches the `failed` paths that
+    // call mark_news_command_failed, so the issue kept spinning on
+    // "Ausgabe wird erstellt" with no retry button (welsch, 15.10.2026).
+    if matches!(
+        terminal_command_status,
+        Some("failed" | "blocked" | "cancelled")
+    ) {
+        let reason = task
+            .status_note
+            .as_deref()
+            .map(str::trim)
+            .filter(|note| !note.is_empty())
+            .unwrap_or("CTOX hat die Ausgabe nicht abgeschlossen.");
+        if let Err(error) =
+            super::store_news_commands::mark_news_command_failed(root, &conn, &command, reason)
+        {
+            eprintln!("[business-os] news hold projection for `{command_id}` failed: {error:#}");
+        }
+    }
     Ok(Some(command_projection))
 }
 
@@ -15354,7 +15374,7 @@ const SECRET_INTAKE_VALUE_TTL: Duration = Duration::from_secs(10 * 60);
 /// Payload fields that carry a secret, per command type.
 fn secret_payload_field(command_type: &str) -> Option<&'static str> {
     match command_type {
-        "ctox.secret.put" => Some("value"),
+        "ctox.secret.put" | "ctox.secret.request.fulfill" => Some("value"),
         "ctox.mailserver.save_user" => Some("password"),
         _ => None,
     }
@@ -15449,7 +15469,7 @@ pub(crate) fn take_detached_secret_intake(command_id: &str, field: &str) -> Opti
 
 /// The secret a handler needs: the value detached at intake, or — for callers
 /// that bypass RxDB intake (CLI, tests) — the value still in the payload.
-fn take_secret_intake_value(command: &BusinessCommand) -> Option<String> {
+pub(super) fn take_secret_intake_value(command: &BusinessCommand) -> Option<String> {
     let field = secret_payload_field(&command.command_type)?;
     let detached = command.id.as_deref().and_then(|command_id| {
         SECRET_INTAKE_VALUES
@@ -15496,7 +15516,7 @@ fn delete_credential_command(
 /// Build a redacted copy of a secret command for the persisted command record.
 /// `safe_payload` must contain no secret value; client_context is rebuilt to
 /// the acting actor only.
-fn secret_command_safe_command(
+pub(super) fn secret_command_safe_command(
     command: &BusinessCommand,
     session: &BusinessOsSession,
     safe_payload: Value,
@@ -26240,6 +26260,9 @@ fn business_command_prompt_enrichment(
         blocks.push(block);
     }
     if let Some(block) = materialize_business_os_app_import_source(root, command_id, command)? {
+        blocks.push(block);
+    }
+    if let Some(block) = super::store_news_commands::issue_run_prompt_block(root, command)? {
         blocks.push(block);
     }
     Ok((!blocks.is_empty()).then(|| format!("\n{}\n", blocks.join("\n"))))

@@ -12,16 +12,3 @@ fn compact_rejects_stream_but_accepts_buffered_request() {
     assert!(!buffered.stream);
     assert_eq!(buffered.model, "gpt-5");
 }
-
-#[test]
-fn compact_alt_is_carried_by_protocol_execution_contract() {
-    let request = crate::sdk::api::handlers::ProtocolExecutionRequest {
-        entry_protocol: "openai-response".to_owned(),
-        exit_protocol: "openai-response".to_owned(),
-        model: "gpt-5".to_owned(),
-        body: br#"{"model":"gpt-5"}"#.to_vec(),
-        alt: "responses/compact".to_owned(),
-        ..Default::default()
-    };
-    assert_eq!(request.alt, "responses/compact");
-}

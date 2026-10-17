@@ -71,6 +71,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
+#[path = "cliproxyapi_account_sessions.rs"]
+mod account_sessions;
+use account_sessions::CtoxAccountSessionStore;
+#[path = "cliproxyapi_account_quotas.rs"]
+mod account_quotas;
+use account_quotas::CtoxAccountQuotaStore;
+
 const COOLDOWN_STATE_PAYLOAD_KEY: &str = "cliproxyapi.auth.cooldown-state.v1";
 const INSTANCE_CHATGPT_AUTH_SCOPE: &str = "ctox-auth";
 const INSTANCE_CHATGPT_AUTH_NAME: &str = "chatgpt_subscription_auth_json";
@@ -2487,9 +2494,10 @@ fn build_ctox_codex_alpha_search_authority(
 ) -> anyhow::Result<Arc<CtoxCodexAlphaSearchAuthority>> {
     let cooldown_store = Arc::new(CtoxCooldownStateStore::new(root));
     Ok(Arc::new(CtoxCodexAlphaSearchAuthority {
-        router: Arc::new(AccountRouter::with_strategy(
+        router: Arc::new(AccountRouter::with_account_state_stores(
             cooldown_store.clone(),
-            config.routing_strategy(),
+            Arc::new(CtoxAccountSessionStore::new(root)),
+            Arc::new(CtoxAccountQuotaStore::new(root)),
         )),
         conductor: Arc::new(CooldownConductor::new(cooldown_store)),
         candidates: config.codex_candidates(),
@@ -3182,15 +3190,8 @@ async fn instance_proxy_owner_phase<T: Send + 'static>(
 }
 
 async fn run_instance_codex_proxy_supervisor(root: PathBuf) {
-    use ctox_cliproxyapi::internal::runtime::executor::helps::xai_client_version::{
-        start_xai_version_updater, HttpXaiVersionFetcher,
-    };
-    // The native xAI path uses a direct host-owned HTTP client. The same
-    // process-wide version reader also supplies its catalog and inference headers.
-    // Keeping the guard here ties refresh cancellation to this existing runtime.
-    let _xai_version_updater = HttpXaiVersionFetcher::new(None)
-        .ok()
-        .map(|fetcher| start_xai_version_updater(Arc::new(fetcher)));
+    // Client identity comes from the reviewed release fallback. No metadata
+    // network fetch is bound until the proposed CTOX-owned source is available.
     use ctox_cliproxyapi::internal::api::server::serve_provider_connection_with_auxiliary_logging;
     use ctox_cliproxyapi::internal::api::server_middleware::{
         RequestLoggingMetricsRegistry, RequestLoggingPolicy,
@@ -3988,9 +3989,10 @@ impl CtoxCliproxyRuntimeFactory {
     ) -> Result<ClaudeSubscriptionAccountPool, CtoxCliproxyRuntimeBuildError> {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
         let conductor = Arc::new(native_cooldown_conductor(cooldown_store.clone()));
-        let router = Arc::new(AccountRouter::with_strategy(
+        let router = Arc::new(AccountRouter::with_account_state_stores(
             cooldown_store,
-            config.routing_strategy(),
+            Arc::new(CtoxAccountSessionStore::new(&self.root)),
+            Arc::new(CtoxAccountQuotaStore::new(&self.root)),
         ));
         let mut executors = HashMap::new();
         let mut targets = HashMap::new();
@@ -4091,9 +4093,10 @@ impl CtoxCliproxyRuntimeFactory {
     > {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
         let conductor = Arc::new(native_cooldown_conductor(cooldown_store.clone()));
-        let router = Arc::new(AccountRouter::with_strategy(
+        let router = Arc::new(AccountRouter::with_account_state_stores(
             cooldown_store,
-            config.routing_strategy(),
+            Arc::new(CtoxAccountSessionStore::new(&self.root)),
+            Arc::new(CtoxAccountQuotaStore::new(&self.root)),
         ));
         let mut executors = HashMap::new();
         let mut targets = HashMap::new();
@@ -4152,9 +4155,10 @@ impl CtoxCliproxyRuntimeFactory {
     ) -> Result<AntigravitySubscriptionAccountPool, CtoxCliproxyRuntimeBuildError> {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
         let conductor = Arc::new(native_cooldown_conductor(cooldown_store.clone()));
-        let router = Arc::new(AccountRouter::with_strategy(
+        let router = Arc::new(AccountRouter::with_account_state_stores(
             cooldown_store,
-            config.routing_strategy(),
+            Arc::new(CtoxAccountSessionStore::new(&self.root)),
+            Arc::new(CtoxAccountQuotaStore::new(&self.root)),
         ));
         let replay_cache = Arc::new(AntigravityReasoningReplayCache::new());
         let mut executors = HashMap::new();
@@ -4235,6 +4239,7 @@ impl std::error::Error for CtoxCliproxyRuntimeBuildError {}
 #[cfg(test)]
 mod tests {
     include!("cliproxyapi_instance_headers_candidate_test.rs");
+    include!("cliproxyapi_session_affinity_test.rs");
 
     use std::future::Future;
     use std::pin::Pin;

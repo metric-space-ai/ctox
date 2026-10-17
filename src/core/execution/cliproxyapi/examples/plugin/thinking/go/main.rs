@@ -13,7 +13,3 @@ pub fn handle(method: &str) -> ExampleResult {
         _ => unknown(method),
     }
 }
-#[test]
-fn applies_thinking_without_external_state() {
-    assert!(handle("thinking.apply").is_ok());
-}

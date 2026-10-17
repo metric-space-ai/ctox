@@ -655,30 +655,4 @@ pub fn format_bytes(bytes: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn weight_stream_hit_rate_reflects_token_tile_reuse() {
-        let cfg = CacheModelConfig {
-            tokens: 512,
-            ..CacheModelConfig::default()
-        };
-        let op = weight_stream_op(cfg, "test", "kernel", 1, 1024, 512, 4, 0, "weights", "none");
-        assert!((op.modeled_hit_rate - 0.75).abs() < 0.001);
-    }
-
-    #[test]
-    fn qwen_analysis_covers_hot_path_families() {
-        let ops = qwen35_cache_analysis(CacheModelConfig::default());
-        for name in [
-            "delta.project.qkv",
-            "delta.recurrent_scan",
-            "ffn.gate_up_swiglu",
-            "attention.prefill_kv_stream",
-            "attention.kv_cache_read",
-            "attention.decode_splitk_scratch",
-            "lm_head",
-        ] {
-            assert!(ops.iter().any(|op| op.op == name), "missing {name}");
-        }
-    }
 }

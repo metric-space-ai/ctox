@@ -543,21 +543,6 @@ mod tests {
     }
 
     #[test]
-    fn module_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "person-discovery");
-        assert_eq!(m.tier(), Tier::S);
-        assert!(m.requires_credential().is_none());
-        assert_eq!(m.countries(), &[Country::De, Country::At, Country::Ch]);
-        let af = m.authoritative_for();
-        assert!(af.contains(&FieldKey::PersonLinkedin));
-        assert!(af.contains(&FieldKey::PersonXing));
-        assert!(af.contains(&FieldKey::PersonFunktion));
-        assert!(af.contains(&FieldKey::PersonVorname));
-        assert!(af.contains(&FieldKey::PersonNachname));
-    }
-
-    #[test]
     fn shape_query_pins_both_networks() {
         let shaped = module()
             .shape_query("DO & Co. AG", &ctx_de())

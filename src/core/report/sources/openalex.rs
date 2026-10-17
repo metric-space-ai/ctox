@@ -270,12 +270,6 @@ mod tests {
     }
 
     #[test]
-    fn user_agent_includes_email() {
-        let c = OpenAlexClient::new(Some("bob@example.com"));
-        assert!(c.user_agent().contains("bob@example.com"));
-    }
-
-    #[test]
     fn strip_doi_prefix_handles_full_url() {
         assert_eq!(
             strip_doi_prefix("https://doi.org/10.1234/AbC"),

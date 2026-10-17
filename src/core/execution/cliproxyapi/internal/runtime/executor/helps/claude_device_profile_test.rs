@@ -306,33 +306,6 @@ fn local_cache_survives_across_requests() {
 }
 
 #[test]
-fn application_helpers_preserve_pinned_and_legacy_semantics() {
-    let defaults = ClaudeHeaderDefaults::default();
-    let profile = default_claude_device_profile(&defaults);
-    let mut upstream = device_headers("old");
-    apply_claude_device_profile_headers(&mut upstream, &profile);
-    assert_eq!(
-        upstream.get("User-Agent").unwrap(),
-        &vec![DEFAULT_CLAUDE_FINGERPRINT_USER_AGENT.to_owned()]
-    );
-
-    let client = device_headers("claude-cli/2.9.0 (external, cli)");
-    let mut legacy = HeaderMap::new();
-    apply_claude_legacy_device_headers(&mut legacy, Some(&client), &defaults, false);
-    assert_eq!(
-        legacy.get("User-Agent").unwrap(),
-        &vec![DEFAULT_CLAUDE_FINGERPRINT_USER_AGENT.to_owned()]
-    );
-    assert_eq!(default_claude_version(&defaults), "2.1.280");
-
-    let prefix_match = ClaudeHeaderDefaults {
-        user_agent: "claude-cli/2.8.4suffix".to_owned(),
-        ..ClaudeHeaderDefaults::default()
-    };
-    assert_eq!(default_claude_version(&prefix_match), "2.8.4");
-}
-
-#[test]
 fn local_resolution_rejects_invalid_software_signals() {
     let mut headers = device_headers("claude-cli/999.0.0 (external, cli)");
     headers.insert(

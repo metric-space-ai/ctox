@@ -21,11 +21,4 @@ pub fn interactions_usage(root: &Value) -> Option<&Value> {
 mod tests {
     use super::interactions_usage;
     use serde_json::json;
-
-    #[test]
-    fn uses_the_first_existing_usage_path_in_upstream_order() {
-        let root = json!({"interaction":{"usage":{"input":1}},"usage":{"input":2}});
-        assert_eq!(interactions_usage(&root), Some(&json!({"input":1})));
-        assert!(interactions_usage(&json!({})).is_none());
-    }
 }

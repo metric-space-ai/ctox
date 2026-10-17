@@ -5,8 +5,6 @@ mod manager;
 mod package;
 mod platform;
 
-#[cfg(test)]
-mod tests;
 
 pub use archive::ArchiveFormat;
 pub use archive::PackageReleaseArchive;

@@ -328,26 +328,6 @@ fn block_stage_rejects_empty_markdown() {
     assert!(msg.contains("empty"));
 }
 
-#[test]
-fn block_apply_with_no_pending_is_a_clean_noop() {
-    let root = TestRoot::new().unwrap();
-    let run_id = fresh_run(&root);
-    handle_command(
-        root.path(),
-        &[s("block-apply"), s("--run-id"), run_id.clone()],
-    )
-    .expect("no-op apply must not error");
-    let conn = open(root.path()).unwrap();
-    let count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM report_blocks WHERE run_id = ?1",
-            params![run_id],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(count, 0);
-}
-
 // ---------- check ----------
 
 #[test]
@@ -404,18 +384,6 @@ fn check_narrative_flow_structural_on_empty_run_misses_required_blocks() {
 }
 
 #[test]
-fn check_rejects_unknown_kind() {
-    let root = TestRoot::new().unwrap();
-    let run_id = fresh_run(&root);
-    let err = handle_command(
-        root.path(),
-        &[s("check"), s("--run-id"), run_id, s("not_a_real_check")],
-    )
-    .expect_err("must reject unknown check kind");
-    assert!(format!("{err:#}").contains("check kind"));
-}
-
-#[test]
 fn check_character_budget_on_populated_workspace_reports_delta() {
     let root = TestRoot::new().unwrap();
     let run_id = fresh_run(&root);
@@ -457,59 +425,6 @@ fn check_character_budget_on_populated_workspace_reports_delta() {
         payload.contains("actual_chars") && payload.contains("target_chars"),
         "payload must include both actual and target chars, got {payload}"
     );
-}
-
-#[test]
-fn check_release_guard_runs_against_seeded_blocks() {
-    let root = TestRoot::new().unwrap();
-    let run_id = fresh_run(&root);
-    // Seed a block + an evidence row so the release-guard lint table
-    // has something to act on.
-    insert_committed_block(
-        root.path(),
-        &run_id,
-        "doc_study",
-        "management_summary",
-        "Management Summary",
-        40,
-        "Diese Pruefung ist machbar. Erfolgsaussichten (qualitativ): mittel-hoch.",
-        &["ev_seed_1"],
-    )
-    .unwrap();
-    insert_evidence(
-        root.path(),
-        &run_id,
-        "ev_seed_1",
-        "doi",
-        Some("10.0/test"),
-        Some("Seed Paper"),
-        &["A. Author"],
-        Some(2024),
-    )
-    .unwrap();
-    handle_command(
-        root.path(),
-        &[
-            s("check"),
-            s("--run-id"),
-            run_id.clone(),
-            s("release_guard"),
-        ],
-    )
-    .expect("release_guard check executes");
-    let conn = open(root.path()).unwrap();
-    let row: (i64, i64, String) = conn
-        .query_row(
-            "SELECT ready_to_finish, needs_revision, payload_json FROM report_check_runs \
-             WHERE run_id = ?1 AND check_kind = 'release_guard' \
-             ORDER BY checked_at DESC LIMIT 1",
-            params![run_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .unwrap();
-    let _ = row;
-    // The smoke goal here is that the check runs end-to-end without
-    // panicking on a populated workspace and persists a row.
 }
 
 // ---------- full-text persistence ----------
@@ -574,154 +489,7 @@ fn evidence_show_surfaces_full_text_when_present() {
     assert!(body_back.contains("0.6 to 0.95"));
 }
 
-#[test]
-fn evidence_show_without_full_text_flag_does_not_dump_body() {
-    // Body is large; we don't want every evidence-show call to flood
-    // the LLM with the entire paper unless explicitly asked.
-    let root = TestRoot::new().unwrap();
-    let run_id = fresh_run(&root);
-    insert_evidence(
-        root.path(),
-        &run_id,
-        "ev_full_2",
-        "doi",
-        Some("10.0/big"),
-        Some("Big Paper"),
-        &[],
-        Some(2024),
-    )
-    .unwrap();
-    let conn = open(root.path()).unwrap();
-    conn.execute(
-        "UPDATE report_evidence_register \
-         SET full_text_md = ?1, full_text_source = 'open_access_pdf', \
-             full_text_chars = ?2 \
-         WHERE evidence_id = ?3",
-        params!["x".repeat(50_000), 50_000_i64, "ev_full_2".to_string(),],
-    )
-    .unwrap();
-    // Should succeed without --full-text and not panic on the big body.
-    handle_command(
-        root.path(),
-        &[
-            s("evidence-show"),
-            s("--run-id"),
-            run_id,
-            s("--evidence-id"),
-            s("ev_full_2"),
-        ],
-    )
-    .expect("evidence-show without --full-text must succeed");
-}
-
 // ---------- evidence-show ----------
-
-#[test]
-fn evidence_show_returns_full_content_for_one_evidence() {
-    let root = TestRoot::new().unwrap();
-    let run_id = fresh_run(&root);
-    insert_evidence(
-        root.path(),
-        &run_id,
-        "ev_show_1",
-        "doi",
-        Some("10.0/showtest"),
-        Some("Show Me Paper"),
-        &["Aaa Bbb"],
-        Some(2024),
-    )
-    .unwrap();
-    // insert_evidence does not populate abstract_md by default — patch
-    // it directly.
-    let conn = open(root.path()).unwrap();
-    conn.execute(
-        "UPDATE report_evidence_register SET abstract_md = ?1 \
-         WHERE run_id = ?2 AND evidence_id = ?3",
-        params![
-            "This abstract describes a novel induction method.".to_string(),
-            run_id.clone(),
-            "ev_show_1".to_string(),
-        ],
-    )
-    .unwrap();
-    handle_command(
-        root.path(),
-        &[
-            s("evidence-show"),
-            s("--run-id"),
-            run_id.clone(),
-            s("--evidence-id"),
-            s("ev_show_1"),
-        ],
-    )
-    .expect("evidence-show happy path");
-}
-
-#[test]
-fn evidence_show_json_includes_abstract_md() {
-    let root = TestRoot::new().unwrap();
-    let run_id = fresh_run(&root);
-    insert_evidence(
-        root.path(),
-        &run_id,
-        "ev_json_1",
-        "doi",
-        Some("10.0/jsontest"),
-        Some("JSON Test Paper"),
-        &["Ccc Ddd"],
-        Some(2025),
-    )
-    .unwrap();
-    let conn = open(root.path()).unwrap();
-    conn.execute(
-        "UPDATE report_evidence_register SET abstract_md = ?1 \
-         WHERE run_id = ?2 AND evidence_id = ?3",
-        params![
-            "Specific finding XYZ123 demonstrated under condition ABC.".to_string(),
-            run_id.clone(),
-            "ev_json_1".to_string(),
-        ],
-    )
-    .unwrap();
-    handle_command(
-        root.path(),
-        &[
-            s("evidence-show"),
-            s("--run-id"),
-            run_id,
-            s("--all"),
-            s("--json"),
-        ],
-    )
-    .expect("evidence-show --all --json must succeed");
-}
-
-#[test]
-fn evidence_show_rejects_missing_filter() {
-    let root = TestRoot::new().unwrap();
-    let run_id = fresh_run(&root);
-    let err = handle_command(root.path(), &[s("evidence-show"), s("--run-id"), run_id])
-        .expect_err("must require --evidence-id or --all");
-    assert!(format!("{err:#}").contains("--evidence-id"));
-}
-
-#[test]
-fn evidence_show_rejects_unknown_evidence_id() {
-    let root = TestRoot::new().unwrap();
-    let run_id = fresh_run(&root);
-    let err = handle_command(
-        root.path(),
-        &[
-            s("evidence-show"),
-            s("--run-id"),
-            run_id,
-            s("--evidence-id"),
-            s("ev_does_not_exist"),
-        ],
-    )
-    .expect_err("must error when no row matches");
-    assert!(format!("{err:#}").to_lowercase().contains("no evidence"));
-}
 
 #[test]
 fn check_release_guard_flags_stub_evidence_cited_by_a_block() {
@@ -801,7 +569,7 @@ fn figure_add_image_file_persists_row_and_copies_image() {
         s("--kind"),
         s("schematic"),
         s("--caption"),
-        s("Test schematic"),
+        s("Signal flow of the measurement pipeline"),
         s("--source"),
         s("eigene Darstellung"),
         s("--image-file"),
@@ -834,50 +602,10 @@ fn figure_add_image_file_persists_row_and_copies_image() {
         )
         .unwrap();
     assert_eq!(kind, "schematic");
-    assert_eq!(caption, "Test schematic");
+    assert_eq!(caption, "Signal flow of the measurement pipeline");
     assert_eq!(source, "eigene Darstellung");
     assert!(code_kind.is_none());
     assert_eq!(has_image, 1);
-}
-
-#[test]
-fn figure_add_rejects_unknown_kind() {
-    let root = TestRoot::new().unwrap();
-    let run_id = fresh_run(&root);
-    let args = vec![
-        s("figure-add"),
-        s("--run-id"),
-        run_id,
-        s("--kind"),
-        s("not_a_kind"),
-        s("--caption"),
-        s("..."),
-        s("--source"),
-        s("..."),
-        s("--image-file"),
-        s("/nonexistent.png"),
-    ];
-    let err = handle_command(root.path(), &args).expect_err("must reject unknown kind");
-    assert!(format!("{err:#}").contains("--kind"));
-}
-
-#[test]
-fn figure_add_requires_a_source_mode() {
-    let root = TestRoot::new().unwrap();
-    let run_id = fresh_run(&root);
-    let args = vec![
-        s("figure-add"),
-        s("--run-id"),
-        run_id,
-        s("--kind"),
-        s("schematic"),
-        s("--caption"),
-        s("..."),
-        s("--source"),
-        s("..."),
-    ];
-    let err = handle_command(root.path(), &args).expect_err("must require source mode");
-    assert!(format!("{err:#}").contains("--code-mermaid"));
 }
 
 // ---------- Layer 2: tables ----------

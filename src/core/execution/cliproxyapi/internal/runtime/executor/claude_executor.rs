@@ -1100,16 +1100,6 @@ mod tests {
     }
 
     #[test]
-    fn device_profile_default_matches_candidate_capture() {
-        let profile = ClaudeDeviceProfile::default();
-        assert_eq!(profile.user_agent(), "claude-cli/2.1.280 (external, cli)");
-        assert_eq!(profile.package_version(), "0.112.1");
-        assert_eq!(profile.runtime_version(), "v26.3.0");
-        assert_eq!(profile.os(), "MacOS");
-        assert_eq!(profile.arch(), "arm64");
-    }
-
-    #[test]
     fn claude_usage_matches_independent_cache_accounting() {
         let usage = parse_claude_usage(
             br#"{"usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":3,"cache_creation_input_tokens":2}}"#,

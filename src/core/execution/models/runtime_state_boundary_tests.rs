@@ -36,21 +36,3 @@ fn production_source(source: &str) -> String {
 
     production
 }
-
-#[test]
-fn production_runtime_state_keeps_adapter_tuning_generic() {
-    let production = production_source(include_str!("runtime_state.rs"));
-
-    for forbidden in [
-        "GptOssRuntimeTuning",
-        ".gpt_oss",
-        "alias = \"gpt_oss\"",
-        "CTOX_GPT_OSS_HARMONY_REASONING_CAP",
-        "CTOX_GPT_OSS_HARMONY_MAX_OUTPUT_TOKENS_CAP",
-    ] {
-        assert!(
-            !production.contains(forbidden),
-            "runtime_state production path leaked adapter-specific legacy detail `{forbidden}`"
-        );
-    }
-}

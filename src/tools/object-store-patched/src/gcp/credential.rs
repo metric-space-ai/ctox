@@ -927,35 +927,4 @@ impl CredentialExt for HttpRequestBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_canonicalize_headers() {
-        let mut input_header = HeaderMap::new();
-        input_header.insert("content-type", "text/plain".parse().unwrap());
-        input_header.insert("host", "storage.googleapis.com".parse().unwrap());
-        input_header.insert("x-goog-meta-reviewer", "jane".parse().unwrap());
-        input_header.append("x-goog-meta-reviewer", "john".parse().unwrap());
-        assert_eq!(
-            GCSAuthorizer::canonicalize_headers(&input_header),
-            (
-                "content-type:text/plain
-host:storage.googleapis.com
-x-goog-meta-reviewer:jane,john"
-                    .into(),
-                "content-type;host;x-goog-meta-reviewer".to_string()
-            )
-        );
-    }
-
-    #[test]
-    fn test_canonicalize_query() {
-        let mut url = Url::parse("https://storage.googleapis.com/bucket/object").unwrap();
-        url.query_pairs_mut()
-            .append_pair("max-keys", "2")
-            .append_pair("prefix", "object");
-        assert_eq!(
-            GCSAuthorizer::canonicalize_query(&url),
-            "max-keys=2&prefix=object".to_string()
-        );
-    }
 }

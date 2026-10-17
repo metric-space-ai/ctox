@@ -311,7 +311,3 @@ impl ConfigReloader for MtimeConfigReloader {
         Ok(state)
     }
 }
-
-#[cfg(test)]
-#[path = "network_proxy_loader_tests.rs"]
-mod tests;

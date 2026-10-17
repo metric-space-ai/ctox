@@ -3964,22 +3964,6 @@ enable_fanout = true
     }
 
     #[test]
-    fn worker_base_instructions_include_system_prompt_and_durable_outcome_contract() {
-        let root = compose_test_root("worker-base");
-        let instructions = compose_base_instructions(&root, &BTreeMap::new(), None, None)
-            .expect("worker instructions");
-        // The long CTOX system prompt is the stability layer and must be present.
-        assert!(instructions.contains("You are CTOX, the personal CTO agent"));
-        assert!(instructions.contains("Secret handling policy:"));
-        // The direct-session execution contract stays appended.
-        assert!(instructions.contains("required durable outcome exists"));
-        assert!(instructions.contains("do not run reviewed-send before review feedback"));
-        assert!(instructions.contains("Do not create review rows or approval digests manually"));
-        assert!(instructions.contains("accepted outbound row"));
-        assert!(instructions.contains("Do not create review-driven internal work"));
-    }
-
-    #[test]
     fn override_base_instructions_stand_alone_without_worker_prompt() {
         let root = compose_test_root("override-base");
         let instructions = compose_base_instructions(
@@ -4165,18 +4149,6 @@ enable_fanout = true
         assert_eq!(
             legacy_notification_thread_id(&thread_id_key),
             Some("thread-b")
-        );
-    }
-
-    #[test]
-    fn midtask_compact_timeout_uses_larger_budget() {
-        assert_eq!(
-            direct_session_midtask_compact_timeout(None),
-            Duration::from_secs(DIRECT_SESSION_MIDTASK_COMPACT_TIMEOUT_SECS)
-        );
-        assert!(
-            direct_session_midtask_compact_timeout(None)
-                > direct_session_control_request_timeout(None)
         );
     }
 

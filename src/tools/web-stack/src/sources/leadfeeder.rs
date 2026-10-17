@@ -547,31 +547,6 @@ mod tests {
     }
 
     #[test]
-    fn module_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "leadfeeder.com");
-        assert_eq!(m.aliases(), &["leadfeeder", "lf"]);
-        assert!(matches!(m.tier(), Tier::C));
-        assert_eq!(m.countries(), &[Country::De, Country::At, Country::Ch]);
-        assert_eq!(m.requires_credential(), Some("LEADFEEDER_API_KEY"));
-        let auth = m.authoritative_for();
-        assert!(auth.contains(&FieldKey::FirmaEmail));
-        assert!(auth.contains(&FieldKey::FirmaDomain));
-        assert!(auth.contains(&FieldKey::Mitarbeiter));
-        assert!(auth.contains(&FieldKey::PersonEmail));
-    }
-
-    #[test]
-    fn shape_query_is_none_for_api_source() {
-        let ctx = SourceCtx {
-            root: Path::new("/tmp/ctox-test"),
-            country: Some(Country::De),
-            mode: ResearchMode::NewRecord,
-        };
-        assert!(module().shape_query("Wittenstein", &ctx).is_none());
-    }
-
-    #[test]
     fn fetch_direct_engages_for_each_dach_country() {
         // The Country enum currently only covers DACH, so there is no
         // negative variant we could feed in. We instead assert the

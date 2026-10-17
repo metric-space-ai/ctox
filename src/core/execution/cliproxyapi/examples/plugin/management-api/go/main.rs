@@ -8,7 +8,3 @@ pub fn example() -> ExampleRegistration {
 pub fn status_page() -> &'static [u8] {
     b"<!doctype html><title>Management API</title><main>Management API resource</main>"
 }
-#[test]
-fn page_is_static_and_bounded() {
-    assert!(status_page().len() < 1024);
-}

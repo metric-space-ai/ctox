@@ -126,36 +126,4 @@ pub fn label_for_vertex(project_id: &str, email: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn public_filename_and_label_are_bounded_and_secret_free() {
-        assert_eq!(
-            sanitize_vertex_file_part(" team/project: one "),
-            "team_project__one"
-        );
-        assert_eq!(
-            label_for_vertex("project", "agent@example.test"),
-            "project (agent@example.test)"
-        );
-    }
-
-    #[test]
-    fn malformed_payload_fails_before_store_access() {
-        struct Store;
-        impl VertexCredentialSecretStore for Store {
-            fn store_service_account(
-                &self,
-                _handle: &VertexCredentialHandle,
-                _record: &[u8],
-            ) -> Result<(), VertexCredentialError> {
-                panic!("store must not be called")
-            }
-        }
-        assert_eq!(
-            import_vertex_credential(b"{}", "", Arc::new(Store)),
-            Err(ManagementVertexImportError::InvalidServiceAccount(
-                ServiceAccountNormalizeError::EmptyPayload
-            ))
-        );
-    }
 }

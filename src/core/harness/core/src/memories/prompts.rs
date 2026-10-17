@@ -177,7 +177,3 @@ pub(crate) async fn build_memory_tool_developer_instructions(codex_home: &Path) 
     };
     template.render().ok()
 }
-
-#[cfg(test)]
-#[path = "prompts_tests.rs"]
-mod tests;

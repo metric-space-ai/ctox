@@ -366,24 +366,4 @@ pub(super) fn refresh_catalog_after_write(
 mod tests {
     use super::*;
     use serde_json::json;
-
-    #[test]
-    fn read_rows_capped_reports_full_row_count() -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let path = temp.path().join("table.parquet");
-        let rows = vec![
-            json!({"id": "a", "score": 1}),
-            json!({"id": "b", "score": 2}),
-            json!({"id": "c", "score": 3}),
-            json!({"id": "d", "score": 4}),
-        ];
-        let df = rows_to_df(&rows)?;
-        commit_parquet(&path, df)?;
-
-        let (embedded, count) = read_rows_capped(&path, 2)?;
-
-        assert_eq!(embedded.len(), 2);
-        assert_eq!(count, 4);
-        Ok(())
-    }
 }

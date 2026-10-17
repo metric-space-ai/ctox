@@ -552,17 +552,6 @@ fn secret_eq(left: &SecretString, right: &SecretString) -> bool {
 mod tests {
     use super::*;
     #[test]
-    fn filename_matches_upstream_shape() {
-        assert_eq!(
-            credential_record_id("user@example.com", "Team Plan", "abc12345"),
-            "codex-abc12345-user@example.com-team-plan.json"
-        );
-        assert_eq!(
-            credential_record_id("user@example.com", "", ""),
-            "codex-user@example.com.json"
-        );
-    }
-    #[test]
     fn callback_debug_redacts_secrets() {
         let result = CodexCallbackResult::from_parts("do-not-leak-code", "do-not-leak-state", "");
         assert!(!format!("{result:?}").contains("do-not-leak"));

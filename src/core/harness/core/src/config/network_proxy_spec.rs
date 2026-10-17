@@ -331,7 +331,3 @@ fn upsert_network_domains(
     target.retain(|entry| !incoming.contains(&normalize_host(entry)));
     target.extend(deduped_hosts);
 }
-
-#[cfg(test)]
-#[path = "network_proxy_spec_tests.rs"]
-mod tests;

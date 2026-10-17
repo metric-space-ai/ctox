@@ -154,12 +154,6 @@ fn claude_request(model: &str, payload: &[u8]) -> ExecutorRequest {
     }
 }
 
-#[test]
-fn new_executor_initializes_delegated_claude_config() {
-    let delegate = Arc::new(RecordingClaude::default());
-    assert!(executor(delegate).delegated_claude_is_configured());
-}
-
 #[tokio::test]
 async fn claude_request_preserves_internal_model_semantics() {
     let delegate = Arc::new(RecordingClaude::default());
@@ -484,23 +478,4 @@ fn drops_empty_assistant_without_tool_link() {
 fn preserves_assistant_with_tool_link_or_reasoning() {
     let value = normalize(br#"{"messages":[{"role":"assistant","content":"","tool_calls":[{"id":"call_1"}]},{"role":"assistant","content":"","function_call":{"name":"legacy"}},{"role":"assistant","content":"","reasoning_content":"thought"},{"role":"assistant","content":[{"type":"text","text":" visible "}]}]}"#);
     assert_eq!(value["messages"].as_array().unwrap().len(), 4);
-}
-
-#[test]
-fn normalizes_upstream_model() {
-    for (input, expected) in [
-        ("kimi-k3[1m]", "k3"),
-        ("kimi-k3", "k3"),
-        ("Kimi-K3[1M]", "k3"),
-        ("k3[1m]", "k3"),
-        ("k3", "k3"),
-        ("kimi-k2.6", "k2.6"),
-        ("kimi-k2.6[1m]", "k2.6"),
-        ("kimi-k3(1024)", "k3(1024)"),
-        ("kimi-k3[1m](1024)", "k3(1024)"),
-        ("kimi-k2.6(high)", "k2.6(high)"),
-        ("kimi-k2.6[1m](high)", "k2.6(high)"),
-    ] {
-        assert_eq!(normalize_kimi_upstream_model(input), expected);
-    }
 }

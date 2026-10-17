@@ -13,8 +13,8 @@ mod claude_device_profile;
 mod claude_diagnostics;
 mod claude_input_tokens;
 mod claude_mcp_alias;
-#[cfg(any(feature = "anthropic-fingerprint-transport", test))]
 mod claude_ratelimit;
+pub(crate) use claude_ratelimit::claude_quota_observation;
 #[cfg(feature = "anthropic-fingerprint-transport")]
 pub(super) use claude_ratelimit::claude_retry_delay;
 mod claude_upstream;

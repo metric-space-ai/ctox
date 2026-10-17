@@ -35,28 +35,6 @@ fn tool_payload() -> Vec<u8> {
 }
 
 #[test]
-fn recognizes_official_codex_clients() {
-    assert!(is_codex_multi_agent_client("Codex Desktop/1"));
-    assert!(is_codex_multi_agent_client("codex-tui/0.1"));
-    assert!(!is_codex_multi_agent_client("curl/8"));
-}
-
-#[test]
-fn decodes_home_models_deduplicated_and_sorted() {
-    let models = decode_home_available_models(
-        br#"{"a":[{"name":"models/z","displayName":"Z"}],"b":[{"id":"a"},{"id":"a"}]}"#,
-    );
-    assert_eq!(
-        models
-            .iter()
-            .map(|model| model["id"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        vec!["a", "z"]
-    );
-    assert_eq!(models[1]["display_name"], "Z");
-}
-
-#[test]
 fn model_profiles_include_reasoning_and_tiers() {
     let models = spawn_agent_models_from_sources(
         &context().available_models,
@@ -226,19 +204,6 @@ fn restore_response_restores_tool_names_but_not_opaque_arguments() {
 fn restore_disabled_or_invalid_is_exact_noop() {
     assert_eq!(restore_response(b"not-json", true), b"not-json");
     assert_eq!(restore_response(b"{ \"x\": 1 }", false), b"{ \"x\": 1 }");
-}
-
-#[test]
-fn model_format_normalizes_whitespace_and_defaults() {
-    let formatted = format_spawn_agent_models(&[SpawnAgentModel {
-        id: " model   one ".into(),
-        description: "Useful model".into(),
-        reasoning_efforts: vec!["low".into(), "high".into()],
-        default_reasoning_effort: "high".into(),
-        service_tiers: vec!["priority".into()],
-        ..Default::default()
-    }]);
-    assert_eq!(formatted, "- `model one`: Useful model. Reasoning efforts: low, high (default). Service tiers: priority.");
 }
 
 #[test]

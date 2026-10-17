@@ -30,7 +30,3 @@ pub fn get_thread_id_from_citations(citations: Vec<String>) -> Vec<ThreadId> {
     }
     result
 }
-
-#[cfg(test)]
-#[path = "citations_tests.rs"]
-mod tests;

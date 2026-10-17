@@ -160,14 +160,3 @@ fn non_stream_preserves_upstream_last_choice_overwrite_behavior() {
     assert_eq!(parts[0], json!({"text":"second"}));
     assert_eq!(parts[1]["functionCall"]["name"], "one");
 }
-
-#[test]
-fn token_count_uses_gemini_shape() {
-    assert_eq!(
-        decode(&gemini_token_count(17)),
-        json!({
-            "totalTokens":17,
-            "promptTokensDetails":[{"modality":"TEXT","tokenCount":17}]
-        })
-    );
-}

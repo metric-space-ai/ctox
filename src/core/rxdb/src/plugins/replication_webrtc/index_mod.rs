@@ -283,12 +283,22 @@ const CTOX_RXDB_NATIVE_CAPABILITIES: &[&str] = &[
     "ctox-browser-live-v1",
     "ctox-workjet-device-control-v1",
     "ctox-workjet-jour-fixe-speech-v1",
+    "ctox-workjet-speech-settings-v1",
+    "ctox-workjet-speech-dictation-v1",
+    "ctox-workjet-grok-v1",
     // Presence is ephemeral transport state (ctox-presence-v1): always
     // advertised, never gated on a runtime flag — there is no persistence or
     // policy surface behind it, only the in-memory hub in the connection
     // handler.
     CTOX_PRESENCE_CAPABILITY,
 ];
+
+/// Capabilities the native peer advertises in the WebRTC handshake. The
+/// signaling URL list in the Business OS peer must be a subset of this one,
+/// otherwise the browser rejects calls with `CTOX_WEBRTC_CAPABILITY_MISSING`.
+pub fn native_handshake_capabilities() -> &'static [&'static str] {
+    CTOX_RXDB_NATIVE_CAPABILITIES
+}
 
 pub fn remote_supports_query_fetch(remote_protocol: &Value) -> bool {
     remote_protocol

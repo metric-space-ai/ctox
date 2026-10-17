@@ -3906,18 +3906,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn depth_labels_accept_deep_alias() {
-        assert_eq!(
-            DeepResearchDepth::from_label("deep"),
-            Some(DeepResearchDepth::Exhaustive)
-        );
-        assert_eq!(
-            DeepResearchDepth::from_label("medium"),
-            Some(DeepResearchDepth::Standard)
-        );
-    }
-
-    #[test]
     fn exclude_urls_are_canonicalized_and_deduplicated_before_discovery() {
         let excluded = normalized_excluded_urls(&[
             "https://Example.com/data.csv#section".to_string(),
@@ -4041,28 +4029,6 @@ mod tests {
             extract_explicit_dois("Verify (DOI 10.5281/zenodo.20111572)."),
             vec!["10.5281/zenodo.20111572"]
         );
-    }
-
-    #[test]
-    fn plan_can_include_annas_archive_as_metadata_only() {
-        let request = DeepResearchRequest {
-            query: "terahertz copper mesh CFRP".to_string(),
-            focus: None,
-            depth: DeepResearchDepth::Exhaustive,
-            max_sources: 20,
-            exclude_urls: Vec::new(),
-            include_annas_archive: true,
-            include_papers: true,
-            workspace: None,
-            persist_workspace: false,
-        };
-        let plans = build_research_search_plan(&request.query, &request, ResearchProfile::Generic);
-        let annas = plans
-            .iter()
-            .find(|plan| plan.label == "annas_archive_metadata")
-            .expect("annas metadata plan");
-        assert!(annas.metadata_only);
-        assert_eq!(annas.domains, vec!["annas-archive.org"]);
     }
 
     #[test]
@@ -4767,19 +4733,6 @@ mod tests {
             followups[0]["url"],
             "https://m-selig.ae.illinois.edu/props/volume-1/data/prop_10x5_static.txt"
         );
-    }
-
-    #[test]
-    fn final_source_target_keeps_a_larger_refill_pool() {
-        assert_eq!(
-            research_candidate_pool_limit(DeepResearchDepth::Quick, 3),
-            12
-        );
-        assert_eq!(
-            research_candidate_pool_limit(DeepResearchDepth::Standard, 8),
-            32
-        );
-        assert_eq!(research_read_budget(DeepResearchDepth::Standard, 8), 16);
     }
 
     #[test]

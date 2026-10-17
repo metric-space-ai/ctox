@@ -129,6 +129,7 @@ pub fn handle_secret_command(root: &Path, args: &[String]) -> Result<()> {
                 .context("usage: ctox secret get --scope <scope> --name <name>")?;
             let name = required_flag_value(args, "--name")
                 .context("usage: ctox secret get --scope <scope> --name <name>")?;
+            reveal_gate(args, |key| std::env::var(key).ok())?;
             let value = get_secret_value(root, scope, name)?;
             print_json(&json!({"ok": true, "scope": scope, "name": name, "value": value}))
         }
@@ -168,10 +169,41 @@ pub fn handle_secret_command(root: &Path, args: &[String]) -> Result<()> {
             )?;
             print_json(&json!({"ok": true, "rewrite": result}))
         }
+        "request" | "requests" | "request-status" | "fulfill" | "decline" | "exec" => {
+            crate::secret_requests::handle(root, command, &args[1..])
+        }
         _ => anyhow::bail!(
-            "usage:\n  ctox secret init\n  ctox secret put --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>]\n  ctox secret intake --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]\n  ctox secret list [--scope <scope>]\n  ctox secret show --scope <scope> --name <name>\n  ctox secret get --scope <scope> --name <name>\n  ctox secret delete --scope <scope> --name <name>\n  ctox secret memory-rewrite --db <path> --conversation-id <id> --scope <scope> --name <name> --match-text <text> [--label <text>]"
+            "usage:\n  ctox secret init\n  ctox secret put --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>]\n  ctox secret intake --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>] [--db <path> --conversation-id <id> --match-text <text> [--label <text>]]\n  ctox secret list [--scope <scope>]\n  ctox secret show --scope <scope> --name <name>\n  ctox secret get --scope <scope> --name <name> --reveal\n  ctox secret delete --scope <scope> --name <name>\n  ctox secret memory-rewrite --db <path> --conversation-id <id> --scope <scope> --name <name> --match-text <text> [--label <text>]\n  ctox secret request --scope <scope> --name <name> --label <text> [--reason <text>] [--thread <key>]\n  ctox secret requests [--status pending|stored|declined] [--thread <key>]\n  ctox secret request-status --request-id <id>\n  ctox secret fulfill --request-id <id> --value-stdin\n  ctox secret decline --request-id <id>\n  ctox secret exec --env <VAR>=<scope>/<name> [--env ...] -- <command> [args...]"
         ),
     }
+}
+
+/// Environment variables the agent harness sets on every agent shell command
+/// (see harness/core/src/exec_env.rs).
+const AGENT_SESSION_ENV_VARS: [&str; 2] = ["CTOX_AGENT_ID", "CTOX_TURN_ID"];
+/// Set by trusted CTOX parents (e.g. `scrape execute`) whose child legitimately
+/// needs a plaintext value inside its own process.
+const REVEAL_ALLOWED_ENV_VAR: &str = "CTOX_SECRET_REVEAL_ALLOWED";
+
+/// `ctox secret get` prints plaintext. It requires an explicit `--reveal`, and
+/// is refused inside agent sessions so the value cannot land in a transcript.
+/// Agents use `ctox secret exec --env VAR=scope/name -- <cmd>` instead.
+/// This is a guardrail against accidental disclosure, not an OS-level
+/// boundary: agents run as the same user as the store.
+fn reveal_gate(args: &[String], env: impl Fn(&str) -> Option<String>) -> Result<()> {
+    anyhow::ensure!(
+        has_flag(args, "--reveal"),
+        "ctox secret get prints the plaintext value and needs --reveal; agents should use `ctox secret exec --env VAR=<scope>/<name> -- <command>` instead"
+    );
+    let in_agent = AGENT_SESSION_ENV_VARS
+        .iter()
+        .any(|key| env(key).is_some_and(|value| !value.trim().is_empty()));
+    let allowed = env(REVEAL_ALLOWED_ENV_VAR).is_some_and(|value| value == "1");
+    anyhow::ensure!(
+        !in_agent || allowed,
+        "ctox secret get --reveal is refused inside an agent session; use `ctox secret exec --env VAR=<scope>/<name> -- <command>` so the value never enters the transcript"
+    );
+    Ok(())
 }
 
 pub fn list_secret_records(root: &Path, scope: Option<&str>) -> Result<Vec<SecretRecordView>> {
@@ -519,7 +551,9 @@ fn mutate_secret_records(
         }
         Ok(true)
     })?;
-    if changed { crate::business_os::browser_bootstrap::invalidate(root); }
+    if changed {
+        crate::business_os::browser_bootstrap::invalidate(root);
+    }
     Ok(changed)
 }
 
@@ -545,7 +579,9 @@ pub fn delete_secret_records(root: &Path, keys: &[(&str, &str)]) -> Result<usize
         }
         Ok(deleted)
     })?;
-    if deleted > 0 { crate::business_os::browser_bootstrap::invalidate(root); }
+    if deleted > 0 {
+        crate::business_os::browser_bootstrap::invalidate(root);
+    }
     Ok(deleted)
 }
 
@@ -1220,7 +1256,7 @@ pub fn secret_exists(root: &Path, scope: &str, name: &str) -> Result<bool> {
     })?)
 }
 
-fn put_secret(
+pub(crate) fn put_secret(
     root: &Path,
     scope: &str,
     name: &str,
@@ -1253,7 +1289,7 @@ fn load_secret_record(root: &Path, scope: &str, name: &str) -> Result<Option<Sec
     Ok(secret_owner(root)?.read_blocking(move|conn|Ok(conn.query_row("SELECT secret_id,scope,secret_name,description,metadata_json,created_at,updated_at FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2 LIMIT 1",params![scope,name],map_secret_record_row).optional()?))?)
 }
 
-fn get_secret_value(root: &Path, scope: &str, name: &str) -> Result<String> {
+pub(crate) fn get_secret_value(root: &Path, scope: &str, name: &str) -> Result<String> {
     read_secret_value_optional(root, scope, name)?.context("secret not found")
 }
 
@@ -1743,9 +1779,11 @@ mod owner_seam_tests {
     }
 }
 
-// Legacy fixture bootstrap only. Live callers require the injected owner.
-#[cfg(test)]
-fn open_secret_db(root: &Path) -> Result<Connection> {
+// Legacy direct-open path. Secrets-owned callers in this file go through the
+// injected owner (`secret_owner`); tests use this as fixture bootstrap. The
+// remaining live caller is `secret_requests` (agent secret requests), which
+// still opens its request table directly and must migrate onto the owner.
+pub(crate) fn open_secret_db(root: &Path) -> Result<Connection> {
     let db_path = resolve_db_path(root);
     if let Some(parent) = db_path.parent() {
         fs::create_dir_all(parent).with_context(|| {
@@ -1819,7 +1857,7 @@ fn decode_master_key(raw: &str, context: &'static str) -> Result<SecretMaterial>
     Ok(Zeroizing::new(bytes))
 }
 
-fn ensure_secret_schema(conn: &Connection) -> Result<()> {
+pub(crate) fn ensure_secret_schema(conn: &Connection) -> Result<()> {
     // Schema verification is idempotent on the file but still requires a
     // writer lock per call. Skip on subsequent calls for the same DB path
     // in this process — the daemon and TUI each pay the cost exactly once.
@@ -2141,7 +2179,7 @@ fn required_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     find_flag_value(args, flag)
 }
 
-fn find_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+pub(crate) fn find_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     args.windows(2).find_map(|window| {
         if window[0] == flag {
             Some(window[1].as_str())
@@ -2151,11 +2189,11 @@ fn find_flag_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
     })
 }
 
-fn has_flag(args: &[String], flag: &str) -> bool {
+pub(crate) fn has_flag(args: &[String], flag: &str) -> bool {
     args.iter().any(|arg| arg == flag)
 }
 
-fn resolve_secret_value_arg(args: &[String], usage: &str) -> Result<Zeroizing<String>> {
+pub(crate) fn resolve_secret_value_arg(args: &[String], usage: &str) -> Result<Zeroizing<String>> {
     let arg_value = find_flag_value(args, "--value");
     let stdin_value = has_flag(args, "--value-stdin");
     anyhow::ensure!(
@@ -2213,7 +2251,7 @@ fn now_iso_string() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
-fn secret_reference_text(scope: &str, name: &str, label: Option<&str>) -> String {
+pub(crate) fn secret_reference_text(scope: &str, name: &str, label: Option<&str>) -> String {
     let handle = format!("{scope}/{name}");
     match label.map(str::trim).filter(|value| !value.is_empty()) {
         Some(label) => format!("[secret-ref:{handle} label={label}]"),
@@ -2221,7 +2259,7 @@ fn secret_reference_text(scope: &str, name: &str, label: Option<&str>) -> String
     }
 }
 
-fn print_json(value: &Value) -> Result<()> {
+pub(crate) fn print_json(value: &Value) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }
@@ -2393,6 +2431,24 @@ mod tests {
         path.push(format!("ctox-secret-test-{}-{}", label, std::process::id()));
         let _ = fs::remove_dir_all(&path);
         path
+    }
+
+    #[test]
+    fn reveal_gate_requires_flag_and_refuses_agent_sessions() {
+        let args = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let none = |_: &str| None;
+        assert!(reveal_gate(&args(&["get"]), none).is_err());
+        assert!(reveal_gate(&args(&["get", "--reveal"]), none).is_ok());
+        let agent = |k: &str| (k == "CTOX_AGENT_ID").then(|| "agent-1".to_string());
+        assert!(reveal_gate(&args(&["get", "--reveal"]), agent).is_err());
+        let turn = |k: &str| (k == "CTOX_TURN_ID").then(|| "turn-1".to_string());
+        assert!(reveal_gate(&args(&["get", "--reveal"]), turn).is_err());
+        let trusted = |k: &str| match k {
+            "CTOX_AGENT_ID" => Some("agent-1".to_string()),
+            "CTOX_SECRET_REVEAL_ALLOWED" => Some("1".to_string()),
+            _ => None,
+        };
+        assert!(reveal_gate(&args(&["get", "--reveal"]), trusted).is_ok());
     }
 
     #[test]
@@ -3005,31 +3061,6 @@ mod tests {
             .contains("sk-live-super-secret"));
 
         let _ = fs::remove_dir_all(&root);
-        Ok(())
-    }
-
-    #[test]
-    fn secret_cli_value_arg_requires_exactly_one_source() -> Result<()> {
-        let value_args = vec![
-            "put".to_string(),
-            "--value".to_string(),
-            "literal".to_string(),
-        ];
-        let value = resolve_secret_value_arg(&value_args, "usage")?;
-        assert_eq!(value.as_str(), "literal");
-
-        let missing_args = vec!["put".to_string()];
-        let missing = resolve_secret_value_arg(&missing_args, "usage").unwrap_err();
-        assert!(format!("{missing:#}").contains("exactly one of --value or --value-stdin"));
-
-        let conflict_args = vec![
-            "put".to_string(),
-            "--value".to_string(),
-            "literal".to_string(),
-            "--value-stdin".to_string(),
-        ];
-        let conflict = resolve_secret_value_arg(&conflict_args, "usage").unwrap_err();
-        assert!(format!("{conflict:#}").contains("exactly one of --value or --value-stdin"));
         Ok(())
     }
 

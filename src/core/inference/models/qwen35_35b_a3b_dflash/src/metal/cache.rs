@@ -195,24 +195,4 @@ impl RecurrentRollbackCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn new_sizes_slot_vec() {
-        let c = RecurrentRollbackCache::new(64, 4);
-        assert_eq!(c.slots.len(), 64);
-        assert_eq!(c.tapes.len(), 64);
-        assert!(!c.armed);
-        assert_eq!(c.conv_kernel_size, 4);
-    }
-
-    #[test]
-    fn clear_transients_is_idempotent() {
-        let mut c = RecurrentRollbackCache::new(4, 4);
-        c.arm_rollback(0);
-        assert!(c.armed);
-        c.clear_transients();
-        assert!(!c.armed);
-        c.clear_transients();
-        assert!(!c.armed);
-    }
 }

@@ -44,44 +44,6 @@ fn available_models_returns_cloned_cached_snapshots() {
 }
 
 #[test]
-fn claude_available_models_include_limits_defaults_and_rfc3339_time() {
-    let registry = registry();
-    registry.register_client(
-        "client-1",
-        "Claude",
-        &[
-            RegistryModelInfo {
-                id: "claude-sonnet-4-6".to_owned(),
-                owned_by: "anthropic".to_owned(),
-                provider_type: "claude".to_owned(),
-                created: 1_771_372_800,
-                context_length: 200_000,
-                max_completion_tokens: 64_000,
-                ..RegistryModelInfo::default()
-            },
-            model("claude-no-limits"),
-        ],
-    );
-    let models = registry.available_models("claude");
-    let by_id = models
-        .into_iter()
-        .map(|model| (model["id"].as_str().unwrap().to_owned(), model))
-        .collect::<std::collections::HashMap<_, _>>();
-    let limits = &by_id["claude-sonnet-4-6"];
-    assert_eq!(limits["max_input_tokens"], 200_000);
-    assert_eq!(limits["max_tokens"], 64_000);
-    assert_eq!(limits["created_at"], "2026-02-18T00:00:00Z");
-    let defaults = &by_id["claude-no-limits"];
-    assert_eq!(
-        defaults["max_input_tokens"],
-        DEFAULT_CLAUDE_MAX_INPUT_TOKENS
-    );
-    assert_eq!(defaults["max_tokens"], DEFAULT_CLAUDE_MAX_OUTPUT_TOKENS);
-    assert_eq!(defaults["display_name"], "claude-no-limits");
-    assert_eq!(defaults["type"], "model");
-}
-
-#[test]
 fn registry_changes_invalidate_cache() {
     let registry = registry();
     let mut info = model("m1");

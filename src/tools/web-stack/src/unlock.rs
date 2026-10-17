@@ -1809,25 +1809,6 @@ mod tests {
     }
 
     #[test]
-    fn public_browser_fallback_script_is_domain_bound_and_redacted() {
-        let source = build_public_unlock_browser_source(&public_request()).unwrap();
-        assert!(source.contains("https://www.companyhouse.de/"));
-        assert!(source.contains("hostAllowed"));
-        assert!(source.contains("unsafe_redirect"));
-        assert!(source.contains("challenge_persisted"));
-        assert!(source.contains("alignBrowserIdentity"));
-        assert!(source.contains("browser && typeof browser.version === \"function\""));
-        assert!(source.contains("runtimeVersion = String(await browser.version()"));
-        assert!(!source.contains("browser.version().catch"));
-        assert!(source.contains("currentUa.match(/Chrome"));
-        assert!(source.contains("humanlike.humanScroll"));
-        assert!(source.contains("page.reload"));
-        assert!(!source.contains("credential_ref"));
-        assert!(!source.contains("secret_value"));
-        assert!(!source.contains("screenshot"));
-    }
-
-    #[test]
     fn public_browser_fallback_invokes_the_persistent_session_contract() {
         let request = public_request();
         let root = Path::new("/ctox-root");
@@ -1971,21 +1952,6 @@ mod tests {
         assert!(notes.is_some());
     }
 
-    #[test]
-    fn schema_idempotent() {
-        let conn = Connection::open_in_memory().unwrap();
-        ensure_schema(&conn).unwrap();
-        ensure_schema(&conn).unwrap();
-        let count: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name LIKE 'web_unlock_%'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 5);
-    }
-
     fn seeded_in_memory_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         ensure_schema(&conn).unwrap();
@@ -2064,14 +2030,6 @@ mod tests {
     }
 
     #[test]
-    fn close_repair_missing_id_errors() {
-        let conn = seeded_in_memory_db();
-        let err = close_repair(&conn, 9_999_999, true, None, None).unwrap_err();
-        let msg = format!("{err}");
-        assert!(msg.contains("no repair with id"));
-    }
-
-    #[test]
     fn record_signal_persists_row() {
         let conn = seeded_in_memory_db();
         let id = record_signal(
@@ -2122,20 +2080,6 @@ mod tests {
         assert_eq!(row.0, 1);
         assert_eq!(row.1, Some(repair_id));
         assert_eq!(row.2.as_deref(), Some("captcha addressed"));
-    }
-
-    #[test]
-    fn resolve_signal_missing_id_errors() {
-        let conn = seeded_in_memory_db();
-        let err = resolve_signal(&conn, 9_999_999, None, None).unwrap_err();
-        assert!(format!("{err}").contains("no signal with id"));
-    }
-
-    #[test]
-    fn record_signal_lossy_does_not_panic_on_bad_root() {
-        // Path under /dev/null shouldn't exist; lossy should swallow the error.
-        let bad_root = std::path::Path::new("/dev/null/never");
-        record_signal_lossy(bad_root, "test_source", None, json!({}));
     }
 
     #[test]

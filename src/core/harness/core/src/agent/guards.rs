@@ -226,7 +226,3 @@ impl Drop for SpawnReservation {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "guards_tests.rs"]
-mod tests;

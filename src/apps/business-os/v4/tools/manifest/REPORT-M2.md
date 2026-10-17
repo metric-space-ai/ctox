@@ -23,7 +23,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | Befehlstypen mit Handlern in mehreren Apps | 0 |
 | eigene Collections ohne Schema | 0 |
 | schema.js noch vorhanden / nicht ladbar | 3 / 0 |
-| Shell-Dateien | 126 |
+| Shell-Dateien | 127 |
 | Apps mit styles / write_guard-Collections | 41 / 1 |
 | offene _todo gesamt | 185 |
 | Deklarationsdateien v4-manifest.json | 41 |

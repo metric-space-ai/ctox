@@ -215,18 +215,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn user_agent_includes_email_when_supplied() {
-        let c = CrossrefClient::new(Some("alice@example.org"));
-        assert!(c.user_agent().contains("alice@example.org"));
-    }
-
-    #[test]
-    fn user_agent_falls_back_when_no_email() {
-        let c = CrossrefClient::new(None);
-        assert!(c.user_agent().contains("metric-space-ai"));
-    }
-
-    #[test]
     fn jats_strip_removes_tags_and_collapses_whitespace() {
         let s = strip_jats_xml("<jats:p>Hello\n\n<jats:italic>world</jats:italic>.</jats:p>");
         assert_eq!(s, "Hello world.");

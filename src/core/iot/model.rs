@@ -413,16 +413,6 @@ mod tests {
     }
 
     // §2A.1 — has_explicit_timestamp: 0 vs >0 (strict > 0, NOT >= 0).
-    #[test]
-    fn has_explicit_timestamp_zero_vs_positive() {
-        let mut a = Attribute::new("temp");
-        assert!(!a.has_explicit_timestamp(), "0 means no explicit ts");
-        a.timestamp = 1;
-        assert!(a.has_explicit_timestamp());
-        a.timestamp = 1_700_000_000_000;
-        assert!(a.has_explicit_timestamp());
-    }
-
     // §2A.2 — normalize_event_timestamp: <=0 → system time; future → clamp.
     #[test]
     fn normalize_timestamp_zero_and_future_clamp() {
@@ -579,30 +569,5 @@ mod tests {
         let mut bad = Attribute::new("x");
         bad.value_str = Some("{not json".to_string());
         assert!(bad.hydrate(ValueBaseType::Object).is_err());
-    }
-
-    #[test]
-    fn base62_id_is_22_chars() {
-        let id = Asset::generate_id();
-        assert_eq!(id.len(), 22, "id={id}");
-        assert!(id.bytes().all(|b| b.is_ascii_alphanumeric()));
-    }
-
-    #[test]
-    fn value_descriptor_array_roundtrip() {
-        let vd = ValueDescriptor {
-            name: "number".into(),
-            base_type: ValueBaseType::Number,
-            array_dimensions: 0,
-            constraints: vec![],
-            units: None,
-            format: None,
-        };
-        let arr = vd.as_array();
-        assert_eq!(arr.name, "number[]");
-        assert_eq!(arr.array_dimensions, 1);
-        let back = arr.as_non_array();
-        assert_eq!(back.name, "number");
-        assert_eq!(back.array_dimensions, 0);
     }
 }

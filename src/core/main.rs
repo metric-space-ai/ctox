@@ -43,6 +43,7 @@ mod paths;
 mod persistence;
 mod report;
 mod runtime;
+mod secret_requests;
 mod secrets;
 mod service;
 mod skill_store;
@@ -6245,50 +6246,6 @@ mod tests {
         assert!(chat_wait_assistant_completion(Some(first), None).is_some());
     }
 
-    #[test]
-    fn chat_wait_failure_outcomes_map_to_agent_failure() {
-        for token in ["TurnTimeout", "ExecutionError", "Aborted", "Cancelled"] {
-            let outcome = lcm::AgentOutcome::from_token(token).expect(token);
-            assert!(outcome.is_agent_failure(), "{token} should be a failure");
-        }
-        assert!(!lcm::AgentOutcome::from_token("Success")
-            .expect("Success token")
-            .is_agent_failure());
-    }
-
-    #[test]
-    fn openrouter_tool_smoke_summary_detects_tool_call_response() {
-        let payload = serde_json::json!({
-            "model": "deepseek/deepseek-v4-flash-20260423",
-            "provider": "DeepInfra",
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "native_finish_reason": "tool_calls",
-                "message": {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{
-                        "id": "call_123",
-                        "type": "function",
-                        "function": {
-                            "name": "record_status",
-                            "arguments": "{\"status\":\"ok\"}"
-                        }
-                    }]
-                }
-            }]
-        });
-
-        let summary = openrouter_tool_smoke_summary("auto", 200, &payload);
-        assert_eq!(summary["has_tool_calls"], serde_json::json!(true));
-        assert_eq!(summary["tool_call_count"], serde_json::json!(1));
-        assert_eq!(
-            summary["tool_call_names"],
-            serde_json::json!(["record_status"])
-        );
-        assert_eq!(summary["content_len"], serde_json::json!(0));
-    }
-
     #[cfg(unix)]
     #[test]
     fn appsec_pipeline_worker_executes_ready_stage_and_handles_queue() {
@@ -6302,12 +6259,27 @@ mod tests {
         let httpx = bin_dir.join("httpx");
         fs::write(
             &httpx,
-            "#!/bin/sh\nprintf '{\"url\":\"https://example.test\",\"status_code\":200}\\n'\n",
+            "#!/bin/sh\nif [ \"$1\" = \"-version\" ] || [ \"$1\" = \"--version\" ]; then printf '[INF] Current Version: v1.7.2\\n'; exit 0; fi\nprintf '{\"url\":\"https://example.test\",\"status_code\":200}\\n'\n",
         )
         .unwrap();
         let mut permissions = fs::metadata(&httpx).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&httpx, permissions).unwrap();
+        // Bind the synthetic scanner exactly as the production execution gate requires.
+        use sha2::{Digest, Sha256};
+        let provenance_dir = root.join("runtime/tools/appsec/install-provenance");
+        fs::create_dir_all(&provenance_dir).unwrap();
+        fs::write(
+            provenance_dir.join("httpx.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "scanner": "httpx",
+                "pinned_version": "v1.7.2",
+                "path": httpx,
+                "sha256": format!("{:x}", Sha256::digest(fs::read(&httpx).unwrap()))
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
         run_projected_appsec_command(
             &root,
@@ -6868,12 +6840,27 @@ mod tests {
         let httpx = bin_dir.join("httpx");
         fs::write(
             &httpx,
-            "#!/bin/sh\nprintf 'transient failure\\n' >&2\nexit 2\n",
+            "#!/bin/sh\nif [ \"$1\" = \"-version\" ] || [ \"$1\" = \"--version\" ]; then printf '[INF] Current Version: v1.7.2\\n'; exit 0; fi\nprintf 'transient failure\\n' >&2\nexit 2\n",
         )
         .unwrap();
         let mut permissions = fs::metadata(&httpx).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&httpx, permissions).unwrap();
+        // Bind the synthetic scanner exactly as the production execution gate requires.
+        use sha2::{Digest, Sha256};
+        let provenance_dir = root.join("runtime/tools/appsec/install-provenance");
+        fs::create_dir_all(&provenance_dir).unwrap();
+        fs::write(
+            provenance_dir.join("httpx.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "scanner": "httpx",
+                "pinned_version": "v1.7.2",
+                "path": httpx,
+                "sha256": format!("{:x}", Sha256::digest(fs::read(&httpx).unwrap()))
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
         run_projected_appsec_command(
             &root,

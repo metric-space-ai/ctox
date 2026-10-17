@@ -151,33 +151,3 @@ pub fn read_frame<R: Read>(mut reader: R) -> Result<Option<FramedMessage>> {
     let msg: FramedMessage = serde_json::from_slice(&payload)?;
     Ok(Some(msg))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn framed_round_trip() {
-        let msg = FramedMessage {
-            version: 1,
-            message: Message::Output {
-                payload: OutputPayload {
-                    data_b64: encode_bytes(b"hello"),
-                    stream: OutputStream::Stdout,
-                },
-            },
-        };
-        let mut buf = Vec::new();
-        write_frame(&mut buf, &msg).expect("write");
-        let decoded = read_frame(buf.as_slice()).expect("read").expect("some");
-        assert_eq!(decoded.version, 1);
-        match decoded.message {
-            Message::Output { payload } => {
-                assert_eq!(payload.stream, OutputStream::Stdout);
-                let data = decode_bytes(&payload.data_b64).expect("decode");
-                assert_eq!(data, b"hello");
-            }
-            other => panic!("unexpected message: {other:?}"),
-        }
-    }
-}

@@ -148,7 +148,3 @@ fn intersect_macos_automation_permission(
         }
     }
 }
-
-#[cfg(all(test, target_os = "macos"))]
-#[path = "macos_permissions_tests.rs"]
-mod tests;

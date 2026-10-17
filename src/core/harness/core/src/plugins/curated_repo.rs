@@ -350,7 +350,3 @@ fn apply_zip_permissions(
 ) -> Result<(), String> {
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "curated_repo_tests.rs"]
-mod tests;

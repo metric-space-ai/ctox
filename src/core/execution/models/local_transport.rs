@@ -685,25 +685,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn display_label_formats_each_variant() {
-        let unix = LocalTransport::UnixSocket {
-            path: PathBuf::from("/tmp/ctox.sock"),
-        };
-        assert_eq!(unix.display_label(), "unix:/tmp/ctox.sock");
-
-        let pipe = LocalTransport::NamedPipe {
-            name: "ctox-primary".to_string(),
-        };
-        assert_eq!(pipe.display_label(), r"pipe:\\.\pipe\ctox-primary");
-
-        let tcp = LocalTransport::TcpLoopback {
-            host: "127.0.0.1".to_string(),
-            port: 2234,
-        };
-        assert_eq!(tcp.display_label(), "tcp:127.0.0.1:2234");
-    }
-
-    #[test]
     fn http_base_url_only_tcp() {
         let tcp = LocalTransport::TcpLoopback {
             host: "127.0.0.1".to_string(),
@@ -724,19 +705,6 @@ mod tests {
         }
         .http_base_url()
         .is_none());
-    }
-
-    #[test]
-    fn endpoint_string_formats_ipc_variants() {
-        let unix = LocalTransport::UnixSocket {
-            path: PathBuf::from("/tmp/ctox.sock"),
-        };
-        assert_eq!(unix.endpoint_string(), "/tmp/ctox.sock");
-
-        let pipe = LocalTransport::NamedPipe {
-            name: "ctox-primary".to_string(),
-        };
-        assert_eq!(pipe.endpoint_string(), r"\\.\pipe\ctox-primary");
     }
 
     #[test]

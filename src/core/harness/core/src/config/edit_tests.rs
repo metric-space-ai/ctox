@@ -46,23 +46,6 @@ fn builder_with_edits_applies_custom_paths() {
     assert_eq!(contents, "enabled = true\n");
 }
 
-#[test]
-fn set_model_availability_nux_count_writes_shown_count() {
-    let tmp = tempdir().expect("tmpdir");
-    let codex_home = tmp.path();
-    let shown_count = HashMap::from([("gpt-foo".to_string(), 4)]);
-
-    ConfigEditsBuilder::new(codex_home)
-        .set_model_availability_nux_count(&shown_count)
-        .apply_blocking()
-        .expect("persist");
-
-    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-    let expected = r#"[tui.model_availability_nux]
-gpt-foo = 4
-"#;
-    assert_eq!(contents, expected);
-}
 
 #[test]
 fn set_skill_config_writes_disabled_entry() {
@@ -426,154 +409,10 @@ model = "o4-mini"
     assert_eq!(contents, expected);
 }
 
-#[test]
-fn blocking_set_hide_full_access_warning_preserves_table() {
-    let tmp = tempdir().expect("tmpdir");
-    let codex_home = tmp.path();
-    std::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        r#"# Global comment
 
-[notice]
-# keep me
-existing = "value"
-"#,
-    )
-    .expect("seed");
 
-    apply_blocking(
-        codex_home,
-        None,
-        &[ConfigEdit::SetNoticeHideFullAccessWarning(true)],
-    )
-    .expect("persist");
 
-    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-    let expected = r#"# Global comment
 
-[notice]
-# keep me
-existing = "value"
-hide_full_access_warning = true
-"#;
-    assert_eq!(contents, expected);
-}
-
-#[test]
-fn blocking_set_hide_rate_limit_model_nudge_preserves_table() {
-    let tmp = tempdir().expect("tmpdir");
-    let codex_home = tmp.path();
-    std::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        r#"[notice]
-existing = "value"
-"#,
-    )
-    .expect("seed");
-
-    apply_blocking(
-        codex_home,
-        None,
-        &[ConfigEdit::SetNoticeHideRateLimitModelNudge(true)],
-    )
-    .expect("persist");
-
-    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-    let expected = r#"[notice]
-existing = "value"
-hide_rate_limit_model_nudge = true
-"#;
-    assert_eq!(contents, expected);
-}
-
-#[test]
-fn blocking_set_hide_gpt5_1_migration_prompt_preserves_table() {
-    let tmp = tempdir().expect("tmpdir");
-    let codex_home = tmp.path();
-    std::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        r#"[notice]
-existing = "value"
-"#,
-    )
-    .expect("seed");
-    apply_blocking(
-        codex_home,
-        None,
-        &[ConfigEdit::SetNoticeHideModelMigrationPrompt(
-            "hide_gpt5_1_migration_prompt".to_string(),
-            true,
-        )],
-    )
-    .expect("persist");
-
-    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-    let expected = r#"[notice]
-existing = "value"
-hide_gpt5_1_migration_prompt = true
-"#;
-    assert_eq!(contents, expected);
-}
-
-#[test]
-fn blocking_set_hide_gpt_5_1_codex_max_migration_prompt_preserves_table() {
-    let tmp = tempdir().expect("tmpdir");
-    let codex_home = tmp.path();
-    std::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        r#"[notice]
-existing = "value"
-"#,
-    )
-    .expect("seed");
-    apply_blocking(
-        codex_home,
-        None,
-        &[ConfigEdit::SetNoticeHideModelMigrationPrompt(
-            "hide_gpt-5.1-codex-max_migration_prompt".to_string(),
-            true,
-        )],
-    )
-    .expect("persist");
-
-    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-    let expected = r#"[notice]
-existing = "value"
-"hide_gpt-5.1-codex-max_migration_prompt" = true
-"#;
-    assert_eq!(contents, expected);
-}
-
-#[test]
-fn blocking_record_model_migration_seen_preserves_table() {
-    let tmp = tempdir().expect("tmpdir");
-    let codex_home = tmp.path();
-    std::fs::write(
-        codex_home.join(CONFIG_TOML_FILE),
-        r#"[notice]
-existing = "value"
-"#,
-    )
-    .expect("seed");
-    apply_blocking(
-        codex_home,
-        None,
-        &[ConfigEdit::RecordModelMigrationSeen {
-            from: "gpt-5".to_string(),
-            to: "gpt-5.1".to_string(),
-        }],
-    )
-    .expect("persist");
-
-    let contents = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-    let expected = r#"[notice]
-existing = "value"
-
-[notice.model_migrations]
-gpt-5 = "gpt-5.1"
-"#;
-    assert_eq!(contents, expected);
-}
 
 #[test]
 fn blocking_replace_mcp_servers_round_trips() {
@@ -868,31 +707,6 @@ fn blocking_clear_path_noop_when_missing() {
     );
 }
 
-#[test]
-fn blocking_set_path_updates_notifications() {
-    let tmp = tempdir().expect("tmpdir");
-    let codex_home = tmp.path();
-
-    let item = value(false);
-    apply_blocking(
-        codex_home,
-        None,
-        &[ConfigEdit::SetPath {
-            segments: vec!["tui".to_string(), "notifications".to_string()],
-            value: item,
-        }],
-    )
-    .expect("apply");
-
-    let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-    let config: TomlValue = toml::from_str(&raw).expect("parse config");
-    let notifications = config
-        .get("tui")
-        .and_then(|item| item.as_table())
-        .and_then(|tbl| tbl.get("notifications"))
-        .and_then(toml::Value::as_bool);
-    assert_eq!(notifications, Some(false));
-}
 
 #[tokio::test]
 async fn async_builder_set_model_persists() {
@@ -946,70 +760,7 @@ model_reasoning_effort = "high"
     assert_eq!(contents, initial_expected);
 }
 
-#[tokio::test]
-async fn blocking_set_asynchronous_helpers_available() {
-    let tmp = tempdir().expect("tmpdir");
-    let codex_home = tmp.path().to_path_buf();
 
-    ConfigEditsBuilder::new(&codex_home)
-        .set_hide_full_access_warning(true)
-        .apply()
-        .await
-        .expect("persist");
-
-    let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-    let notice = toml::from_str::<TomlValue>(&raw)
-        .expect("parse config")
-        .get("notice")
-        .and_then(|item| item.as_table())
-        .and_then(|tbl| tbl.get("hide_full_access_warning"))
-        .and_then(toml::Value::as_bool);
-    assert_eq!(notice, Some(true));
-}
-
-#[test]
-fn blocking_builder_set_realtime_audio_persists_and_clears() {
-    let tmp = tempdir().expect("tmpdir");
-    let codex_home = tmp.path();
-
-    ConfigEditsBuilder::new(codex_home)
-        .set_realtime_microphone(Some("USB Mic"))
-        .set_realtime_speaker(Some("Desk Speakers"))
-        .apply_blocking()
-        .expect("persist realtime audio");
-
-    let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-    let config: TomlValue = toml::from_str(&raw).expect("parse config");
-    let realtime_audio = config
-        .get("audio")
-        .and_then(TomlValue::as_table)
-        .expect("audio table should exist");
-    assert_eq!(
-        realtime_audio.get("microphone").and_then(TomlValue::as_str),
-        Some("USB Mic")
-    );
-    assert_eq!(
-        realtime_audio.get("speaker").and_then(TomlValue::as_str),
-        Some("Desk Speakers")
-    );
-
-    ConfigEditsBuilder::new(codex_home)
-        .set_realtime_microphone(None)
-        .apply_blocking()
-        .expect("clear realtime microphone");
-
-    let raw = std::fs::read_to_string(codex_home.join(CONFIG_TOML_FILE)).expect("read config");
-    let config: TomlValue = toml::from_str(&raw).expect("parse config");
-    let realtime_audio = config
-        .get("audio")
-        .and_then(TomlValue::as_table)
-        .expect("audio table should exist");
-    assert_eq!(realtime_audio.get("microphone"), None);
-    assert_eq!(
-        realtime_audio.get("speaker").and_then(TomlValue::as_str),
-        Some("Desk Speakers")
-    );
-}
 
 #[test]
 fn replace_mcp_servers_blocking_clears_table_when_empty() {

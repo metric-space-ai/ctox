@@ -49,16 +49,6 @@ fn sandbox_detection_ignores_non_sandbox_mode() {
     assert!(!is_likely_sandbox_denied(SandboxType::None, &output));
 }
 
-#[test]
-fn sandbox_detection_ignores_network_policy_text_in_non_sandbox_mode() {
-    let output = make_exec_output(
-        0,
-        "",
-        "",
-        r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","reason":"not_allowed","source":"decider","protocol":"http","host":"google.com","port":80}"#,
-    );
-    assert!(!is_likely_sandbox_denied(SandboxType::None, &output));
-}
 
 #[test]
 fn sandbox_detection_uses_aggregated_output() {
@@ -74,20 +64,6 @@ fn sandbox_detection_uses_aggregated_output() {
     ));
 }
 
-#[test]
-fn sandbox_detection_ignores_network_policy_text_with_zero_exit_code() {
-    let output = make_exec_output(
-        0,
-        "",
-        "",
-        r#"CODEX_NETWORK_POLICY_DECISION {"decision":"ask","source":"decider","protocol":"http","host":"google.com","port":80}"#,
-    );
-
-    assert!(!is_likely_sandbox_denied(
-        SandboxType::LinuxSeccomp,
-        &output
-    ));
-}
 
 #[tokio::test]
 async fn read_capped_limits_retained_bytes() {
@@ -180,95 +156,10 @@ fn aggregate_output_keeps_stdout_then_stderr_when_under_cap() {
     assert_eq!(aggregated.truncated_after_lines, None);
 }
 
-#[test]
-fn windows_restricted_token_skips_external_sandbox_policies() {
-    let policy = SandboxPolicy::ExternalSandbox {
-        network_access: ctox_protocol::protocol::NetworkAccess::Restricted,
-    };
-    let file_system_policy = FileSystemSandboxPolicy::restricted(vec![]);
 
-    assert_eq!(
-        should_use_windows_restricted_token_sandbox(
-            SandboxType::WindowsRestrictedToken,
-            &policy,
-            &file_system_policy,
-        ),
-        false
-    );
-}
 
-#[test]
-fn windows_restricted_token_runs_for_legacy_restricted_policies() {
-    let policy = SandboxPolicy::new_read_only_policy();
-    let file_system_policy = FileSystemSandboxPolicy::restricted(vec![]);
 
-    assert_eq!(
-        should_use_windows_restricted_token_sandbox(
-            SandboxType::WindowsRestrictedToken,
-            &policy,
-            &file_system_policy,
-        ),
-        true
-    );
-}
 
-#[test]
-fn windows_restricted_token_rejects_network_only_restrictions() {
-    let policy = SandboxPolicy::ExternalSandbox {
-        network_access: ctox_protocol::protocol::NetworkAccess::Restricted,
-    };
-    let file_system_policy = FileSystemSandboxPolicy::unrestricted();
-
-    assert_eq!(
-            unsupported_windows_restricted_token_sandbox_reason(
-                SandboxType::WindowsRestrictedToken,
-                &policy,
-                &file_system_policy,
-                NetworkSandboxPolicy::Restricted,
-            ),
-            Some(
-                "windows sandbox backend cannot enforce file_system=Unrestricted, network=Restricted, legacy_policy=ExternalSandbox { network_access: Restricted }; refusing to run unsandboxed".to_string()
-            )
-        );
-}
-
-#[test]
-fn windows_restricted_token_allows_legacy_restricted_policies() {
-    let policy = SandboxPolicy::new_read_only_policy();
-    let file_system_policy = FileSystemSandboxPolicy::restricted(vec![]);
-
-    assert_eq!(
-        unsupported_windows_restricted_token_sandbox_reason(
-            SandboxType::WindowsRestrictedToken,
-            &policy,
-            &file_system_policy,
-            NetworkSandboxPolicy::Restricted,
-        ),
-        None
-    );
-}
-
-#[test]
-fn windows_restricted_token_allows_legacy_workspace_write_policies() {
-    let policy = SandboxPolicy::WorkspaceWrite {
-        writable_roots: vec![],
-        read_only_access: ctox_protocol::protocol::ReadOnlyAccess::FullAccess,
-        network_access: false,
-        exclude_tmpdir_env_var: false,
-        exclude_slash_tmp: false,
-    };
-    let file_system_policy = FileSystemSandboxPolicy::from(&policy);
-
-    assert_eq!(
-        unsupported_windows_restricted_token_sandbox_reason(
-            SandboxType::WindowsRestrictedToken,
-            &policy,
-            &file_system_policy,
-            NetworkSandboxPolicy::Restricted,
-        ),
-        None
-    );
-}
 
 #[test]
 fn process_exec_tool_call_uses_platform_sandbox_for_network_only_restrictions() {

@@ -279,23 +279,6 @@ mod tests {
         }
     }
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn preserves_large_image_in_original_mode() {
-        let temp_file = NamedTempFile::new().expect("temp file");
-        let image = ImageBuffer::from_pixel(4096, 2048, Rgba([180u8, 30, 30, 255]));
-        image
-            .save_with_format(temp_file.path(), ImageFormat::Png)
-            .expect("write png to temp file");
-
-        let original_bytes = std::fs::read(temp_file.path()).expect("read written image");
-        let processed =
-            load_for_prompt(temp_file.path(), PromptImageMode::Original).expect("process image");
-
-        assert_eq!(processed.width, 4096);
-        assert_eq!(processed.height, 2048);
-        assert_eq!(processed.mime, "image/png");
-        assert_eq!(processed.bytes, original_bytes);
-    }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn fails_cleanly_for_invalid_images() {

@@ -52,7 +52,7 @@
   ],
   "collections": {
     "ctox_task_approval_requests": {
-      "_class_proposal": "heute demand-only (shared/sync.js:3701 isDemandOnlyPullCollection)",
+      "_class_proposal": "heute demand-only (shared/sync.js:3845 isDemandOnlyPullCollection)",
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "_schema_source": "v4/schemas/threads.collections.schema.json",
       "byte_budget": null,
@@ -191,7 +191,7 @@
       }
     },
     "user_notifications": {
-      "_class_proposal": "heute demand-only (shared/sync.js:3700 isDemandOnlyPullCollection)",
+      "_class_proposal": "heute demand-only (shared/sync.js:3844 isDemandOnlyPullCollection)",
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "_schema_source": "v4/schemas/threads.collections.schema.json",
       "byte_budget": null,
@@ -280,7 +280,7 @@
       }
     },
     "user_thread_links": {
-      "_class_proposal": "heute demand-only (shared/sync.js:3699 isDemandOnlyPullCollection)",
+      "_class_proposal": "heute demand-only (shared/sync.js:3843 isDemandOnlyPullCollection)",
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "_schema_source": "v4/schemas/threads.collections.schema.json",
       "byte_budget": null,
@@ -368,7 +368,7 @@
       }
     },
     "user_thread_messages": {
-      "_class_proposal": "heute demand-only (shared/sync.js:3698 isDemandOnlyPullCollection)",
+      "_class_proposal": "heute demand-only (shared/sync.js:3842 isDemandOnlyPullCollection)",
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "_schema_source": "v4/schemas/threads.collections.schema.json",
       "byte_budget": null,
@@ -581,7 +581,7 @@
       }
     },
     "user_threads": {
-      "_class_proposal": "heute demand-only (shared/sync.js:3697 isDemandOnlyPullCollection)",
+      "_class_proposal": "heute demand-only (shared/sync.js:3841 isDemandOnlyPullCollection)",
       "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
       "_schema_source": "v4/schemas/threads.collections.schema.json",
       "byte_budget": null,
@@ -787,9 +787,9 @@
     "handlers/threads.thread.unwatch.js": "f35508f9ac480b90a26a3b229bbb236485eb1b0797e6722c7c2c9377cd78ea9c",
     "handlers/threads.thread.watch.js": "fa009979c0e9be64b5e3b5cd342cd2d130b390bb7df1d2dced36946a46ca477e",
     "icon.svg": "95ecb93feb4ff290216e4dc1e4a1e8d9f5beff5ed7a7333d136d321b8e0d7c79",
-    "index.css": "4064dcfc989e7fb196dcd9f4d1e7742838b26f263a86ed8e5cb1752964513a30",
-    "index.html": "e9403c29e33a3507baaa18f5ea24a00efaf3e8d33efe4de2a0ff9776978977e2",
-    "index.js": "0858c0df0f994e805c7f6c6043283d5d81f597f06bb4bc64c421d8837f798024",
+    "index.css": "cc6c5ea46991713acb622e0c9c602f072d2536128cd6a7e79b630cced3120470",
+    "index.html": "668d2a68ee528db6e26ab65cf7dae310b7a80eff8cb3ed7830a0e583933cc674",
+    "index.js": "cc92f313c39ce31994299934fa0dbf8b627d54aa90cc82dc5162941d5052f565",
     "links.js": "f85a00cab723c3fa4e974b558d62af7856a601ae18c2c2f480cfac5a030e33a8",
     "locales/de.json": "ee883f393ac1cab073f1e7fa2d2d113ddf864413c8b3168ecf75ab07590eef5f",
     "locales/en.json": "5f1250080d6832729c7d5c43a334b61cf7b5b9e5663e3907e2dcc84b0a261122",
@@ -1244,7 +1244,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "a5339836f022158443332690ae10eac8f3a04747cba798ac3a0abab6fe52f9c4",
+    "base_hash": "5fee16dad3aa9bbcd345b5c339de119122458d0df4b5ef66e86b7e5373e1c847",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

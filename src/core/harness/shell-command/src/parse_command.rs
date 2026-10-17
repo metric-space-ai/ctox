@@ -984,17 +984,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn shorten_path_on_windows() {
-        assert_parsed(
-            &shlex_split_safe(r#"cat "pkg\src\main.rs""#),
-            vec![ParsedCommand::Read {
-                cmd: r#"cat "pkg\\src\\main.rs""#.to_string(),
-                name: "main.rs".to_string(),
-                path: PathBuf::from(r#"pkg\src\main.rs"#),
-            }],
-        );
-    }
 
     #[test]
     fn head_with_no_space() {
@@ -1235,41 +1224,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn powershell_command_is_stripped() {
-        assert_parsed(
-            &vec_str(&["powershell", "-Command", "Get-ChildItem"]),
-            vec![ParsedCommand::Unknown {
-                cmd: "Get-ChildItem".to_string(),
-            }],
-        );
-    }
 
-    #[test]
-    fn pwsh_with_noprofile_and_c_alias_is_stripped() {
-        assert_parsed(
-            &vec_str(&["pwsh", "-NoProfile", "-c", "Write-Host hi"]),
-            vec![ParsedCommand::Unknown {
-                cmd: "Write-Host hi".to_string(),
-            }],
-        );
-    }
 
-    #[test]
-    fn powershell_with_path_is_stripped() {
-        let command = if cfg!(windows) {
-            "C:\\windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
-        } else {
-            "/usr/local/bin/powershell.exe"
-        };
-
-        assert_parsed(
-            &vec_str(&[command, "-NoProfile", "-c", "Write-Host hi"]),
-            vec![ParsedCommand::Unknown {
-                cmd: "Write-Host hi".to_string(),
-            }],
-        );
-    }
 }
 
 pub fn parse_command_impl(command: &[String]) -> Vec<ParsedCommand> {

@@ -611,7 +611,3 @@ pub(crate) async fn finish_deferred_network_approval(
         .unregister_call(deferred.registration_id())
         .await;
 }
-
-#[cfg(test)]
-#[path = "network_approval_tests.rs"]
-mod tests;

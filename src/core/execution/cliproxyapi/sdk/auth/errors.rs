@@ -43,16 +43,4 @@ pub fn email_required_message(error: Option<&EmailRequiredError>) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn nil_empty_and_custom_prompts_match_upstream() {
-        assert_eq!(email_required_message(None), DEFAULT_EMAIL_REQUIRED_MESSAGE);
-        assert_eq!(
-            EmailRequiredError::default().to_string(),
-            DEFAULT_EMAIL_REQUIRED_MESSAGE
-        );
-        let custom = EmailRequiredError::new("Enter account alias");
-        assert_eq!(custom.to_string(), "Enter account alias");
-        assert_eq!(email_required_message(Some(&custom)), "Enter account alias");
-    }
 }

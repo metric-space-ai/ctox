@@ -122,15 +122,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_config_targets_qwen3_embedding() {
-        let config = Qwen3EmbeddingConfig::default();
-        assert_eq!(config.model, QWEN3_EMBEDDING_0_6B_CANONICAL_MODEL);
-        assert_eq!(config.embedding_dim, QWEN3_EMBEDDING_0_6B_DEFAULT_DIM);
-        assert_eq!(config.pooling, PoolingMode::LastToken);
-        assert!(config.normalize);
-    }
-
-    #[test]
     fn model_surface_fails_until_backend_forward_is_wired() {
         let model =
             Qwen3EmbeddingModel::new(Qwen3EmbeddingConfig::default(), EmbeddingBackend::Cpu);

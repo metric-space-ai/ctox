@@ -14134,6 +14134,21 @@ pub(in crate::business_os) mod tests {
         assert_eq!(capabilities, CTOX_NATIVE_CAPABILITIES);
     }
 
+    #[test]
+    fn workjet_signaling_capabilities_are_advertised_in_the_handshake() {
+        let handshake =
+            rxdb::plugins::replication_webrtc::index_mod::native_handshake_capabilities();
+        for capability in CTOX_NATIVE_CAPABILITIES
+            .iter()
+            .filter(|capability| capability.starts_with("ctox-workjet-"))
+        {
+            assert!(
+                handshake.contains(capability),
+                "{capability} is announced in the signaling URL but missing from the WebRTC handshake"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn native_core_schema_hashes_match_browser_contract() {
         let cases = [

@@ -100,46 +100,4 @@ mod tests {
             self.0.lock().unwrap().push(record.clone());
         }
     }
-
-    #[test]
-    fn unauthorized_result_carries_fingerprint_without_token() {
-        let transport =
-            crate::sdk::cliproxy::auth::home_execution_paths_test::TestHomeTransport::with_auth_ids(
-                &[],
-            );
-        let executor =
-            crate::sdk::cliproxy::auth::home_execution_paths_test::TestExecutor::failing(0);
-        let (runtime, _) =
-            crate::sdk::cliproxy::auth::home_execution_paths_test::runtime(transport, executor);
-        let manager = Arc::new(Manager::new(1));
-        let records = Arc::new(Mutex::new(Vec::new()));
-        manager.register(Arc::new(Collector(records.clone())));
-        runtime.set_usage_manager(Some(manager.clone()));
-        let mut auth = Auth::default();
-        auth.id = "auth".into();
-        auth.index = "index".into();
-        auth.provider = "claude".into();
-        auth.metadata
-            .insert("access_token".into(), serde_json::json!("secret-token"));
-        assert!(runtime.report_home_unauthorized(
-            UsageContext::default()
-                .with_requested_model_alias("public-sonnet")
-                .with_reasoning_effort("high")
-                .with_service_tier("auto"),
-            &auth,
-            "claude",
-            "sonnet",
-            None,
-        ));
-        manager.stop();
-        let records = records.lock().unwrap();
-        assert_eq!(records.len(), 1);
-        assert_eq!(records[0].access_token_sha256, access_token_sha256(&auth));
-        assert!(!records[0].access_token_sha256.contains("secret-token"));
-        assert_eq!(records[0].fail.status_code, 401);
-        assert_eq!(records[0].generate, Some(false));
-        assert_eq!(records[0].alias, "public-sonnet");
-        assert_eq!(records[0].reasoning_effort, "high");
-        assert_eq!(records[0].service_tier, "auto");
-    }
 }

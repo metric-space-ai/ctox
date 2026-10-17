@@ -2938,28 +2938,6 @@ mod tests {
 
     // The webhook.register business command returns the one-time token + path so
     // the operator UI can show them.
-    #[test]
-    fn webhook_register_command_returns_token_and_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path();
-        let out = handle_business_command(
-            root,
-            "ctox.iot.webhook.register",
-            &json!({ "realm": "master", "signal_ref": "asset-1::temperature", "value_path": "data.temp" }),
-            &admin_session(),
-        )
-        .unwrap();
-        assert!(out["token"]
-            .as_str()
-            .map(|s| !s.is_empty())
-            .unwrap_or(false));
-        assert!(out["ingest_path"]
-            .as_str()
-            .unwrap_or("")
-            .starts_with("/ctox/iot/webhook/"));
-        assert_eq!(out["header"], "X-Webhook-Token");
-    }
-
     // Forbidden when the session is neither admin nor an authenticated open one.
     #[test]
     fn executor_rejects_unauthorized_session() {

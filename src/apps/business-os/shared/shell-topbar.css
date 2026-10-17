@@ -130,6 +130,13 @@ body[data-module-loading] .app-shell > .topbar { z-index: 60; }
   border-top-color: var(--accent); background: transparent; animation: topbar-sync-spin 1s linear infinite;
 }
 @keyframes topbar-sync-spin { to { transform: rotate(360deg); } }
+.topbar .app-menu-button {
+  display: inline-grid; place-items: center; width: 30px; min-width: 30px; height: 30px; min-height: 30px;
+  padding: 0; border-radius: 5px; border: 1px solid transparent; background: transparent; color: var(--muted);
+}
+.topbar .app-menu-button:hover { border-color: var(--line); color: var(--text); }
+.topbar .app-menu-button svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
+.topbar .app-menu-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .topbar .account-button {
   position: relative; width: 30px; min-width: 30px; height: 30px; min-height: 30px;
   padding: 0; border-radius: 50%; background: var(--accent-soft); border: 1px solid var(--line);

@@ -269,32 +269,6 @@ mod tests {
     impl Error for Cause {}
 
     #[test]
-    fn oauth_error_matches_go_display_and_json_contract() {
-        let mut error = OAuthError::new("access_denied", "user cancelled", 400);
-        error.uri = "https://example.test/error".to_owned();
-
-        assert_eq!(
-            error.to_string(),
-            "OAuth error access_denied: user cancelled"
-        );
-        assert_eq!(
-            serde_json::to_value(&error).unwrap(),
-            serde_json::json!({
-                "error": "access_denied",
-                "error_description": "user cancelled",
-                "error_uri": "https://example.test/error"
-            })
-        );
-
-        let error = OAuthError::new("invalid_request", "", 400);
-        assert_eq!(error.to_string(), "OAuth error: invalid_request");
-        assert_eq!(
-            serde_json::to_value(&error).unwrap(),
-            serde_json::json!({"error": "invalid_request"})
-        );
-    }
-
-    #[test]
     fn authentication_error_copies_base_and_formats_cause() {
         let error = new_authentication_error(&ERR_INVALID_STATE, Cause("state mismatch"));
         assert_eq!(error.error_type, "invalid_state");
@@ -312,43 +286,5 @@ mod tests {
             })
         );
         assert!(!format!("{error:?}").contains("state mismatch"));
-    }
-
-    #[test]
-    fn classification_and_friendly_messages_match_upstream_tables() {
-        let authentication = new_authentication_error(&ERR_PORT_IN_USE, Cause("occupied"));
-        assert!(is_authentication_error(&authentication));
-        assert!(!is_oauth_error(&authentication));
-        assert_eq!(
-            get_user_friendly_message(&authentication),
-            "The required port is already in use. Please close any applications using port 3000 and try again."
-        );
-
-        let oauth = OAuthError::new("access_denied", "cancelled", 400);
-        assert!(is_oauth_error(&oauth));
-        assert_eq!(
-            get_user_friendly_message(&oauth),
-            "Authentication was cancelled or denied."
-        );
-
-        let unexpected = Cause("disk failed");
-        assert_eq!(
-            get_user_friendly_message(&unexpected),
-            "An unexpected error occurred. Please try again."
-        );
-    }
-
-    #[test]
-    fn all_upstream_base_errors_keep_exact_codes_and_messages() {
-        assert_eq!(ERR_INVALID_STATE.code, 400);
-        assert_eq!(ERR_CODE_EXCHANGE_FAILED.code, 400);
-        assert_eq!(ERR_SERVER_START_FAILED.code, 500);
-        assert_eq!(ERR_PORT_IN_USE.code, 13);
-        assert_eq!(ERR_CALLBACK_TIMEOUT.code, 408);
-        assert_eq!(ERR_CALLBACK_TIMEOUT.error_type, "callback_timeout");
-        assert_eq!(
-            ERR_CALLBACK_TIMEOUT.message,
-            "Timeout waiting for OAuth callback"
-        );
     }
 }

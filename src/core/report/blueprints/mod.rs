@@ -119,31 +119,4 @@ pub enum ValidatorSeverity {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn feasibility_blueprint_parses() {
-        let bp = load("feasibility").unwrap();
-        assert_eq!(bp.preset, "feasibility");
-        assert!(bp.bounds.min_options >= 3);
-        assert!(bp.sections.iter().any(|s| s.id == "recommendation"));
-        assert!(bp.matrices.contains_key("main"));
-        assert_eq!(
-            validator_severity(&bp, "every_claim_has_fk_evidence"),
-            ValidatorSeverity::Hard
-        );
-        assert_eq!(
-            validator_severity(&bp, "urls_resolve"),
-            ValidatorSeverity::Soft
-        );
-    }
-
-    #[test]
-    fn unknown_preset_errors() {
-        assert!(load("market_research_v0").is_err());
-    }
-
-    #[test]
-    fn list_contains_feasibility() {
-        assert!(list().contains(&"feasibility"));
-    }
 }

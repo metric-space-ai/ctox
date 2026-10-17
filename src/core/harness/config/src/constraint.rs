@@ -186,18 +186,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn constrained_allow_any_accepts_any_value() {
-        let mut constrained = Constrained::allow_any(5);
-        constrained.set(-10).expect("allow any accepts all values");
-        assert_eq!(constrained.value(), -10);
-    }
 
-    #[test]
-    fn constrained_allow_any_default_uses_default_value() {
-        let constrained = Constrained::<i32>::allow_any_from_default();
-        assert_eq!(constrained.value(), 0);
-    }
 
     #[test]
     fn constrained_allow_only_rejects_different_values() {

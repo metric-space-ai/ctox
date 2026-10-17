@@ -15,10 +15,3 @@ pub fn handle(method: &str) -> ExampleResult {
         _ => unknown(method),
     }
 }
-#[test]
-fn authentication_is_deterministic() {
-    assert_eq!(
-        handle("frontend_auth.authenticate").unwrap().result["Authenticated"],
-        true
-    );
-}

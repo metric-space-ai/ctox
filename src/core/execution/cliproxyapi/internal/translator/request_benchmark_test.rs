@@ -59,20 +59,6 @@ fn request_benchmark_routes_keep_valid_json_and_final_history_turn() {
     verify_request_matrix(1);
 }
 
-#[test]
-#[ignore = "manual allocation/throughput benchmark"]
-fn benchmark_request_translation_large_history() {
-    exercise_request_matrix(64, 100);
-}
-
-#[test]
-#[ignore = "manual allocation/throughput benchmark"]
-fn benchmark_request_translation_history_sizes() {
-    for turns in [0, 1, 4, 16, 64] {
-        exercise_request_matrix(turns, 25);
-    }
-}
-
 fn verify_request_matrix(turns: usize) {
     visit_request_matrix(turns, |_, _, _, _| {});
 }
