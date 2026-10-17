@@ -31,7 +31,7 @@ fn outcome(value: &Value) -> String {
 }
 pub fn apply(tx: &Transaction<'_>, binding: &Value, method: &str, args: &Value) -> Result<Value> {
     let command = &binding["command"];
-    let app = text(command, "app_id")?;
+    let app = crate::execution_app(command).map_err(|_| invalid("invalid"))?;
     let run = text(&binding["fence"], "run_id")?;
     let fence = binding["fence"]["fence"]
         .as_i64()
@@ -171,5 +171,35 @@ pub fn apply(tx: &Transaction<'_>, binding: &Value, method: &str, args: &Value) 
             Ok(json!({"status":"accepted"}))
         }
         _ => Err(invalid("invalid")),
+    }
+}
+
+#[cfg(test)]
+mod e39_tests {
+    use super::*;
+    #[test]
+    fn callback_metadata_uses_execution_target() {
+        let mut db = rusqlite::Connection::open_in_memory().unwrap();
+        let tx = db.transaction().unwrap();
+        initialize(&tx).unwrap();
+        let binding = json!({"command":{"app_id":"sender","target_app":"receiver","app_ver":"v1","actor":{"id":"owner"}},"manifest":{"handlers":{"done":"handlers/done.js"}},"fence":{"run_id":"app-runtime:parent","fence":1}});
+        apply(
+            &tx,
+            &binding,
+            "completion.register",
+            &json!({"task_id":"command:child","callbacks":{"on_complete":"done"}}),
+        )
+        .unwrap();
+        let app: String = tx
+            .query_row(
+                "SELECT app_id FROM _app_runtime_completions WHERE task_id='command:child'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            app, "receiver",
+            "E39 callback scope must belong to executing target"
+        );
     }
 }

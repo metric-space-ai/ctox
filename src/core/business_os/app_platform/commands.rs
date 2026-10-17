@@ -736,6 +736,30 @@ pub(super) fn execute(
           + Send
           + Sync),
 ) -> Result<Value, StoreError> {
+    execute_with_publication(
+        tx,
+        actor,
+        command,
+        now,
+        secret_owner_available,
+        signer,
+        migrations,
+        None,
+    )
+}
+
+pub(super) fn execute_with_publication(
+    tx: &Transaction<'_>,
+    actor: &BusinessOsActor,
+    command: &CommandDocument,
+    now: u64,
+    secret_owner_available: bool,
+    signer: &dyn InstanceSigner,
+    migrations: &(dyn Fn(&CollectionDefinition, &CollectionDefinition, &Value) -> bool
+          + Send
+          + Sync),
+    publication: Option<&(dyn Fn() -> Result<(), StoreError> + Send + Sync)>,
+) -> Result<Value, StoreError> {
     ctox_store::change_log::subscription::write_contract::routes::validate_persisted_input(
         &json!({"type":command.command_type,"payload":command.payload}),
     )
@@ -985,6 +1009,15 @@ pub(super) fn execute(
     manifest["created_at"] = json!(now);
     manifest["provenance"] =
         json!({"base_release":base_release,"base_hash":base_hash,"locally_modified":local_target});
+    // Omission means no capabilities; never infer or grant a capability. The
+    // shared instance signer requires this explicit canonical manifest field.
+    if manifest.get("capabilities_required").is_none() {
+        manifest["capabilities_required"] = json!([]);
+    }
+    if !manifest["capabilities_required"].is_array() {
+        return Err(invalid("capabilities_required must be an array"));
+    }
+    manifest.sort_all_objects();
     if serde_json::to_vec(&manifest)
         .map_err(|e| invalid(e.to_string()))?
         .len()
@@ -1136,7 +1169,7 @@ pub(super) fn execute(
     if preparation_pending {
         return Ok(get(tx, "business_commands", &command.id)?.unwrap()["result"].clone());
     }
-    complete(tx, actor, &command.id, now)
+    complete_with_publication(tx, actor, &command.id, now, publication)
 }
 
 pub(super) fn version_id(app: &str, version: &str) -> String {
@@ -1186,6 +1219,16 @@ pub(super) fn complete(
     actor: &BusinessOsActor,
     command_id: &str,
     now: u64,
+) -> Result<Value, StoreError> {
+    complete_with_publication(tx, actor, command_id, now, None)
+}
+
+pub(super) fn complete_with_publication(
+    tx: &Transaction<'_>,
+    actor: &BusinessOsActor,
+    command_id: &str,
+    now: u64,
+    publication: Option<&(dyn Fn() -> Result<(), StoreError> + Send + Sync)>,
 ) -> Result<Value, StoreError> {
     let mut command = get(tx, "business_commands", command_id)?
         .ok_or_else(|| invalid("publication command missing"))?;
@@ -1245,6 +1288,10 @@ pub(super) fn complete(
             "publication base version changed before activation",
         ));
     }
+    eprintln!(
+        "APP_FEED_EVENT ts={now} event=manifest_publish app={}",
+        lock.app_id
+    );
     let watermark = schema::activate_publication(tx, &lock, (now / 1000) as i64)?;
     if pending["discard_local"] == true {
         // Archive the customized version in the pointer-switch transaction,
@@ -1277,11 +1324,12 @@ pub(super) fn complete(
     version["status"] = version["state"].clone();
     version["migrated_at_seq"] = json!(watermark.to_string());
     if command["type"].is_string() {
-        super::runtime_host::publish_rights(
+        super::runtime_host::publish_rights_with_fence(
             tx,
             &lock.app_id,
             &lock.target_app_ver,
             &version["manifest"],
+            publication,
         )?;
     }
     put(tx, "business_app_versions", &id, &version)?; // effect: publish/update/rollback

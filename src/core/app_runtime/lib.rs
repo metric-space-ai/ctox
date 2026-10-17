@@ -109,7 +109,7 @@ pub trait RuntimeHost: Send + Sync + 'static {
     }
     fn invoke_bound(&self, binding: &Value, method: &str, args: &Value) -> Result<Value> {
         self.invoke(
-            string(&binding["command"], "app_id")?,
+            execution_app(&binding["command"])?,
             &binding["command"]["actor"],
             method,
             args,
@@ -132,6 +132,110 @@ pub struct AppBundle {
     manifest: Value,
     sources: BTreeMap<String, String>,
     grants: BTreeSet<String>,
+}
+/// Core retains the sender in app_id and binds the execution target separately.
+/// The CoreAuthority must validate this target against the committed intent.
+pub fn execution_app(command: &Value) -> Result<&str> {
+    if command.get("target_app").is_some() {
+        string(command, "target_app")
+    } else {
+        string(command, "app_id")
+    }
+}
+/// Resolve only declared destinations. A local handler cannot override commands_out.
+pub fn core_command(kind: &str) -> bool {
+    ctox_store::change_log::subscription::write_contract::routes::resolve(kind)
+        .is_ok_and(ctox_store::change_log::subscription::write_contract::routes::is_command_bus)
+}
+/// Routing declaration check only; Core separately checks the target user's
+/// current permission in its transaction before accepting or executing an intent.
+pub fn command_declarations(
+    sender: &Value,
+    receiver: &Value,
+    kind: &str,
+    options: &Value,
+) -> Result<()> {
+    let options = options.as_object().context("invalid: command options")?;
+    ensure!(
+        options.keys().all(|k| matches!(
+            k.as_str(),
+            "id" | "record_id" | "module" | "client_context" | "on_complete" | "on_failed"
+        )),
+        "invalid: command option"
+    );
+    let from = string(sender, "app_id")?;
+    let to = string(receiver, "app_id")?;
+    ensure!(
+        declared_target(sender, kind, options.get("module").and_then(Value::as_str))? == to,
+        "forbidden: command target differs"
+    );
+    if !core_command(kind) {
+        ensure!(
+            receiver["handlers"].get(kind).is_some(),
+            "{}: target handler missing",
+            if from == to {
+                "unknown_command"
+            } else {
+                "forbidden"
+            }
+        );
+        if from != to {
+            let exported = receiver["commands_in"].as_array().is_some_and(|rules| {
+                rules.iter().any(|r| {
+                    r["type"] == kind
+                        && (r["from"] == "*"
+                            || r["from"]
+                                .as_array()
+                                .is_some_and(|apps| apps.iter().any(|a| a == from)))
+                })
+            });
+            ensure!(exported, "forbidden: receiver commands_in missing");
+        }
+    }
+    for key in ["on_complete", "on_failed"] {
+        if let Some(callback) = options.get(key) {
+            ensure!(
+                callback
+                    .as_str()
+                    .is_some_and(|t| sender["handlers"].get(t).is_some()),
+                "forbidden: callback must be a sender handler"
+            );
+        }
+    }
+    Ok(())
+}
+pub fn declared_target<'a>(
+    manifest: &'a Value,
+    kind: &str,
+    requested: Option<&'a str>,
+) -> Result<&'a str> {
+    let sender = string(manifest, "app_id")?;
+    if core_command(kind) {
+        return Ok(sender);
+    }
+    let targets: Vec<&str> = manifest["commands_out"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|r| r["type"] == kind)
+        .filter_map(|r| r["app"].as_str())
+        .collect();
+    if targets.is_empty() {
+        ensure!(
+            requested.is_none_or(|app| app == sender),
+            "forbidden: sender commands_out missing"
+        );
+        return Ok(sender);
+    }
+    if let Some(target) = requested {
+        ensure!(
+            targets.contains(&target),
+            "forbidden: undeclared command target"
+        );
+        return Ok(target);
+    }
+    ensure!(targets.len() == 1, "forbidden: ambiguous command target");
+    Ok(*targets.first().unwrap())
 }
 fn string<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
     value
@@ -578,7 +682,7 @@ impl RuntimePool {
     }
     /// Production entry point: Core supplies the authenticated command and lease.
     pub fn dispatch(&self, command: Value, fence: Value) -> Result<Value> {
-        let app = string(&command, "app_id")?.to_owned();
+        let app = execution_app(&command)?.to_owned();
         let target = string(&command, "type")?.to_owned();
         string(&command, "id")?;
         string(&command, "app_ver")?;
@@ -608,7 +712,7 @@ impl RuntimePool {
             matches!(kind, "trigger" | "completion"),
             "invalid: handler kind"
         );
-        let app = string(&command, "app_id")?.to_owned();
+        let app = execution_app(&command)?.to_owned();
         let mut binding = json!({"command":command,"fence":fence,"entry":entry,"kind":kind});
         if kind == "trigger" {
             binding["trigger_id"] = binding["command"]["client_context"]["trigger_id"].clone();
@@ -631,7 +735,7 @@ impl RuntimePool {
         collection: &str,
         docs: Vec<Value>,
     ) -> Result<Value> {
-        let app = string(&command, "app_id")?.to_owned();
+        let app = execution_app(&command)?.to_owned();
         string(&command, "id")?;
         string(&command, "app_ver")?;
         ensure!(command["actor"].is_object(), "invalid: migration actor");
@@ -717,11 +821,15 @@ impl RuntimePool {
             .inner
             .host
             .shared_modules(binding.as_ref().unwrap_or(&Value::Null))?;
-        self.inner.host.authorize(
-            app,
-            &actor,
-            &json!({"operation":operation, "target":target}),
-        )?;
+        // Bound admission checks the actual target command right and retained
+        // native origin. App visibility is not an additional command grant.
+        if binding.is_none() || migration {
+            self.inner.host.authorize(
+                app,
+                &actor,
+                &json!({"operation":operation, "target":target}),
+            )?;
+        }
         let path = if migration {
             ensure!(
                 bundle.manifest["collections"].get(target).is_some(),
@@ -904,8 +1012,8 @@ fn maintenance(weak: Weak<Inner>) {
 }
 fn error_code(message: &str) -> &str {
     match message.split(':').next().unwrap_or("").trim() {
-        code @ ("invalid" | "forbidden" | "not_found" | "conflict" | "revoked" | "expired"
-        | "quota" | "unavailable") => code,
+        code @ ("invalid" | "forbidden" | "not_found" | "unknown_command" | "conflict"
+        | "revoked" | "expired" | "quota" | "unavailable") => code,
         _ => "unavailable",
     }
 }
