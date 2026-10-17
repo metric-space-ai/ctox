@@ -22,5 +22,5 @@ try{
  await writeFile(path(files[3]),originals.get(files[3]).replace(fixture,"manifest:{...PLATFORM_MANIFEST,collections:Object.fromEntries(['business_commands','files','ctox_queue_tasks'].map(name=>[name,{schema:{version:3,type:'object'}}]))}"));
  assertRed('permissive-catalog-fixture',run(['--test','--test-name-pattern=E61 platform','src/apps/business-os/kernel/tests/e48.test.mjs']),'ERR_ASSERTION');
 } finally {for(const [f,source] of originals)await writeFile(path(f),source);}
-const restored=run(['--test','src/apps/business-os/kernel/tests/s9-delivery.test.mjs','src/apps/business-os/kernel/tests/e35-wire.test.mjs','src/apps/business-os/kernel/tests/e48.test.mjs']);
+const restored=run(['--test','--test-concurrency=2','src/apps/business-os/kernel/tests/s9-delivery.test.mjs','src/apps/business-os/kernel/tests/e35-wire.test.mjs','src/apps/business-os/kernel/tests/e48.test.mjs']);
 if(restored.status)throw Error(restored.stdout+restored.stderr);console.log('RESTORE GREEN');

@@ -30,7 +30,8 @@ test('E35 native CAS rejection after metadata acceptance preserves code, reason 
    const subscribedBy=Date.now()+2000;
    while(!peer.messages.some(m=>m.type==='subscribe'&&m.collection==='business_app_versions')){assert.ok(Date.now()<subscribedBy,'native subscriptions precede fixture pages');await new Promise(r=>setTimeout(r,2));}
    await publishNativePlatformCatalog((collection,docs)=>peer.page(collection,docs));
-   while(!(await k.sim.inspect('business_app_versions','ctox-platform@platform-native'))?.data){assert.ok(Date.now()<subscribedBy,'native catalog applied before file metadata');await new Promise(r=>setTimeout(r,2));}
+   const catalogBy=Date.now()+2000; // Start the page-apply deadline after the native frames were handed off.
+   while(!(await k.sim.inspect('business_app_versions','ctox-platform@platform-native'))?.data){assert.ok(Date.now()<catalogBy,'native catalog applied before file metadata');await new Promise(r=>setTimeout(r,2));}
    await peer.page('business_apps',[{id:'notes',seq:peer.head,rev:'a',data:{id:'notes',active_ver:'1'}}]);
    await peer.page('business_app_versions',[{id:'notes@1',seq:peer.head,rev:'v',data:{id:'notes@1',app_id:'notes',manifest:{collections:{notes:{schema:{type:'object',properties:{id:{type:'string'}}}}}}}}]);
    const file=await k.appApi('notes','1').files.put({text:'native CAS bytes'},{id:'wire-file'});
