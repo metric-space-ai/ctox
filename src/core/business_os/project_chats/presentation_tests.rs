@@ -112,227 +112,237 @@ fn canvas_scene(text: &str) -> String {
 
 #[test]
 fn owner_canvas_saves_are_not_held_to_the_supervisor_content_rules() -> anyhow::Result<()> {
-    if !node_available() {
-        eprintln!("SKIP: node not available");
-        return Ok(());
-    }
-    let (root, meeting) = fixture()?;
-    agent_revision(root.path(), &meeting)?;
-    let read = send(
-        root.path(),
-        "read-1",
-        "read",
-        "owner",
-        json!({"project_id":"project","meeting_id":"meeting-1"}),
-    )?;
-    let presentation = read["result"]["presentation"]["presentation_id"].clone();
-    let slide = read["result"]["presentation"]["slide_ids"][1].clone();
-    // The Owner may write what he likes on his own slide, even text the
-    // Supervisor's content rules would reject.
-    let saved = send(
-        root.path(),
-        "save-1",
-        "canvas.save",
-        "owner",
-        json!({"operation_id":"canvas-op","presentation_id":presentation,"expected_revision":1,
+    crate::persistence::test_support::run_scoped(move || {
+        if !node_available() {
+            eprintln!("SKIP: node not available");
+            return Ok(());
+        }
+        let (root, meeting) = fixture()?;
+        agent_revision(root.path(), &meeting)?;
+        let read = send(
+            root.path(),
+            "read-1",
+            "read",
+            "owner",
+            json!({"project_id":"project","meeting_id":"meeting-1"}),
+        )?;
+        let presentation = read["result"]["presentation"]["presentation_id"].clone();
+        let slide = read["result"]["presentation"]["slide_ids"][1].clone();
+        // The Owner may write what he likes on his own slide, even text the
+        // Supervisor's content rules would reject.
+        let saved = send(
+            root.path(),
+            "save-1",
+            "canvas.save",
+            "owner",
+            json!({"operation_id":"canvas-op","presentation_id":presentation,"expected_revision":1,
             "slide_id":slide,"scene_json":canvas_scene("Diese Folie bleibt bewusst leer.")}),
-    )?;
-    assert_eq!(saved["status"], "completed", "{saved}");
-    assert_eq!(saved["result"]["mutation"]["revision"], 2);
-    Ok(())
+        )?;
+        assert_eq!(saved["status"], "completed", "{saved}");
+        assert_eq!(saved["result"]["mutation"]["revision"], 2);
+        Ok(())
+    })
 }
 
 #[test]
 fn owner_reads_manifest_and_saves_a_canvas_revision_with_replay() -> anyhow::Result<()> {
-    if !node_available() {
-        eprintln!("SKIP: node not available");
-        return Ok(());
-    }
-    let (root, meeting) = fixture()?;
-    let created = agent_revision(root.path(), &meeting)?;
-    assert_eq!(created["revision"], 1);
-    assert_eq!(created["source"], "agent");
+    crate::persistence::test_support::run_scoped(move || {
+        if !node_available() {
+            eprintln!("SKIP: node not available");
+            return Ok(());
+        }
+        let (root, meeting) = fixture()?;
+        let created = agent_revision(root.path(), &meeting)?;
+        assert_eq!(created["revision"], 1);
+        assert_eq!(created["source"], "agent");
 
-    let read = send(
-        root.path(),
-        "read-1",
-        "read",
-        "owner",
-        json!({"project_id":"project","meeting_id":"meeting-1"}),
-    )?;
-    assert_eq!(read["status"], "completed", "{read}");
-    assert_eq!(read["result"]["presentation"]["revision"], 1);
-    let slide = read["result"]["presentation"]["slide_ids"][1]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let presentation = read["result"]["presentation"]["presentation_id"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+        let read = send(
+            root.path(),
+            "read-1",
+            "read",
+            "owner",
+            json!({"project_id":"project","meeting_id":"meeting-1"}),
+        )?;
+        assert_eq!(read["status"], "completed", "{read}");
+        assert_eq!(read["result"]["presentation"]["revision"], 1);
+        let slide = read["result"]["presentation"]["slide_ids"][1]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let presentation = read["result"]["presentation"]["presentation_id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
 
-    let save = json!({"operation_id":"canvas-op","presentation_id":presentation,"expected_revision":1,
+        let save = json!({"operation_id":"canvas-op","presentation_id":presentation,"expected_revision":1,
         "slide_id":slide,"scene_json":canvas_scene("Neuer Gedanke")});
-    let saved = send(root.path(), "save-1", "canvas.save", "owner", save.clone())?;
-    assert_eq!(saved["status"], "completed", "{saved}");
-    assert_eq!(saved["result"]["mutation"]["revision"], 2);
-    assert_eq!(saved["result"]["presentation"]["source"], "owner");
+        let saved = send(root.path(), "save-1", "canvas.save", "owner", save.clone())?;
+        assert_eq!(saved["status"], "completed", "{saved}");
+        assert_eq!(saved["result"]["mutation"]["revision"], 2);
+        assert_eq!(saved["result"]["presentation"]["source"], "owner");
 
-    // Same operation and intent: the stored receipt, no third revision.
-    let replay = send(root.path(), "save-2", "canvas.save", "owner", save)?;
-    assert_eq!(replay["result"]["mutation"], saved["result"]["mutation"]);
-    let conn = open_store(root.path())?;
-    let manifest = load_by_meeting(&conn, "meeting-1")?.unwrap();
-    assert_eq!(manifest.revision, 2);
-    let document: Value = serde_json::from_str(&current_document(&conn, &manifest)?)?;
-    let stored = document["slides"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|s| s["id"] == slide.as_str())
-        .unwrap();
-    assert!(stored["canvas"]["elements"]
-        .to_string()
-        .contains("Neuer Gedanke"));
+        // Same operation and intent: the stored receipt, no third revision.
+        let replay = send(root.path(), "save-2", "canvas.save", "owner", save)?;
+        assert_eq!(replay["result"]["mutation"], saved["result"]["mutation"]);
+        let conn = open_store(root.path())?;
+        let manifest = load_by_meeting(&conn, "meeting-1")?.unwrap();
+        assert_eq!(manifest.revision, 2);
+        let document: Value = serde_json::from_str(&current_document(&conn, &manifest)?)?;
+        let stored = document["slides"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["id"] == slide.as_str())
+            .unwrap();
+        assert!(stored["canvas"]["elements"]
+            .to_string()
+            .contains("Neuer Gedanke"));
 
-    // Each revision is its own immutable desktop file with the document hash.
-    let files: i64 = conn.query_row(
+        // Each revision is its own immutable desktop file with the document hash.
+        let files: i64 = conn.query_row(
         "SELECT COUNT(*) FROM business_records WHERE collection='desktop_files' AND json_extract(payload_json,'$.linked_record_id')=?1",
         [&presentation],
         |r| r.get(0),
     )?;
-    assert_eq!(files, 2);
-    let hash: String = conn.query_row(
+        assert_eq!(files, 2);
+        let hash: String = conn.query_row(
         "SELECT json_extract(payload_json,'$.content_hash') FROM business_records WHERE collection='desktop_files' AND record_id=?1",
         [&manifest.document_file_id],
         |r| r.get(0),
     )?;
-    assert_eq!(hash, manifest.document_sha256);
-    Ok(())
+        assert_eq!(hash, manifest.document_sha256);
+        Ok(())
+    })
 }
 
 #[test]
 fn stale_foreign_and_invalid_saves_keep_the_revision() -> anyhow::Result<()> {
-    if !node_available() {
-        eprintln!("SKIP: node not available");
-        return Ok(());
-    }
-    let (root, meeting) = fixture()?;
-    let created = agent_revision(root.path(), &meeting)?;
-    let presentation = created["presentation_id"].as_str().unwrap().to_owned();
-    let slide = created["slide_ids"][0].as_str().unwrap().to_owned();
-    let request = |revision: u64, scene: String| {
-        json!({"operation_id":format!("op-{revision}-{}", scene.len()),"presentation_id":presentation,
-            "expected_revision":revision,"slide_id":slide,"scene_json":scene})
-    };
-    rejected(send(
-        root.path(),
-        "stale",
-        "canvas.save",
-        "owner",
-        request(7, canvas_scene("x")),
-    ));
-    rejected(send(
-        root.path(),
-        "foreign",
-        "canvas.save",
-        "intruder",
-        request(1, canvas_scene("x")),
-    ));
-    let invalid = json!({"version":"learnordie.excalidraw.v1","width":1600,"height":900,
-        "backgroundColor":"#fffef8","elements":[{"id":"t","type":"text","x":1,"y":1,"width":10,"height":10}],"files":{}});
-    let failed = send(
-        root.path(),
-        "invalid",
-        "canvas.save",
-        "owner",
-        request(1, invalid.to_string()),
-    );
-    let message = match failed {
-        Ok(value) => {
-            assert_eq!(value["status"], "failed", "{value}");
-            value.to_string()
+    crate::persistence::test_support::run_scoped(move || {
+        if !node_available() {
+            eprintln!("SKIP: node not available");
+            return Ok(());
         }
-        Err(error) => error.to_string(),
-    };
-    assert!(message.contains("presentation rejected"), "{message}");
-    let conn = open_store(root.path())?;
-    assert_eq!(load_by_meeting(&conn, "meeting-1")?.unwrap().revision, 1);
-    Ok(())
+        let (root, meeting) = fixture()?;
+        let created = agent_revision(root.path(), &meeting)?;
+        let presentation = created["presentation_id"].as_str().unwrap().to_owned();
+        let slide = created["slide_ids"][0].as_str().unwrap().to_owned();
+        let request = |revision: u64, scene: String| {
+            json!({"operation_id":format!("op-{revision}-{}", scene.len()),"presentation_id":presentation,
+            "expected_revision":revision,"slide_id":slide,"scene_json":scene})
+        };
+        rejected(send(
+            root.path(),
+            "stale",
+            "canvas.save",
+            "owner",
+            request(7, canvas_scene("x")),
+        ));
+        rejected(send(
+            root.path(),
+            "foreign",
+            "canvas.save",
+            "intruder",
+            request(1, canvas_scene("x")),
+        ));
+        let invalid = json!({"version":"learnordie.excalidraw.v1","width":1600,"height":900,
+        "backgroundColor":"#fffef8","elements":[{"id":"t","type":"text","x":1,"y":1,"width":10,"height":10}],"files":{}});
+        let failed = send(
+            root.path(),
+            "invalid",
+            "canvas.save",
+            "owner",
+            request(1, invalid.to_string()),
+        );
+        let message = match failed {
+            Ok(value) => {
+                assert_eq!(value["status"], "failed", "{value}");
+                value.to_string()
+            }
+            Err(error) => error.to_string(),
+        };
+        assert!(message.contains("presentation rejected"), "{message}");
+        let conn = open_store(root.path())?;
+        assert_eq!(load_by_meeting(&conn, "meeting-1")?.unwrap().revision, 1);
+        Ok(())
+    })
 }
 
 #[test]
 fn owner_edit_batches_use_the_engine_semantics() -> anyhow::Result<()> {
-    if !node_available() {
-        eprintln!("SKIP: node not available");
-        return Ok(());
-    }
-    let (root, meeting) = fixture()?;
-    let created = agent_revision(root.path(), &meeting)?;
-    let presentation = created["presentation_id"].as_str().unwrap().to_owned();
-    let last = created["slide_ids"]
-        .as_array()
-        .unwrap()
-        .last()
-        .unwrap()
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let operations = json!([{"kind":"deleteSlide","slideId":last}]).to_string();
-    let applied = send(
-        root.path(),
-        "edits",
-        "edits.apply",
-        "owner",
-        json!({"operation_id":"edit-op","presentation_id":presentation,"expected_revision":1,
+    crate::persistence::test_support::run_scoped(move || {
+        if !node_available() {
+            eprintln!("SKIP: node not available");
+            return Ok(());
+        }
+        let (root, meeting) = fixture()?;
+        let created = agent_revision(root.path(), &meeting)?;
+        let presentation = created["presentation_id"].as_str().unwrap().to_owned();
+        let last = created["slide_ids"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let operations = json!([{"kind":"deleteSlide","slideId":last}]).to_string();
+        let applied = send(
+            root.path(),
+            "edits",
+            "edits.apply",
+            "owner",
+            json!({"operation_id":"edit-op","presentation_id":presentation,"expected_revision":1,
             "operations_json":operations}),
-    )?;
-    assert_eq!(applied["status"], "completed", "{applied}");
-    let ids = applied["result"]["mutation"]["slide_ids"]
-        .as_array()
-        .unwrap();
-    assert!(!ids.iter().any(|id| id == last.as_str()));
-    let missing = json!([{"kind":"deleteSlide","slideId":"does-not-exist"}]).to_string();
-    rejected(send(
-        root.path(),
-        "edits-missing",
-        "edits.apply",
-        "owner",
-        json!({"operation_id":"edit-op-2","presentation_id":presentation,"expected_revision":2,
+        )?;
+        assert_eq!(applied["status"], "completed", "{applied}");
+        let ids = applied["result"]["mutation"]["slide_ids"]
+            .as_array()
+            .unwrap();
+        assert!(!ids.iter().any(|id| id == last.as_str()));
+        let missing = json!([{"kind":"deleteSlide","slideId":"does-not-exist"}]).to_string();
+        rejected(send(
+            root.path(),
+            "edits-missing",
+            "edits.apply",
+            "owner",
+            json!({"operation_id":"edit-op-2","presentation_id":presentation,"expected_revision":2,
             "operations_json":missing}),
-    ));
-    Ok(())
+        ));
+        Ok(())
+    })
 }
 
 #[test]
 fn meeting_slides_keep_presentation_ids_and_fit_the_narration_budget() -> anyhow::Result<()> {
-    if !node_available() {
-        eprintln!("SKIP: node not available");
-        return Ok(());
-    }
-    let root = tempfile::tempdir()?;
-    let document = deck();
-    let slides = meeting_slides(root.path(), &document, "meeting-1")?;
-    let ids: Vec<&str> = document["slides"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|s| s["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(
-        slides
+    crate::persistence::test_support::run_scoped(move || {
+        if !node_available() {
+            eprintln!("SKIP: node not available");
+            return Ok(());
+        }
+        let root = crate::persistence::test_support::fixture_tempdir()?;
+        let document = deck();
+        let slides = meeting_slides(root.path(), &document, "meeting-1")?;
+        let ids: Vec<&str> = document["slides"]
+            .as_array()
+            .unwrap()
             .iter()
             .map(|s| s["id"].as_str().unwrap())
-            .collect::<Vec<_>>(),
-        ids
-    );
-    for (position, slide) in slides.iter().enumerate() {
-        assert_eq!(slide["position"], position);
-        assert_eq!(slide["meeting_id"], "meeting-1");
-        let body = slide["body_markdown"].as_str().unwrap();
-        assert!(!body.trim().is_empty() && body.len() <= 4096);
-        let typed: meeting_wire::Slide = serde_json::from_value(slide.clone())?;
-        meeting_wire::WireValidate::validate(&typed).map_err(anyhow::Error::msg)?;
-    }
-    Ok(())
+            .collect();
+        assert_eq!(
+            slides
+                .iter()
+                .map(|s| s["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ids
+        );
+        for (position, slide) in slides.iter().enumerate() {
+            assert_eq!(slide["position"], position);
+            assert_eq!(slide["meeting_id"], "meeting-1");
+            let body = slide["body_markdown"].as_str().unwrap();
+            assert!(!body.trim().is_empty() && body.len() <= 4096);
+            let typed: meeting_wire::Slide = serde_json::from_value(slide.clone())?;
+            meeting_wire::WireValidate::validate(&typed).map_err(anyhow::Error::msg)?;
+        }
+        Ok(())
+    })
 }
