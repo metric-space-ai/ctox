@@ -2455,98 +2455,102 @@ mod tests {
     #[test]
     fn optional_secret_read_distinguishes_absence_from_unavailable_or_corrupt_storage() -> Result<()>
     {
-        let root = tempfile::tempdir()?;
-        let scope = "credentials";
-        let name = "FIXTURE_OPTIONAL_READ";
-        let canary = "synthetic-secret-read-canary";
-        put_secret(root.path(), scope, name, canary, None, json!({}))?;
-        assert_eq!(
-            read_secret_value_optional(root.path(), scope, "ABSENT_FIXTURE")?,
-            None
-        );
-        assert_eq!(
-            read_secret_value_optional(root.path(), scope, name)?,
-            Some(canary.to_owned())
-        );
-        let conn = open_secret_db(root.path())?;
-        let (key, _) = load_existing_secret_master_key(root.path())?;
-        let invalid_utf8 = encrypt_secret_value(&key, &[0xff, 0xfe])?;
-        conn.execute(
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            let scope = "credentials";
+            let name = "FIXTURE_OPTIONAL_READ";
+            let canary = "synthetic-secret-read-canary";
+            put_secret(root.path(), scope, name, canary, None, json!({}))?;
+            assert_eq!(
+                read_secret_value_optional(root.path(), scope, "ABSENT_FIXTURE")?,
+                None
+            );
+            assert_eq!(
+                read_secret_value_optional(root.path(), scope, name)?,
+                Some(canary.to_owned())
+            );
+            let conn = open_secret_db(root.path())?;
+            let (key, _) = load_existing_secret_master_key(root.path())?;
+            let invalid_utf8 = encrypt_secret_value(&key, &[0xff, 0xfe])?;
+            conn.execute(
             "UPDATE ctox_secret_records SET nonce_b64 = ?1, ciphertext_b64 = ?2 WHERE scope = ?3 AND secret_name = ?4",
             params![invalid_utf8.nonce_b64, invalid_utf8.ciphertext_b64, scope, name],
         )?;
-        assert_eq!(
-            read_secret_value_optional(root.path(), scope, name),
-            Err(SecretReadError::InvalidEncoding)
-        );
-        conn.execute(
+            assert_eq!(
+                read_secret_value_optional(root.path(), scope, name),
+                Err(SecretReadError::InvalidEncoding)
+            );
+            conn.execute(
             "UPDATE ctox_secret_records SET ciphertext_b64 = ?1 WHERE scope = ?2 AND secret_name = ?3",
             params!["not-valid-base64", scope, name],
         )?;
-        let error = read_secret_value_optional(root.path(), scope, name).unwrap_err();
-        assert_eq!(error, SecretReadError::DecryptionFailed);
-        assert!(!error.to_string().contains(canary));
+            let error = read_secret_value_optional(root.path(), scope, name).unwrap_err();
+            assert_eq!(error, SecretReadError::DecryptionFailed);
+            assert!(!error.to_string().contains(canary));
 
-        let unavailable_root = root.path().join("not-a-directory");
-        fs::write(&unavailable_root, b"fixture")?;
-        assert_eq!(
-            read_secret_value_optional(&unavailable_root, scope, name),
-            Err(SecretReadError::Unavailable)
-        );
-        Ok(())
+            let unavailable_root = root.path().join("not-a-directory");
+            fs::write(&unavailable_root, b"fixture")?;
+            assert_eq!(
+                read_secret_value_optional(&unavailable_root, scope, name),
+                Err(SecretReadError::Unavailable)
+            );
+            Ok(())
+        })
     }
 
     #[test]
     fn optional_read_never_replaces_a_lost_key_and_can_migrate_an_existing_key() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        let scope = "credentials";
-        let name = "FIXTURE_OPTIONAL_READ";
-        let canary = "synthetic-lost-key-canary";
-        put_secret(root.path(), scope, name, canary, None, json!({}))?;
-        let key_path = master_key_path(root.path());
-        let original_key = fs::read_to_string(&key_path)?;
-        let conn = open_secret_db(root.path())?;
-        let ciphertext = || -> rusqlite::Result<(String, String)> {
-            conn.query_row("SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2", params![scope, name], |row| Ok((row.get(0)?, row.get(1)?)))
-        };
-        let original_ciphertext = ciphertext()?;
-        fs::remove_file(&key_path)?;
-        assert_eq!(
-            read_secret_value_optional(root.path(), scope, name),
-            Err(SecretReadError::Unavailable)
-        );
-        assert!(
-            !key_path.exists(),
-            "read must not generate a replacement master key"
-        );
-        assert_eq!(ciphertext()?, original_ciphertext);
-        assert!(read_secret_value(root.path(), scope, name).is_err());
-        assert!(
-            !key_path.exists(),
-            "required-value wrapper must also remain read-only for key creation"
-        );
-        assert!(read_secret_values(root.path(), &[(scope, name)]).is_err());
-        assert!(read_secret_values(root.path(), &[])?.is_empty());
-        assert!(
-            !key_path.exists(),
-            "tuple reads must never create a replacement master key"
-        );
-        assert_eq!(ciphertext()?, original_ciphertext);
-        conn.execute(
-            &format!("INSERT INTO {SECRET_KV_TABLE} (key, value) VALUES (?1, ?2)"),
-            params![MASTER_KEY_STORAGE_KEY, original_key.trim()],
-        )?;
-        assert_eq!(
-            read_secret_value_optional(root.path(), scope, name)?,
-            Some(canary.to_string())
-        );
-        assert_eq!(fs::read_to_string(&key_path)?.trim(), original_key.trim());
-        assert_eq!(
-            read_secret_values(root.path(), &[(scope, name)])?,
-            vec![canary.to_string()]
-        );
-        assert_eq!(ciphertext()?, original_ciphertext);
-        Ok(())
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            let scope = "credentials";
+            let name = "FIXTURE_OPTIONAL_READ";
+            let canary = "synthetic-lost-key-canary";
+            put_secret(root.path(), scope, name, canary, None, json!({}))?;
+            let key_path = master_key_path(root.path());
+            let original_key = fs::read_to_string(&key_path)?;
+            let conn = open_secret_db(root.path())?;
+            let ciphertext = || -> rusqlite::Result<(String, String)> {
+                conn.query_row("SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2", params![scope, name], |row| Ok((row.get(0)?, row.get(1)?)))
+            };
+            let original_ciphertext = ciphertext()?;
+            fs::remove_file(&key_path)?;
+            assert_eq!(
+                read_secret_value_optional(root.path(), scope, name),
+                Err(SecretReadError::Unavailable)
+            );
+            assert!(
+                !key_path.exists(),
+                "read must not generate a replacement master key"
+            );
+            assert_eq!(ciphertext()?, original_ciphertext);
+            assert!(read_secret_value(root.path(), scope, name).is_err());
+            assert!(
+                !key_path.exists(),
+                "required-value wrapper must also remain read-only for key creation"
+            );
+            assert!(read_secret_values(root.path(), &[(scope, name)]).is_err());
+            assert!(read_secret_values(root.path(), &[])?.is_empty());
+            assert!(
+                !key_path.exists(),
+                "tuple reads must never create a replacement master key"
+            );
+            assert_eq!(ciphertext()?, original_ciphertext);
+            conn.execute(
+                &format!("INSERT INTO {SECRET_KV_TABLE} (key, value) VALUES (?1, ?2)"),
+                params![MASTER_KEY_STORAGE_KEY, original_key.trim()],
+            )?;
+            assert_eq!(
+                read_secret_value_optional(root.path(), scope, name)?,
+                Some(canary.to_string())
+            );
+            assert_eq!(fs::read_to_string(&key_path)?.trim(), original_key.trim());
+            assert_eq!(
+                read_secret_values(root.path(), &[(scope, name)])?,
+                vec![canary.to_string()]
+            );
+            assert_eq!(ciphertext()?, original_ciphertext);
+            Ok(())
+        })
     }
 
     #[test]
@@ -2611,69 +2615,73 @@ mod tests {
     #[test]
     fn secret_snapshot_reads_committed_issuer_while_writer_and_master_fence_are_held() -> Result<()>
     {
-        let root = tempfile::tempdir()?;
-        put_secret(
-            root.path(),
-            "snapshot-fixture",
-            "issuer",
-            "before",
-            None,
-            json!({}),
-        )?;
-        let writer = Connection::open(resolve_db_path(root.path()))?;
-        writer.busy_timeout(std::time::Duration::ZERO)?;
-        let tx = rusqlite::Transaction::new_unchecked(
-            &writer,
-            rusqlite::TransactionBehavior::Immediate,
-        )?;
-        tx.execute("UPDATE ctox_secret_records SET ciphertext_b64='uncommitted-invalid' WHERE scope='snapshot-fixture'", [])?;
-        let master = master_key_guard(root.path());
-        let _master = master.lock().unwrap();
-        with_secret_value_snapshot(root.path(), "snapshot-fixture", "issuer", |value| {
-            assert_eq!(
-                value, b"before",
-                "read the committed WAL snapshot, never uncommitted ciphertext"
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            put_secret(
+                root.path(),
+                "snapshot-fixture",
+                "issuer",
+                "before",
+                None,
+                json!({}),
+            )?;
+            let writer = Connection::open(resolve_db_path(root.path()))?;
+            writer.busy_timeout(std::time::Duration::ZERO)?;
+            let tx = rusqlite::Transaction::new_unchecked(
+                &writer,
+                rusqlite::TransactionBehavior::Immediate,
+            )?;
+            tx.execute("UPDATE ctox_secret_records SET ciphertext_b64='uncommitted-invalid' WHERE scope='snapshot-fixture'", [])?;
+            let master = master_key_guard(root.path());
+            let _master = master.lock().unwrap();
+            with_secret_value_snapshot(root.path(), "snapshot-fixture", "issuer", |value| {
+                assert_eq!(
+                    value, b"before",
+                    "read the committed WAL snapshot, never uncommitted ciphertext"
+                );
+                Ok(())
+            })?;
+            assert!(
+                with_current_secret_value(root.path(), "snapshot-fixture", "issuer", |_| Ok(()))
+                    .is_err()
             );
+            tx.rollback()?;
             Ok(())
-        })?;
-        assert!(
-            with_current_secret_value(root.path(), "snapshot-fixture", "issuer", |_| Ok(()))
-                .is_err()
-        );
-        tx.rollback()?;
-        Ok(())
+        })
     }
 
     #[test]
     fn secret_snapshot_does_not_block_rotation_and_next_read_reloads_it() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        put_secret(
-            root.path(),
-            "snapshot-fixture",
-            "issuer",
-            "before",
-            None,
-            json!({}),
-        )?;
-        let writer = Connection::open(resolve_db_path(root.path()))?;
-        writer.busy_timeout(std::time::Duration::ZERO)?;
-        with_secret_value_snapshot(root.path(), "snapshot-fixture", "issuer", |value| {
-            assert_eq!(value, b"before");
-            writer.execute(
-                "DELETE FROM ctox_secret_records WHERE scope='snapshot-fixture'",
-                [],
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            put_secret(
+                root.path(),
+                "snapshot-fixture",
+                "issuer",
+                "before",
+                None,
+                json!({}),
             )?;
+            let writer = Connection::open(resolve_db_path(root.path()))?;
+            writer.busy_timeout(std::time::Duration::ZERO)?;
+            with_secret_value_snapshot(root.path(), "snapshot-fixture", "issuer", |value| {
+                assert_eq!(value, b"before");
+                writer.execute(
+                    "DELETE FROM ctox_secret_records WHERE scope='snapshot-fixture'",
+                    [],
+                )?;
+                Ok(())
+            })?;
+            assert!(
+                with_secret_value_snapshot(root.path(), "snapshot-fixture", "issuer", |_| Ok(()))
+                    .is_err()
+            );
+            assert!(
+                with_current_secret_value(root.path(), "snapshot-fixture", "issuer", |_| Ok(()))
+                    .is_err()
+            );
             Ok(())
-        })?;
-        assert!(
-            with_secret_value_snapshot(root.path(), "snapshot-fixture", "issuer", |_| Ok(()))
-                .is_err()
-        );
-        assert!(
-            with_current_secret_value(root.path(), "snapshot-fixture", "issuer", |_| Ok(()))
-                .is_err()
-        );
-        Ok(())
+        })
     }
 
     #[test]
@@ -2694,148 +2702,170 @@ mod tests {
 
     #[test]
     fn current_secret_tuple_fences_all_records_and_reloads_rotated_values() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        for (name, value) in [("issuer", "issuer-before"), ("grant", "grant-before")] {
-            put_secret(root.path(), "tuple-fixture", name, value, None, json!({}))?;
-        }
-        let keys = [("tuple-fixture", "issuer"), ("tuple-fixture", "grant")];
-        let writer = Connection::open(resolve_db_path(root.path()))?;
-        writer.busy_timeout(std::time::Duration::ZERO)?;
-        with_current_secret_values(root.path(), &keys, |values| {
-            assert_eq!(
-                values,
-                &[b"issuer-before".as_slice(), b"grant-before".as_slice()]
-            );
-            for name in ["issuer", "grant"] {
-                let error = writer.execute(
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            for (name, value) in [("issuer", "issuer-before"), ("grant", "grant-before")] {
+                put_secret(root.path(), "tuple-fixture", name, value, None, json!({}))?;
+            }
+            let keys = [("tuple-fixture", "issuer"), ("tuple-fixture", "grant")];
+            let writer = Connection::open(resolve_db_path(root.path()))?;
+            writer.busy_timeout(std::time::Duration::ZERO)?;
+            with_current_secret_values(root.path(), &keys, |values| {
+                assert_eq!(
+                    values,
+                    &[b"issuer-before".as_slice(), b"grant-before".as_slice()]
+                );
+                for name in ["issuer", "grant"] {
+                    let error = writer.execute(
                     "UPDATE ctox_secret_records SET ciphertext_b64='invalid' WHERE scope='tuple-fixture' AND secret_name=?1",
                     [name],
                 ).expect_err("all tuple records remain fenced during publication");
+                    assert!(
+                        matches!(error, rusqlite::Error::SqliteFailure(code, _) if matches!(
+                            code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
+                        ))
+                    );
+                }
+                Ok(())
+            })?;
+            put_secret(
+                root.path(),
+                "tuple-fixture",
+                "grant",
+                "grant-after",
+                None,
+                json!({}),
+            )?;
+            with_current_secret_values(root.path(), &keys, |values| {
+                assert_eq!(
+                    values,
+                    &[b"issuer-before".as_slice(), b"grant-after".as_slice()]
+                );
+                Ok(())
+            })?;
+            delete_secret(root.path(), "tuple-fixture", "grant")?;
+            let mut entered = false;
+            assert!(with_current_secret_values(root.path(), &keys, |_| {
+                entered = true;
+                Ok(())
+            })
+            .is_err());
+            assert!(!entered, "a partial tuple must not authorize publication");
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn current_secret_publication_fences_rotation_and_reads_the_next_issuer() -> Result<()> {
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            persistence::store_text_value(root.path(), "publication_fixture", Some("present"))?;
+            put_secret(
+                root.path(),
+                "issuer-fixture",
+                "token",
+                "before",
+                None,
+                json!({}),
+            )?;
+            let writer = Connection::open(resolve_db_path(root.path()))?;
+            writer.busy_timeout(std::time::Duration::ZERO)?;
+            let changes = writer.total_changes();
+            with_current_secret_value(root.path(), "issuer-fixture", "token", |value| {
+                assert_eq!(value, b"before");
+                let error = writer.execute(
+                "UPDATE ctox_secret_records SET ciphertext_b64='invalid' WHERE scope='issuer-fixture' AND secret_name='token'",
+                [],
+            ).expect_err("rotation cannot cross the bounded publication callback");
                 assert!(
                     matches!(error, rusqlite::Error::SqliteFailure(code, _) if matches!(
                         code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
                     ))
                 );
-            }
-            Ok(())
-        })?;
-        put_secret(
-            root.path(),
-            "tuple-fixture",
-            "grant",
-            "grant-after",
-            None,
-            json!({}),
-        )?;
-        with_current_secret_values(root.path(), &keys, |values| {
-            assert_eq!(
-                values,
-                &[b"issuer-before".as_slice(), b"grant-after".as_slice()]
+                // The issuer fence must not own a second Core writer transaction.
+                let core = Connection::open(persistence::sqlite_path(root.path()))?;
+                core.busy_timeout(std::time::Duration::ZERO)?;
+                let _core_tx = rusqlite::Transaction::new_unchecked(
+                    &core,
+                    rusqlite::TransactionBehavior::Immediate,
+                )?;
+                Ok(())
+            })?;
+            assert_eq!(writer.total_changes(), changes);
+            put_secret(
+                root.path(),
+                "issuer-fixture",
+                "token",
+                "after",
+                None,
+                json!({}),
+            )?;
+            with_current_secret_value(root.path(), "issuer-fixture", "token", |value| {
+                assert_eq!(value, b"after");
+                Ok(())
+            })?;
+            delete_secret(root.path(), "issuer-fixture", "token")?;
+            let mut called = false;
+            assert!(
+                with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                    called = true;
+                    Ok(())
+                })
+                .is_err()
             );
-            Ok(())
-        })?;
-        delete_secret(root.path(), "tuple-fixture", "grant")?;
-        let mut entered = false;
-        assert!(with_current_secret_values(root.path(), &keys, |_| {
-            entered = true;
+            assert!(!called, "a deleted issuer cannot publish cached plaintext");
             Ok(())
         })
-        .is_err());
-        assert!(!entered, "a partial tuple must not authorize publication");
-        Ok(())
-    }
-
-    #[test]
-    fn current_secret_publication_fences_rotation_and_reads_the_next_issuer() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        persistence::store_text_value(root.path(), "publication_fixture", Some("present"))?;
-        put_secret(
-            root.path(),
-            "issuer-fixture",
-            "token",
-            "before",
-            None,
-            json!({}),
-        )?;
-        let writer = Connection::open(resolve_db_path(root.path()))?;
-        writer.busy_timeout(std::time::Duration::ZERO)?;
-        let changes = writer.total_changes();
-        with_current_secret_value(root.path(), "issuer-fixture", "token", |value| {
-            assert_eq!(value, b"before");
-            let error = writer.execute(
-                "UPDATE ctox_secret_records SET ciphertext_b64='invalid' WHERE scope='issuer-fixture' AND secret_name='token'",
-                [],
-            ).expect_err("rotation cannot cross the bounded publication callback");
-            assert!(
-                matches!(error, rusqlite::Error::SqliteFailure(code, _) if matches!(
-                    code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked
-                ))
-            );
-            // The issuer fence must not own a second Core writer transaction.
-            let core = Connection::open(persistence::sqlite_path(root.path()))?;
-            core.busy_timeout(std::time::Duration::ZERO)?;
-            let _core_tx = rusqlite::Transaction::new_unchecked(
-                &core,
-                rusqlite::TransactionBehavior::Immediate,
-            )?;
-            Ok(())
-        })?;
-        assert_eq!(writer.total_changes(), changes);
-        put_secret(
-            root.path(),
-            "issuer-fixture",
-            "token",
-            "after",
-            None,
-            json!({}),
-        )?;
-        with_current_secret_value(root.path(), "issuer-fixture", "token", |value| {
-            assert_eq!(value, b"after");
-            Ok(())
-        })?;
-        delete_secret(root.path(), "issuer-fixture", "token")?;
-        let mut called = false;
-        assert!(
-            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
-                called = true;
-                Ok(())
-            })
-            .is_err()
-        );
-        assert!(!called, "a deleted issuer cannot publish cached plaintext");
-        Ok(())
     }
 
     #[test]
     fn current_secret_publication_denies_busy_missing_and_conflicting_authority() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        let mut called = false;
-        assert!(
-            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
-                called = true;
-                Ok(())
-            })
-            .is_err()
-        );
-        assert!(!called);
-        assert!(
-            !root.path().join("runtime").exists(),
-            "verification cannot create runtime state"
-        );
-        put_secret(
-            root.path(),
-            "issuer-fixture",
-            "token",
-            "present",
-            None,
-            json!({}),
-        )?;
-        let writer = Connection::open(resolve_db_path(root.path()))?;
-        writer.busy_timeout(std::time::Duration::ZERO)?;
-        {
-            let _tx = rusqlite::Transaction::new_unchecked(
-                &writer,
-                rusqlite::TransactionBehavior::Immediate,
+        crate::persistence::test_support::run(move |owner_root| {
+            // Keep the missing-authority probe private and unowned while the
+            // caller is admitted; owner startup itself must not satisfy the probe.
+            let root = tempfile::tempdir()?;
+            let mut called = false;
+            assert!(
+                with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                    called = true;
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert!(!called);
+            assert!(
+                !root.path().join("runtime").exists(),
+                "verification cannot create runtime state"
+            );
+            let root = owner_root;
+            put_secret(
+                root.path(),
+                "issuer-fixture",
+                "token",
+                "present",
+                None,
+                json!({}),
+            )?;
+            let writer = Connection::open(resolve_db_path(root.path()))?;
+            writer.busy_timeout(std::time::Duration::ZERO)?;
+            {
+                let _tx = rusqlite::Transaction::new_unchecked(
+                    &writer,
+                    rusqlite::TransactionBehavior::Immediate,
+                )?;
+                assert!(
+                    with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                        called = true;
+                        Ok(())
+                    })
+                    .is_err()
+                );
+                assert!(!called);
+            }
+            let conflict = BASE64_STANDARD.encode([0u8; 32]);
+            writer.execute(
+                "INSERT INTO ctox_secret_kv (key, value) VALUES (?1, ?2)",
+                params![MASTER_KEY_STORAGE_KEY, conflict],
             )?;
             assert!(
                 with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
@@ -2845,163 +2875,154 @@ mod tests {
                 .is_err()
             );
             assert!(!called);
-        }
-        let conflict = BASE64_STANDARD.encode([0u8; 32]);
-        writer.execute(
-            "INSERT INTO ctox_secret_kv (key, value) VALUES (?1, ?2)",
-            params![MASTER_KEY_STORAGE_KEY, conflict],
-        )?;
-        assert!(
-            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
-                called = true;
-                Ok(())
-            })
-            .is_err()
-        );
-        assert!(!called);
-        writer.execute(
-            "DELETE FROM ctox_secret_kv WHERE key=?1",
-            [MASTER_KEY_STORAGE_KEY],
-        )?;
-        persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, Some(&conflict))?;
-        assert!(
-            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
-                called = true;
-                Ok(())
-            })
-            .is_err()
-        );
-        assert!(!called);
-        persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, None)?;
-        fs::write(master_key_path(root.path()), "invalid-protected-key")?;
-        assert!(
-            with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
-                called = true;
-                Ok(())
-            })
-            .is_err()
-        );
-        assert!(!called);
-        Ok(())
+            writer.execute(
+                "DELETE FROM ctox_secret_kv WHERE key=?1",
+                [MASTER_KEY_STORAGE_KEY],
+            )?;
+            persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, Some(&conflict))?;
+            assert!(
+                with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                    called = true;
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert!(!called);
+            persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, None)?;
+            fs::write(master_key_path(root.path()), "invalid-protected-key")?;
+            assert!(
+                with_current_secret_value(root.path(), "issuer-fixture", "token", |_| {
+                    called = true;
+                    Ok(())
+                })
+                .is_err()
+            );
+            assert!(!called);
+            Ok(())
+        })
     }
 
     #[test]
     fn repeated_secret_reads_observe_late_legacy_key_conflicts_and_rotation() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        persistence::store_text_value(root.path(), "secret_reader_fixture", Some("present"))?;
-        put_secret(
-            root.path(),
-            "reader-fixture",
-            "token",
-            "before",
-            None,
-            json!({}),
-        )?;
-        for _ in 0..10 {
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            persistence::store_text_value(root.path(), "secret_reader_fixture", Some("present"))?;
+            put_secret(
+                root.path(),
+                "reader-fixture",
+                "token",
+                "before",
+                None,
+                json!({}),
+            )?;
+            for _ in 0..10 {
+                assert_eq!(
+                    get_secret_value(root.path(), "reader-fixture", "token")?,
+                    "before"
+                );
+            }
+            // The previous absent legacy value must not become a cached decision.
+            let protected_key_before = fs::read(master_key_path(root.path()))?;
+            let conflicting = BASE64_STANDARD.encode([0u8; 32]);
+            persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, Some(&conflicting))?;
+            let error = get_secret_value(root.path(), "reader-fixture", "token").unwrap_err();
+            assert_eq!(
+                error.downcast_ref::<SecretReadError>(),
+                Some(&SecretReadError::Unavailable)
+            );
+            assert_eq!(error.to_string(), "secret store or key unavailable");
+            // The public reader sanitizes diagnostics, while the key loader must
+            // still detect the actual conflict and never replace the protected key.
+            let key_error = load_existing_secret_master_key(root.path()).unwrap_err();
+            assert!(key_error
+                .to_string()
+                .contains("conflicts with the legacy runtime key"));
+            assert_eq!(
+                fs::read(master_key_path(root.path()))?,
+                protected_key_before
+            );
+            persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, None)?;
             assert_eq!(
                 get_secret_value(root.path(), "reader-fixture", "token")?,
                 "before"
             );
-        }
-        // The previous absent legacy value must not become a cached decision.
-        let protected_key_before = fs::read(master_key_path(root.path()))?;
-        let conflicting = BASE64_STANDARD.encode([0u8; 32]);
-        persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, Some(&conflicting))?;
-        let error = get_secret_value(root.path(), "reader-fixture", "token").unwrap_err();
-        assert_eq!(
-            error.downcast_ref::<SecretReadError>(),
-            Some(&SecretReadError::Unavailable)
-        );
-        assert_eq!(error.to_string(), "secret store or key unavailable");
-        // The public reader sanitizes diagnostics, while the key loader must
-        // still detect the actual conflict and never replace the protected key.
-        let key_error = load_existing_secret_master_key(root.path()).unwrap_err();
-        assert!(key_error
-            .to_string()
-            .contains("conflicts with the legacy runtime key"));
-        assert_eq!(
-            fs::read(master_key_path(root.path()))?,
-            protected_key_before
-        );
-        persistence::store_text_value(root.path(), MASTER_KEY_STORAGE_KEY, None)?;
-        assert_eq!(
-            get_secret_value(root.path(), "reader-fixture", "token")?,
-            "before"
-        );
-        put_secret(
-            root.path(),
-            "reader-fixture",
-            "token",
-            "after",
-            None,
-            json!({}),
-        )?;
-        assert_eq!(
-            get_secret_value(root.path(), "reader-fixture", "token")?,
-            "after"
-        );
-        delete_secret(root.path(), "reader-fixture", "token")?;
-        assert!(get_secret_value(root.path(), "reader-fixture", "token").is_err());
-        Ok(())
+            put_secret(
+                root.path(),
+                "reader-fixture",
+                "token",
+                "after",
+                None,
+                json!({}),
+            )?;
+            assert_eq!(
+                get_secret_value(root.path(), "reader-fixture", "token")?,
+                "after"
+            );
+            delete_secret(root.path(), "reader-fixture", "token")?;
+            assert!(get_secret_value(root.path(), "reader-fixture", "token").is_err());
+            Ok(())
+        })
     }
 
     #[test]
     fn credential_tuple_delete_is_atomic_and_idempotent() -> Result<()> {
-        let root = temp_root("tuple-delete");
-        fs::create_dir_all(&root)?;
-        write_secret_records(
-            &root,
-            &[
-                SecretRecordWrite {
-                    scope: "provider-subscriptions",
-                    name: "account-access",
-                    value: "access-do-not-leak",
-                    description: None,
-                    metadata: json!({}),
-                },
-                SecretRecordWrite {
-                    scope: "provider-subscriptions",
-                    name: "account-refresh",
-                    value: "refresh-do-not-leak",
-                    description: None,
-                    metadata: json!({}),
-                },
-            ],
-        )?;
-
-        assert_eq!(
-            delete_secret_records(
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            fs::create_dir_all(&root)?;
+            write_secret_records(
                 &root,
                 &[
-                    ("provider-subscriptions", "account-access"),
-                    ("provider-subscriptions", "account-refresh"),
+                    SecretRecordWrite {
+                        scope: "provider-subscriptions",
+                        name: "account-access",
+                        value: "access-do-not-leak",
+                        description: None,
+                        metadata: json!({}),
+                    },
+                    SecretRecordWrite {
+                        scope: "provider-subscriptions",
+                        name: "account-refresh",
+                        value: "refresh-do-not-leak",
+                        description: None,
+                        metadata: json!({}),
+                    },
                 ],
-            )?,
-            2
-        );
-        assert!(!secret_exists(
-            &root,
-            "provider-subscriptions",
-            "account-access"
-        )?);
-        assert!(!secret_exists(
-            &root,
-            "provider-subscriptions",
-            "account-refresh"
-        )?);
-        assert_eq!(
-            delete_secret_records(
-                &root,
-                &[
-                    ("provider-subscriptions", "account-access"),
-                    ("provider-subscriptions", "account-refresh"),
-                ],
-            )?,
-            0
-        );
+            )?;
 
-        let _ = fs::remove_dir_all(&root);
-        Ok(())
+            assert_eq!(
+                delete_secret_records(
+                    &root,
+                    &[
+                        ("provider-subscriptions", "account-access"),
+                        ("provider-subscriptions", "account-refresh"),
+                    ],
+                )?,
+                2
+            );
+            assert!(!secret_exists(
+                &root,
+                "provider-subscriptions",
+                "account-access"
+            )?);
+            assert!(!secret_exists(
+                &root,
+                "provider-subscriptions",
+                "account-refresh"
+            )?);
+            assert_eq!(
+                delete_secret_records(
+                    &root,
+                    &[
+                        ("provider-subscriptions", "account-access"),
+                        ("provider-subscriptions", "account-refresh"),
+                    ],
+                )?,
+                0
+            );
+
+            // Shared fixture removes the root after the owner shutdown.
+            Ok(())
+        })
     }
 
     #[test]
@@ -3016,53 +3037,54 @@ mod tests {
 
     #[test]
     fn secret_intake_stores_secret_and_rewrites_memory_reference() -> Result<()> {
-        let root = temp_root("intake");
-        fs::create_dir_all(&root)?;
-        let lcm_db = root.join("runtime").join("ctox.sqlite3");
-        if let Some(parent) = lcm_db.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let engine = lcm::LcmEngine::open(&lcm_db, lcm::LcmConfig::default())?;
-        engine.add_message(
-            51,
-            "user",
-            "Please use sk-live-super-secret for the monitoring API",
-        )?;
-        drop(engine);
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            fs::create_dir_all(&root)?;
+            let lcm_db = root.join("runtime").join("ctox.sqlite3");
+            if let Some(parent) = lcm_db.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            lcm::run_add_message(
+                &lcm_db,
+                51,
+                "user",
+                "Please use sk-live-super-secret for the monitoring API",
+            )?;
 
-        let intake = intake_secret(
-            &root,
-            "monitoring",
-            "api-token",
-            "sk-live-super-secret",
-            Some("Monitoring API token".to_string()),
-            json!({"source": "user_message"}),
-            Some(IntakeRewriteRequest {
-                db_path: lcm_db.clone(),
-                conversation_id: 51,
-                match_text: "sk-live-super-secret".to_string(),
-                label: Some("monitoring api token".to_string()),
-            }),
-        )?;
+            let intake = intake_secret(
+                &root,
+                "monitoring",
+                "api-token",
+                "sk-live-super-secret",
+                Some("Monitoring API token".to_string()),
+                json!({"source": "user_message"}),
+                Some(IntakeRewriteRequest {
+                    db_path: lcm_db.clone(),
+                    conversation_id: 51,
+                    match_text: "sk-live-super-secret".to_string(),
+                    label: Some("monitoring api token".to_string()),
+                }),
+            )?;
 
-        assert_eq!(intake.secret.scope, "monitoring");
-        let rewrite = intake.rewrite.context("expected memory rewrite result")?;
-        assert_eq!(rewrite.message_rows_updated, 1);
-        assert_eq!(
-            get_secret_value(&root, "monitoring", "api-token")?,
-            "sk-live-super-secret"
-        );
+            assert_eq!(intake.secret.scope, "monitoring");
+            let rewrite = intake.rewrite.context("expected memory rewrite result")?;
+            assert_eq!(rewrite.message_rows_updated, 1);
+            assert_eq!(
+                get_secret_value(&root, "monitoring", "api-token")?,
+                "sk-live-super-secret"
+            );
 
-        let snapshot = lcm::run_dump(&lcm_db, 51)?;
-        assert!(snapshot.messages[0]
-            .content
-            .contains("[secret-ref:monitoring/api-token label=monitoring api token]"));
-        assert!(!snapshot.messages[0]
-            .content
-            .contains("sk-live-super-secret"));
+            let snapshot = lcm::run_dump(&lcm_db, 51)?;
+            assert!(snapshot.messages[0]
+                .content
+                .contains("[secret-ref:monitoring/api-token label=monitoring api token]"));
+            assert!(!snapshot.messages[0]
+                .content
+                .contains("sk-live-super-secret"));
 
-        let _ = fs::remove_dir_all(&root);
-        Ok(())
+            // Shared fixture removes the root after the owner shutdown.
+            Ok(())
+        })
     }
 
     #[test]
@@ -3094,9 +3116,10 @@ mod tests {
 
     #[test]
     fn auto_intake_prompt_secrets_stores_and_rewrites_high_confidence_literals() -> Result<()> {
-        let root = temp_root("prompt-auto-intake");
-        fs::create_dir_all(&root)?;
-        let prompt = "\
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            fs::create_dir_all(&root)?;
+            let prompt = "\
 openAI API key:
 sk-proj-super-secret-key-1234567890
 
@@ -3108,67 +3131,71 @@ owner@example.com
 vercel-password-123
 ";
 
-        let result = auto_intake_prompt_secrets(&root, prompt)?;
+            let result = auto_intake_prompt_secrets(&root, prompt)?;
 
-        assert!(result.auto_ingested_secrets >= 4);
-        assert!(!result
-            .sanitized_prompt
-            .contains("sk-proj-super-secret-key-1234567890"));
-        assert!(!result
-            .sanitized_prompt
-            .contains("postgresql://user:pw@example.neon.tech/db?sslmode=require"));
-        assert!(!result.sanitized_prompt.contains("vercel-password-123"));
-        assert!(result
-            .sanitized_prompt
-            .contains("[secret-ref:credentials/OPENAI_API_KEY"));
-        assert!(result
-            .sanitized_prompt
-            .contains("[secret-ref:credentials/DATABASE_URL"));
-        assert!(result
-            .sanitized_prompt
-            .contains("[secret-ref:captured-input/VERCEL_LOGIN_PASSWORD"));
+            assert!(result.auto_ingested_secrets >= 4);
+            assert!(!result
+                .sanitized_prompt
+                .contains("sk-proj-super-secret-key-1234567890"));
+            assert!(!result
+                .sanitized_prompt
+                .contains("postgresql://user:pw@example.neon.tech/db?sslmode=require"));
+            assert!(!result.sanitized_prompt.contains("vercel-password-123"));
+            assert!(result
+                .sanitized_prompt
+                .contains("[secret-ref:credentials/OPENAI_API_KEY"));
+            assert!(result
+                .sanitized_prompt
+                .contains("[secret-ref:credentials/DATABASE_URL"));
+            assert!(result
+                .sanitized_prompt
+                .contains("[secret-ref:captured-input/VERCEL_LOGIN_PASSWORD"));
 
-        assert_eq!(
-            get_secret_value(&root, "credentials", "OPENAI_API_KEY")?,
-            "sk-proj-super-secret-key-1234567890"
-        );
-        assert_eq!(
-            get_secret_value(&root, "credentials", "DATABASE_URL")?,
-            "postgresql://user:pw@example.neon.tech/db?sslmode=require"
-        );
-        assert_eq!(
-            get_secret_value(&root, "captured-input", "VERCEL_LOGIN_EMAIL")?,
-            "owner@example.com"
-        );
-        assert_eq!(
-            get_secret_value(&root, "captured-input", "VERCEL_LOGIN_PASSWORD")?,
-            "vercel-password-123"
-        );
+            assert_eq!(
+                get_secret_value(&root, "credentials", "OPENAI_API_KEY")?,
+                "sk-proj-super-secret-key-1234567890"
+            );
+            assert_eq!(
+                get_secret_value(&root, "credentials", "DATABASE_URL")?,
+                "postgresql://user:pw@example.neon.tech/db?sslmode=require"
+            );
+            assert_eq!(
+                get_secret_value(&root, "captured-input", "VERCEL_LOGIN_EMAIL")?,
+                "owner@example.com"
+            );
+            assert_eq!(
+                get_secret_value(&root, "captured-input", "VERCEL_LOGIN_PASSWORD")?,
+                "vercel-password-123"
+            );
 
-        let _ = fs::remove_dir_all(&root);
-        Ok(())
+            // Shared fixture removes the root after the owner shutdown.
+            Ok(())
+        })
     }
 
     #[test]
     fn auto_intake_does_not_rewrite_workspace_paths_as_secrets() -> Result<()> {
-        let root = temp_root("prompt-auto-intake-workspace-path");
-        fs::create_dir_all(&root)?;
-        let workspace = "/home/you/ctox/runtime/model-smoke/20260506T195937-hy3-responses-id-smoke";
-        let prompt = format!(
-            "Work only inside this workspace: {workspace}\nCreate smoke.txt in that workspace."
-        );
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            fs::create_dir_all(&root)?;
+            let workspace =
+                "/home/you/ctox/runtime/model-smoke/20260506T195937-hy3-responses-id-smoke";
+            let prompt = format!(
+                "Work only inside this workspace: {workspace}\nCreate smoke.txt in that workspace."
+            );
 
-        let result = auto_intake_prompt_secrets(&root, &prompt)?;
+            let result = auto_intake_prompt_secrets(&root, &prompt)?;
 
-        assert_eq!(result.auto_ingested_secrets, 0);
-        assert_eq!(result.sanitized_prompt, prompt);
-        assert!(!secret_exists(
-            &root,
-            "captured-input",
-            "WORK_ONLY_INSIDE_THIS_WORKSPACE"
-        )?);
+            assert_eq!(result.auto_ingested_secrets, 0);
+            assert_eq!(result.sanitized_prompt, prompt);
+            assert!(!secret_exists(
+                &root,
+                "captured-input",
+                "WORK_ONLY_INSIDE_THIS_WORKSPACE"
+            )?);
 
-        let _ = fs::remove_dir_all(&root);
-        Ok(())
+            // Shared fixture removes the root after the owner shutdown.
+            Ok(())
+        })
     }
 }
