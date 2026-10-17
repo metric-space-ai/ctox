@@ -454,7 +454,7 @@ mod queue_capacity_tests {
         );
         for job in &jobs {
             assert!(!queue_job_reuses_persistent_session(
-                &chat_turn_session_options_for_queue_job(job)
+                &chat_turn_session_options_for_queue_job(&root, job)
             ));
         }
         runtime_env::set_runtime_env_value(&root, "queue.worker_capacity", "9")?;

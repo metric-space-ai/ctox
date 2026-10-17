@@ -591,7 +591,7 @@ mod command_writeback_tests {
                 context.pointer("/command/payload/writeback_contract"),
                 Some(&contract)
             );
-            let mut options = chat_turn_session_options_for_queue_job(&job);
+            let mut options = chat_turn_session_options_for_queue_job(root, &job);
             let error = configure_business_os_mcp_session_for_queue_job(root, &job, &mut options)
                 .expect_err("an incomplete writeback contract must stop the turn")
                 .to_string();
@@ -654,7 +654,7 @@ mod command_writeback_tests {
             .context("test research queue task missing")?;
         let task = channels::load_queue_task(root, key)?.context("test queue task missing")?;
         let job = queued_prompt_from_queue_task(task);
-        let mut options = chat_turn_session_options_for_queue_job(&job);
+        let mut options = chat_turn_session_options_for_queue_job(root, &job);
         assert!(configure_business_os_mcp_session_for_queue_job(
             root,
             &job,
