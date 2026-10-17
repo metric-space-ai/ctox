@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { cmd, createTestCtx } from './_ctx.mjs';
+import './ctox-shared-loader.mjs'; // ctox:shared/ wie der Service Worker (Handler mit prompt-template.js)
 import { createAgentTaskSim } from '../../../../v4/tools/agent-sim/agent-task-sim.mjs';
 
 const APP_DIR = fileURLToPath(new URL('../..', import.meta.url));

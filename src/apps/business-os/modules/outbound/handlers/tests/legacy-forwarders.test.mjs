@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createTestCtx, cmd } from './_ctx.mjs';
+import './ctox-shared-loader.mjs'; // ctox:shared/ wie der Service Worker (Handler mit prompt-template.js)
 
 const dir = fileURLToPath(new URL('..', import.meta.url));
 const handlerFiles = readdirSync(dir).filter((name) => name.endsWith('.js'));
