@@ -86,7 +86,7 @@ try{
  const visible=frame?await page.locator('[data-v4-frame]').first().evaluate(el=>({shellVersion:el.dataset.shellVer,visible:!!el.getBoundingClientRect().width})):null;
  criterion('browser-static-http',r.browserResponses.every(x=>x.path==='/api/business-os/launch-context'&&x.status===503),{failures:r.browserResponses.filter(x=>x.path!=='/api/business-os/launch-context')});
  criterion('browser-boot',frame&&navigationStatus===200&&!r.console.some(x=>x.v4BootError),{durationMs:Date.now()-at,navigationStatus,frame,visible,errorClass});
- if(frame){
+ if(frame&&!pendingSignaling){
   const command=await page.evaluate(async()=>{
    const begin=performance.now(),h=globalThis.__m7Boot.kernel.appApi('ctox-platform','1').command('ctox.workjet.device.v1',{action:'binding.list'});
    await h.local;const localMs=performance.now()-begin;await h.result;const acceptedMs=performance.now()-begin;
@@ -94,7 +94,7 @@ try{
    const status=h.status.get();return {commandId:h.id,type:'ctox.workjet.device.v1',terminalStatus:status.status,localMs,acceptedMs,terminalMs:performance.now()-begin};
   }).catch(error=>({terminalStatus:'failed',errorClass:error.name}));
   criterion('platform-command-roundtrip',command.terminalStatus==='done',command);
- }else r.criteria.push({id:'platform-command-roundtrip',status:'not_run',reason:pendingSignaling&&browserSignalingBlocked()?'signaling-deploy':'browser-boot',observed:'Browser did not boot; no command was submitted',submitted:false});
+ }else r.criteria.push({id:'platform-command-roundtrip',status:'not_run',reason:pendingSignaling?'signaling-deploy':'browser-boot',observed:pendingSignaling?'Controller marks signaling deployment pending; no command was submitted':'Browser did not boot; no command was submitted',submitted:false});
  r.visualEvidence='whitelisted frame/visibility metadata only; no session or grant-bearing screenshot';await context.close();
  r.pass=r.criteria.every(x=>x.status==='pass');
 }catch(error){r.errorClass=error.name;r.errorSha256=digest(String(error.message));criterion('runner-completed',false,{phase:r.phase||'setup',errorClass:error.name});}

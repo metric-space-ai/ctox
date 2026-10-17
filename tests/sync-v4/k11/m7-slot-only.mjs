@@ -13,8 +13,11 @@ const c=JSON.parse(fs.readFileSync(join(previous,'sandbox.json')));
 const smoke={...JSON.parse(fs.readFileSync(join(base,'signed-smoke.json'))),dataReference:join(previous,'data-before.json')};
 if(activeReceipt){
  const file=resolve(activeReceipt);if(!file.startsWith(allowed+'/'))throw Error('Private activation receipt required');
- const r=JSON.parse(fs.readFileSync(file)),done=JSON.parse(fs.readFileSync(join(resolve(file,'..'),'probe/controller.json')));
- if(r.prior!==base||r.signedSmoke?.signedSlot?.status!=='pass'||r.signedSmoke.signedSlot.artifactSha256!==smoke.slotSha256||r.signedSmoke.signedSlot.sourceCommit!==smoke.slotSourceSha||!done.groupAbsent||!done.network?.childTerminal)throw Error('Prior active slot or terminal controller custody differs');
+ const r=JSON.parse(fs.readFileSync(file)),full=file===join(base,'result.json');
+ const selected=full?r.afterForward:r.signedSmoke;
+ const done=JSON.parse(fs.readFileSync(full?join(previous,'controller.json'):join(resolve(file,'..'),'probe/controller.json')));
+ const sameProfile=full?r.lifecyclePass===true&&r.roundtripExecuted===true&&r.dataPreserved===true&&r.mainSha===smoke.mainSha:r.prior===base;
+ if(!sameProfile||selected?.signedSlot?.status!=='pass'||selected.signedSlot.artifactSha256!==smoke.slotSha256||selected.signedSlot.sourceCommit!==smoke.slotSourceSha||!done.groupAbsent||!done.network?.childTerminal)throw Error('Prior active slot or terminal controller custody differs');
  smoke.verifiedActiveReceipt=file;
 }
 if(!smoke.version||!smoke.slotSha256)throw Error('Real signed slot config required');
