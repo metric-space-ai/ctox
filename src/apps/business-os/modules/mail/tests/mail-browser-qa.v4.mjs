@@ -431,10 +431,10 @@ mailQa: try {
   await step('editor.undo-redo', 'L582-L587', async () => {
     // Auf die Wirkung warten statt auf feste Zeiten (CI 17.10.: Verlauf asynchron). Jede Station wird protokolliert und
     // steht im Fehlertext, damit ein Rot auf dem Runner ohne Rätselraten lesbar ist.
-    const texts = () => editorFrame.locator('[contenteditable="true"]').evaluateAll((els) => els.map((e) => (e.innerText || '').trim().slice(0, 60)));
+    const texts = () => editorFrame.locator('[contenteditable="true"]').evaluateAll((els) => els.map((e) => (e.innerText || '').trim()));
     const full = async () => (await texts()).some((t) => t.includes('Echter visueller Kampagneninhalt'));
     const log = [];
-    const note = async (label) => log.push(`${label}: ${JSON.stringify(await texts())}`);
+    const note = async (label) => log.push(`${label}: ${JSON.stringify((await texts()).map((t) => t.slice(0, 80)))}`); // nur das Protokoll kürzt
     const fail = (what) => { throw new Error(`${what} – Verlauf ${log.join(' | ')}`); };
     await page.locator('[data-mail-content-title]').click();
     await page.waitForTimeout(500);
