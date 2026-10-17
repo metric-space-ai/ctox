@@ -788,8 +788,8 @@
     "handlers/threads.thread.watch.js": "fa009979c0e9be64b5e3b5cd342cd2d130b390bb7df1d2dced36946a46ca477e",
     "icon.svg": "95ecb93feb4ff290216e4dc1e4a1e8d9f5beff5ed7a7333d136d321b8e0d7c79",
     "index.css": "cc6c5ea46991713acb622e0c9c602f072d2536128cd6a7e79b630cced3120470",
-    "index.html": "e9403c29e33a3507baaa18f5ea24a00efaf3e8d33efe4de2a0ff9776978977e2",
-    "index.js": "0858c0df0f994e805c7f6c6043283d5d81f597f06bb4bc64c421d8837f798024",
+    "index.html": "055a9c2e8a8bc019d2d84e0848d0b9f2b196b7c41a4bdfd425346a441cd7b624",
+    "index.js": "7fb1687c3c14f5afe963cded07ecca5ab44a946c6499b2698ac2c3dde3d63e73",
     "links.js": "f85a00cab723c3fa4e974b558d62af7856a601ae18c2c2f480cfac5a030e33a8",
     "locales/de.json": "ee883f393ac1cab073f1e7fa2d2d113ddf864413c8b3168ecf75ab07590eef5f",
     "locales/en.json": "5f1250080d6832729c7d5c43a334b61cf7b5b9e5663e3907e2dcc84b0a261122",
@@ -803,7 +803,7 @@
     "business_apps": {
       "_evidence": {
         "code_read": [
-          "index.js:182",
+          "index.js:185",
           "naming.js:10"
         ],
         "code_write": [],
@@ -837,7 +837,7 @@
     "business_users": {
       "_evidence": {
         "code_read": [
-          "index.js:176"
+          "index.js:179"
         ],
         "code_write": [],
         "sources": [
@@ -1129,7 +1129,7 @@
         "code_read": [
           "handlers/_chat_access.js:7",
           "handlers/_chat_access.js:12",
-          "index.js:184"
+          "index.js:187"
         ],
         "code_write": [],
         "declaration_basis": "modules/threads/V4-PORT.md OFFEN 2",
@@ -1244,7 +1244,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "d2005e950304c0ef5aee628d789f58f6fd9f6b70af31b8ac8b205c21791d506a",
+    "base_hash": "cd9bed756b9215fb99f215c3b27cc4d9c0674f3971eb964d301c858861dfa99d",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },
