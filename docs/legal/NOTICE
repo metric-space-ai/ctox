@@ -5,6 +5,17 @@ and integrated per-model inference trees.
 
 Primary integrated source trees:
 
+- src/tools/actions-runner
+  Rust translations/adaptations of nektos/act v0.2.89, upstream commit
+  4f411281417e88660bea1c1a1749aa71ae0bd60f (MIT), plus docker/cli, moby,
+  go-git, go-units, go-connections and distribution/reference (Apache-2.0),
+  Go standard-library and spf13/pflag code (BSD-3-Clause), and the GitHub
+  workflow-v1.0 schema, rhysd/actionlint and go-shellquote (MIT).
+  Full component copyrights, licenses, notices, source versions and adaptation
+  scope are retained in src/tools/actions-runner/THIRD-PARTY-NOTICES.
+  LICENSE-MIT retains act's original license. The crate's Cargo license is
+  MIT AND Apache-2.0 AND BSD-3-Clause. Docker execution is disabled by default.
+
 - src/core/transfers/vendor/smb
   Published smb 0.12.1 from https://github.com/afiffon/smb-rs at
   7c7d4a60c930e3780e95208967aa13b6346eaa25, MIT license.

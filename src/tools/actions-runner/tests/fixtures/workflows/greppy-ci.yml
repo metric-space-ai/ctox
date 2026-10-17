@@ -1,0 +1,427 @@
+name: CI
+
+# Track C — CI + release-build battle/soak validation.
+#
+# Gates every push and pull request on:
+#   * fast non-inference build/test/clippy with SHA-verified sentinel assets
+#   * default product links with both real models on ELF, Mach-O, and PE/COFF
+#   * cargo fmt    --check
+#   * a --release build + the black-box battle suite
+#     (bash bench/battle/run_battle.sh)
+#
+# The Rust toolchain is pinned by the repo's rust-toolchain.toml
+# (channel 1.95.0, components rustfmt + clippy); we do NOT override the
+# channel here so local and CI builds use the identical compiler.
+#
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * *"
+
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  check:
+    name: build / test / lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    env:
+      GIT_LFS_SKIP_SMUDGE: "1"
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Reject tracked files covered by .gitignore
+        shell: bash
+        run: |
+          tracked_ignored="$(git ls-files -ci --exclude-standard)"
+          if [[ -n "$tracked_ignored" ]]; then
+            echo "Tracked files must not also be ignored:" >&2
+            echo "$tracked_ignored" >&2
+            exit 1
+          fi
+
+      # This job intentionally does not fetch Git LFS. Its debug-only,
+      # compile-guarded sentinel assets keep black-box CLI process startup
+      # small; `real-assets-link` verifies the actual product payloads.
+
+      # rust-toolchain.toml pins the channel + components; this action
+      # The immutable action SHA cannot infer a channel from its ref name, so
+      # keep this explicit value synchronized with rust-toolchain.toml.
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: '1.95.0'
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry, git, and target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-fast-assets-v1-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-fast-assets-v1-
+
+      # The battle scripts shell out to sqlite3 (PRAGMA integrity_check,
+      # node/edge dumps). macOS runners ship it; Ubuntu needs the CLI.
+      - name: Install sqlite3 (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y sqlite3
+
+      # The platform GPU backend is not opt-in, so every Linux build compiles the
+      # vendored ggml-cuda kernels and needs nvcc. release.yml already installs
+      # this exact pinned toolkit for the same reason; CI was never brought in
+      # line and has been red on every 0.3.0 branch since the backend became
+      # mandatory. No GPU is needed at build time — only the compiler.
+      - name: Install CUDA toolkit (Ubuntu)
+        if: runner.os == 'Linux'
+        uses: Jimver/cuda-toolkit@4bd727d5619dc6fa323b1e76c3aa5dca94f5ec6d
+        with:
+          cuda: '12.5.0'
+          method: network
+          sub-packages: '["nvcc", "cudart"]'
+          non-cuda-sub-packages: '["libcublas", "libcublas-dev"]'
+
+      - name: Show toolchain
+        run: |
+          rustc --version
+          cargo --version
+          cargo clippy --version
+
+      - name: cargo build --workspace (fast test assets)
+        run: cargo build --workspace --features greppy/ci-test-assets
+
+      # Several crates' unit tests mutate process-global env via set_var
+      # (GREPPY_* config knobs). set_var is process-wide across the test
+      # harness's parallel threads, so one test's override leaks into another
+      # test's concurrent index()/discovery and skips files — intermittent
+      # failures. Run unit tests single-threaded for deterministic results;
+      # real concurrency is covered separately by bench/battle/concurrency.sh.
+      - name: cargo test --workspace (single-threaded — env-var test isolation)
+        # The unoptimized, generated full CLI parser exceeds the 2 MiB
+        # libtest thread stack. Same-source verification: debug2MiB aborts,
+        # debug8MiB and optimized release2MiB pass. Match the Windows debug
+        # test budget; this changes neither product builds nor timeouts.
+        env:
+          RUST_MIN_STACK: "8388608"
+        run: cargo test --workspace --no-fail-fast --features greppy/ci-test-assets -- --test-threads=1
+
+      - name: x86 portable CPU dispatch gate
+        if: runner.os == 'Linux'
+        env:
+          EMBED_NATIVE_CPU_SIMD: scalar
+        run: cargo test -p greppy-embed-native --lib cpu_simd_override_selects_requested_supported_kernel
+
+      # clippy is pinned to 1.95.0 (rust-toolchain.toml). The lints allowed below
+      # are style/complexity lints (no bug/correctness lints) that clippy 1.95
+      # newly flags on pre-existing, correct code. We hard-gate on rustc warnings
+      # (dead_code, unused, …) and clippy correctness/suspicious/perf, and treat
+      # this specific batch as advisory. Tracked for a follow-up cleanup pass.
+      - name: cargo clippy --workspace --all-targets -- -D warnings
+        run: >
+          cargo clippy --workspace --all-targets --features greppy/ci-test-assets -- -D warnings
+          -A clippy::unnecessary_lazy_evaluations
+          -A clippy::too_many_arguments
+          -A clippy::needless_range_loop
+          -A clippy::manual_pattern_char_comparison
+          -A clippy::manual_is_multiple_of
+          -A clippy::len_zero
+          -A clippy::bool_assert_comparison
+          -A clippy::skip_while_next
+          -A clippy::needless_return
+          -A clippy::single_char_add_str
+          -A clippy::assertions_on_constants
+          -A clippy::useless_vec
+          -A clippy::infallible_destructuring_match
+
+      - name: cargo fmt --check
+        run: cargo fmt --all -- --check
+
+      # These are deterministic unit tests for repository-owned parsers and
+      # harness code. They do not execute an agent, score an outcome, or make a
+      # benchmark result part of release eligibility.
+      - name: benchmark precision tooling unit tests (no agent outcomes)
+        run: python3 -m unittest discover -s bench/agent_efficiency -p 'test_*.py' -v
+
+      - name: coding harness unit tests (no agent outcomes)
+        run: |
+          python3 -m unittest tools.test_materialize_benchmark_corpus -v
+          python3 -m unittest discover -s bench/agent_coding -p 'test_*.py' -v
+          # v1 micro-revert bank retired (owner decision 2026-07-21); full
+          # validate-only returns once the v2 runner integration lands.
+          python3 - <<'PY'
+          import json, pathlib
+          # The task bank is benchmark corpus and is maintained in the benchmark
+          # repository, not here. When it is absent this is not a product
+          # failure — say so and move on. Where the corpus IS checked out, the
+          # integrity gate still runs unchanged.
+          bank = pathlib.Path("bench/agent_coding/tasks_v2.json")
+          if not bank.exists():
+              print("tasks_v2 bank not in this checkout: corpus lives in the benchmark repo — skipped")
+              raise SystemExit(0)
+          d = json.load(bank.open())
+          tasks = d["tasks"] if isinstance(d, dict) and "tasks" in d else d
+          assert len(tasks) >= 40, f"v2 bank too small: {len(tasks)}"
+          assert all(t.get("test_patch") and t["repository"]["commit"] for t in tasks)
+          print(f"tasks_v2 bank ok: {len(tasks)} real-commit tasks")
+          PY
+
+      - name: runtime footprint evidence harness
+        run: python3 -m unittest bench.test_runtime_footprint -v
+
+      - name: function summary quality gate logic
+        run: python3 -m unittest bench.test_summary_quality -v
+
+      - name: immutable GitHub Action pins
+        run: |
+          python3 -m unittest tools/test_verify_workflow_action_pins.py -v
+          python3 tools/verify_workflow_action_pins.py
+
+      - name: model redistribution verifier tests
+        run: python3 -m unittest tools/test_verify_model_redistribution.py
+
+      - name: Qwen training provenance package
+        run: |
+          python3 -m unittest discover -s training/qwen35/tests -v
+          python3 training/qwen35/verify_package.py
+
+      # Black-box battle suite against the freshly built debug binaries. The
+      # real-assets-link and the release workflow separately build the actual
+      # embedded payload, avoiding repeated 827 MB process images here.
+      - name: battle suite (bench/battle/run_battle.sh)
+        env:
+          # Point the harness at the debug binaries we just built.
+          GREPPY_BIN: ${{ github.workspace }}/target/debug/greppy
+        run: bash bench/battle/run_battle.sh
+
+  # Link the actual 827 MB embedded payload on every Tier-1 object format.
+  # This is deliberately separate from fast tests: release/default builds
+  # never use sentinels, and a real link catches missing LFS assets plus
+  # PE/COFF, Mach-O, or ELF size/link regressions.
+  real-assets-link:
+    # Branch protection consumes this published name. Keep the Windows context
+    # stable when pinning its runner for WDK compatibility; the real build and
+    # inference gates below still execute on windows-2022.
+    name: real embedded assets (${{ matrix.check_name || matrix.os }})
+    runs-on: ${{ matrix.os }}
+    env:
+      EMBED_NATIVE_GGUF: ${{ github.workspace }}/crates/cli/assets/embeddinggemma-300m-q4k/embeddinggemma-300M-Q4_K.gguf
+      EMBED_NATIVE_TOKENIZER: ${{ github.workspace }}/crates/cli/assets/embeddinggemma-300m-q4k/tokenizer.json
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-2022]
+        include:
+          - os: windows-2022
+            check_name: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Restore model assets
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            crates/cli/assets/qwen35-0.8b-mtp-q4km/Qwen3.5-0.8B-MTP-Q4_K_M.gguf
+            crates/cli/assets/qwen35-0.8b-mtp-q4km/tokenizer.json
+            crates/cli/assets/embeddinggemma-300m-q4k/embeddinggemma-300M-Q4_K.gguf
+            crates/cli/assets/embeddinggemma-300m-q4k/tokenizer.json
+          key: model-assets-${{ hashFiles('crates/cli/assets/MODEL_ASSETS.json') }}
+
+      - name: Fetch model assets (release-hosted, sha-pinned)
+        shell: bash
+        run: ./tools/fetch_model_assets.sh
+
+      - name: Verify model redistribution integrity
+        run: python tools/verify_model_redistribution.py
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: '1.95.0'
+
+      - name: Install CUDA toolkit (Ubuntu)
+        if: runner.os == 'Linux'
+        uses: Jimver/cuda-toolkit@4bd727d5619dc6fa323b1e76c3aa5dca94f5ec6d
+        with:
+          cuda: '12.5.0'
+          method: network
+          sub-packages: '["nvcc", "cudart"]'
+          non-cuda-sub-packages: '["libcublas", "libcublas-dev"]'
+
+      # Windows CUDA is deliberately outside the release gate (release.yml ships
+      # a CPU Windows binary), so this is the one target that builds without a
+      # GPU backend — and it must say so out loud rather than drift into a
+      # silent CPU build.
+      - name: Build default product binary with real assets
+        run: cargo build -p greppy --bin greppy ${{ runner.os == 'Windows' && '--features cpu-only' || '' }}
+
+      - name: Real CPU embedding inference gates
+        run: |
+          cargo test --release -p greppy-embed-native --test dequant_parity -- --nocapture
+          cargo test --release -p greppy-embed-native --test forward_parity -- --nocapture
+          cargo test --release -p greppy-embed-native --test api_contract -- --nocapture
+          cargo test --release -p greppy-embed-native --test tokenizer_parity -- --nocapture
+
+      - name: Apple Silicon Metal inference gates
+        if: runner.os == 'macOS'
+        run: |
+          cargo test -p greppy-embed-native --features metal --lib -- --test-threads=1
+          cargo test -p greppy-embed-native --features metal --test metal_kernel_parity
+          cargo test -p greppy-embed-native --features metal --test metal_forward_parity
+
+  windows-cpu:
+    name: Windows CPU + named-pipe daemons
+    runs-on: windows-2022
+    env:
+      GIT_LFS_SKIP_SMUDGE: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: '1.95.0'
+          components: rustfmt
+
+      - name: Cache cargo registry, git, and target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: windows-cpu-fast-assets-v1-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: windows-cpu-fast-assets-v1-
+
+      - name: Build exact Greppy WinFsp transport fork
+        shell: pwsh
+        run: |
+          $fork = Join-Path $env:RUNNER_TEMP 'greppy-winfsp-fork'
+          tools/build_winfsp_fork.ps1 -Destination $fork
+          "GREPPY_WINFSP_FORK_ROOT=$fork" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      # This job's name is its contract: Windows ships a CPU binary, so the
+      # backend assertion is waived explicitly here and nowhere else.
+      - name: Build Windows CPU test binary
+        run: cargo build --workspace --features greppy/ci-test-assets,greppy/cpu-only
+
+      - name: Test Windows locks, portable agent fail-closed, and daemon transport
+        env:
+          # Rust's test harness runs each test on a fresh thread; match the
+          # 8 MiB PE stack stamped into the real Windows CLI by build.rs.
+          RUST_MIN_STACK: "8388608"
+        run: cargo test -p greppy-core -p greppy-embed-native -p greppy-agent -p greppy --lib --features greppy/ci-test-assets,greppy/cpu-only -- --test-threads=1
+
+      - name: Verify doctor registry
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/greppy-doctor-root","$env:RUNNER_TEMP/greppy-doctor-store" | Out-Null
+          $env:GREPPY_STORE_DIR = "$env:RUNNER_TEMP/greppy-doctor-store"
+          $output = & target/debug/greppy.exe --device cpu doctor --json --root "$env:RUNNER_TEMP/greppy-doctor-root"
+          $doctorExit = $LASTEXITCODE
+          $output | Out-File -Encoding utf8 doctor.json
+          if ($doctorExit -ne 0 -and $doctorExit -ne 1) {
+            Write-Error "Windows doctor failed with unexpected exit code $doctorExit"
+            exit 1
+          }
+          $doctor = Get-Content doctor.json -Raw | ConvertFrom-Json
+          if ($doctor.inference.registry.selected_backend -ne 'cpu') {
+            Write-Error 'Windows CPU registry selection failed'
+            exit 1
+          }
+          if (-not $doctor.inference.daemons.embedding.state -or -not $doctor.inference.daemons.summary.state) {
+            Write-Error 'Windows daemon diagnostics are incomplete'
+            exit 1
+          }
+          exit 0
+
+  # Heavier validation runs nightly and on explicit dispatch. Release package
+  # validation belongs to release.yml and is not duplicated here.
+  soak:
+    name: nightly soak (${{ matrix.os }})
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Restore model assets
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            crates/cli/assets/qwen35-0.8b-mtp-q4km/Qwen3.5-0.8B-MTP-Q4_K_M.gguf
+            crates/cli/assets/qwen35-0.8b-mtp-q4km/tokenizer.json
+            crates/cli/assets/embeddinggemma-300m-q4k/embeddinggemma-300M-Q4_K.gguf
+            crates/cli/assets/embeddinggemma-300m-q4k/tokenizer.json
+          key: model-assets-${{ hashFiles('crates/cli/assets/MODEL_ASSETS.json') }}
+
+      - name: Fetch model assets (release-hosted, sha-pinned)
+        shell: bash
+        run: ./tools/fetch_model_assets.sh
+
+      - name: Install pinned Rust toolchain
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: '1.95.0'
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry, git, and target
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: |
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-soak-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-soak-
+            ${{ runner.os }}-cargo-
+
+      - name: Install sqlite3 (Ubuntu)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y sqlite3
+
+      - name: Build debug binaries (Linux CPU)
+        if: runner.os == 'Linux'
+        run: cargo build --bins --features cpu-only
+
+      - name: Build debug binaries (macOS Metal)
+        if: runner.os == 'macOS'
+        run: cargo build --bins
+
+      - name: battle suite + soak
+        env:
+          GREPPY_BIN: ${{ github.workspace }}/target/debug/greppy
+          BATTLE_SOAK: "1"
+          BATTLE_SOAK_ITERS: "100"
+          BATTLE_SOAK_FILES: "40"
+        run: bash bench/battle/run_battle.sh

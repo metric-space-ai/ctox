@@ -148,6 +148,7 @@ members = [
     "src/core/store",
     "src/core/execution/cliproxyapi",
     "src/tools/postgres-adapter",
+    "src/tools/actions-runner",
 ]
 exclude = [
     "src/core/app_runtime",
