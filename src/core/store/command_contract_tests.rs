@@ -58,6 +58,73 @@ async fn command_schema_publication_changes_generation_and_replay_is_seq_neutral
 }
 
 #[tokio::test]
+async fn command_repository_catalog_upgrade_preserves_existing_v4_rows_without_migration() {
+    let (_dir, writer, readers) = runtime().await;
+    let mut plan = command_release_fixture();
+    crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
+        .await
+        .unwrap();
+    let original = readers
+        .read(|tx| crate::schema::active_collection(tx, "business_commands"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(original.definition.schema_json, command_document_schema());
+    let body = json!({"id":"retained-v4","type":"fixture.task","app_id":"fixture",
+        "actor_id":"retained-user","created_at":"2026-10-15T20:00:00Z",
+        "status":"queued","payload":{"retained":true}});
+    let expected = body.clone();
+    writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            crate::import::insert_document(
+                tx,
+                &crate::import::Document {
+                    collection: "business_commands".into(),
+                    id: "retained-v4".into(),
+                    body,
+                    revision: None,
+                },
+            )?;
+            Ok(())
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    plan.version = "platform-8".into();
+    for defs in plan.collections.values_mut() {
+        for definition in defs {
+            definition.app_ver = plan.version.clone();
+        }
+    }
+    // The real loader already canonicalizes the running V4 generation. An E61
+    // artifact/catalog update therefore needs no identity/actor invention.
+    crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64 + 1)
+        .await
+        .unwrap();
+    readers
+        .read(move |tx| {
+            let current = crate::schema::active_collection(tx, "business_commands")?.unwrap();
+            assert_eq!(current.gen, original.gen);
+            assert_eq!(current.table, original.table);
+            assert_eq!(current.definition.schema_ver, 3);
+            let raw: String = tx.query_row(
+                &format!(
+                    "SELECT data FROM {} WHERE id='retained-v4'",
+                    change_log::identifier(&current.table)?
+                ),
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(serde_json::from_str::<Value>(&raw).unwrap(), expected);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    readers.shutdown().await.unwrap();
+    writer.shutdown().await.unwrap();
+}
+
+#[tokio::test]
 async fn command_schema_publication_refuses_unmapped_legacy_rows_and_resumes_explicit_migration() {
     let (_dir, writer, readers) = runtime().await;
     let mut plan = command_release_fixture();
@@ -363,34 +430,28 @@ async fn kernel_component(e25: bool) {
     use std::io::{BufRead, BufReader, Write as IoWrite};
     use std::process::Stdio;
     let (_dir, writer, readers) = runtime().await;
-    let mut plan = command_release_fixture();
-    // E48: take the wire version from the repository platform manifest.
-    // Keep the release fixture's corrected V4 document shape: the legacy
-    // repository schema still requires command_id, absent from Kernel intents.
+    let plan = command_release_fixture();
+    // E61: exercise the exact repository catalog; do not repair a legacy shape
+    // or substitute a permissive schema in the test.
     let platform: Value = serde_json::from_str(include_str!(
         "../business_os/v4/ctox-platform.manifest.json"
     ))
     .unwrap();
-    let manifest_version = platform["collections"]["business_commands"]["schema"]["version"]
-        .as_u64()
-        .unwrap();
-    let schema_ver = u32::try_from(manifest_version).unwrap();
-    let published_schema = &mut plan
+    let manifest_schema = platform["collections"]["business_commands"]["schema"].clone();
+    assert_eq!(manifest_schema, command_document_schema());
+    let schema_ver = manifest_schema["version"].as_u64().unwrap() as u32;
+    let published_schema = &plan
         .manifests
-        .iter_mut()
+        .iter()
         .find(|m| m["app_id"] == "ctox-platform")
         .unwrap()["collections"]["business_commands"]["schema"];
-    published_schema["version"] = json!(schema_ver);
-    let manifest_schema = published_schema.clone();
-    let definition = plan
-        .collections
-        .get_mut("ctox-platform")
-        .unwrap()
-        .iter_mut()
+    assert_eq!(published_schema, &manifest_schema);
+    let definition = plan.collections["ctox-platform"]
+        .iter()
         .find(|d| d.name == "business_commands")
         .unwrap();
-    definition.schema_ver = schema_ver;
-    definition.schema_json = manifest_schema.clone();
+    assert_eq!(definition.schema_ver, schema_ver);
+    assert_eq!(definition.schema_json, manifest_schema);
     crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
         .await
         .unwrap();
