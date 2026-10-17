@@ -54,5 +54,11 @@
   "groupReddit": "Reddit",
   "addRedditPreset": "KI-Subreddits übernehmen",
   "placeholderReddit": "r/subreddit",
-  "sourceConnect": "Konto verbinden"
+  "sourceConnect": "Konto verbinden",
+  "drawerUndo": "Rückgängig",
+  "digestLabel": "Wochenzusammenfassung",
+  "digestHint": "Fasst die Tagesausgaben der Woche zu Top-Meldungen und Trends zusammen, ohne neue Recherche.",
+  "digestWeekday": "Wochentag",
+  "digestTime": "Uhrzeit",
+  "digestCadence": "{0} · Woche {1}"
 }

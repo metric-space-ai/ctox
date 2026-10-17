@@ -60,7 +60,7 @@ test('Template: angemeldete Quelle nennt die Befehls-ID, vorherige Ausgabe, Engl
   const lines = w.sim.enqueued[0].args.instruction.split('\n');
   assert.equal(lines[1], 'Sprache: Englisch. Höchstens 5 Beiträge, Kategorien: model, tool.');
   assert.ok(lines.includes('Angemeldete Quellen (X, Reddit) über das CTOX-Konto lesen; --task-id cmd_signed.'));
-  assert.ok(lines.includes('Vorherige Ausgabe 2026-10-13: wiederhole nur Meldungen mit neuer Entwicklung.'));
+  assert.ok(lines.includes('Vorherige Ausgabe 2026-10-13: wiederhole keine Meldung aus früheren Ausgaben (covered_urls).'));
   assert.ok(!lines.some((l) => l.startsWith('Fokus:')));
 });
 
