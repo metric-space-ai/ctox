@@ -5965,7 +5965,7 @@ mod tests {
         let work = root.clone();
         crate::persistence::run_cli_owned(&root, move || {
             let mut env = std::collections::BTreeMap::new();
-            env.insert("CTOX_API_PROVIDER".to_owned(), "openai".to_owned());
+            env.insert("CTOX_CHAT_TURN_TIMEOUT_SECS".to_owned(), "30".to_owned());
             runtime_env::save_runtime_env_map(&work, &env)
         })
         .unwrap();
@@ -5981,7 +5981,7 @@ mod tests {
         assert!(snapshot
             .env_values
             .iter()
-            .any(|(key, value)| key == "CTOX_API_PROVIDER" && value == "openai"));
+            .any(|(key, value)| key == "CTOX_CHAT_TURN_TIMEOUT_SECS" && value == "30"));
         snapshot.verify_preserved(&root).unwrap();
 
         // Each capture released its exclusive lease; the next offline owner
