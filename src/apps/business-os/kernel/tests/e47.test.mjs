@@ -21,9 +21,28 @@ test('E47 foreign reads expose confirmed revision for CAS and keep optimistic pe
 });
 test('E47 underscore write fields reject before local commit',async t=>{
  const k=await open(t);await k.sim.publishAppVersion('notes','1',{collections:{notes:schema}});const api=k.appApi('notes','1');
- for(const field of ['_rev','_pending','_custom']){
-  await assert.rejects(api.put('notes',{id:'bad',[field]:'forged'}).local,e=>e.code==='invalid'&&e.path===field);
-  await assert.rejects(api.patch('notes','bad',{[field]:null}).local,e=>e.code==='invalid'&&e.path===field);
+ for(const field of ['_deleted','_custom','__proto__']){
+  await assert.rejects(api.put('notes',{id:'bad',_rev:'ignored',_pending:true,[field]:'forged'}).local,e=>e.code==='invalid'&&e.path===field);
+  await assert.rejects(api.patch('notes','bad',{_rev:null,_pending:false,[field]:null}).local,e=>e.code==='invalid'&&e.path===field);
  }
  assert.equal(api.get('notes','bad').get(),null);assert.deepEqual(await k.sim.outbox(),[]);
+});
+
+test('E47.1 spread writes drop only read metadata and CAS uses the explicit option',async t=>{
+ const k=await open(t);await k.sim.publishAppVersion('notes','1',{collections:{notes:schema}});const api=k.appApi('notes','1');
+ const first=api.put('notes',{id:'spread',value:1,_rev:()=>{},_pending:undefined});await assert.doesNotReject(first.local);assert.equal((await first.result).status,'accepted');await k.sim.settle();
+ const seen=api.get('notes','spread').get();assert.equal(typeof seen._rev,'string');
+ const put=api.put('notes',{...seen,value:2});await put.local;assert.equal((await put.result).status,'accepted');await k.sim.settle();
+ const patch=api.patch('notes','spread',{_rev:'stale-read-token',_pending:true,value:3});await patch.local;assert.equal((await patch.result).status,'accepted');await k.sim.settle();
+ const conflict=api.patch('notes','spread',{value:4,_rev:seen._rev,_pending:seen._pending},{expected_revision:seen._rev});await conflict.local;assert.equal((await conflict.result).code,'revision_conflict');
+ const row=await k.sim.inspect('notes','spread');assert.equal(row.base.data.value,3);assert.equal('_rev' in row.base.data,false);assert.equal('_pending' in row.base.data,false);
+});
+
+test('E47.1 fake core strips read metadata independently at its wire boundary',async t=>{
+ const {MemoryCoreTransport}=await import('../testkit.mjs');const {createKernel}=await import('../index.mjs');
+ const transport=new MemoryCoreTransport({namespace:`e471-wire-${process.pid}`,latencyMs:0});const original=transport.write.bind(transport);
+ transport.write=entry=>original(entry.collection==='notes'?{...entry,body:{...entry.body,_rev:'ignored',_pending:true}}:entry);
+ const k=createKernel({instanceId:'e471-wire',userId:'alice',storage:'memory',multiTab:false,transport});t.after(()=>k.close());await k.ready;
+ await k.sim.publishAppVersion('notes','1',{collections:{notes:schema}});const h=k.appApi('notes','1').put('notes',{id:'wire',value:1});await h.local;assert.equal((await h.result).status,'accepted');await k.sim.settle();
+ const row=await k.sim.inspect('notes','wire');assert.equal('_rev' in row.base.data,false);assert.equal('_pending' in row.base.data,false);
 });

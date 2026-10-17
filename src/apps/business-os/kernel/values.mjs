@@ -18,6 +18,8 @@ export const hasBlob = typeof Blob !== 'undefined';
 export const isBlob = (v) => hasBlob && v instanceof Blob;
 export const isPlainObject = (v) => v !== null && typeof v === 'object' && (Object.getPrototypeOf(v) === Object.prototype || Object.getPrototypeOf(v) === null);
 
+export function stripReadMetadata(value) { if(!isPlainObject(value)||(!Object.hasOwn(value,'_rev')&&!Object.hasOwn(value,'_pending')))return value; return Object.fromEntries(Object.keys(value).filter(key=>key!=='_rev'&&key!=='_pending').map(key=>[key,value[key]])); }
+
 export function cloneValue(v) {
   if(v === undefined || typeof v === 'function')return v;
   return structuredClone(v);
