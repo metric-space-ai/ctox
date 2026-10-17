@@ -9,12 +9,18 @@ test('eviction invalidates the cursor and preserves unrelated durable stores',as
  const db=new MemoryBackend('cache');const scope={collection:'notes',scope_hash:'x',epoch:'1',gen:1};
  await db.tx(async t=>{
   await t.put('docs',{collection:'notes',id:'a',data:{id:'a'},base:{seq:'8'}});
+  for(let n=0;n<65;n++)await t.put('docs',{collection:'notes',id:'extra-'+n,data:{id:'extra-'+n}});
   await t.put('meta',{key:checkpointKey(scope),...scope,cursor_to:'8',complete:true});
   await t.put('archive_local',{ref:'rejected',body:'keep'});await t.put('outbox',{op_id:'elsewhere',collection:'other'});
  });
  const rows=await evictCollection(db,'notes',async()=>{});
  assert.equal(rows[0].cache_evicted,true);assert.equal((await db.get('meta',checkpointKey(scope))).complete,false);
+ assert.equal((await db.get('meta',checkpointKey(scope))).evicted_at_seq,'8','multi-slice eviction must preserve the original checkpoint');
  assert.equal((await db.get('meta',checkpointKey(scope))).cursor_to,'0');assert.equal((await db.all('archive_local')).length,1);assert.equal((await db.all('outbox')).length,1);
+ const vacant={...scope,collection:'empty'};await db.tx(t=>t.put('meta',{key:checkpointKey(vacant),...vacant,cursor_to:'9',complete:true}));
+ assert.deepEqual(await evictCollection(db,'empty',async()=>{}),[]);
+ assert.equal((await db.get('meta',checkpointKey(vacant))).cursor_to,'0','empty collection eviction must invalidate its checkpoint');
+ assert.equal((await db.get('meta',checkpointKey(vacant))).evicted_at_seq,'9');
 });
 test('eviction with pending writes rolls back without deleting either document or cursor',async()=>{
  const db=new MemoryBackend('pinned');

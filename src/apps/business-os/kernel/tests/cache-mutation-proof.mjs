@@ -19,4 +19,13 @@ try{
  if(red.error||red.signal||!red.status||!log.includes('cache pressure cloned the pending outbox'))throw Error('outbox-clone-pressure survived or failed for another reason');
  console.log('MUTATION outbox-clone-pressure RED cache pressure cloned the pending outbox');
 }finally{await writeFile(file,original);}
+try{
+ const anchor="if(meta.evicted && meta.cursor_to==='0' && !meta.complete)continue;";
+ if(!original.includes(anchor))throw Error('checkpoint marker anchor missing');
+ await writeFile(file,original.replace(anchor,''));
+ const red=spawnSync(process.execPath,['--test','--test-name-pattern=eviction invalidates the cursor','src/apps/business-os/kernel/tests/cache.test.mjs'],{encoding:'utf8',timeout:60000});
+ const log=(red.stdout??'')+(red.stderr??'');console.log(log);
+ if(red.error||red.signal||!red.status||!log.includes('multi-slice eviction must preserve the original checkpoint'))throw Error('eviction-checkpoint-marker survived or failed for another reason');
+ console.log('MUTATION eviction-checkpoint-marker RED multi-slice eviction must preserve the original checkpoint');
+}finally{await writeFile(file,original);}
 const green=spawnSync(process.execPath,args,{encoding:'utf8',timeout:60000});console.log(green.stdout);if(green.status||green.error)throw Error(green.stderr||'restore failed');console.log('RESTORE GREEN');

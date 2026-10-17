@@ -4,7 +4,10 @@ export const CLIENT_CACHE_BUDGET = 2_000_000_000;
 const yieldTurn=()=>new Promise(resolve=>setTimeout(resolve,0));
 function empty(row,lseq){return {collection:row.collection,id:row.id,data:null,base:{data:null,deleted:false,rev:null,seq:'0'},rev:null,seq:'0',deleted:true,pending:false,cache_evicted:true,lseq};}
 async function invalidate(t,collections){
- for(const collection of collections)for(const meta of await t.checkpointsFor(collection))await t.put('meta',{...meta,evicted_at_seq:meta.cursor_to,cursor_to:'0',complete:false,evicted:true});
+ for(const collection of collections)for(const meta of await t.checkpointsFor(collection)){
+  if(meta.evicted && meta.cursor_to==='0' && !meta.complete)continue;
+  await t.put('meta',{...meta,evicted_at_seq:meta.cursor_to,cursor_to:'0',complete:false,evicted:true});
+ }
 }
 async function canEvict(t,collection){
  const group=await t.get('meta',CACHE_COLLECTION_PREFIX+collection);
@@ -25,7 +28,7 @@ export async function evictCollection(db,collection,assertGeneration){
    }
    const batch=await t.scan('docs',cursor,32,collection);let seq=(await t.get('meta','local_seq'))?.value??0;const rows=[];
    for(const row of batch.rows){const record=empty(row,++seq);await t.put('docs',record);rows.push(record);}
-   if(rows.length){await invalidate(t,new Set([collection]));await t.put('meta',{key:'local_seq',value:seq});}
+   if(rows.length || cursor===null){await invalidate(t,new Set([collection]));await t.put('meta',{key:'local_seq',value:seq});}
    return {rows,next:batch.next};
   },'readwrite');
   records.push(...page.rows);cursor=page.next;
@@ -52,7 +55,7 @@ export async function reclaimCache(db,assertGeneration,lastUsed=new Map(),protec
   if(m.key.startsWith(CACHE_COLLECTION_PREFIX)&&m.bytes&&!m.pinned&&!protectedCollections.has(m.cache_collection))candidates.push({collection:m.cache_collection,at:lastUsed.get(m.cache_collection)??0});
   if(m.key.startsWith(CACHE_BLOB_PREFIX)&&!m.pinned&&!rejectedRefs.has(m.ref))candidates.push({blob:m.ref,at:m.at});
  }
- candidates.sort((a,b)=>a.at-b.at);
+ candidates.sort((a,b)=>a.at-b.at || Number(!!a.blob)-Number(!!b.blob));
  for(const candidate of candidates){
   if(budget!==undefined && usage<=budget)break;
   if(candidate.blob){

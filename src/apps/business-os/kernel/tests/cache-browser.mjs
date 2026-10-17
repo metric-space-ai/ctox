@@ -27,8 +27,10 @@ try{
   await db.close();db=await IdbBackend.open(name);if((await db.get('meta',CACHE_USAGE_KEY)).value!==expected)throw Error('reopen counted twice');
   try{await db.tx(async t=>{await t.del('docs',['cold','000']);throw Error('rollback');});}catch(e){if(e.message!=='rollback')throw e;}
   if((await db.get('meta',CACHE_USAGE_KEY)).value!==expected)throw Error('aborted accounting leaked');
+  await db.tx(t=>t.put('meta',{key:'cursor:cache-browser',collection:'cold',cursor_to:'42',complete:true}));
   let turns=0;const timer=setInterval(()=>turns++,0);const result=await reclaimCache(db,async()=>{},new Map([['cold',0]]),new Set(),1);clearInterval(timer);
   if(!turns||result.records.length!==100||result.within_budget)throw Error('bounded IDB eviction/pinned budget contract');
+  const checkpoint=await db.get('meta','cursor:cache-browser');if(checkpoint.cursor_to!=='0'||checkpoint.evicted_at_seq!=='42'||checkpoint.complete)throw Error('multi-slice IDB checkpoint marker lost');
   if((await db.get('docs',['pending','p'])).data.value!=='my local input')throw Error('input discarded');
   if((await db.get('docs',['queued','q'])).data.value!=='queued local input'||!(await db.get('blobs','blob')))throw Error('pending document/upload discarded');
   if((await db.get('meta',CACHE_USAGE_KEY)).value!==cacheBytes(pinned)+cacheBytes(queued)+50)throw Error('post-eviction accounting mismatch');
