@@ -19,6 +19,10 @@ export const NEWS_ISSUE_FAILED = 'news.issue.failed';
 export const NEWS_SOURCE_ADAPTER_COMPLETE = 'news.source.adapter.complete';
 export const NEWS_SOURCE_ADAPTER_FAILED = 'news.source.adapter.failed';
 export const SCHEDULE_PREFIX = 'news:';
+/** Die Wochenzusammenfassung eines Themas hat einen eigenen Termin neben dem regulaeren (#800). */
+export const DIGEST_SCHEDULE_PREFIX = 'news-digest:';
+export const DIGEST_MODE = 'weekly_digest';
+export const MAX_DIGEST_POSTS = 80;
 export const ROUTE_MARKER = 'ctox-news-schedule:';
 export const MAX_POSTS = 40;
 export const MAX_TEXT = 8_000;
@@ -38,6 +42,9 @@ export function validRecordId(value) {
 }
 
 export const scheduleName = (topicId) => `${SCHEDULE_PREFIX}${topicId}`;
+export const digestScheduleName = (topicId) => `${DIGEST_SCHEDULE_PREFIX}${topicId}`;
+// ref: route_schedule_name
+export const routeScheduleName = (route) => (route?.mode === 'digest' ? digestScheduleName(route.topic_id) : scheduleName(route?.topic_id));
 export const topicThreadKey = (topicId) => `business-os/news/${topicId}`;
 
 // ref: store_news_commands.rs account_auth_source :107
@@ -251,9 +258,237 @@ export function parseSourceReply(replyText) {
   };
 }
 
+// ---------------------------------------------------------------- Zeitfenster und Dubletten (#799, main d4de046cb)
+
+export const HOUR_MS = 3_600_000;
+export const DAY_MS = 24 * HOUR_MS;
+/** Spielraum vor dem Fensterbeginn (Zeitzonen, Agenturzeiten). ref: FRESHNESS_GRACE_MS */
+export const FRESHNESS_GRACE_MS = 6 * HOUR_MS;
+const COVERED_LOOKBACK_MS = 30 * DAY_MS;
+export const MAX_COVERED_URLS = 120;
+
+export const isDigestIssue = (issue) => issue?.payload?.kind === 'weekly_digest';
+
+// ref: normalize_story_url – gleiche Form wie core/news-model.mjs normalizeStoryUrl.
+export function normalizeStoryUrl(url) {
+  let rest = String(url ?? '').trim().split('#')[0];
+  rest = rest.includes('://') ? rest.split('://').slice(1).join('://') : rest;
+  const slash = rest.indexOf('/');
+  let host = (slash >= 0 ? rest.slice(0, slash) : rest).toLowerCase();
+  if (host.startsWith('www.')) host = host.slice(4);
+  const path = (slash >= 0 ? rest.slice(slash + 1) : '').replace(/\/+$/, '');
+  return path ? `${host}/${path}` : host;
+}
+
+// ref: primary_story_url – Link-Karte, sonst die Primaerquelle, sonst die erste Quelle.
+export function primaryStoryUrl(post) {
+  const card = str(post?.link_card?.url);
+  const sources = Array.isArray(post?.sources) ? post.sources : [];
+  const primary = str((sources.find((s) => s?.kind === 'primary') ?? sources[0])?.url);
+  const url = card || primary;
+  return url ? normalizeStoryUrl(url) : undefined;
+}
+
+// ref: all_story_urls
+export function allStoryUrls(post) {
+  const urls = [];
+  const primary = primaryStoryUrl(post);
+  if (primary) urls.push(primary);
+  for (const source of Array.isArray(post?.sources) ? post.sources : []) {
+    if (source?.kind === 'discussion' || !str(source?.url)) continue;
+    const url = normalizeStoryUrl(source.url);
+    if (!urls.includes(url)) urls.push(url);
+  }
+  return urls;
+}
+
+// ref: window_from_history – seit der letzten fertigen Ausgabe (hoechstens eine Woche zurueck), sonst 24 h (daily)
+// bzw. 7 Tage; dazu die Links der Ausgaben der letzten 30 Tage. `issues` = fertige Nicht-Digest-Ausgaben.
+export function windowFromHistory(issues, posts, cadence, now) {
+  const generated = (issue) => (Number.isInteger(issue?.generated_at_ms) ? issue.generated_at_ms : 0);
+  const previous = issues.filter((i) => generated(i) > 0).reduce((best, i) => (!best || generated(i) > generated(best) ? i : best), null);
+  const fallbackStart = now - (cadence === 'daily' ? DAY_MS : 7 * DAY_MS);
+  const startMs = previous && generated(previous) > now - 7 * DAY_MS ? Math.min(generated(previous), now) : fallbackStart;
+  const recent = new Set(issues.filter((i) => generated(i) > now - COVERED_LOOKBACK_MS).map((i) => i.id));
+  const covered = [];
+  for (const post of posts) {
+    if (!recent.has(post?.issue_id)) continue;
+    for (const url of allStoryUrls(post)) if (!covered.includes(url)) covered.push(url);
+  }
+  return { startMs, previousIssueId: str(previous?.id) ?? '', coveredUrls: covered.slice(0, MAX_COVERED_URLS * 4) };
+}
+
+/** Fertige Nicht-Digest-Ausgaben und Beitraege eines Themas (Rust: find_rxdb_collection_records_by_string_field). */
+export async function topicHistory(ctx, topicId, excludeIssueId = '') {
+  const issues = (await ctx.read('news_issues', { selector: { topic_id: topicId }, limit: 500 }))
+    .filter((i) => i.id !== excludeIssueId && i.status === 'ready' && !isDigestIssue(i));
+  const posts = await ctx.read('news_posts', { selector: { topic_id: topicId }, limit: 2_000 });
+  return { issues, posts };
+}
+
+// ref: rfc3339 (SecondsFormat::Secs, Z)
+export const rfc3339 = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+// ref: freshness_rejection
+export function freshnessRejection(post, window, now) {
+  const published = Number.isInteger(post?.published_at_ms) ? post.published_at_ms : 0;
+  if (published <= 0) return 'missing_published_at';
+  if (published < window.startMs - FRESHNESS_GRACE_MS) return 'published_before_window';
+  if (published > now + DAY_MS) return 'published_in_future';
+  const primary = primaryStoryUrl(post);
+  if (primary && window.coveredUrls.includes(primary)) return 'already_covered';
+  return undefined;
+}
+
+// ref: repoint_trends – Trends eines verworfenen Beitrags gehen mit.
+export function repointTrends(parsed, indexMap) {
+  parsed.trends = parsed.trends
+    .map((trend) => {
+      const old = trend.post_index;
+      if (old === null) return trend;
+      const next = indexMap[old] ?? null;
+      return next === null ? undefined : { ...trend, post_index: next };
+    })
+    .filter(Boolean);
+}
+
+// ref: enforce_window – verwirft Beitraege ausserhalb des Fensters, schon gebrachte und Dubletten der Ausgabe.
+export function enforceWindow(parsed, window, now) {
+  const kept = [];
+  const indexMap = [];
+  const rejected = [];
+  const seen = [];
+  for (const post of parsed.posts) {
+    const primary = primaryStoryUrl(post) ?? '';
+    const reason = freshnessRejection(post, window, now) ?? (primary && seen.includes(primary) ? 'duplicate_in_issue' : undefined);
+    if (reason) {
+      indexMap.push(null);
+      rejected.push({ reason, url: primary, intro: clip(post.intro, 160), published_at_ms: post.published_at_ms ?? 0 });
+    } else {
+      indexMap.push(kept.length);
+      seen.push(primary);
+      kept.push(post);
+    }
+  }
+  parsed.posts = kept;
+  parsed.dropped += rejected.length;
+  repointTrends(parsed, indexMap);
+  return rejected;
+}
+
+// ---------------------------------------------------------------- Wochenzusammenfassung (#800, main 8b43f9e8d)
+
+// ref: digest_week_posts – Beitraege der fertigen Tagesausgaben der letzten 7 Tage, staerkste zuerst.
+export function digestWeekPosts(issues, posts, now) {
+  const generated = (issue) => (Number.isInteger(issue?.generated_at_ms) ? issue.generated_at_ms : 0);
+  const week = new Set(issues
+    .filter((i) => i.status === 'ready' && !isDigestIssue(i) && generated(i) > now - 7 * DAY_MS && generated(i) <= now)
+    .map((i) => i.id));
+  const score = (post) => (Number(post?.hype_score) || 0) * 1_000_000 + (Number(post?.discussion_count) || 0);
+  return posts.filter((post) => week.has(post?.issue_id)).sort((a, b) => score(b) - score(a)).slice(0, MAX_DIGEST_POSTS);
+}
+
+// ref: digest_post_snapshot
+export function digestPostSnapshot(post) {
+  const opt = (v) => (v === undefined ? null : v);
+  return {
+    post_id: opt(post.id),
+    issue_id: opt(post.issue_id),
+    category: opt(post.category),
+    author_name: opt(post.author_name),
+    author_handle: opt(post.author_handle),
+    author_kind: opt(post.author_kind),
+    intro: opt(post.intro),
+    body: clip(post.body, 1_200),
+    published_at_ms: opt(post.published_at_ms),
+    hype_score: opt(post.hype_score),
+    discussion_count: opt(post.discussion_count),
+    link_card: opt(post.link_card),
+    sources: opt(post.sources),
+  };
+}
+
+// ref: digest_payload – ohne `instruction`/`required_skills`: die Anweisung fuellt news.issue.generate aus
+// prompts/digest.md. Keine Quellen, keine neue Recherche.
+export function digestPayload(topic, weekPosts, issueId, issueDate, now) {
+  const field = (key) => str(topic?.[key]) ?? '';
+  const topicId = field('id');
+  const maxPosts = Math.min(Number.isInteger(topic?.max_posts) && topic.max_posts >= 0 ? topic.max_posts : 12, 10);
+  return {
+    topic_id: topicId,
+    issue_id: issueId,
+    issue_date: issueDate,
+    mode: DIGEST_MODE,
+    thread_key: topicThreadKey(topicId),
+    output_contract: NEWS_ISSUE_CONTRACT,
+    window_start: rfc3339(now - 7 * DAY_MS),
+    window_start_ms: now - 7 * DAY_MS,
+    digest_posts: weekPosts.map(digestPostSnapshot),
+    digest_urls: weekPosts.flatMap(allStoryUrls),
+    record_snapshot: {
+      topic: {
+        id: topicId,
+        title: field('title'),
+        prompt: field('prompt'),
+        cadence: field('cadence'),
+        language: field('language'),
+        categories: topic?.categories ?? [],
+        max_posts: maxPosts,
+      },
+      sources: [],
+    },
+  };
+}
+
+// ref: enforce_digest_sources – ein Beitrag, dessen Primaerlink keine Tagesausgabe der Woche trug, ist neue
+// Recherche und faellt weg.
+export function enforceDigestSources(parsed, digestUrls) {
+  const kept = [];
+  const indexMap = [];
+  const rejected = [];
+  for (const post of parsed.posts) {
+    const primary = primaryStoryUrl(post) ?? '';
+    if (digestUrls.includes(primary)) {
+      indexMap.push(kept.length);
+      kept.push(post);
+    } else {
+      indexMap.push(null);
+      rejected.push({ reason: 'not_in_week', url: primary, intro: clip(post.intro, 160) });
+    }
+  }
+  parsed.posts = kept;
+  parsed.dropped += rejected.length;
+  repointTrends(parsed, indexMap);
+  return rejected;
+}
+
+/** Werte fuer prompts/digest.md (ref: digest_payload instruction). */
+export function digestPromptValues(command) {
+  const payload = command.payload ?? {};
+  const topic = isObject(payload.record_snapshot?.topic) ? payload.record_snapshot.topic : {};
+  const posts = Array.isArray(payload.digest_posts) ? payload.digest_posts : [];
+  return {
+    topic_title: str(topic.title) ?? '',
+    post_count: posts.length,
+    max_posts: Number.isInteger(topic.max_posts) && topic.max_posts >= 0 ? topic.max_posts : 10,
+    context_json: contextJson({
+      command_id: command.id,
+      topic_id: str(payload.topic_id) ?? '',
+      issue_id: str(payload.issue_id) ?? '',
+      issue_date: str(payload.issue_date) ?? '',
+      mode: DIGEST_MODE,
+      output_contract: NEWS_ISSUE_CONTRACT,
+      window_start: str(payload.window_start) ?? '',
+      digest_posts: posts,
+      digest_urls: Array.isArray(payload.digest_urls) ? payload.digest_urls : [],
+      record_snapshot: payload.record_snapshot ?? {},
+    }),
+  };
+}
+
 // ref: :446 generate_payload – Payload der geplanten Ausgabe. Schluessel wie in Rust, ohne `instruction`/
 // `required_skills`: die Anweisung fuellt news.issue.generate aus prompts/issue.md (SKL-B1), `--task-id` = Befehls-ID.
-export function generatePayload(topic, sources, issueId, issueDate) {
+export function generatePayload(topic, sources, issueId, issueDate, window = null) {
   const field = (key) => str(topic?.[key]) ?? '';
   const topicId = field('id');
   // Rust: json!({"id": source.get("id"), …}) -> fehlende Felder werden null.
@@ -264,6 +499,12 @@ export function generatePayload(topic, sources, issueId, issueDate) {
     issue_date: issueDate,
     thread_key: topicThreadKey(topicId),
     output_contract: NEWS_ISSUE_CONTRACT,
+    ...(window ? {
+      previous_issue_id: window.previousIssueId,
+      window_start: rfc3339(window.startMs),
+      window_start_ms: window.startMs,
+      covered_urls: window.coveredUrls.slice(0, MAX_COVERED_URLS),
+    } : {}),
     record_snapshot: {
       topic: {
         id: topicId,
@@ -293,6 +534,39 @@ export function generatePayload(topic, sources, issueId, issueDate) {
 // ---------------------------------------------------------------- Agenten-Start (SKL-B1, Kern §16.30/§16.34)
 
 const LANGUAGE_LABEL = (language) => (language === 'en' ? 'Englisch' : 'Deutsch');
+
+// ---------------------------------------------------------------- Laufvertrag (d86fb3ac8 / 9f6ad058a)
+
+export const MAX_SOURCES_PER_RUN = 12;
+export const UNUSABLE_SOURCE_STATES = ['failed', 'needs_auth', 'auth_requested'];
+
+// ref: select_run_sources – Quellen, die nicht liefern koennen, fallen weg; der Rest ist gedeckelt.
+export function selectRunSources(sources) {
+  const usable = [];
+  const skipped = [];
+  for (const source of sources) {
+    const label = str(source?.label) ?? '';
+    const status = str(source?.status) ?? '';
+    if (UNUSABLE_SOURCE_STATES.includes(status)) skipped.push({ label, reason: status });
+    else if (usable.length >= MAX_SOURCES_PER_RUN) skipped.push({ label, reason: 'limit' });
+    else usable.push(source);
+  }
+  return { usable, skipped };
+}
+
+// ref: issue_run_prompt_block – haengt an jede news.issue.generate-Anweisung (Knopf und Planer). Die Zwischenstand-
+// Datei (runtime/news/checkpoints/<issue>.json) entfaellt: Handler kennen kein Dateisystem und keinen State-Root.
+export function issueRunContract(usable, skipped) {
+  const lines = ['News-Laufvertrag (verbindlich):'];
+  if (skipped.length) {
+    lines.push(usable.length
+      ? `- Nur diese Quellen lesen: ${usable.map((s) => str(s.label)).filter(Boolean).join('; ')}.`
+      : '- Keine nutzbare Quelle: nutze die Websuche.');
+    lines.push(`- Überspringen: ${skipped.map((s) => `${s.label} (${s.reason})`).join('; ')}.`);
+  }
+  lines.push('- Höchstens zwei Abrufe pro Quelle, keine Quelle zweimal lesen; sobald genug Beiträge belegt sind, nicht weiter suchen, sondern das Ergebnis liefern.');
+  return lines.join('\n');
+}
 
 /**
  * Template aus prompts/<name>.md laden und streng fuellen (ctox:shared/prompt-template.js). Eine Zeile entfaellt,
@@ -328,7 +602,7 @@ export function issuePromptValues(command, previousIssue = null) {
   const payload = command.payload ?? {};
   const snapshot = isObject(payload.record_snapshot) ? payload.record_snapshot : {};
   const topic = isObject(snapshot.topic) ? snapshot.topic : {};
-  const sources = (Array.isArray(snapshot.sources) ? snapshot.sources : []).filter(isObject);
+  const { usable: sources, skipped } = selectRunSources((Array.isArray(snapshot.sources) ? snapshot.sources : []).filter(isObject));
   const signedIn = sources.some((s) => str(s.auth_source) || accountAuthSource(str(s.kind)));
   return {
     topic_title: str(topic.title) ?? '',
@@ -340,18 +614,26 @@ export function issuePromptValues(command, previousIssue = null) {
     source_line: sources.map((s) => `${str(s.kind) ?? 'web'}:${str(s.label) ?? ''}`).join('; ') || 'keine konfiguriert, nutze die Websuche',
     signed_in_task_id: signedIn ? command.id : '',
     previous_issue_date: str(previousIssue?.issue_date) ?? '',
+    run_contract: issueRunContract(sources, skipped),
+    window_start: Number.isInteger(payload.window_start_ms) && payload.window_start_ms > 0 ? rfc3339(payload.window_start_ms) : '',
     context_json: contextJson({
       command_id: command.id,
       topic_id: str(payload.topic_id) ?? '',
       issue_id: str(payload.issue_id) ?? '',
       issue_date: str(payload.issue_date) ?? '',
       previous_issue_id: str(payload.previous_issue_id) ?? '',
+      ...(Number.isInteger(payload.window_start_ms) ? {
+        window_start: str(payload.window_start) ?? rfc3339(payload.window_start_ms),
+        window_start_ms: payload.window_start_ms,
+        covered_urls: (Array.isArray(payload.covered_urls) ? payload.covered_urls : []).filter((u) => typeof u === 'string').slice(0, MAX_COVERED_URLS),
+      } : {}),
       output_contract: NEWS_ISSUE_CONTRACT,
+      ...(skipped.length ? { skipped_sources: skipped } : {}),
       record_snapshot: snapshot,
     }),
   };
 }
-export const ISSUE_OPTIONAL_FIELDS = ['focus', 'signed_in_task_id', 'previous_issue_date'];
+export const ISSUE_OPTIONAL_FIELDS = ['focus', 'signed_in_task_id', 'previous_issue_date', 'window_start'];
 
 /** news.issue.generate (Knopf „Ausgabe jetzt erzeugen“ bzw. Planer): Template fuellen, Agenten starten. */
 export async function enqueueIssue(ctx, command) {
@@ -362,7 +644,10 @@ export async function enqueueIssue(ctx, command) {
   if (!validRecordId(issueId)) fail('invalid', 'news issue command is missing issue_id');
   const previousId = firstStringField(payload, ['previous_issue_id']);
   const previous = previousId && validRecordId(previousId) ? await ctx.get('news_issues', previousId) : null;
-  const instruction = await renderPromptLines(ctx, 'issue', issuePromptValues(command, previous), ISSUE_OPTIONAL_FIELDS);
+  // #800: eine Wochenzusammenfassung liest keine Quellen; Laufvertrag und Zeitfenster-Zeile gelten nicht.
+  const instruction = payload.mode === DIGEST_MODE
+    ? await renderPromptLines(ctx, 'digest', digestPromptValues(command))
+    : await renderPromptLines(ctx, 'issue', issuePromptValues(command, previous), ISSUE_OPTIONAL_FIELDS);
   const task = await ctx.cap.agent.task.enqueue({
     title: taskTitle(command),
     instruction,

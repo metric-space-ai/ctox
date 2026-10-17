@@ -112,6 +112,36 @@ export function cronForTopic(topic) {
   return '';
 }
 
+// Weekly digest of a daily topic: built from that week's daily issues (#800).
+export function digestOf(topic) {
+  const raw = topic?.payload?.digest || {};
+  const weekday = Number(raw.weekday);
+  return {
+    enabled: raw.enabled === true,
+    weekday: Number.isInteger(weekday) && weekday >= 0 && weekday <= 6 ? weekday : 5,
+    run_time: /^\d{1,2}:\d{2}$/.test(String(raw.run_time || '')) ? String(raw.run_time) : '17:00',
+  };
+}
+
+export function withDigest(topic, digest, now = Date.now()) {
+  const next = digestOf({ payload: { digest } });
+  return { ...topic, payload: { ...(topic.payload || {}), digest: next }, updated_at_ms: now };
+}
+
+export function digestActive(topic) {
+  return topic?.cadence === 'daily' && topic?.enabled !== false && digestOf(topic).enabled;
+}
+
+export function cronForDigest(topic) {
+  const digest = digestOf(topic);
+  const { hour, minute } = parseTime(digest.run_time);
+  return `${minute} ${hour} * * ${digest.weekday}`;
+}
+
+export function isDigestIssue(issue) {
+  return issue?.payload?.kind === 'weekly_digest';
+}
+
 export function normalizeTopic(input, now = Date.now()) {
   const cadence = CADENCES.includes(input?.cadence) ? input.cadence : 'daily';
   const categories = Array.isArray(input?.categories)
@@ -319,7 +349,8 @@ export function issuesForTopic(issues, topicId, limit = 6) {
 
 // Two issues of the same day are told apart by their start time.
 export function issueNodeLabel(issue, siblings, lang = 'de', today = new Date()) {
-  const label = issueLabel(issue.issue_date, lang, today);
+  const day = issueLabel(issue.issue_date, lang, today);
+  const label = isDigestIssue(issue) ? `${lang === 'en' ? 'Week' : 'Woche'} · ${day}` : day;
   const sameDay = siblings.filter((other) => other.issue_date === issue.issue_date).length;
   const created = Number(issue.created_at_ms) || 0;
   if (sameDay < 2 || !created) return label;
@@ -438,8 +469,48 @@ export function topicSnapshot(topic) {
   };
 }
 
-// Anweisung, Skill und Rueckruf setzt der Handler news.issue.generate (prompts/issue.md, Skill news/news-aggregation).
-export function buildGenerateCommand(topic, sources, issue, previousIssue) {
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
+
+// Same canonical link form as the writeback (handlers/_lib/news.js normalizeStoryUrl).
+export function normalizeStoryUrl(url) {
+  let rest = String(url || '').trim().split('#')[0];
+  rest = rest.includes('://') ? rest.split('://').slice(1).join('://') : rest;
+  const slash = rest.indexOf('/');
+  let host = (slash >= 0 ? rest.slice(0, slash) : rest).toLowerCase();
+  if (host.startsWith('www.')) host = host.slice(4);
+  const path = (slash >= 0 ? rest.slice(slash + 1) : '').replace(/\/+$/, '');
+  return path ? `${host}/${path}` : host;
+}
+
+// Since the previous issue (never further back than a week), otherwise the
+// last 24 hours for daily topics and 7 days for the rest; plus the links
+// earlier issues of the topic already carried.
+export function issueWindow(topic, issues, posts, now = Date.now()) {
+  const ready = issues.filter((issue) => issue.topic_id === topic.id && issue.status === 'ready'
+    && issue.payload?.kind !== 'weekly_digest' && Number(issue.generated_at_ms) > 0);
+  const previous = ready.reduce((best, issue) => (!best || issue.generated_at_ms > best.generated_at_ms ? issue : best), null);
+  const fallback = topic.cadence === 'daily' ? DAY_MS : 7 * DAY_MS;
+  const startMs = previous && previous.generated_at_ms > now - 7 * DAY_MS
+    ? Math.min(previous.generated_at_ms, now)
+    : now - fallback;
+  const recent = new Set(ready.filter((issue) => issue.generated_at_ms > now - 30 * DAY_MS).map((issue) => issue.id));
+  const covered = [];
+  for (const post of posts) {
+    if (!recent.has(post.issue_id)) continue;
+    const urls = [post.link_card?.url, ...(post.sources || []).filter((source) => source.kind !== 'discussion').map((source) => source.url)];
+    for (const url of urls) {
+      if (!url) continue;
+      const key = normalizeStoryUrl(url);
+      if (!covered.includes(key)) covered.push(key);
+    }
+  }
+  return { startMs, previousIssueId: previous?.id || '', coveredUrls: covered.slice(0, 120) };
+}
+
+// Anweisung, Skill und Rueckruf setzt der Handler news.issue.generate (prompts/issue.md, Skill news/news-aggregation);
+// das Zeitfenster (window_start_ms, covered_urls) reist im Payload und gilt in news.issue.complete.
+export function buildGenerateCommand(topic, sources, issue, previousIssue, window = null) {
   const topicSources = sources.filter((source) => source.topic_id === topic.id);
   const commandId = newCommandId(NEWS_ISSUE_GENERATE);
   return commandEnvelope({
@@ -452,7 +523,12 @@ export function buildGenerateCommand(topic, sources, issue, previousIssue) {
     issue_date: issue.issue_date,
     thread_key: `business-os/news/${topic.id}`,
     output_contract: ISSUE_OUTPUT_CONTRACT,
-    previous_issue_id: previousIssue?.id || '',
+    previous_issue_id: window?.previousIssueId || previousIssue?.id || '',
+    ...(window ? {
+      window_start: new Date(window.startMs).toISOString(),
+      window_start_ms: window.startMs,
+      covered_urls: window.coveredUrls,
+    } : {}),
     record_snapshot: {
       topic: topicSnapshot(topic),
       sources: topicSources.filter((source) => source.enabled !== false).map(sourceSnapshot),
@@ -470,7 +546,9 @@ function localTimezone() {
   }
 }
 
-export function buildScheduleCommand(topic, { deleted = false } = {}) {
+export function buildScheduleCommand(topic, { deleted = false, digest = false } = {}) {
+  const cron = digest ? cronForDigest(topic) : topic.cron_expr;
+  const active = digest ? digestActive(topic) : topic.enabled !== false && Boolean(topic.cron_expr);
   return commandEnvelope({
     command_type: NEWS_TOPIC_SCHEDULE,
     record_id: topic.id,
@@ -478,8 +556,9 @@ export function buildScheduleCommand(topic, { deleted = false } = {}) {
     topic_id: topic.id,
     title: topic.title,
     cadence: topic.cadence,
-    cron_expr: deleted ? '' : topic.cron_expr,
-    enabled: deleted ? false : topic.enabled !== false && Boolean(topic.cron_expr),
+    ...(digest ? { mode: 'digest' } : {}),
+    cron_expr: deleted ? '' : cron,
+    enabled: deleted ? false : active,
     deleted,
     deadline_date: topic.deadline_date || '',
     timezone: localTimezone(),

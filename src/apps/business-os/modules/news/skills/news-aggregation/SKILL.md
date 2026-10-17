@@ -20,7 +20,10 @@ The instruction ends with a block `Auftragsdaten (JSON)`. In it:
 `record_snapshot.topic` — title, prompt (the editorial focus), language,
 categories, `max_posts`. `record_snapshot.sources` — the enabled sources of
 this topic (with their `id`). `issue_id`, `issue_date`, `previous_issue_id`,
-`command_id`. Only these sources plus open web search are in scope; do not invent sources the topic did not configure, except to confirm or
+`command_id`, `window_start` (ISO time; nothing older belongs in the issue) and
+`covered_urls` (primary links earlier issues of this topic already carried).
+`mode` is `weekly_digest` for the weekly summary of a daily topic; then follow
+"Weekly digest" below instead of collecting. Only these sources plus open web search are in scope; do not invent sources the topic did not configure, except to confirm or
 complete a story found through them.
 
 ## Collect, per source kind
@@ -124,8 +127,45 @@ The owner asked CTOX to set up its own account for this source.
  "account": "<username or e-mail, no password>", "note": "<one sentence for the owner>"}
 ```
 
-Time window: since the previous issue (`previous_issue_id`), otherwise the last
-24 hours for daily topics and 7 days for weekly ones.
+## Freshness window (enforced)
+
+The window runs from `window_start` to now: since the previous issue,
+otherwise the last 24 hours for daily topics and 7 days for weekly ones.
+
+- A story belongs in the issue only when its **primary source** (the lab post,
+  model card, paper, release note) was first published inside the window. A
+  Hacker News thread, a newsletter or a trending list that is new today does
+  not make an older story new.
+- `published_at` is the primary source's publication time (ISO 8601, read from
+  the page). Never use the time you found the story.
+- The writeback (`news.issue.complete`) drops every post without
+  `published_at`, with `published_at` before the window (6 hours of slack),
+  every post whose primary link is in `covered_urls` and duplicates within the
+  issue. Dropped posts are listed on the issue as `rejected_posts` — do not
+  send them.
+- A quiet window is a valid result: send fewer posts rather than filling up
+  with older material.
+- The block `News-Laufvertrag` at the end of the instruction is binding: read
+  only the sources it names, skip the ones it lists, and stop collecting once
+  enough posts are backed.
+
+## Weekly digest (`mode: weekly_digest`)
+
+The digest re-tells the week from the topic's own daily issues; it is not a
+new research run.
+
+- Input is `digest_posts` in `Auftragsdaten` (the week's daily posts,
+  strongest first, with their links, dates and counts). Read nothing else: no
+  source reads, no web search. A post whose primary link is not among the
+  week's posts is dropped by the writeback (`not_in_week`).
+- Merge posts that tell the same story across days into one post; keep the
+  original primary source as `link_card` and its `published_at`, and say in the
+  body how the story developed during the week.
+- Pick the top stories of the week (at most `record_snapshot.topic.max_posts`)
+  by relevance to the topic prompt first, measured attention second.
+- `trends` are the three to five themes of the week with summed
+  `discussion_count`; `summary` is two or three sentences on the week.
+- Reply with the same `ctox.news.issue.v1` object; `source_report` stays empty.
 
 ## Editorial rules
 

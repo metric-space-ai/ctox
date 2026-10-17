@@ -369,28 +369,29 @@
     "assets/icon.jpg": "10a8e2d20a59ac3dd5b6e139b5a234b1dcf82a12e8b96b4cfd536357dc71c850",
     "assets/icon@512.jpg": "19206727d17c85a3b39c2032c30c9fb319cedd2a97be7480568479a112b393ed",
     "collections.schema.json": "159e77f0d25893d299d554e9deeb23f738f174c1ef5f79fd58269030e411949b",
-    "core/news-model.mjs": "350d31fbf225cddcb06da10c5e3ab0fbaaa9d683da6313eb41200cd9fa4af4cd",
-    "handlers/_lib/news.js": "dbbb22dabca1c6bbb1208853847274b498e0e37a665a0a99983fdfe9ffbb173c",
+    "core/news-model.mjs": "c873543671c07a016a47d284539717f86dee6d90cbe27f94f797ef301ae41945",
+    "handlers/_lib/news.js": "d20878bf5b4411dd035f09b097fabf91e18c89df3fadce346374303e0b81c7b7",
     "handlers/_lib/sha256.js": "f13057673d66921033a6baf0bc77df33448aac828b02ac5768d52521d7205f60",
-    "handlers/news.issue.complete.js": "c02a0374d453cecb272ac6ce7c9a1e1338aca0e3d8363adad3005490958383f7",
+    "handlers/news.issue.complete.js": "87e3f2d1b40474b2c05382f088cd89d314018e4349401ec91aae3e040871edc9",
     "handlers/news.issue.failed.js": "5f4cc47ed2de85e266f7125c3e76e72acd157dd283ff0c46756fe79893f787e8",
-    "handlers/news.issue.generate.js": "a1c134e9eb2aff52610072eac8af6a03ad5d07333460d82a4a8628f1a7badc9f",
+    "handlers/news.issue.generate.js": "7338e433ac45ba2484591a004ee84ca25c47f6dc363c137864e0e019a3d500f5",
     "handlers/news.source.adapter.complete.js": "ac766e827a919a6e9b6fbe15cd522204788ea7bb7c7cda0042ddb62b970a6258",
     "handlers/news.source.adapter.failed.js": "5ed5aa34f1dd88cdac4baf4ac60457312f62eceb66202d223687e143e5d3b4f6",
     "handlers/news.source.adapter.js": "eef353a6478c53d6c809544956ad5fad3c6a11f1d9d64988e0b3c6395eae97a6",
     "handlers/news.source.auth_assist.js": "e2bfefd2fc7bdad8b014f525aeb6a06fdfd81f9e0762f318fa77ae7a7ac48e17",
-    "handlers/news.topic.schedule.js": "2ff533f78503af13ce932f8073161fe49115ac97b119c407e897495bc7cdbbfa",
+    "handlers/news.topic.schedule.js": "3e2d27bab35aad0607ff22f3042adb4f38e642ebbcacddc4f82e083899b0f79c",
     "icon.svg": "5e2c1836ab96f4cdb3e0ef8f0faa64f195287081f72501776b13d97c08123616",
-    "index.css": "76c852e324cdabcf973afc7217f100a6493dcb669a37b279b4a6710eba1da180",
-    "index.html": "546f59678e00bb529360175c6042117818764747c25ed7d4ba7a48b33088f2ab",
-    "index.js": "2507b15412a5610ed7d0dfd30b9a2de3f046c262f5961fc5ee3848f1813715fa",
-    "locales/de.json": "90dd73b1b3b10b8ee89353bff8c4433afbf3022425ab5b2d6771a8c836ded17d",
-    "locales/en.json": "cbe8f4632128f29c170f8c09c6297634ba765496ab03be0cff500d32e27d5910",
+    "index.css": "b13cc30d6b4a873bff06c4789caa31155f9049f3ca65f8579677f7a19a42b1a5",
+    "index.html": "7660a7f48295f45ba3bb9245757d88e38028c705e5349033b7e7edf391229e4f",
+    "index.js": "a2df0cff79453aaca90ccde030d4eb25c2dbe86f45062f2cbc3daa265afc4c5e",
+    "locales/de.json": "12e321cc6d9735d44fd54fbe83bddc73370cd2625805424760357815c23f6d64",
+    "locales/en.json": "7ae6978b1342b3208158a198d7fae38daa842a24cd6b02350ce1a77d63960005",
     "module.json": "d65f0a486331d2ac046d3bc19892e639032f9f263b08da8abfcfcbe174ef74d8",
-    "prompts/issue.md": "3240fa35ca2f8c473191486514448e9dc5a8280fdcb29316a90876bae847b1fe",
+    "prompts/digest.md": "0cb87ce6862bc4bbbd8c1e160babbf9b5309cb18f7db62cddde32d364072b4e1",
+    "prompts/issue.md": "572d13ab16c07cec40a236fab57f6c9f6c73087496c02169c289e43eeba8862f",
     "prompts/source-adapter.md": "ff04c2ed0a47b7427426a57047ab054f4f4018b10881808465d714d6e3f5a3df",
     "prompts/source-connect.md": "83f9c12869b3630140f645963a09be4d6ee534c22400a6abf9d207adc0e48445",
-    "skills/news-aggregation/SKILL.md": "1125f983580e360097275dc29afbfd72b6048d7a189cccf5130e61a83df81255",
+    "skills/news-aggregation/SKILL.md": "93f0fd62eec8364d78904bc61605fac2831a68c62ed8bdf72d64e00b52e2b87a",
     "v4-manifest.json": "8d9043e859d3d58ed3312b2d56f9329fd53713c0b5435ff912afdc5fb09dcc37"
   },
   "foreign_collections": {
@@ -453,6 +454,10 @@
   "min_app_api": "4.0",
   "prompts": [
     {
+      "name": "digest",
+      "path": "prompts/digest.md"
+    },
+    {
       "name": "issue",
       "path": "prompts/issue.md"
     },
@@ -466,7 +471,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "bf1362ca519a27d95aa7f0cd81e8c55e58ac8ff04c2b29b17ee45a9a5cbcea77",
+    "base_hash": "2cecf90c5758a24454f22c54b0adcdfe6932649beec80fa21fd2cc02025857e5",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

@@ -12,11 +12,15 @@ import {
   buildGenerateCommand,
   buildScheduleCommand,
   categoryCounts,
+  digestActive,
+  digestOf,
+  withDigest,
   compactCount,
   domainOf,
   issueDateKey,
   issueLabel,
   issueNodeLabel,
+  issueWindow,
   issuesForTopic,
   mergeIntoAccountSource,
   migrateLegacyRedditSources,
@@ -65,6 +69,12 @@ const labels = {
     titleRequired: 'Gib dem Thema einen Namen.',
     deadlineRequired: 'Wähle einen Stichtag.',
     saveFailed: 'Speichern fehlgeschlagen',
+    drawerUndo: 'Rückgängig',
+    digestLabel: 'Wochenzusammenfassung',
+    digestHint: 'Fasst die Tagesausgaben der Woche zu Top-Meldungen und Trends zusammen, ohne neue Recherche.',
+    digestWeekday: 'Wochentag',
+    digestTime: 'Uhrzeit',
+    digestCadence: '{0} · Woche {1}',
     commandFailed: 'Auftrag konnte nicht an CTOX übergeben werden',
     deleteConfirm: 'Nochmal klicken: „{0}“ mit allen Ausgaben löschen',
     deleteTopic: 'Thema löschen',
@@ -124,6 +134,12 @@ const labels = {
     titleRequired: 'Give the topic a name.',
     deadlineRequired: 'Pick a deadline.',
     saveFailed: 'Saving failed',
+    drawerUndo: 'Undo',
+    digestLabel: 'Weekly digest',
+    digestHint: "Sums up the week's daily issues into top stories and trends, without new research.",
+    digestWeekday: 'Weekday',
+    digestTime: 'Time',
+    digestCadence: '{0} · week {1}',
     commandFailed: 'Could not hand the task to CTOX',
     deleteConfirm: 'Click again: delete “{0}” with all issues',
     deleteTopic: 'Delete topic',
@@ -196,6 +212,7 @@ const state = {
   renderTimer: 0,
   disposed: false,
   commandWatches: new Map(),
+  drawerUndoTimer: 0,
 };
 const els = {};
 
@@ -219,7 +236,7 @@ function resetState() {
     topics: [], sources: [], issues: [], posts: [], selectedTopicId: '', selectedIssueId: '',
     leftGrammar: { search: '', band: 'active', filters: {} }, centerGrammar: { search: '', band: 'all', filters: {} },
     leftView: 'cards', centerView: 'cards', expandedPosts: new Set(), drawer: null, renderTimer: 0, disposed: false,
-    commandWatches: new Map(),
+    commandWatches: new Map(), drawerUndoTimer: 0,
   });
   for (const key of Object.keys(els)) delete els[key];
 }
@@ -261,6 +278,7 @@ export async function mount(root, api, { restored } = {}) {
   return {
     unmount() {
       clearTimeout(state.renderTimer);
+      clearTimeout(state.drawerUndoTimer);
       for (const off of disposers.splice(0)) {
         try { off(); } catch (error) { console.warn('[news] unsubscribe failed', error); }
       }
@@ -314,6 +332,7 @@ function newsSnapshot() {
       tab: state.drawer.tab,
       sources: structuredClone(state.drawer.sources),
       removed: [...state.drawer.removed],
+      digest: digestOf(state.drawer.topic),
       values,
     };
   }
@@ -350,6 +369,10 @@ function restoreDrawer(snap) {
   if (!snap.persisted && snap.topicId) state.drawer.topic.id = snap.topicId;
   if (Array.isArray(snap.sources)) state.drawer.sources = snap.sources;
   if (Array.isArray(snap.removed)) state.drawer.removed = new Set(snap.removed);
+  if (snap.digest && typeof snap.digest === 'object') {
+    state.drawer.topic = withDigest(state.drawer.topic, snap.digest);
+    renderDigestField();
+  }
   for (const el of els.form?.elements || []) {
     if (!el.name || !(el.name in (snap.values || {}))) continue;
     const v = snap.values[el.name];
@@ -473,6 +496,13 @@ function wireEvents() {
   els.host.addEventListener('click', onClick);
   els.form?.addEventListener('submit', (event) => { event.preventDefault(); saveTopic(); });
   els.form?.querySelector('[name="cadence"]')?.addEventListener('change', syncCadenceFields);
+  // Sofort speichern (9f6ad058a): jede abgeschlossene Feldänderung eines gespeicherten Themas wird geschrieben.
+  els.form?.addEventListener('change', (event) => {
+    if (event.target?.closest?.('[data-digest-field]')) { onDigestChange(); return; }
+    if (event.target?.dataset?.action === 'toggle-source') return;
+    if (event.target === els.newSourceKind || event.target === els.newSourceValue) return;
+    instantSave();
+  });
   els.newSourceKind?.addEventListener('change', syncSourcePlaceholder);
   els.newSourceValue?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') { event.preventDefault(); addDraftSource(); }
@@ -511,6 +541,7 @@ function onClick(event) {
     'mobile-back': () => els.root?.classList.remove('is-detail'),
     'close-drawer': closeDrawer,
     'save-topic': saveTopic,
+    'drawer-undo': undoDrawerChange,
     'delete-topic': deleteTopic,
     'drawer-tab': () => setDrawerTab(target.dataset.tab),
     'add-source': addDraftSource,
@@ -521,7 +552,10 @@ function onClick(event) {
     'remove-source': () => removeDraftSource(target.dataset.sourceId),
     'source-adapter': () => runSourceCommand(target.dataset.sourceId, 'adapter'),
     'source-auth': () => runSourceCommand(target.dataset.sourceId, 'auth'),
-    'toggle-category': () => target.setAttribute('aria-pressed', String(target.getAttribute('aria-pressed') !== 'true')),
+    'toggle-category': () => {
+      target.setAttribute('aria-pressed', String(target.getAttribute('aria-pressed') !== 'true'));
+      instantSave();
+    },
     'expand-post': () => toggleExpand(target.dataset.postId),
     'bookmark-post': () => toggleBookmark(target.dataset.postId),
     'copy-post-link': () => copyPostLink(target.dataset.postId),
@@ -558,6 +592,18 @@ function render() {
 }
 
 function cadenceLabel(topic) {
+  const base = baseCadenceLabel(topic);
+  if (!digestActive(topic)) return base;
+  const digest = digestOf(topic);
+  return t('digestCadence', base, `${weekdayName(digest.weekday, 'short')} ${digest.run_time}`);
+}
+
+function weekdayName(weekday, style = 'long') {
+  const name = new Date(2024, 0, 7 + (Number(weekday) || 0)).toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE', { weekday: style });
+  return style === 'short' ? name.replace('.', '') : name;
+}
+
+function baseCadenceLabel(topic) {
   if (topic.cadence === 'daily') return t('daily', topic.run_time);
   if (topic.cadence === 'weekly') {
     const day = new Date(2024, 0, 7 + (Number(topic.weekday) || 0)).toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE', { weekday: 'short' }).replace('.', '');
@@ -934,7 +980,8 @@ async function generateIssue() {
     created_at_ms: now,
     updated_at_ms: now,
   };
-  const envelope = buildGenerateCommand(topic, state.sources, issue, previous);
+  const freshness = issueWindow(topic, state.issues, state.posts, now);
+  const envelope = buildGenerateCommand(topic, state.sources, issue, previous, freshness);
   // Ausgabe lokal anlegen, dann Befehl senden (ohne Warten); die Befehls-ID vergibt der Kernel (OFFEN-2).
   issue.command_id = envelope.command_id;
   const stored = write('put', COLLECTIONS.issues, issue);
@@ -990,7 +1037,25 @@ function openDrawer(topic) {
   const migrated = migrateLegacyRedditSources(state.drawer.sources, draft.id);
   state.drawer.sources = migrated.sources;
   migrated.removedIds.forEach((id) => state.drawer.removed.add(id));
+  state.drawer.saved = drawerSnapshot();
   els.drawerTitle.textContent = persisted ? draft.title : t('newTopic');
+  syncDrawerFoot();
+  hideDrawerUndo();
+  fillDrawerForm(draft);
+  const deleteButton = els.host.querySelector('[data-action="delete-topic"]');
+  deleteButton.hidden = !persisted;
+  deleteButton.classList.remove('is-danger');
+  deleteButton.setAttribute('title', t('deleteTopic'));
+  deleteButton.setAttribute('aria-label', t('deleteTopic'));
+  syncSourcePlaceholder();
+  setDrawerTab('topic');
+  renderSourceGroups();
+  els.scrim.hidden = false;
+  els.drawer.hidden = false;
+  els.form.elements.title.focus();
+}
+
+function fillDrawerForm(draft) {
   const form = els.form;
   form.elements.title.value = draft.title || '';
   form.elements.prompt.value = draft.prompt || '';
@@ -1004,21 +1069,12 @@ function openDrawer(topic) {
   els.drawer.querySelectorAll('[data-category]').forEach((chip) => {
     chip.setAttribute('aria-pressed', String((draft.categories || CATEGORIES).includes(chip.dataset.category)));
   });
-  const deleteButton = els.host.querySelector('[data-action="delete-topic"]');
-  deleteButton.hidden = !persisted;
-  deleteButton.classList.remove('is-danger');
-  deleteButton.setAttribute('title', t('deleteTopic'));
-  deleteButton.setAttribute('aria-label', t('deleteTopic'));
+  renderDigestField();
   syncCadenceFields();
-  syncSourcePlaceholder();
-  setDrawerTab('topic');
-  renderSourceGroups();
-  els.scrim.hidden = false;
-  els.drawer.hidden = false;
-  form.elements.title.focus();
 }
 
 function closeDrawer() {
+  hideDrawerUndo();
   state.drawer = null;
   if (els.drawer) els.drawer.hidden = true;
   if (els.scrim) els.scrim.hidden = true;
@@ -1043,6 +1099,44 @@ function syncCadenceFields() {
     deadline: cadence === 'deadline',
   };
   els.form?.querySelectorAll('[data-cadence-field]').forEach((field) => { field.hidden = !visible[field.dataset.cadenceField]; });
+  const digestField = els.form?.querySelector('[data-digest-field]');
+  if (digestField) digestField.hidden = cadence !== 'daily';
+}
+
+// --- Wochenzusammenfassung (#800): Einstellung im Themen-Dialog, gespeichert wie jedes Feld (sofort + Rückgängig) ---
+
+function renderDigestField() {
+  const host = els.form?.querySelector('[data-digest-field]');
+  if (!host || !state.drawer) return;
+  const digest = digestOf(state.drawer.topic);
+  host.querySelectorAll('[data-digest-text]').forEach((el) => { el.textContent = t(el.dataset.digestText); });
+  host.querySelector('[data-digest-hint]')?.setAttribute('title', t('digestHint'));
+  host.querySelectorAll('[data-digest-input="weekday"] option').forEach((option) => { option.textContent = weekdayName(option.value); });
+  host.querySelector('[data-digest-input="enabled"]').checked = digest.enabled;
+  host.querySelector('[data-digest-input="weekday"]').value = String(digest.weekday);
+  host.querySelector('[data-digest-input="run_time"]').value = digest.run_time;
+  host.querySelector('[data-digest-schedule]').hidden = !digest.enabled;
+}
+
+function readDigestField() {
+  const host = els.form?.querySelector('[data-digest-field]');
+  return {
+    enabled: Boolean(host?.querySelector('[data-digest-input="enabled"]')?.checked),
+    weekday: Number(host?.querySelector('[data-digest-input="weekday"]')?.value ?? 5),
+    run_time: host?.querySelector('[data-digest-input="run_time"]')?.value || '17:00',
+  };
+}
+
+// Neues Thema: bleibt im Entwurf bis „Thema anlegen“; gespeichertes Thema: sofort, mit Rückgängig.
+function onDigestChange() {
+  const drawer = state.drawer;
+  if (!drawer) return;
+  const next = readDigestField();
+  if (JSON.stringify(digestOf(drawer.topic)) === JSON.stringify(digestOf({ payload: { digest: next } }))) return;
+  drawer.topic = withDigest(drawer.topic, next);
+  const schedule = els.form?.querySelector('[data-digest-schedule]');
+  if (schedule) schedule.hidden = !next.enabled;
+  instantSave();
 }
 
 function syncSourcePlaceholder() {
@@ -1122,6 +1216,7 @@ function addDraftSource() {
   }
   els.newSourceValue.value = '';
   renderSourceGroups();
+  instantSave();
 }
 
 function addPreset(kind) {
@@ -1130,17 +1225,20 @@ function addPreset(kind) {
     const merged = redditPresetSource(state.drawer.sources, state.drawer.topic.id);
     state.drawer.sources = [...state.drawer.sources.filter((source) => source.id !== merged.id), merged];
     renderSourceGroups();
+    instantSave();
     return;
   }
   const preset = kind === 'lab' ? LAB_PRESET : COMMUNITY_PRESET;
   state.drawer.sources.push(...presetSources(state.drawer.topic.id, preset, kind, state.drawer.sources));
   renderSourceGroups();
+  instantSave();
 }
 
 function toggleDraftSource(sourceId) {
   const source = state.drawer?.sources.find((item) => item.id === sourceId);
   if (!source) return;
   source.enabled = source.enabled === false;
+  instantSave();
 }
 
 function removeDraftSource(sourceId) {
@@ -1148,6 +1246,7 @@ function removeDraftSource(sourceId) {
   state.drawer.sources = state.drawer.sources.filter((source) => source.id !== sourceId);
   state.drawer.removed.add(sourceId);
   renderSourceGroups();
+  instantSave();
 }
 
 function readTopicForm() {
@@ -1181,24 +1280,113 @@ async function saveTopic() {
     return;
   }
   state.api?.status.clear('news.topic.invalid');
+  if (!(await persistDrawer(topic))) return;
+  closeDrawer();
+  state.selectedTopicId = topic.id;
+  scheduleRender();
+}
+
+// Thema + Quellen schreiben und den Zeitplan neu senden, wenn er sich geändert hat. Gemeinsam für „Thema anlegen“,
+// Sofort-Speichern und Rückgängig (9f6ad058a). Nur api.put/remove, Befehl über api.command (dispatch).
+async function persistDrawer(topic, sourceList = state.drawer?.sources || [], removed = state.drawer?.removed || new Set()) {
   const now = Date.now();
+  const previous = state.topics.find((item) => item.id === topic.id);
   const writes = [write('put', COLLECTIONS.topics, topic)];
-  for (const source of state.drawer.sources) {
+  for (const source of sourceList) {
     writes.push(write('put', COLLECTIONS.sources, { ...source, topic_id: topic.id, updated_at_ms: now }));
   }
-  for (const sourceId of state.drawer.removed) {
+  for (const sourceId of removed) {
     if (readOne(COLLECTIONS.sources, sourceId)) writes.push(write('remove', COLLECTIONS.sources, sourceId));
   }
-  if (!(await Promise.all(writes)).every(Boolean)) return;
-  const previous = state.topics.find((item) => item.id === topic.id);
+  if (!(await Promise.all(writes)).every(Boolean)) return false;
   const scheduleChanged = !previous
     || previous.cron_expr !== topic.cron_expr
     || previous.enabled !== topic.enabled
     || previous.title !== topic.title;
-  closeDrawer();
-  state.selectedTopicId = topic.id;
   if (scheduleChanged) dispatch(buildScheduleCommand(topic));
-  scheduleRender();
+  // Der Wochen-Termin folgt dem Thema: nur ein tägliches, aktives Thema behält ihn.
+  const digestChanged = previous
+    ? digestActive(previous) !== digestActive(topic) || (digestActive(topic) && JSON.stringify(digestOf(previous)) !== JSON.stringify(digestOf(topic)))
+    : digestActive(topic);
+  if (digestChanged) dispatch(buildScheduleCommand(topic, { digest: true }));
+  return true;
+}
+
+// --- Sofort speichern + Rückgängig (8 s) ------------------------------------
+
+const DRAWER_UNDO_MS = 8000;
+
+function syncDrawerFoot() {
+  const foot = els.drawer?.querySelector('[data-drawer-create-foot]');
+  if (foot) foot.hidden = Boolean(state.drawer?.persisted);
+  const create = foot?.querySelector('[data-action="save-topic"]');
+  if (create) create.textContent = t('createTopic');
+  const undo = els.drawer?.querySelector('[data-action="drawer-undo"]');
+  if (undo) undo.textContent = t('drawerUndo');
+}
+
+function drawerSnapshot() {
+  return {
+    topic: { ...state.drawer.topic },
+    sources: state.drawer.sources.map((source) => ({ ...source })),
+  };
+}
+
+// Ein neues Thema entsteht einmal mit „Thema anlegen“; Halbgültiges wird nicht gespeichert (Fehler → Zone).
+async function instantSave() {
+  const drawer = state.drawer;
+  if (!drawer?.persisted) return;
+  const topic = readTopicForm();
+  const problem = validateTopic(topic);
+  if (problem) {
+    notify('error', t(problem), '', 'topic.invalid');
+    return;
+  }
+  state.api?.status.clear('news.topic.invalid');
+  const before = drawer.saved || drawerSnapshot();
+  const removed = new Set(drawer.removed);
+  if (!(await persistDrawer(topic, drawer.sources, removed))) return;
+  if (state.drawer !== drawer) return;
+  drawer.removed.clear();
+  drawer.topic = topic;
+  drawer.saved = drawerSnapshot();
+  els.drawerTitle.textContent = topic.title;
+  showDrawerUndo(before);
+}
+
+function showDrawerUndo(before) {
+  const bar = els.drawer?.querySelector('[data-drawer-undo]');
+  if (!bar || !state.drawer) return;
+  bar.hidden = false;
+  // Rückgängig führt auf den Stand vor der ersten Änderung dieser Folge zurück.
+  if (!state.drawer.undo) state.drawer.undo = before;
+  clearTimeout(state.drawerUndoTimer);
+  state.drawerUndoTimer = setTimeout(hideDrawerUndo, DRAWER_UNDO_MS);
+}
+
+function hideDrawerUndo() {
+  clearTimeout(state.drawerUndoTimer);
+  const bar = els.drawer?.querySelector('[data-drawer-undo]');
+  if (bar) bar.hidden = true;
+  if (state.drawer) state.drawer.undo = null;
+}
+
+async function undoDrawerChange() {
+  const drawer = state.drawer;
+  const snapshot = drawer?.undo;
+  if (!snapshot) return;
+  const keep = new Set(snapshot.sources.map((source) => source.id));
+  const added = new Set(drawer.sources.filter((source) => !keep.has(source.id)).map((source) => source.id));
+  if (!(await persistDrawer(snapshot.topic, snapshot.sources, added))) return;
+  if (state.drawer !== drawer) return;
+  drawer.topic = { ...snapshot.topic };
+  drawer.sources = snapshot.sources.map((source) => ({ ...source }));
+  drawer.saved = drawerSnapshot();
+  drawer.removed.clear();
+  hideDrawerUndo();
+  els.drawerTitle.textContent = drawer.topic.title;
+  fillDrawerForm(drawer.topic);
+  renderSourceGroups();
 }
 
 async function deleteTopic() {
@@ -1215,6 +1403,7 @@ async function deleteTopic() {
   }
   // Zeitplan löschen als Befehl (ohne Warten; Fehler → Zone), Datensätze lokal entfernen.
   dispatch(buildScheduleCommand(topic, { deleted: true }));
+  if (digestOf(topic).enabled) dispatch(buildScheduleCommand(topic, { deleted: true, digest: true }));
   const removeWhere = async (name, predicate) => {
     for (const doc of state.api ? state.api.query(name, {}).get() : []) {
       if (predicate(doc)) await write('remove', name, doc.id);
@@ -1259,6 +1448,7 @@ function importTopics() {
         idMap.set(raw.id, topic.id);
         await write('put', COLLECTIONS.topics, topic);
         dispatch(buildScheduleCommand(topic));
+        if (digestActive(topic)) dispatch(buildScheduleCommand(topic, { digest: true }));
       }
       for (const raw of Array.isArray(data.sources) ? data.sources : []) {
         const topicId = idMap.get(raw.topic_id);
