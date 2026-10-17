@@ -41,35 +41,37 @@ pub(super) fn persist(root: &std::path::Path, value: &Captured) -> Result<()> {
 #[test]
 fn holder_reads_exact_encrypted_account_and_exposes_no_refresh_in_sdk_configuration() -> Result<()>
 {
-    let root = tempfile::tempdir()?;
-    let expected = account("access-private", "refresh-private");
-    persist(root.path(), &expected)?;
-    let selected = stable_capture(root.path(), "native-claude")?;
-    assert!(selected == expected);
-    assert!(stable_capture(root.path(), "other-account").is_err());
-    let binding = fingerprint(&selected)?;
-    let state = Mutex::new(Some(selected));
-    let current = stable_capture(root.path(), "native-claude")?;
-    with_captured_current(&state, &current, &binding, |value| {
-        let configuration = NativeClaudeSdkConfiguration {
-            model: MODEL,
-            access_token: value.credentials.access_token(),
-            private_binding: &binding,
-        };
-        assert_eq!(configuration.model(), MODEL);
-        assert_eq!(configuration.upstream(), "https://api.anthropic.com");
-        assert_eq!(
-            configuration.access_token().expose_secret(),
-            "access-private"
-        );
-        assert_eq!(configuration.private_binding(), binding);
-        assert_eq!(
-            format!("{:?}", configuration.access_token()),
-            "SecretString([REDACTED])"
-        );
+    crate::persistence::test_support::run(move |owner_root| {
+        let root = owner_root;
+        let expected = account("access-private", "refresh-private");
+        persist(root.path(), &expected)?;
+        let selected = stable_capture(root.path(), "native-claude")?;
+        assert!(selected == expected);
+        assert!(stable_capture(root.path(), "other-account").is_err());
+        let binding = fingerprint(&selected)?;
+        let state = Mutex::new(Some(selected));
+        let current = stable_capture(root.path(), "native-claude")?;
+        with_captured_current(&state, &current, &binding, |value| {
+            let configuration = NativeClaudeSdkConfiguration {
+                model: MODEL,
+                access_token: value.credentials.access_token(),
+                private_binding: &binding,
+            };
+            assert_eq!(configuration.model(), MODEL);
+            assert_eq!(configuration.upstream(), "https://api.anthropic.com");
+            assert_eq!(
+                configuration.access_token().expose_secret(),
+                "access-private"
+            );
+            assert_eq!(configuration.private_binding(), binding);
+            assert_eq!(
+                format!("{:?}", configuration.access_token()),
+                "SecretString([REDACTED])"
+            );
+            Ok(())
+        })?;
         Ok(())
-    })?;
-    Ok(())
+    })
 }
 
 #[test]
@@ -114,24 +116,26 @@ fn account_access_refresh_and_configuration_changes_permanently_retire_a_reserva
 
 #[test]
 fn relogin_in_real_secret_store_never_reuses_the_old_sdk_account() -> Result<()> {
-    let root = tempfile::tempdir()?;
-    let old = account("old-private-access", "old-private-refresh");
-    persist(root.path(), &old)?;
-    let binding = fingerprint(&old)?;
-    let state = Mutex::new(Some(stable_capture(root.path(), "native-claude")?));
-    let new = account("new-private-access", "new-private-refresh");
-    CtoxClaudeSecretStore::new(root.path())
-        .store_credentials(&new.account.credential_handles().unwrap(), &new.credentials)?;
-    let current = stable_capture(root.path(), "native-claude")?;
-    assert!(
-        with_captured_current::<()>(&state, &current, &binding, |_| {
-            panic!("old reservation cannot export a re-login credential")
-        })
-        .is_err()
-    );
-    assert!(state.lock().unwrap().is_none());
-    assert!(validate(&current, &fingerprint(&current)?).is_ok());
-    Ok(())
+    crate::persistence::test_support::run(move |owner_root| {
+        let root = owner_root;
+        let old = account("old-private-access", "old-private-refresh");
+        persist(root.path(), &old)?;
+        let binding = fingerprint(&old)?;
+        let state = Mutex::new(Some(stable_capture(root.path(), "native-claude")?));
+        let new = account("new-private-access", "new-private-refresh");
+        CtoxClaudeSecretStore::new(root.path())
+            .store_credentials(&new.account.credential_handles().unwrap(), &new.credentials)?;
+        let current = stable_capture(root.path(), "native-claude")?;
+        assert!(
+            with_captured_current::<()>(&state, &current, &binding, |_| {
+                panic!("old reservation cannot export a re-login credential")
+            })
+            .is_err()
+        );
+        assert!(state.lock().unwrap().is_none());
+        assert!(validate(&current, &fingerprint(&current)?).is_ok());
+        Ok(())
+    })
 }
 
 #[test]

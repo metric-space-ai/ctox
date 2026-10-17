@@ -1074,118 +1074,134 @@ data: [DONE]
         assert!(receiver.blocking_recv().is_none());
     }
 
-    #[tokio::test]
-    async fn installed_route_resolves_secrets_and_executes_exact_kimi_contract() {
-        let root = tempfile::tempdir().unwrap();
-        assert_eq!(
-            install_kimi_subscription(root.path(), "kimi-primary", &token_storage()).unwrap(),
-            1
-        );
-        let http = Arc::new(RecordingHttp::default());
-        let route =
-            build_kimi_subscription_route_with_http(root.path(), "kimi-primary", http.clone())
+    #[test]
+    fn installed_route_resolves_secrets_and_executes_exact_kimi_contract() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
+            let root = owner_root;
+            assert_eq!(
+                install_kimi_subscription(root.path(), "kimi-primary", &token_storage()).unwrap(),
+                1
+            );
+            let http = Arc::new(RecordingHttp::default());
+            let route =
+                build_kimi_subscription_route_with_http(root.path(), "kimi-primary", http.clone())
+                    .unwrap();
+            let payload = br#"{"model":"kimi-k3[1m]","input":"hello"}"#;
+            let response = route
+                .execute(ExecutorRequest {
+                    auth_id: "kimi-primary".to_owned(),
+                    auth_provider: "kimi".to_owned(),
+                    model: "k3[1m]".to_owned(),
+                    source_format: "openai-response".to_owned(),
+                    format: "openai-response".to_owned(),
+                    payload: payload.to_vec(),
+                    original_request: payload.to_vec(),
+                    ..ExecutorRequest::default()
+                })
+                .await
                 .unwrap();
-        let payload = br#"{"model":"kimi-k3[1m]","input":"hello"}"#;
-        let response = route
-            .execute(ExecutorRequest {
-                auth_id: "kimi-primary".to_owned(),
-                auth_provider: "kimi".to_owned(),
-                model: "k3[1m]".to_owned(),
-                source_format: "openai-response".to_owned(),
-                format: "openai-response".to_owned(),
-                payload: payload.to_vec(),
-                original_request: payload.to_vec(),
-                ..ExecutorRequest::default()
-            })
-            .await
-            .unwrap();
-        assert_eq!(
-            serde_json::from_slice::<Value>(&response.payload).unwrap()["object"],
-            json!("response")
-        );
-        let requests = http.requests.lock().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].url, KIMI_CHAT_COMPLETIONS_URL);
-        assert_eq!(
-            requests[0].headers["Authorization"],
-            ["Bearer access-kimi-do-not-leak"]
-        );
-        assert_eq!(requests[0].headers["X-Msh-Device-Id"], ["device-kimi"]);
-        assert_eq!(
-            serde_json::from_slice::<Value>(&requests[0].body).unwrap()["model"],
-            json!("k3")
-        );
-        let debug = format!("{route:?}");
-        assert!(!debug.contains("access-kimi-do-not-leak"));
-        assert!(!debug.contains("refresh-kimi-do-not-leak"));
+            assert_eq!(
+                serde_json::from_slice::<Value>(&response.payload).unwrap()["object"],
+                json!("response")
+            );
+            let requests = http.requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].url, KIMI_CHAT_COMPLETIONS_URL);
+            assert_eq!(
+                requests[0].headers["Authorization"],
+                ["Bearer access-kimi-do-not-leak"]
+            );
+            assert_eq!(requests[0].headers["X-Msh-Device-Id"], ["device-kimi"]);
+            assert_eq!(
+                serde_json::from_slice::<Value>(&requests[0].body).unwrap()["model"],
+                json!("k3")
+            );
+            let debug = format!("{route:?}");
+            assert!(!debug.contains("access-kimi-do-not-leak"));
+            assert!(!debug.contains("refresh-kimi-do-not-leak"));
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn route_fails_closed_for_missing_or_expired_credentials() {
-        let root = tempfile::tempdir().unwrap();
-        assert!(build_kimi_subscription_route(root.path(), "missing").is_err());
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            assert!(build_kimi_subscription_route(root.path(), "missing").is_err());
 
-        let expired = KimiTokenData::new(
-            SecretString::new("expired-access").unwrap(),
-            None,
-            "Bearer",
-            Some(SystemTime::now() - Duration::from_secs(1)),
-            "kimi-code",
-        );
-        let storage = KimiTokenStorage::from_bundle(&KimiAuthBundle::new(expired, "device"));
-        install_kimi_subscription(root.path(), "expired", &storage).unwrap();
-        assert!(build_kimi_subscription_route(root.path(), "expired").is_err());
+            let expired = KimiTokenData::new(
+                SecretString::new("expired-access").unwrap(),
+                None,
+                "Bearer",
+                Some(SystemTime::now() - Duration::from_secs(1)),
+                "kimi-code",
+            );
+            let storage = KimiTokenStorage::from_bundle(&KimiAuthBundle::new(expired, "device"));
+            install_kimi_subscription(root.path(), "expired", &storage).unwrap();
+            assert!(build_kimi_subscription_route(root.path(), "expired").is_err());
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn provider_neutral_disconnect_removes_kimi_topology_and_secret_tuple() {
-        let root = tempfile::tempdir().unwrap();
-        install_kimi_subscription(root.path(), "kimi-remove", &token_storage()).unwrap();
-        let result = crate::execution::cliproxyapi_host::disconnect_provider_subscription(
-            root.path(),
-            "kimi",
-            "kimi-remove",
-        )
-        .unwrap();
-        assert_eq!(result["revision"], 2);
-        assert_eq!(result["deleted_secret_records"], 3);
-        assert!(load_provider_integration_config(root.path())
-            .unwrap()
-            .config
-            .kimi_subscription_accounts
-            .is_empty());
-        for suffix in ["access-token", "refresh-token", "state"] {
-            assert!(!crate::secrets::secret_exists(
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            install_kimi_subscription(root.path(), "kimi-remove", &token_storage()).unwrap();
+            let result = crate::execution::cliproxyapi_host::disconnect_provider_subscription(
                 root.path(),
-                PROVIDER_SECRET_SCOPE,
-                &format!("kimi-remove-{suffix}")
+                "kimi",
+                "kimi-remove",
             )
-            .unwrap());
-        }
+            .unwrap();
+            assert_eq!(result["revision"], 2);
+            assert_eq!(result["deleted_secret_records"], 3);
+            assert!(load_provider_integration_config(root.path())
+                .unwrap()
+                .config
+                .kimi_subscription_accounts
+                .is_empty());
+            for suffix in ["access-token", "refresh-token", "state"] {
+                assert!(!crate::secrets::secret_exists(
+                    root.path(),
+                    PROVIDER_SECRET_SCOPE,
+                    &format!("kimi-remove-{suffix}")
+                )
+                .unwrap());
+            }
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn credential_lifecycle_rotates_rolls_back_and_deletes_as_one_owned_tuple() {
-        let root = tempfile::tempdir().unwrap();
-        let account_id = "kimi-lifecycle";
-        let initial = token_storage_with(
-            "access-initial-do-not-leak",
-            "refresh-initial-do-not-leak",
-            "device-initial",
-        );
-        assert_eq!(
-            install_kimi_subscription(root.path(), account_id, &initial).unwrap(),
-            1
-        );
-        let route = build_kimi_subscription_route(root.path(), account_id).unwrap();
-        assert_eq!(route.access_token.as_str(), "access-initial-do-not-leak");
-        assert_eq!(route.state.device_id, "device-initial");
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            let account_id = "kimi-lifecycle";
+            let initial = token_storage_with(
+                "access-initial-do-not-leak",
+                "refresh-initial-do-not-leak",
+                "device-initial",
+            );
+            assert_eq!(
+                install_kimi_subscription(root.path(), account_id, &initial).unwrap(),
+                1
+            );
+            let route = build_kimi_subscription_route(root.path(), account_id).unwrap();
+            assert_eq!(route.access_token.as_str(), "access-initial-do-not-leak");
+            assert_eq!(route.state.device_id, "device-initial");
 
-        let connection =
-            rusqlite::Connection::open(crate::secrets::secret_store_path(root.path())).unwrap();
-        connection
-            .execute_batch(
-                r#"
+            let connection =
+                rusqlite::Connection::open(crate::secrets::secret_store_path(root.path())).unwrap();
+            connection
+                .execute_batch(
+                    r#"
                 CREATE TRIGGER reject_kimi_state_rotation
                 BEFORE UPDATE ON ctox_secret_records
                 WHEN NEW.secret_name = 'kimi-lifecycle-state'
@@ -1193,128 +1209,143 @@ data: [DONE]
                     SELECT RAISE(ABORT, 'forced Kimi tuple rollback');
                 END;
                 "#,
+                )
+                .unwrap();
+            drop(connection);
+
+            let rotated = token_storage_with(
+                "access-rotated-do-not-leak",
+                "refresh-rotated-do-not-leak",
+                "device-rotated",
+            );
+            assert!(install_kimi_subscription(root.path(), account_id, &rotated).is_err());
+            assert_eq!(
+                load_provider_integration_config(root.path())
+                    .unwrap()
+                    .revision,
+                1
+            );
+            let retained = build_kimi_subscription_route(root.path(), account_id).unwrap();
+            assert_eq!(retained.access_token.as_str(), "access-initial-do-not-leak");
+            assert_eq!(retained.state.device_id, "device-initial");
+
+            let connection =
+                rusqlite::Connection::open(crate::secrets::secret_store_path(root.path())).unwrap();
+            connection
+                .execute_batch("DROP TRIGGER reject_kimi_state_rotation;")
+                .unwrap();
+            drop(connection);
+            assert_eq!(
+                install_kimi_subscription(root.path(), account_id, &rotated).unwrap(),
+                2
+            );
+            let installed = build_kimi_subscription_route(root.path(), account_id).unwrap();
+            assert_eq!(
+                installed.access_token.as_str(),
+                "access-rotated-do-not-leak"
+            );
+            assert_eq!(installed.state.device_id, "device-rotated");
+
+            let disconnected =
+                crate::execution::cliproxyapi_host::disconnect_provider_subscription(
+                    root.path(),
+                    "kimi",
+                    account_id,
+                )
+                .unwrap();
+            assert_eq!(disconnected["revision"], 3);
+            assert_eq!(disconnected["deleted_secret_records"], 3);
+            assert!(build_kimi_subscription_route(root.path(), account_id).is_err());
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn caller_cannot_override_provider_account_model_or_format() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
+            let root = owner_root;
+            install_kimi_subscription(root.path(), "kimi-primary", &token_storage()).unwrap();
+            let route = build_kimi_subscription_route_with_http(
+                root.path(),
+                "kimi-primary",
+                Arc::new(RecordingHttp::default()),
             )
             .unwrap();
-        drop(connection);
-
-        let rotated = token_storage_with(
-            "access-rotated-do-not-leak",
-            "refresh-rotated-do-not-leak",
-            "device-rotated",
-        );
-        assert!(install_kimi_subscription(root.path(), account_id, &rotated).is_err());
-        assert_eq!(
-            load_provider_integration_config(root.path())
-                .unwrap()
-                .revision,
-            1
-        );
-        let retained = build_kimi_subscription_route(root.path(), account_id).unwrap();
-        assert_eq!(retained.access_token.as_str(), "access-initial-do-not-leak");
-        assert_eq!(retained.state.device_id, "device-initial");
-
-        let connection =
-            rusqlite::Connection::open(crate::secrets::secret_store_path(root.path())).unwrap();
-        connection
-            .execute_batch("DROP TRIGGER reject_kimi_state_rotation;")
-            .unwrap();
-        drop(connection);
-        assert_eq!(
-            install_kimi_subscription(root.path(), account_id, &rotated).unwrap(),
-            2
-        );
-        let installed = build_kimi_subscription_route(root.path(), account_id).unwrap();
-        assert_eq!(
-            installed.access_token.as_str(),
-            "access-rotated-do-not-leak"
-        );
-        assert_eq!(installed.state.device_id, "device-rotated");
-
-        let disconnected = crate::execution::cliproxyapi_host::disconnect_provider_subscription(
-            root.path(),
-            "kimi",
-            account_id,
-        )
-        .unwrap();
-        assert_eq!(disconnected["revision"], 3);
-        assert_eq!(disconnected["deleted_secret_records"], 3);
-        assert!(build_kimi_subscription_route(root.path(), account_id).is_err());
-    }
-
-    #[tokio::test]
-    async fn caller_cannot_override_provider_account_model_or_format() {
-        let root = tempfile::tempdir().unwrap();
-        install_kimi_subscription(root.path(), "kimi-primary", &token_storage()).unwrap();
-        let route = build_kimi_subscription_route_with_http(
-            root.path(),
-            "kimi-primary",
-            Arc::new(RecordingHttp::default()),
-        )
-        .unwrap();
-        let base = ExecutorRequest {
-            auth_id: "other".to_owned(),
-            auth_provider: "kimi".to_owned(),
-            model: "k3[1m]".to_owned(),
-            source_format: "openai-response".to_owned(),
-            format: "openai-response".to_owned(),
-            payload: br#"{"input":"hello"}"#.to_vec(),
-            ..ExecutorRequest::default()
-        };
-        assert!(route.execute(base.clone()).await.is_err());
-        let mut wrong_provider = base.clone();
-        wrong_provider.auth_id = "kimi-primary".to_owned();
-        wrong_provider.auth_provider = "codex".to_owned();
-        assert!(route.execute(wrong_provider).await.is_err());
-        let mut wrong_model = base.clone();
-        wrong_model.auth_id = "kimi-primary".to_owned();
-        wrong_model.model = "unconfigured".to_owned();
-        assert!(route.execute(wrong_model).await.is_err());
-        let mut wrong_format = base;
-        wrong_format.auth_id = "kimi-primary".to_owned();
-        wrong_format.source_format = "claude".to_owned();
-        wrong_format.format = "claude".to_owned();
-        assert!(route.execute(wrong_format).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn stream_route_keeps_exact_endpoint_auth_and_responses_format() {
-        let root = tempfile::tempdir().unwrap();
-        install_kimi_subscription(root.path(), "kimi-stream", &token_storage()).unwrap();
-        let http = Arc::new(RecordingHttp::default());
-        let route =
-            build_kimi_subscription_route_with_http(root.path(), "kimi-stream", http.clone())
-                .unwrap();
-        let payload = br#"{"model":"k3[1m]","input":"hello","stream":true}"#;
-        let mut response = route
-            .execute_stream(ExecutorRequest {
-                auth_id: "kimi-stream".to_owned(),
+            let base = ExecutorRequest {
+                auth_id: "other".to_owned(),
                 auth_provider: "kimi".to_owned(),
                 model: "k3[1m]".to_owned(),
                 source_format: "openai-response".to_owned(),
                 format: "openai-response".to_owned(),
-                stream: true,
-                payload: payload.to_vec(),
-                original_request: payload.to_vec(),
+                payload: br#"{"input":"hello"}"#.to_vec(),
                 ..ExecutorRequest::default()
-            })
-            .await
-            .unwrap();
-        let mut output = Vec::new();
-        while let Some(chunk) = response.chunks.recv().await {
-            assert!(chunk.error.is_none());
-            output.extend_from_slice(&chunk.payload);
-        }
-        let output = String::from_utf8(output).unwrap();
-        assert!(output.contains("response.output_text.delta"));
-        assert!(output.contains("response.completed"));
-        let requests = http.requests.lock().unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0].url, KIMI_CHAT_COMPLETIONS_URL);
-        assert_eq!(
-            requests[0].headers["Authorization"],
-            ["Bearer access-kimi-do-not-leak"]
-        );
-        assert_eq!(requests[0].headers["Accept"], ["text/event-stream"]);
+            };
+            assert!(route.execute(base.clone()).await.is_err());
+            let mut wrong_provider = base.clone();
+            wrong_provider.auth_id = "kimi-primary".to_owned();
+            wrong_provider.auth_provider = "codex".to_owned();
+            assert!(route.execute(wrong_provider).await.is_err());
+            let mut wrong_model = base.clone();
+            wrong_model.auth_id = "kimi-primary".to_owned();
+            wrong_model.model = "unconfigured".to_owned();
+            assert!(route.execute(wrong_model).await.is_err());
+            let mut wrong_format = base;
+            wrong_format.auth_id = "kimi-primary".to_owned();
+            wrong_format.source_format = "claude".to_owned();
+            wrong_format.format = "claude".to_owned();
+            assert!(route.execute(wrong_format).await.is_err());
+
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn stream_route_keeps_exact_endpoint_auth_and_responses_format() {
+        crate::persistence::test_support::run_async(move |owner_root| async move {
+            let root = owner_root;
+            install_kimi_subscription(root.path(), "kimi-stream", &token_storage()).unwrap();
+            let http = Arc::new(RecordingHttp::default());
+            let route =
+                build_kimi_subscription_route_with_http(root.path(), "kimi-stream", http.clone())
+                    .unwrap();
+            let payload = br#"{"model":"k3[1m]","input":"hello","stream":true}"#;
+            let mut response = route
+                .execute_stream(ExecutorRequest {
+                    auth_id: "kimi-stream".to_owned(),
+                    auth_provider: "kimi".to_owned(),
+                    model: "k3[1m]".to_owned(),
+                    source_format: "openai-response".to_owned(),
+                    format: "openai-response".to_owned(),
+                    stream: true,
+                    payload: payload.to_vec(),
+                    original_request: payload.to_vec(),
+                    ..ExecutorRequest::default()
+                })
+                .await
+                .unwrap();
+            let mut output = Vec::new();
+            while let Some(chunk) = response.chunks.recv().await {
+                assert!(chunk.error.is_none());
+                output.extend_from_slice(&chunk.payload);
+            }
+            let output = String::from_utf8(output).unwrap();
+            assert!(output.contains("response.output_text.delta"));
+            assert!(output.contains("response.completed"));
+            let requests = http.requests.lock().unwrap();
+            assert_eq!(requests.len(), 1);
+            assert_eq!(requests[0].url, KIMI_CHAT_COMPLETIONS_URL);
+            assert_eq!(
+                requests[0].headers["Authorization"],
+                ["Bearer access-kimi-do-not-leak"]
+            );
+            assert_eq!(requests[0].headers["Accept"], ["text/event-stream"]);
+
+            Ok(())
+        })
+        .unwrap();
     }
 }
 

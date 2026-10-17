@@ -774,7 +774,8 @@ impl CodexSubscriptionAccountPool {
         while !remaining.is_empty() {
             let selected = self
                 .router
-                .select("codex", Some(model), self.clock.now_ms(), &remaining)
+                .select_async("codex", Some(model), self.clock.now_ms(), &remaining)
+                .await
                 .map_err(CodexAccountPoolError::Routing)?;
             crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
@@ -831,7 +832,8 @@ impl CodexSubscriptionAccountPool {
         while !remaining.is_empty() {
             let selected = self
                 .router
-                .select("codex", Some(model), self.clock.now_ms(), &remaining)
+                .select_async("codex", Some(model), self.clock.now_ms(), &remaining)
+                .await
                 .map_err(CodexAccountPoolError::Routing)?;
             crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);

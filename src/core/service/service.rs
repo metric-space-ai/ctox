@@ -31740,50 +31740,55 @@ Business OS command:
 
     #[test]
     fn chat_submit_auto_ingests_prompt_secrets_before_queueing() {
-        let root = temp_root("chat-submit-secrets");
-        let mut shared = SharedState::default();
-        shared.busy = true;
-        let state = Arc::new(Mutex::new(shared));
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let mut shared = SharedState::default();
+            shared.busy = true;
+            let state = Arc::new(Mutex::new(shared));
 
-        let response = handle_service_ipc_request(
-            ServiceIpcRequest::ChatSubmit {
-                prompt: "openAI API key:\nsk-proj-service-secret-1234567890".to_string(),
-                thread_key: None,
-                outbound_email: None,
-                outbound_anchor: None,
-            },
-            &root,
-            state.clone(),
-        )
-        .expect("chat submit should be accepted");
+            let response = handle_service_ipc_request(
+                ServiceIpcRequest::ChatSubmit {
+                    prompt: "openAI API key:\nsk-proj-service-secret-1234567890".to_string(),
+                    thread_key: None,
+                    outbound_email: None,
+                    outbound_anchor: None,
+                },
+                &root,
+                state.clone(),
+            )
+            .expect("chat submit should be accepted");
 
-        match response {
-            ServiceIpcResponse::Accepted(response) => {
-                assert!(response.accepted);
-                assert_eq!(response.status, "queued");
+            match response {
+                ServiceIpcResponse::Accepted(response) => {
+                    assert!(response.accepted);
+                    assert_eq!(response.status, "queued");
+                }
+                other => panic!("unexpected response: {other:?}"),
             }
-            other => panic!("unexpected response: {other:?}"),
-        }
 
-        let shared = lock_shared_state(&state);
-        assert_eq!(shared.pending_prompts.len(), 1);
-        assert!(!shared.pending_prompts[0]
-            .prompt
-            .contains("sk-proj-service-secret-1234567890"));
-        assert!(shared.pending_prompts[0]
-            .prompt
-            .contains("[secret-ref:credentials/OPENAI_API_KEY"));
-        assert_eq!(
-            shared.pending_prompts[0].suggested_skill.as_deref(),
-            Some("secret-hygiene")
-        );
-        drop(shared);
+            let shared = lock_shared_state(&state);
+            assert_eq!(shared.pending_prompts.len(), 1);
+            assert!(!shared.pending_prompts[0]
+                .prompt
+                .contains("sk-proj-service-secret-1234567890"));
+            assert!(shared.pending_prompts[0]
+                .prompt
+                .contains("[secret-ref:credentials/OPENAI_API_KEY"));
+            assert_eq!(
+                shared.pending_prompts[0].suggested_skill.as_deref(),
+                Some("secret-hygiene")
+            );
+            drop(shared);
 
-        assert_eq!(
-            secrets::read_secret_value(&root, "credentials", "OPENAI_API_KEY")
-                .expect("secret should be readable"),
-            "sk-proj-service-secret-1234567890"
-        );
+            assert_eq!(
+                secrets::read_secret_value(&root, "credentials", "OPENAI_API_KEY")
+                    .expect("secret should be readable"),
+                "sk-proj-service-secret-1234567890"
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -32817,30 +32822,35 @@ Business OS command:
 
     #[test]
     fn non_work_tui_route_is_acknowledged_without_agent_queue() {
-        let root = temp_root("tui-non-work-route");
-        upsert_test_inbound_message(
-            &root,
-            "tui-probe-1",
-            "tui",
-            "tui/main",
-            "owner",
-            "Demo",
-            "hello queue",
-            json!({ "priority": "normal" }),
-        );
-        let state = Arc::new(Mutex::new(SharedState::default()));
+        crate::persistence::test_support::run_queue(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            upsert_test_inbound_message(
+                &root,
+                "tui-probe-1",
+                "tui",
+                "tui/main",
+                "owner",
+                "Demo",
+                "hello queue",
+                json!({ "priority": "normal" }),
+            );
+            let state = Arc::new(Mutex::new(SharedState::default()));
 
-        route_external_messages(&root, &state).expect("route tui probe");
+            route_external_messages(&root, &state).expect("route tui probe");
 
-        let shared = state.lock().expect("state poisoned");
-        assert!(shared.pending_prompts.is_empty());
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("Ignored non-work TUI route")));
-        drop(shared);
-        assert_eq!(route_status_for(&root, "tui-probe-1"), "handled");
-        let _ = std::fs::remove_dir_all(&root);
+            let shared = state.lock().expect("state poisoned");
+            assert!(shared.pending_prompts.is_empty());
+            assert!(shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("Ignored non-work TUI route")));
+            drop(shared);
+            assert_eq!(route_status_for(&root, "tui-probe-1"), "handled");
+            // Root cleanup follows owner shutdown.
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

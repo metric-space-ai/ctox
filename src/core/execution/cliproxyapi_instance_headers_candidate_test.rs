@@ -124,51 +124,56 @@ fn candidate_instance_header_router(root: &Path) -> InstanceResponsesRouter {
     }
 }
 
-#[tokio::test]
-async fn candidate_cliproxy_host_headers_survive_instance_router() {
+#[test]
+fn candidate_cliproxy_host_headers_survive_instance_router() {
     let body = br#"{"model":"gemini-3-flash-agent","stream":true,"input":"hello"}"#;
     for (codex, provider) in [(true, None), (true, Some(" Antigravity ")), (false, None)] {
-        let root = tempfile::tempdir().unwrap();
-        let router = candidate_instance_header_router(root.path());
-        let headers = std::collections::BTreeMap::from([(
-            "oRiGiNaToR".to_owned(),
-            vec![if codex { "codex_cli_rs" } else { "workjet" }.to_owned()],
-        )]);
-        let response = router
-            .handle_provider_route_with_headers(provider, &headers, body)
-            .await;
-        let OpenAiResponsesRouteResponse::AntigravityStream(mut stream) = response else {
-            panic!("expected the actual Antigravity tracked stream");
-        };
-        let mut output = Vec::new();
-        tokio::time::timeout(Duration::from_secs(3), async {
-            while let Some(chunk) = stream.next_chunk().await {
-                output.extend(chunk);
-            }
+        crate::persistence::test_support::run_async(move |owner_root| async move {
+            let root = owner_root;
+            let router = candidate_instance_header_router(root.path());
+            let headers = std::collections::BTreeMap::from([(
+                "oRiGiNaToR".to_owned(),
+                vec![if codex { "codex_cli_rs" } else { "workjet" }.to_owned()],
+            )]);
+            let response = router
+                .handle_provider_route_with_headers(provider, &headers, body)
+                .await;
+            let OpenAiResponsesRouteResponse::AntigravityStream(mut stream) = response else {
+                panic!("expected the actual Antigravity tracked stream");
+            };
+            let mut output = Vec::new();
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while let Some(chunk) = stream.next_chunk().await {
+                    output.extend(chunk);
+                }
+            })
+            .await
+            .expect("header fixture must terminate");
+            let text = String::from_utf8(output).unwrap();
+            assert!(text.contains("partial"), "{text}");
+            assert!(
+                text.contains(if codex {
+                    "event: response.failed"
+                } else {
+                    "event: error"
+                }),
+                "{text}"
+            );
+            assert!(
+                !text.contains(if codex {
+                    "event: error"
+                } else {
+                    "event: response.failed"
+                }),
+                "{text}"
+            );
+            assert!(
+                !text.contains("header-access-do-not-leak")
+                    && !text.contains("header-refresh-do-not-leak")
+            );
+
+            Ok(())
         })
-        .await
-        .expect("header fixture must terminate");
-        let text = String::from_utf8(output).unwrap();
-        assert!(text.contains("partial"), "{text}");
-        assert!(
-            text.contains(if codex {
-                "event: response.failed"
-            } else {
-                "event: error"
-            }),
-            "{text}"
-        );
-        assert!(
-            !text.contains(if codex {
-                "event: error"
-            } else {
-                "event: response.failed"
-            }),
-            "{text}"
-        );
-        assert!(
-            !text.contains("header-access-do-not-leak")
-                && !text.contains("header-refresh-do-not-leak")
-        );
+        .unwrap();
     }
 }

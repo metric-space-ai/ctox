@@ -1104,3 +1104,7 @@ mod owner_adapter_tests {
 #[cfg(test)]
 #[path = "persistence_blocking_tests.rs"]
 mod blocking_tests;
+
+#[cfg(test)]
+#[path = "persistence_test_support.rs"]
+pub(crate) mod test_support;

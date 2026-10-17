@@ -2519,6 +2519,11 @@ fn dispatch_business_command(
         | "ctox.mailserver.delete_user" => {
             handle_mailserver_command(root, command).map(BusinessCommandDispatchOutcome::Returned)
         }
+        "ctox.workjet.remote_worker.admit"
+        | "ctox.maintenance.restart"
+        | "instance.providers.models.check" => {
+            anyhow::bail!("canonical_platform_feed_required")
+        }
         _ => {
             // Legacy native dispatch: these types are outside EXACT_CONTROL_TYPES
             // but still execute immediately and return before record_command.
@@ -2901,14 +2906,15 @@ mod tests {
     use serde_json::json;
     use std::collections::BTreeSet;
     use std::time::{Duration, Instant};
-    use tempfile::tempdir;
+    use crate::persistence::test_support::scoped_tempdir as tempdir;
 
     #[test]
     fn intake_stamps_verified_identity_and_preserves_claimed_actor_evidence() -> anyhow::Result<()>
     {
-        let root = tempdir()?;
-        let owner_user_id = "michael.welsch@metric-space.ai";
-        let (capability_token, _) =
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let owner_user_id = "michael.welsch@metric-space.ai";
+            let (capability_token, _) =
             super::super::store::issue_business_os_capability_token_for_managed_user_with_email(
                 root.path(),
                 owner_user_id,
@@ -2917,120 +2923,121 @@ mod tests {
                 "admin",
                 now_ms() as i64,
             )?;
-        let accept = |command_id: &str, client_context: Value| {
-            accept_rxdb_business_command_with_origin(
-                root.path(),
+            let accept = |command_id: &str, client_context: Value| {
+                accept_rxdb_business_command_with_origin(
+                    root.path(),
+                    serde_json::json!({
+                        "id": command_id,
+                        "command_id": command_id,
+                        "module": "research",
+                        "command_type": "business_os.chat.task",
+                        "payload": {
+                            "title": "Identity intake test",
+                            "instruction": "Verify the persisted command identity."
+                        },
+                        "client_context": client_context,
+                    }),
+                    CommandOrigin::ReplicatedPeer,
+                )
+            };
+            let load_context = |command_id: &str| -> anyhow::Result<Value> {
+                let conn = open_store(root.path())?;
+                let raw = conn.query_row(
+                    "SELECT client_context_json FROM business_commands WHERE command_id = ?1",
+                    params![command_id],
+                    |row| row.get::<_, String>(0),
+                )?;
+                Ok(serde_json::from_str(&raw)?)
+            };
+
+            let missing_id = "cmd_missing_identity";
+            accept(
+                missing_id,
                 serde_json::json!({
-                    "id": command_id,
-                    "command_id": command_id,
-                    "module": "research",
-                    "command_type": "business_os.chat.task",
-                    "payload": {
-                        "title": "Identity intake test",
-                        "instruction": "Verify the persisted command identity."
-                    },
-                    "client_context": client_context,
+                    "source": "business-os-chat",
+                    "capability_token": capability_token,
                 }),
-                CommandOrigin::ReplicatedPeer,
-            )
-        };
-        let load_context = |command_id: &str| -> anyhow::Result<Value> {
-            let conn = open_store(root.path())?;
-            let raw = conn.query_row(
-                "SELECT client_context_json FROM business_commands WHERE command_id = ?1",
-                params![command_id],
-                |row| row.get::<_, String>(0),
             )?;
-            Ok(serde_json::from_str(&raw)?)
-        };
+            let stamped = load_context(missing_id)?;
+            assert_eq!(
+                stamped.get("owner_user_id").and_then(Value::as_str),
+                Some(owner_user_id)
+            );
+            assert_eq!(
+                stamped.pointer("/actor/id").and_then(Value::as_str),
+                Some(owner_user_id)
+            );
+            assert_eq!(
+                stamped
+                    .pointer("/actor/display_name")
+                    .and_then(Value::as_str),
+                Some(owner_user_id)
+            );
 
-        let missing_id = "cmd_missing_identity";
-        accept(
-            missing_id,
-            serde_json::json!({
-                "source": "business-os-chat",
-                "capability_token": capability_token,
-            }),
-        )?;
-        let stamped = load_context(missing_id)?;
-        assert_eq!(
-            stamped.get("owner_user_id").and_then(Value::as_str),
-            Some(owner_user_id)
-        );
-        assert_eq!(
-            stamped.pointer("/actor/id").and_then(Value::as_str),
-            Some(owner_user_id)
-        );
-        assert_eq!(
-            stamped
-                .pointer("/actor/display_name")
-                .and_then(Value::as_str),
-            Some(owner_user_id)
-        );
+            let foreign_id = "cmd_foreign_identity";
+            accept(
+                foreign_id,
+                serde_json::json!({
+                    "source": "business-os-chat",
+                    "capability_token": capability_token,
+                    "actor": { "id": "attacker", "display_name": "Claimed User" },
+                    "owner_user_id": "foreign-owner",
+                    "user_id": "foreign-user"
+                }),
+            )?;
+            let overridden = load_context(foreign_id)?;
+            assert_eq!(
+                overridden.pointer("/actor/id").and_then(Value::as_str),
+                Some(owner_user_id)
+            );
+            assert_eq!(
+                overridden.get("owner_user_id").and_then(Value::as_str),
+                Some(owner_user_id)
+            );
+            assert_eq!(
+                overridden.get("user_id").and_then(Value::as_str),
+                Some(owner_user_id)
+            );
+            assert_eq!(
+                overridden
+                    .pointer("/claimed_actor/actor/id")
+                    .and_then(Value::as_str),
+                Some("attacker")
+            );
+            assert_eq!(
+                overridden
+                    .pointer("/claimed_actor/owner_user_id")
+                    .and_then(Value::as_str),
+                Some("foreign-owner")
+            );
+            assert_eq!(
+                overridden
+                    .pointer("/claimed_actor/user_id")
+                    .and_then(Value::as_str),
+                Some("foreign-user")
+            );
 
-        let foreign_id = "cmd_foreign_identity";
-        accept(
-            foreign_id,
-            serde_json::json!({
-                "source": "business-os-chat",
-                "capability_token": capability_token,
-                "actor": { "id": "attacker", "display_name": "Claimed User" },
-                "owner_user_id": "foreign-owner",
-                "user_id": "foreign-user"
-            }),
-        )?;
-        let overridden = load_context(foreign_id)?;
-        assert_eq!(
-            overridden.pointer("/actor/id").and_then(Value::as_str),
-            Some(owner_user_id)
-        );
-        assert_eq!(
-            overridden.get("owner_user_id").and_then(Value::as_str),
-            Some(owner_user_id)
-        );
-        assert_eq!(
-            overridden.get("user_id").and_then(Value::as_str),
-            Some(owner_user_id)
-        );
-        assert_eq!(
-            overridden
-                .pointer("/claimed_actor/actor/id")
-                .and_then(Value::as_str),
-            Some("attacker")
-        );
-        assert_eq!(
-            overridden
-                .pointer("/claimed_actor/owner_user_id")
-                .and_then(Value::as_str),
-            Some("foreign-owner")
-        );
-        assert_eq!(
-            overridden
-                .pointer("/claimed_actor/user_id")
-                .and_then(Value::as_str),
-            Some("foreign-user")
-        );
-
-        let matching_id = "cmd_matching_identity";
-        accept(
-            matching_id,
-            serde_json::json!({
-                "source": "business-os-chat",
-                "capability_token": capability_token,
-                "actor": { "id": owner_user_id, "display_name": "Existing User" },
-                "owner_user_id": owner_user_id,
-                "user_id": owner_user_id
-            }),
-        )?;
-        let matching = load_context(matching_id)?;
-        assert_eq!(
-            matching
-                .pointer("/actor/display_name")
-                .and_then(Value::as_str),
-            Some("Existing User")
-        );
-        assert!(matching.get("claimed_actor").is_none());
-        Ok(())
+            let matching_id = "cmd_matching_identity";
+            accept(
+                matching_id,
+                serde_json::json!({
+                    "source": "business-os-chat",
+                    "capability_token": capability_token,
+                    "actor": { "id": owner_user_id, "display_name": "Existing User" },
+                    "owner_user_id": owner_user_id,
+                    "user_id": owner_user_id
+                }),
+            )?;
+            let matching = load_context(matching_id)?;
+            assert_eq!(
+                matching
+                    .pointer("/actor/display_name")
+                    .and_then(Value::as_str),
+                Some("Existing User")
+            );
+            assert!(matching.get("claimed_actor").is_none());
+            Ok(())
+        })
     }
 
     fn rust_brace_depth_after(mut depth: usize, line: &str) -> usize {
@@ -3069,11 +3076,9 @@ mod tests {
             .find("match command.command_type.as_str()")
             .map(|offset| function_start + offset)
             .expect("command dispatcher match must exist");
-        let fallback = source[match_start..]
-            .find("        _ => {")
-            .map(|offset| match_start + offset)
-            .expect("command dispatcher fallback must exist");
-        let classifier = &source[match_start..fallback];
+        // A nested handler may have its own fallback; only the dispatcher
+        // match's top-level fallback ends this inventory.
+        let classifier = &source[match_start..];
         let mut lines = classifier.lines();
         let match_line = lines
             .next()
@@ -3084,6 +3089,7 @@ mod tests {
 
         for line in lines {
             let trimmed = line.trim();
+            if brace_depth == 1 && trimmed.starts_with("_ =>") { break; }
             if brace_depth == 1 && (trimmed.starts_with('"') || !arm_pattern.is_empty()) {
                 if !arm_pattern.is_empty() {
                     arm_pattern.push(' ');
@@ -3337,136 +3343,144 @@ mod tests {
 
     #[test]
     fn replicated_peer_cannot_enqueue_work_on_another_users_business_chat() -> anyhow::Result<()> {
-        let root = tempdir()?;
-        let user_a = "user-a@example.test";
-        let user_b = "user-b@example.test";
-        let token_a = issue_chef_token(root.path(), user_a)?;
-        let token_b = issue_chef_token(root.path(), user_b)?;
-        let chat_id = "chat-owner-a";
-        let owner_command = accept_chat_task(
-            root.path(),
-            "cmd-owner-a",
-            &token_a,
-            chat_id,
-            "Owner A chat",
-            "Create the owned chat.",
-            "chatmsg-owner-a",
-        )?;
-        assert_eq!(owner_command.get("ok").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            owner_command.get("chat_id").and_then(Value::as_str),
-            Some(chat_id)
-        );
-        let before = load_chat(root.path(), chat_id)?;
-        let before_messages = before
-            .get("messages")
-            .cloned()
-            .unwrap_or(Value::Array(vec![]));
-        let foreign = accept_chat_task(
-            root.path(),
-            "cmd-owner-b",
-            &token_b,
-            chat_id,
-            "Foreign targeting",
-            "Inject into the other chat.",
-            "chatmsg-owner-b",
-        )?;
-        assert_denied_unchanged(
-            root.path(),
-            &foreign,
-            "cmd-owner-b",
-            chat_id,
-            user_a,
-            &before_messages,
-        )
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let user_a = "user-a@example.test";
+            let user_b = "user-b@example.test";
+            let token_a = issue_chef_token(root.path(), user_a)?;
+            let token_b = issue_chef_token(root.path(), user_b)?;
+            let chat_id = "chat-owner-a";
+            let owner_command = accept_chat_task(
+                root.path(),
+                "cmd-owner-a",
+                &token_a,
+                chat_id,
+                "Owner A chat",
+                "Create the owned chat.",
+                "chatmsg-owner-a",
+            )?;
+            assert_eq!(owner_command.get("ok").and_then(Value::as_bool), Some(true));
+            assert_eq!(
+                owner_command.get("chat_id").and_then(Value::as_str),
+                Some(chat_id)
+            );
+            let before = load_chat(root.path(), chat_id)?;
+            let before_messages = before
+                .get("messages")
+                .cloned()
+                .unwrap_or(Value::Array(vec![]));
+            let foreign = accept_chat_task(
+                root.path(),
+                "cmd-owner-b",
+                &token_b,
+                chat_id,
+                "Foreign targeting",
+                "Inject into the other chat.",
+                "chatmsg-owner-b",
+            )?;
+            assert_denied_unchanged(
+                root.path(),
+                &foreign,
+                "cmd-owner-b",
+                chat_id,
+                user_a,
+                &before_messages,
+            )
+        })
     }
 
     #[test]
     fn replicated_peer_cannot_adopt_existing_local_dev_business_chat() -> anyhow::Result<()> {
-        let root = tempdir()?;
-        let user_a = "user-a@example.test";
-        let user_b = "user-b@example.test";
-        let _token_a = issue_chef_token(root.path(), user_a)?;
-        let token_b = issue_chef_token(root.path(), user_b)?;
-        let chat_id = "chat-unattributed-local-dev";
-        let seeded = seed_unattributed_chat(
-            root.path(),
-            chat_id,
-            "local-dev",
-            "A leftover conversation.",
-        )?;
-        let messages = seeded
-            .get("messages")
-            .cloned()
-            .unwrap_or(Value::Array(vec![]));
-        let foreign = accept_chat_task(
-            root.path(),
-            "cmd-adopt-local-dev",
-            &token_b,
-            chat_id,
-            "Adopt placeholder",
-            "Claim the leftover chat.",
-            "chatmsg-adopt-local-dev",
-        )?;
-        assert_denied_unchanged(
-            root.path(),
-            &foreign,
-            "cmd-adopt-local-dev",
-            chat_id,
-            "local-dev",
-            &messages,
-        )
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let user_a = "user-a@example.test";
+            let user_b = "user-b@example.test";
+            let _token_a = issue_chef_token(root.path(), user_a)?;
+            let token_b = issue_chef_token(root.path(), user_b)?;
+            let chat_id = "chat-unattributed-local-dev";
+            let seeded = seed_unattributed_chat(
+                root.path(),
+                chat_id,
+                "local-dev",
+                "A leftover conversation.",
+            )?;
+            let messages = seeded
+                .get("messages")
+                .cloned()
+                .unwrap_or(Value::Array(vec![]));
+            let foreign = accept_chat_task(
+                root.path(),
+                "cmd-adopt-local-dev",
+                &token_b,
+                chat_id,
+                "Adopt placeholder",
+                "Claim the leftover chat.",
+                "chatmsg-adopt-local-dev",
+            )?;
+            assert_denied_unchanged(
+                root.path(),
+                &foreign,
+                "cmd-adopt-local-dev",
+                chat_id,
+                "local-dev",
+                &messages,
+            )
+        })
     }
 
     #[test]
     fn replicated_peer_cannot_adopt_existing_empty_owner_business_chat() -> anyhow::Result<()> {
-        let root = tempdir()?;
-        let user_a = "user-a@example.test";
-        let user_b = "user-b@example.test";
-        let _token_a = issue_chef_token(root.path(), user_a)?;
-        let token_b = issue_chef_token(root.path(), user_b)?;
-        let chat_id = "chat-unattributed-empty";
-        let seeded = seed_unattributed_chat(root.path(), chat_id, "", "Empty-owner conversation.")?;
-        let messages = seeded
-            .get("messages")
-            .cloned()
-            .unwrap_or(Value::Array(vec![]));
-        let foreign = accept_chat_task(
-            root.path(),
-            "cmd-adopt-empty",
-            &token_b,
-            chat_id,
-            "Adopt empty owner",
-            "Claim the empty-owner chat.",
-            "chatmsg-adopt-empty",
-        )?;
-        assert_denied_unchanged(
-            root.path(),
-            &foreign,
-            "cmd-adopt-empty",
-            chat_id,
-            "",
-            &messages,
-        )
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let user_a = "user-a@example.test";
+            let user_b = "user-b@example.test";
+            let _token_a = issue_chef_token(root.path(), user_a)?;
+            let token_b = issue_chef_token(root.path(), user_b)?;
+            let chat_id = "chat-unattributed-empty";
+            let seeded =
+                seed_unattributed_chat(root.path(), chat_id, "", "Empty-owner conversation.")?;
+            let messages = seeded
+                .get("messages")
+                .cloned()
+                .unwrap_or(Value::Array(vec![]));
+            let foreign = accept_chat_task(
+                root.path(),
+                "cmd-adopt-empty",
+                &token_b,
+                chat_id,
+                "Adopt empty owner",
+                "Claim the empty-owner chat.",
+                "chatmsg-adopt-empty",
+            )?;
+            assert_denied_unchanged(
+                root.path(),
+                &foreign,
+                "cmd-adopt-empty",
+                chat_id,
+                "",
+                &messages,
+            )
+        })
     }
 
     #[test]
     fn trusted_policy_receipt_repairs_matching_legacy_chat_and_still_denies_foreign(
     ) -> anyhow::Result<()> {
-        let root = tempdir()?;
-        let user_a = "user-a@example.test";
-        let user_b = "user-b@example.test";
-        let token_a = issue_chef_token(root.path(), user_a)?;
-        let token_b = issue_chef_token(root.path(), user_b)?;
-        let chat_id = "chat-legacy-receipt";
-        let seeded = seed_unattributed_chat(
-            root.path(),
-            chat_id,
-            "local-dev",
-            "Legacy conversation still on local-dev.",
-        )?;
-        let conn = open_store(root.path())?;
-        conn.execute(
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let user_a = "user-a@example.test";
+            let user_b = "user-b@example.test";
+            let token_a = issue_chef_token(root.path(), user_a)?;
+            let token_b = issue_chef_token(root.path(), user_b)?;
+            let chat_id = "chat-legacy-receipt";
+            let seeded = seed_unattributed_chat(
+                root.path(),
+                chat_id,
+                "local-dev",
+                "Legacy conversation still on local-dev.",
+            )?;
+            let conn = open_store(root.path())?;
+            conn.execute(
             "INSERT INTO business_commands
                 (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
              VALUES (?1, 'ctox', 'business_os.chat.task', ?2, 'completed', ?3, ?4, ?5)",
@@ -3484,74 +3498,76 @@ mod tests {
                 now_ms() as i64
             ],
         )?;
-        conn.execute(
-            "INSERT INTO business_events
+            conn.execute(
+                "INSERT INTO business_events
                 (event_id, collection, record_id, command_type, payload_json, observed_at_ms)
              VALUES (?1, 'business_commands', ?2, 'business_os.policy.allowed', ?3, ?4)",
-            params![
-                "evt-legacy-a",
-                "cmd-legacy-a",
-                serde_json::to_string(&serde_json::json!({
-                    "event_type": "business_os.policy.allowed",
-                    "command_id": "cmd-legacy-a",
-                    "actor": { "id": user_a, "trusted": true },
-                    "client_context": { "source": "business-os-chat" }
-                }))?,
-                now_ms() as i64
-            ],
-        )?;
-        drop(conn);
-        let foreign = accept_chat_task(
-            root.path(),
-            "cmd-legacy-b",
-            &token_b,
-            chat_id,
-            "Foreign legacy",
-            "Inject into the legacy chat.",
-            "chatmsg-legacy-b",
-        )?;
-        assert_denied_unchanged(
-            root.path(),
-            &foreign,
-            "cmd-legacy-b",
-            chat_id,
-            "local-dev",
-            seeded.get("messages").unwrap(),
-        )?;
-        let repaired = accept_chat_task(
-            root.path(),
-            "cmd-legacy-repair-a",
-            &token_a,
-            chat_id,
-            "Repair legacy",
-            "Continue the legacy chat.",
-            "chatmsg-legacy-repair-a",
-        )?;
-        assert_eq!(repaired.get("ok").and_then(Value::as_bool), Some(true));
-        let after = load_chat(root.path(), chat_id)?;
-        assert_eq!(
-            after.get("owner_user_id").and_then(Value::as_str),
-            Some(user_a)
-        );
-        Ok(())
+                params![
+                    "evt-legacy-a",
+                    "cmd-legacy-a",
+                    serde_json::to_string(&serde_json::json!({
+                        "event_type": "business_os.policy.allowed",
+                        "command_id": "cmd-legacy-a",
+                        "actor": { "id": user_a, "trusted": true },
+                        "client_context": { "source": "business-os-chat" }
+                    }))?,
+                    now_ms() as i64
+                ],
+            )?;
+            drop(conn);
+            let foreign = accept_chat_task(
+                root.path(),
+                "cmd-legacy-b",
+                &token_b,
+                chat_id,
+                "Foreign legacy",
+                "Inject into the legacy chat.",
+                "chatmsg-legacy-b",
+            )?;
+            assert_denied_unchanged(
+                root.path(),
+                &foreign,
+                "cmd-legacy-b",
+                chat_id,
+                "local-dev",
+                seeded.get("messages").unwrap(),
+            )?;
+            let repaired = accept_chat_task(
+                root.path(),
+                "cmd-legacy-repair-a",
+                &token_a,
+                chat_id,
+                "Repair legacy",
+                "Continue the legacy chat.",
+                "chatmsg-legacy-repair-a",
+            )?;
+            assert_eq!(repaired.get("ok").and_then(Value::as_bool), Some(true));
+            let after = load_chat(root.path(), chat_id)?;
+            assert_eq!(
+                after.get("owner_user_id").and_then(Value::as_str),
+                Some(user_a)
+            );
+            Ok(())
+        })
     }
 
     #[test]
     fn trusted_policy_receipt_for_another_chat_cannot_recover_via_ignored_field(
     ) -> anyhow::Result<()> {
-        let root = tempdir()?;
-        let user_a = "user-a@example.test";
-        let token_a = issue_chef_token(root.path(), user_a)?;
-        let chat_id = "chat-legacy-ignored-field";
-        let other_chat_id = "chat-canonical-other";
-        let seeded = seed_unattributed_chat(
-            root.path(),
-            chat_id,
-            "local-dev",
-            "Legacy conversation must not be recovered from a foreign receipt.",
-        )?;
-        let conn = open_store(root.path())?;
-        conn.execute(
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let user_a = "user-a@example.test";
+            let token_a = issue_chef_token(root.path(), user_a)?;
+            let chat_id = "chat-legacy-ignored-field";
+            let other_chat_id = "chat-canonical-other";
+            let seeded = seed_unattributed_chat(
+                root.path(),
+                chat_id,
+                "local-dev",
+                "Legacy conversation must not be recovered from a foreign receipt.",
+            )?;
+            let conn = open_store(root.path())?;
+            conn.execute(
             "INSERT INTO business_commands
                 (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
              VALUES (?1, 'ctox', 'business_os.chat.task', ?2, 'completed', ?3, ?4, ?5)",
@@ -3571,553 +3587,578 @@ mod tests {
                 now_ms() as i64
             ],
         )?;
-        conn.execute(
-            "INSERT INTO business_events
+            conn.execute(
+                "INSERT INTO business_events
                 (event_id, collection, record_id, command_type, payload_json, observed_at_ms)
              VALUES (?1, 'business_commands', ?2, 'business_os.policy.allowed', ?3, ?4)",
-            params![
-                "evt-canonical-other",
-                "cmd-canonical-other",
-                serde_json::to_string(&serde_json::json!({
-                    "event_type": "business_os.policy.allowed",
-                    "command_id": "cmd-canonical-other",
-                    "actor": { "id": user_a, "trusted": true },
-                    "client_context": { "source": "business-os-chat", "chat_id": chat_id }
-                }))?,
-                now_ms() as i64
-            ],
-        )?;
-        drop(conn);
-        let attempted = accept_chat_task(
-            root.path(),
-            "cmd-ignored-field-a",
-            &token_a,
-            chat_id,
-            "Adopt via ignored field",
-            "This receipt belongs to another chat.",
-            "chatmsg-ignored-field-a",
-        )?;
-        assert_denied_unchanged(
-            root.path(),
-            &attempted,
-            "cmd-ignored-field-a",
-            chat_id,
-            "local-dev",
-            seeded.get("messages").unwrap(),
-        )
+                params![
+                    "evt-canonical-other",
+                    "cmd-canonical-other",
+                    serde_json::to_string(&serde_json::json!({
+                        "event_type": "business_os.policy.allowed",
+                        "command_id": "cmd-canonical-other",
+                        "actor": { "id": user_a, "trusted": true },
+                        "client_context": { "source": "business-os-chat", "chat_id": chat_id }
+                    }))?,
+                    now_ms() as i64
+                ],
+            )?;
+            drop(conn);
+            let attempted = accept_chat_task(
+                root.path(),
+                "cmd-ignored-field-a",
+                &token_a,
+                chat_id,
+                "Adopt via ignored field",
+                "This receipt belongs to another chat.",
+                "chatmsg-ignored-field-a",
+            )?;
+            assert_denied_unchanged(
+                root.path(),
+                &attempted,
+                "cmd-ignored-field-a",
+                chat_id,
+                "local-dev",
+                seeded.get("messages").unwrap(),
+            )
+        })
     }
 
     #[test]
     fn data_write_denied_peer_cannot_create_a_fresh_business_chat() -> anyhow::Result<()> {
-        let root = tempdir()?;
-        let user = "user-denied@example.test";
-        let token = issue_role_token(root.path(), user, "user")?;
-        let chat_id = "chat-denied-fresh";
-        let outcome = accept_chat_task(
-            root.path(),
-            "cmd-denied-fresh",
-            &token,
-            chat_id,
-            "Denied title",
-            "This caller lacks DataWrite.",
-            "chatmsg-denied-fresh",
-        )?;
-        assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
-        assert_ne!(
-            outcome
-                .pointer("/result/error_code")
-                .and_then(Value::as_str),
-            Some("chat_owner_mismatch"),
-            "policy denial must fail before owner admission"
-        );
-        assert!(
-            !chat_exists(root.path(), chat_id)?,
-            "a DataWrite-denied caller must not reserve a fresh chat record"
-        );
-        Ok(())
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let user = "user-denied@example.test";
+            let token = issue_role_token(root.path(), user, "user")?;
+            let chat_id = "chat-denied-fresh";
+            let outcome = accept_chat_task(
+                root.path(),
+                "cmd-denied-fresh",
+                &token,
+                chat_id,
+                "Denied title",
+                "This caller lacks DataWrite.",
+                "chatmsg-denied-fresh",
+            )?;
+            assert_eq!(outcome.get("ok").and_then(Value::as_bool), Some(false));
+            assert_ne!(
+                outcome
+                    .pointer("/result/error_code")
+                    .and_then(Value::as_str),
+                Some("chat_owner_mismatch"),
+                "policy denial must fail before owner admission"
+            );
+            assert!(
+                !chat_exists(root.path(), chat_id)?,
+                "a DataWrite-denied caller must not reserve a fresh chat record"
+            );
+            Ok(())
+        })
     }
 
     #[test]
     fn fresh_chat_admission_preserves_title_and_auto_focus_through_reply() -> anyhow::Result<()> {
-        let root = tempdir()?;
-        let user = "user-a@example.test";
-        let token = issue_chef_token(root.path(), user)?;
-        let chat_id = "chat-title-focus";
-        let command_id = "cmd-title-focus";
-        let accepted = accept_chat_task_with_client_context(
-            root.path(),
-            command_id,
-            &token,
-            chat_id,
-            "Requested title",
-            "Keep the requested presentation.",
-            "chatmsg-title-focus",
-            serde_json::json!({ "business_chat_auto_focus": false }),
-        )?;
-        assert_eq!(accepted.get("ok").and_then(Value::as_bool), Some(true));
-        let after_admit = load_chat(root.path(), chat_id)?;
-        assert_eq!(
-            after_admit.get("title").and_then(Value::as_str),
-            Some("Requested title")
-        );
-        assert_eq!(
-            after_admit.get("minimized").and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            after_admit.get("owner_user_id").and_then(Value::as_str),
-            Some(user)
-        );
-        let conn = open_store(root.path())?;
-        let command = load_business_command(&conn, command_id)?;
-        process_business_chat_reply(
-            root.path(),
-            &conn,
-            command_id,
-            &command,
-            None,
-            "Delivered reply.",
-        )?;
-        drop(conn);
-        let after_reply = load_chat(root.path(), chat_id)?;
-        assert_eq!(
-            after_reply.get("title").and_then(Value::as_str),
-            Some("Requested title")
-        );
-        assert_eq!(
-            after_reply.get("minimized").and_then(Value::as_bool),
-            Some(true)
-        );
-        let messages = after_reply
-            .get("messages")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        assert!(
-            messages.iter().any(|item| {
-                item.get("role").and_then(Value::as_str) == Some("ctox")
-                    && item.get("text").and_then(Value::as_str) == Some("Delivered reply.")
-            }),
-            "reply delivery must append the assistant message"
-        );
-        Ok(())
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let user = "user-a@example.test";
+            let token = issue_chef_token(root.path(), user)?;
+            let chat_id = "chat-title-focus";
+            let command_id = "cmd-title-focus";
+            let accepted = accept_chat_task_with_client_context(
+                root.path(),
+                command_id,
+                &token,
+                chat_id,
+                "Requested title",
+                "Keep the requested presentation.",
+                "chatmsg-title-focus",
+                serde_json::json!({ "business_chat_auto_focus": false }),
+            )?;
+            assert_eq!(accepted.get("ok").and_then(Value::as_bool), Some(true));
+            let after_admit = load_chat(root.path(), chat_id)?;
+            assert_eq!(
+                after_admit.get("title").and_then(Value::as_str),
+                Some("Requested title")
+            );
+            assert_eq!(
+                after_admit.get("minimized").and_then(Value::as_bool),
+                Some(true)
+            );
+            assert_eq!(
+                after_admit.get("owner_user_id").and_then(Value::as_str),
+                Some(user)
+            );
+            let conn = open_store(root.path())?;
+            let command = load_business_command(&conn, command_id)?;
+            process_business_chat_reply(
+                root.path(),
+                &conn,
+                command_id,
+                &command,
+                None,
+                "Delivered reply.",
+            )?;
+            drop(conn);
+            let after_reply = load_chat(root.path(), chat_id)?;
+            assert_eq!(
+                after_reply.get("title").and_then(Value::as_str),
+                Some("Requested title")
+            );
+            assert_eq!(
+                after_reply.get("minimized").and_then(Value::as_bool),
+                Some(true)
+            );
+            let messages = after_reply
+                .get("messages")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
+            assert!(
+                messages.iter().any(|item| {
+                    item.get("role").and_then(Value::as_str) == Some("ctox")
+                        && item.get("text").and_then(Value::as_str) == Some("Delivered reply.")
+                }),
+                "reply delivery must append the assistant message"
+            );
+            Ok(())
+        })
     }
 
     #[test]
     fn trusted_local_followup_continues_unattributed_chat_and_still_denies_peers(
     ) -> anyhow::Result<()> {
-        let root = tempdir()?;
-        let chat_id = "chat-trusted-local";
-        let first = accept_trusted_local_chat_task(
-            root.path(),
-            "cmd-trusted-local-1",
-            chat_id,
-            "Native chat",
-            "First trusted-local turn.",
-            "chatmsg-trusted-local-1",
-        )?;
-        assert_eq!(first.get("ok").and_then(Value::as_bool), Some(true));
-        let after_first = load_chat(root.path(), chat_id)?;
-        assert_eq!(
-            after_first.get("owner_user_id").and_then(Value::as_str),
-            Some("local-dev")
-        );
-        let second = accept_trusted_local_chat_task(
-            root.path(),
-            "cmd-trusted-local-2",
-            chat_id,
-            "Native chat",
-            "Second trusted-local turn.",
-            "chatmsg-trusted-local-2",
-        )?;
-        assert_eq!(second.get("ok").and_then(Value::as_bool), Some(true));
-        let after_second = load_chat(root.path(), chat_id)?;
-        assert_eq!(
-            after_second.get("owner_user_id").and_then(Value::as_str),
-            Some("local-dev")
-        );
-        let token = issue_chef_token(root.path(), "user-b@example.test")?;
-        let foreign = accept_chat_task(
-            root.path(),
-            "cmd-trusted-local-peer",
-            &token,
-            chat_id,
-            "Peer takeover",
-            "Replicated peer must not adopt the unproven chat.",
-            "chatmsg-trusted-local-peer",
-        )?;
-        assert_denied_unchanged(
-            root.path(),
-            &foreign,
-            "cmd-trusted-local-peer",
-            chat_id,
-            "local-dev",
-            after_second.get("messages").unwrap(),
-        )
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let chat_id = "chat-trusted-local";
+            let first = accept_trusted_local_chat_task(
+                root.path(),
+                "cmd-trusted-local-1",
+                chat_id,
+                "Native chat",
+                "First trusted-local turn.",
+                "chatmsg-trusted-local-1",
+            )?;
+            assert_eq!(first.get("ok").and_then(Value::as_bool), Some(true));
+            let after_first = load_chat(root.path(), chat_id)?;
+            assert_eq!(
+                after_first.get("owner_user_id").and_then(Value::as_str),
+                Some("local-dev")
+            );
+            let second = accept_trusted_local_chat_task(
+                root.path(),
+                "cmd-trusted-local-2",
+                chat_id,
+                "Native chat",
+                "Second trusted-local turn.",
+                "chatmsg-trusted-local-2",
+            )?;
+            assert_eq!(second.get("ok").and_then(Value::as_bool), Some(true));
+            let after_second = load_chat(root.path(), chat_id)?;
+            assert_eq!(
+                after_second.get("owner_user_id").and_then(Value::as_str),
+                Some("local-dev")
+            );
+            let token = issue_chef_token(root.path(), "user-b@example.test")?;
+            let foreign = accept_chat_task(
+                root.path(),
+                "cmd-trusted-local-peer",
+                &token,
+                chat_id,
+                "Peer takeover",
+                "Replicated peer must not adopt the unproven chat.",
+                "chatmsg-trusted-local-peer",
+            )?;
+            assert_denied_unchanged(
+                root.path(),
+                &foreign,
+                "cmd-trusted-local-peer",
+                chat_id,
+                "local-dev",
+                after_second.get("messages").unwrap(),
+            )
+        })
     }
 
     #[test]
     fn concurrent_peers_cannot_both_claim_the_same_new_business_chat() -> anyhow::Result<()> {
-        let root = tempdir()?;
-        let root_path = root.path().to_path_buf();
-        let user_a = "user-a@example.test";
-        let user_b = "user-b@example.test";
-        let token_a = issue_chef_token(&root_path, user_a)?;
-        let token_b = issue_chef_token(&root_path, user_b)?;
-        let chat_id = "chat-race";
-        let handle_a = std::thread::spawn({
-            let root_path = root_path.clone();
-            let token_a = token_a.clone();
-            move || {
-                accept_chat_task(
-                    &root_path,
-                    "cmd-race-a",
-                    &token_a,
-                    chat_id,
-                    "Race A",
-                    "Claim the fresh chat.",
-                    "chatmsg-race-a",
-                )
-            }
-        });
-        let handle_b = std::thread::spawn({
-            let root_path = root_path.clone();
-            let token_b = token_b.clone();
-            move || {
-                accept_chat_task(
-                    &root_path,
-                    "cmd-race-b",
-                    &token_b,
-                    chat_id,
-                    "Race B",
-                    "Claim the fresh chat.",
-                    "chatmsg-race-b",
-                )
-            }
-        });
-        let outcome_a = handle_a.join().expect("thread A")?;
-        let outcome_b = handle_b.join().expect("thread B")?;
-        let accepted = [&outcome_a, &outcome_b]
-            .into_iter()
-            .filter(|outcome| outcome.get("ok").and_then(Value::as_bool) == Some(true))
-            .count();
-        let denied = [&outcome_a, &outcome_b]
-            .into_iter()
-            .filter(|outcome| {
-                outcome.get("ok").and_then(Value::as_bool) == Some(false)
-                    && outcome
-                        .pointer("/result/error_code")
-                        .and_then(Value::as_str)
-                        == Some("chat_owner_mismatch")
-            })
-            .count();
-        assert_eq!(accepted, 1, "exactly one peer may claim a fresh chat id");
-        assert_eq!(denied, 1, "the other peer must be denied before queue work");
-        let owner = load_chat(&root_path, chat_id)?
-            .get("owner_user_id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        assert!(
-            owner == user_a || owner == user_b,
-            "claimed owner must be one authenticated peer"
-        );
-        let loser = if owner == user_a {
-            "cmd-race-b"
-        } else {
-            "cmd-race-a"
-        };
-        assert!(!command_exists(&root_path, loser)?);
-        assert!(!queue_mentions(&root_path, loser)?);
-        Ok(())
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let root_path = root.path().to_path_buf();
+            let user_a = "user-a@example.test";
+            let user_b = "user-b@example.test";
+            let token_a = issue_chef_token(&root_path, user_a)?;
+            let token_b = issue_chef_token(&root_path, user_b)?;
+            let chat_id = "chat-race";
+            let handle_a = std::thread::spawn({
+                let root_path = root_path.clone();
+                let token_a = token_a.clone();
+                move || {
+                    crate::persistence::run_core_blocking_at(&root_path.clone(), move || {
+                        accept_chat_task(
+                            &root_path,
+                            "cmd-race-a",
+                            &token_a,
+                            chat_id,
+                            "Race A",
+                            "Claim the fresh chat.",
+                            "chatmsg-race-a",
+                        )
+                    })
+                }
+            });
+            let handle_b = std::thread::spawn({
+                let root_path = root_path.clone();
+                let token_b = token_b.clone();
+                move || {
+                    crate::persistence::run_core_blocking_at(&root_path.clone(), move || {
+                        accept_chat_task(
+                            &root_path,
+                            "cmd-race-b",
+                            &token_b,
+                            chat_id,
+                            "Race B",
+                            "Claim the fresh chat.",
+                            "chatmsg-race-b",
+                        )
+                    })
+                }
+            });
+            let outcome_a = handle_a.join().expect("thread A")?;
+            let outcome_b = handle_b.join().expect("thread B")?;
+            let accepted = [&outcome_a, &outcome_b]
+                .into_iter()
+                .filter(|outcome| outcome.get("ok").and_then(Value::as_bool) == Some(true))
+                .count();
+            let denied = [&outcome_a, &outcome_b]
+                .into_iter()
+                .filter(|outcome| {
+                    outcome.get("ok").and_then(Value::as_bool) == Some(false)
+                        && outcome
+                            .pointer("/result/error_code")
+                            .and_then(Value::as_str)
+                            == Some("chat_owner_mismatch")
+                })
+                .count();
+            assert_eq!(accepted, 1, "exactly one peer may claim a fresh chat id");
+            assert_eq!(denied, 1, "the other peer must be denied before queue work");
+            let owner = load_chat(&root_path, chat_id)?
+                .get("owner_user_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            assert!(
+                owner == user_a || owner == user_b,
+                "claimed owner must be one authenticated peer"
+            );
+            let loser = if owner == user_a {
+                "cmd-race-b"
+            } else {
+                "cmd-race-a"
+            };
+            assert!(!command_exists(&root_path, loser)?);
+            assert!(!queue_mentions(&root_path, loser)?);
+            Ok(())
+        })
     }
 
     #[test]
     fn workjet_command_documents_project_into_native_rxdb_before_return() -> anyhow::Result<()> {
-        let root = tempdir()?;
-        drop(create_repair_rxdb_tables(root.path())?);
-        create_workjet_rxdb_projection_tables(root.path())?;
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            drop(create_repair_rxdb_tables(root.path())?);
+            create_workjet_rxdb_projection_tables(root.path())?;
 
-        let project_id = "project-command-plane-e2e";
-        let project_command_id = "cmd-workjet-project-command-plane-e2e";
-        let working_copy_command_id = "cmd-workjet-working-copy-command-plane-e2e";
-        let actor = json!({
-            "id": "owner-1",
-            "role": "admin",
-            "is_admin": true,
-            "display_name": "owner-1",
-            "email": "",
-            "login": ""
-        });
-        let project_document = json!({
-            "id": project_command_id,
-            "command_id": project_command_id,
-            "inbound_channel": "ctox",
-            "contract_version": 2,
-            "idempotency_key": project_command_id,
-            "status": "pending_sync",
-            "module": "ctox",
-            "command_type": "ctox.workjet.project.upsert",
-            "record_id": project_id,
-            "payload": {
-                "project_id": project_id,
-                "name": "Command Plane Project",
-                "inbound_channel": "ctox"
-            },
-            "client_context": {
-                "source": "workjet-project-control",
+            let project_id = "project-command-plane-e2e";
+            let project_command_id = "cmd-workjet-project-command-plane-e2e";
+            let working_copy_command_id = "cmd-workjet-working-copy-command-plane-e2e";
+            let actor = json!({
+                "id": "owner-1",
+                "role": "admin",
+                "is_admin": true,
+                "display_name": "owner-1",
+                "email": "",
+                "login": ""
+            });
+            let project_document = json!({
+                "id": project_command_id,
+                "command_id": project_command_id,
                 "inbound_channel": "ctox",
-                "dispatch_transport": "rxdb-command-bus",
-                "actor": actor.clone()
-            }
-        });
-        let working_copy_document = json!({
-            "id": working_copy_command_id,
-            "command_id": working_copy_command_id,
-            "inbound_channel": "ctox",
-            "contract_version": 2,
-            "idempotency_key": working_copy_command_id,
-            "status": "pending_sync",
-            "module": "ctox",
-            "command_type": "ctox.workjet.working_copy.upsert",
-            "record_id": project_id,
-            "payload": {
-                "project_id": project_id,
-                "computer_id": "computer-command-plane-e2e",
-                "path": "/workspace/command-plane-e2e",
-                "active": true,
-                "inbound_channel": "ctox"
-            },
-            "client_context": {
-                "source": "workjet-project-control",
+                "contract_version": 2,
+                "idempotency_key": project_command_id,
+                "status": "pending_sync",
+                "module": "ctox",
+                "command_type": "ctox.workjet.project.upsert",
+                "record_id": project_id,
+                "payload": {
+                    "project_id": project_id,
+                    "name": "Command Plane Project",
+                    "inbound_channel": "ctox"
+                },
+                "client_context": {
+                    "source": "workjet-project-control",
+                    "inbound_channel": "ctox",
+                    "dispatch_transport": "rxdb-command-bus",
+                    "actor": actor.clone()
+                }
+            });
+            let working_copy_document = json!({
+                "id": working_copy_command_id,
+                "command_id": working_copy_command_id,
                 "inbound_channel": "ctox",
-                "dispatch_transport": "rxdb-command-bus",
-                "actor": actor
+                "contract_version": 2,
+                "idempotency_key": working_copy_command_id,
+                "status": "pending_sync",
+                "module": "ctox",
+                "command_type": "ctox.workjet.working_copy.upsert",
+                "record_id": project_id,
+                "payload": {
+                    "project_id": project_id,
+                    "computer_id": "computer-command-plane-e2e",
+                    "path": "/workspace/command-plane-e2e",
+                    "active": true,
+                    "inbound_channel": "ctox"
+                },
+                "client_context": {
+                    "source": "workjet-project-control",
+                    "inbound_channel": "ctox",
+                    "dispatch_transport": "rxdb-command-bus",
+                    "actor": actor
+                }
+            });
+
+            let started = Instant::now();
+            let project_outcome =
+                accept_rxdb_business_command(root.path(), project_document.clone())?;
+            let working_copy_outcome =
+                accept_rxdb_business_command(root.path(), working_copy_document.clone())?;
+            let elapsed = started.elapsed();
+            assert!(
+                elapsed <= Duration::from_secs(5),
+                "Workjet command-plane projection took {elapsed:?}, expected at most 5s"
+            );
+            assert_eq!(project_outcome["result"]["project"]["id"], project_id);
+
+            let project = load_rxdb_collection_record(root.path(), "workjet_projects", project_id)?
+                .context("missing native RxDB workjet_projects row after command return")?;
+            assert_eq!(project["name"], "Command Plane Project");
+            assert_eq!(project["status"], "active");
+            assert_eq!(project["owner_user_id"], "owner-1");
+            assert_eq!(project["is_deleted"], false);
+
+            let working_copy_id = working_copy_outcome["result"]["working_copy"]["id"]
+                .as_str()
+                .context("working-copy command outcome has no result.working_copy.id")?;
+            assert!(working_copy_id.starts_with("workjet_wc_"));
+            let working_copy = load_rxdb_collection_record(
+                root.path(),
+                "workjet_working_copies",
+                working_copy_id,
+            )?
+            .context("missing native RxDB workjet_working_copies row after command return")?;
+            assert_eq!(working_copy["project_id"], project_id);
+            assert_eq!(working_copy["computer_id"], "computer-command-plane-e2e");
+            assert_eq!(working_copy["path"], "/workspace/command-plane-e2e");
+            assert_eq!(working_copy["status"], "active");
+            assert_eq!(working_copy["owner_user_id"], "owner-1");
+
+            for command_id in [project_command_id, working_copy_command_id] {
+                let command =
+                    load_rxdb_collection_record(root.path(), "business_commands", command_id)?
+                        .with_context(|| {
+                            format!("missing business_commands projection for {command_id}")
+                        })?;
+                assert_eq!(command["inbound_channel"], "ctox");
             }
-        });
 
-        let started = Instant::now();
-        let project_outcome = accept_rxdb_business_command(root.path(), project_document.clone())?;
-        let working_copy_outcome =
-            accept_rxdb_business_command(root.path(), working_copy_document.clone())?;
-        let elapsed = started.elapsed();
-        assert!(
-            elapsed <= Duration::from_secs(5),
-            "Workjet command-plane projection took {elapsed:?}, expected at most 5s"
-        );
-        assert_eq!(project_outcome["result"]["project"]["id"], project_id);
+            accept_rxdb_business_command(root.path(), project_document)?;
+            accept_rxdb_business_command(root.path(), working_copy_document)?;
 
-        let project = load_rxdb_collection_record(root.path(), "workjet_projects", project_id)?
-            .context("missing native RxDB workjet_projects row after command return")?;
-        assert_eq!(project["name"], "Command Plane Project");
-        assert_eq!(project["status"], "active");
-        assert_eq!(project["owner_user_id"], "owner-1");
-        assert_eq!(project["is_deleted"], false);
-
-        let working_copy_id = working_copy_outcome["result"]["working_copy"]["id"]
-            .as_str()
-            .context("working-copy command outcome has no result.working_copy.id")?;
-        assert!(working_copy_id.starts_with("workjet_wc_"));
-        let working_copy =
-            load_rxdb_collection_record(root.path(), "workjet_working_copies", working_copy_id)?
-                .context("missing native RxDB workjet_working_copies row after command return")?;
-        assert_eq!(working_copy["project_id"], project_id);
-        assert_eq!(working_copy["computer_id"], "computer-command-plane-e2e");
-        assert_eq!(working_copy["path"], "/workspace/command-plane-e2e");
-        assert_eq!(working_copy["status"], "active");
-        assert_eq!(working_copy["owner_user_id"], "owner-1");
-
-        for command_id in [project_command_id, working_copy_command_id] {
-            let command =
-                load_rxdb_collection_record(root.path(), "business_commands", command_id)?
-                    .with_context(|| {
-                        format!("missing business_commands projection for {command_id}")
-                    })?;
-            assert_eq!(command["inbound_channel"], "ctox");
-        }
-
-        accept_rxdb_business_command(root.path(), project_document)?;
-        accept_rxdb_business_command(root.path(), working_copy_document)?;
-
-        let replayed_project =
-            load_rxdb_collection_record(root.path(), "workjet_projects", project_id)?
-                .context("project projection disappeared after identical command replay")?;
-        assert_eq!(replayed_project["id"], project["id"]);
-        assert_eq!(replayed_project["updated_at_ms"], project["updated_at_ms"]);
-        let replayed_working_copy =
-            load_rxdb_collection_record(root.path(), "workjet_working_copies", working_copy_id)?
-                .context("working-copy projection disappeared after identical command replay")?;
-        assert_eq!(replayed_working_copy["id"], working_copy["id"]);
-        assert_eq!(
-            replayed_working_copy["updated_at_ms"],
-            working_copy["updated_at_ms"]
-        );
-        Ok(())
+            let replayed_project =
+                load_rxdb_collection_record(root.path(), "workjet_projects", project_id)?
+                    .context("project projection disappeared after identical command replay")?;
+            assert_eq!(replayed_project["id"], project["id"]);
+            assert_eq!(replayed_project["updated_at_ms"], project["updated_at_ms"]);
+            let replayed_working_copy = load_rxdb_collection_record(
+                root.path(),
+                "workjet_working_copies",
+                working_copy_id,
+            )?
+            .context("working-copy projection disappeared after identical command replay")?;
+            assert_eq!(replayed_working_copy["id"], working_copy["id"]);
+            assert_eq!(
+                replayed_working_copy["updated_at_ms"],
+                working_copy["updated_at_ms"]
+            );
+            Ok(())
+        })
     }
 
     #[test]
     fn record_owned_data_write_workjet_session_owner_allowed_foreign_denied_and_admin_allowed(
     ) -> anyhow::Result<()> {
-        let root = tempdir()?;
-        drop(create_repair_rxdb_tables(root.path())?);
-        create_workjet_rxdb_projection_tables(root.path())?;
-        create_workjet_session_rxdb_projection_tables(root.path())?;
-        let issued_at_ms = now_ms() as i64;
-        issue_business_os_capability_token_for_managed_user(
-            root.path(),
-            "session-owner",
-            "Session Owner",
-            "admin",
-            issued_at_ms,
-        )?;
-        issue_business_os_capability_token_for_managed_user(
-            root.path(),
-            "foreign-user",
-            "Foreign User",
-            "user",
-            issued_at_ms,
-        )?;
-        issue_business_os_capability_token_for_managed_user(
-            root.path(),
-            "admin-operator",
-            "Admin Operator",
-            "admin",
-            issued_at_ms,
-        )?;
-        let owner_actor = json!({
-            "id": "session-owner",
-            "role": "admin",
-            "is_admin": true,
-            "display_name": "Session Owner",
-            "email": "",
-            "login": ""
-        });
-        let project = json!({
-            "id": "cmd-record-owned-project",
-            "command_id": "cmd-record-owned-project",
-            "module": "ctox",
-            "command_type": "ctox.workjet.project.upsert",
-            "record_id": "record-owned-project",
-            "payload": {
-                "project_id": "record-owned-project",
-                "name": "Record-owned Project"
-            },
-            "client_context": { "actor": owner_actor.clone() }
-        });
-        accept_rxdb_business_command(root.path(), project)?;
-        let copy = accept_rxdb_business_command(
-            root.path(),
-            json!({
-                "id": "cmd-record-owned-copy",
-                "command_id": "cmd-record-owned-copy",
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            drop(create_repair_rxdb_tables(root.path())?);
+            create_workjet_rxdb_projection_tables(root.path())?;
+            create_workjet_session_rxdb_projection_tables(root.path())?;
+            let issued_at_ms = now_ms() as i64;
+            issue_business_os_capability_token_for_managed_user(
+                root.path(),
+                "session-owner",
+                "Session Owner",
+                "admin",
+                issued_at_ms,
+            )?;
+            issue_business_os_capability_token_for_managed_user(
+                root.path(),
+                "foreign-user",
+                "Foreign User",
+                "user",
+                issued_at_ms,
+            )?;
+            issue_business_os_capability_token_for_managed_user(
+                root.path(),
+                "admin-operator",
+                "Admin Operator",
+                "admin",
+                issued_at_ms,
+            )?;
+            let owner_actor = json!({
+                "id": "session-owner",
+                "role": "admin",
+                "is_admin": true,
+                "display_name": "Session Owner",
+                "email": "",
+                "login": ""
+            });
+            let project = json!({
+                "id": "cmd-record-owned-project",
+                "command_id": "cmd-record-owned-project",
                 "module": "ctox",
-                "command_type": "ctox.workjet.working_copy.upsert",
+                "command_type": "ctox.workjet.project.upsert",
+                "record_id": "record-owned-project",
                 "payload": {
                     "project_id": "record-owned-project",
-                    "computer_id": "record-owned-computer",
-                    "path": "opaque://record-owned/project",
-                    "active": true
+                    "name": "Record-owned Project"
                 },
-                "client_context": { "actor": owner_actor }
-            }),
-        )?;
-        let working_copy_id = copy["result"]["working_copy"]["id"]
-            .as_str()
-            .context("working copy id")?;
-        issue_business_os_capability_token_for_managed_user(
-            root.path(),
-            "session-owner",
-            "Session Owner",
-            "user",
-            issued_at_ms,
-        )?;
-        let owner_create = accept_rxdb_business_command(
-            root.path(),
-            json!({
-                "id": "cmd-record-owned-session-create",
-                "command_id": "cmd-record-owned-session-create",
-                "module": "ctox",
-                "command_type": "ctox.workjet.session.create",
-                "payload": {
-                    "project_id": "record-owned-project",
-                    "working_copy_id": working_copy_id
-                },
-                "client_context": {
-                    "actor": {
-                        "id": "session-owner",
-                        "role": "user",
-                        "is_admin": false,
-                        "display_name": "Session Owner",
-                        "email": "",
-                        "login": ""
+                "client_context": { "actor": owner_actor.clone() }
+            });
+            accept_rxdb_business_command(root.path(), project)?;
+            let copy = accept_rxdb_business_command(
+                root.path(),
+                json!({
+                    "id": "cmd-record-owned-copy",
+                    "command_id": "cmd-record-owned-copy",
+                    "module": "ctox",
+                    "command_type": "ctox.workjet.working_copy.upsert",
+                    "payload": {
+                        "project_id": "record-owned-project",
+                        "computer_id": "record-owned-computer",
+                        "path": "opaque://record-owned/project",
+                        "active": true
+                    },
+                    "client_context": { "actor": owner_actor }
+                }),
+            )?;
+            let working_copy_id = copy["result"]["working_copy"]["id"]
+                .as_str()
+                .context("working copy id")?;
+            issue_business_os_capability_token_for_managed_user(
+                root.path(),
+                "session-owner",
+                "Session Owner",
+                "user",
+                issued_at_ms,
+            )?;
+            let owner_create = accept_rxdb_business_command(
+                root.path(),
+                json!({
+                    "id": "cmd-record-owned-session-create",
+                    "command_id": "cmd-record-owned-session-create",
+                    "module": "ctox",
+                    "command_type": "ctox.workjet.session.create",
+                    "payload": {
+                        "project_id": "record-owned-project",
+                        "working_copy_id": working_copy_id
+                    },
+                    "client_context": {
+                        "actor": {
+                            "id": "session-owner",
+                            "role": "user",
+                            "is_admin": false,
+                            "display_name": "Session Owner",
+                            "email": "",
+                            "login": ""
+                        }
                     }
-                }
-            }),
-        )?;
-        assert_eq!(owner_create["ok"], true);
-        assert_eq!(
-            owner_create["result"]["session"]["owner_user_id"],
-            "session-owner"
-        );
-        let session_id = owner_create["result"]["session"]["id"]
-            .as_str()
-            .context("session id")?;
-        let projected = load_rxdb_collection_record(root.path(), "workjet_sessions", session_id)?
-            .context("session projection must exist before command return")?;
-        assert_eq!(projected["id"], session_id);
-        assert_eq!(projected["owner_user_id"], "session-owner");
+                }),
+            )?;
+            assert_eq!(owner_create["ok"], true);
+            assert_eq!(
+                owner_create["result"]["session"]["owner_user_id"],
+                "session-owner"
+            );
+            let session_id = owner_create["result"]["session"]["id"]
+                .as_str()
+                .context("session id")?;
+            let projected =
+                load_rxdb_collection_record(root.path(), "workjet_sessions", session_id)?
+                    .context("session projection must exist before command return")?;
+            assert_eq!(projected["id"], session_id);
+            assert_eq!(projected["owner_user_id"], "session-owner");
 
-        let foreign_delete = accept_rxdb_business_command(
-            root.path(),
-            json!({
-                "id": "cmd-record-owned-session-foreign-delete",
-                "command_id": "cmd-record-owned-session-foreign-delete",
-                "module": "ctox",
-                "command_type": "ctox.workjet.session.delete",
-                "record_id": session_id,
-                "payload": {},
-                "client_context": {
-                    "actor": {
-                        "id": "foreign-user",
-                        "role": "user",
-                        "is_admin": false,
-                        "display_name": "Foreign User",
-                        "email": "",
-                        "login": ""
+            let foreign_delete = accept_rxdb_business_command(
+                root.path(),
+                json!({
+                    "id": "cmd-record-owned-session-foreign-delete",
+                    "command_id": "cmd-record-owned-session-foreign-delete",
+                    "module": "ctox",
+                    "command_type": "ctox.workjet.session.delete",
+                    "record_id": session_id,
+                    "payload": {},
+                    "client_context": {
+                        "actor": {
+                            "id": "foreign-user",
+                            "role": "user",
+                            "is_admin": false,
+                            "display_name": "Foreign User",
+                            "email": "",
+                            "login": ""
+                        }
                     }
-                }
-            }),
-        )?;
-        assert_eq!(foreign_delete["ok"], false);
-        assert_eq!(
-            foreign_delete["result"]["policy_decision"]["reason_code"],
-            "role_or_scope_denied"
-        );
+                }),
+            )?;
+            assert_eq!(foreign_delete["ok"], false);
+            assert_eq!(
+                foreign_delete["result"]["policy_decision"]["reason_code"],
+                "role_or_scope_denied"
+            );
 
-        let admin_delete = accept_rxdb_business_command(
-            root.path(),
-            json!({
-                "id": "cmd-record-owned-session-admin-delete",
-                "command_id": "cmd-record-owned-session-admin-delete",
-                "module": "ctox",
-                "command_type": "ctox.workjet.session.delete",
-                "record_id": session_id,
-                "payload": {},
-                "client_context": {
-                    "actor": {
-                        "id": "admin-operator",
-                        "role": "admin",
-                        "is_admin": true,
-                        "display_name": "Admin Operator",
-                        "email": "",
-                        "login": ""
+            let admin_delete = accept_rxdb_business_command(
+                root.path(),
+                json!({
+                    "id": "cmd-record-owned-session-admin-delete",
+                    "command_id": "cmd-record-owned-session-admin-delete",
+                    "module": "ctox",
+                    "command_type": "ctox.workjet.session.delete",
+                    "record_id": session_id,
+                    "payload": {},
+                    "client_context": {
+                        "actor": {
+                            "id": "admin-operator",
+                            "role": "admin",
+                            "is_admin": true,
+                            "display_name": "Admin Operator",
+                            "email": "",
+                            "login": ""
+                        }
                     }
-                }
-            }),
-        )?;
-        assert_eq!(admin_delete["ok"], true);
-        assert_eq!(admin_delete["result"]["session"]["is_deleted"], true);
-        Ok(())
+                }),
+            )?;
+            assert_eq!(admin_delete["ok"], true);
+            assert_eq!(admin_delete["result"]["session"]["is_deleted"], true);
+            Ok(())
+        })
     }
 
     #[test]
@@ -4260,27 +4301,28 @@ mod tests {
 
     #[test]
     fn control_command_outcome_updates_outbox_intake_projection() -> anyhow::Result<()> {
-        let root = tempdir()?;
-        let command_id = "cmd_appsec_outbox_race";
-        drop(create_repair_rxdb_tables(root.path())?);
-        let command = BusinessCommand {
-            origin: CommandOrigin::TrustedLocal,
-            id: Some(command_id.to_string()),
-            module: APPSEC_MODULE_ID.to_string(),
-            command_type: "ctox.appsec.tools.doctor".to_string(),
-            record_id: Some("runtime/appsec/test".to_string()),
-            payload: serde_json::json!({ "profile": "full" }),
-            client_context: serde_json::json!({ "actor": { "id": "local-dev" } }),
-        };
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let command_id = "cmd_appsec_outbox_race";
+            drop(create_repair_rxdb_tables(root.path())?);
+            let command = BusinessCommand {
+                origin: CommandOrigin::TrustedLocal,
+                id: Some(command_id.to_string()),
+                module: APPSEC_MODULE_ID.to_string(),
+                command_type: "ctox.appsec.tools.doctor".to_string(),
+                record_id: Some("runtime/appsec/test".to_string()),
+                payload: serde_json::json!({ "profile": "full" }),
+                client_context: serde_json::json!({ "actor": { "id": "local-dev" } }),
+            };
 
-        let claim = channels::claim_business_control_command(
-            root.path(),
-            business_command_core_claim(command_id, &command)?,
-        )?;
-        assert_eq!(claim.disposition, "new");
+            let claim = channels::claim_business_control_command(
+                root.path(),
+                business_command_core_claim(command_id, &command)?,
+            )?;
+            assert_eq!(claim.disposition, "new");
 
-        let conn = open_store(root.path())?;
-        conn.execute(
+            let conn = open_store(root.path())?;
+            conn.execute(
             "INSERT INTO business_commands
                 (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
              VALUES (?1, ?2, ?3, ?4, 'accepted', ?5, ?6, 1)",
@@ -4293,183 +4335,188 @@ mod tests {
                 serde_json::to_string(&command.client_context)?,
             ],
         )?;
-        drop(conn);
+            drop(conn);
 
-        write_rxdb_control_command_progress(
-            root.path(),
-            &command,
-            "running",
-            serde_json::json!({ "ok": true, "status": "running" }),
-        )?;
+            write_rxdb_control_command_progress(
+                root.path(),
+                &command,
+                "running",
+                serde_json::json!({ "ok": true, "status": "running" }),
+            )?;
 
-        let outcome = write_rxdb_control_command_outcome(
-            root.path(),
-            &command,
-            "completed",
-            command.record_id.as_deref(),
-            Some("completed"),
-            serde_json::json!({ "ok": true }),
-        )?;
-        assert_eq!(
-            outcome.get("status").and_then(Value::as_str),
-            Some("completed")
-        );
+            let outcome = write_rxdb_control_command_outcome(
+                root.path(),
+                &command,
+                "completed",
+                command.record_id.as_deref(),
+                Some("completed"),
+                serde_json::json!({ "ok": true }),
+            )?;
+            assert_eq!(
+                outcome.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
 
-        let conn = open_store(root.path())?;
-        let (count, status): (i64, String) = conn.query_row(
-            "SELECT COUNT(*), MAX(status) FROM business_commands WHERE command_id = ?1",
-            params![command_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        assert_eq!(count, 1);
-        assert_eq!(status, "completed");
-        let rxdb_conn = Connection::open(rxdb_store_path(root.path()))?;
-        let projected: String = rxdb_conn.query_row(
-            "SELECT data FROM ctox_business_os__business_commands__v1 WHERE id = ?1",
-            params![command_id],
-            |row| row.get(0),
-        )?;
-        let projected: Value = serde_json::from_str(&projected)?;
-        assert_eq!(projected["status"], "completed");
-        assert_eq!(projected["task_status"], "completed");
-        assert_eq!(projected["result"]["status"], "completed");
-        assert_eq!(projected["result"]["task_status"], "completed");
-        Ok(())
+            let conn = open_store(root.path())?;
+            let (count, status): (i64, String) = conn.query_row(
+                "SELECT COUNT(*), MAX(status) FROM business_commands WHERE command_id = ?1",
+                params![command_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(count, 1);
+            assert_eq!(status, "completed");
+            let rxdb_conn = Connection::open(rxdb_store_path(root.path()))?;
+            let projected: String = rxdb_conn.query_row(
+                "SELECT data FROM ctox_business_os__business_commands__v1 WHERE id = ?1",
+                params![command_id],
+                |row| row.get(0),
+            )?;
+            let projected: Value = serde_json::from_str(&projected)?;
+            assert_eq!(projected["status"], "completed");
+            assert_eq!(projected["task_status"], "completed");
+            assert_eq!(projected["result"]["status"], "completed");
+            assert_eq!(projected["result"]["task_status"], "completed");
+            Ok(())
+        })
     }
 
     #[test]
     fn terminal_control_command_settles_linked_leased_queue_task_without_repair(
     ) -> anyhow::Result<()> {
-        let temp = tempdir()?;
-        let root = temp.path();
-        let business_store = open_store(root)?;
-        let rxdb = create_repair_rxdb_tables(root)?;
+        crate::persistence::test_support::run_scoped(move || {
+            let temp = tempdir()?;
+            let root = temp.path();
+            let business_store = open_store(root)?;
+            let rxdb = create_repair_rxdb_tables(root)?;
 
-        for (suffix, terminal_status, expected_route, error_message, reject_projection) in [
-            ("success", "completed", "handled", None, false),
-            (
-                "failure",
-                "failed",
-                "failed",
-                Some("synthetic terminal failure"),
-                false,
-            ),
-            ("projection-rollback", "completed", "leased", None, true),
-        ] {
-            let command_id = format!("cmd_terminal_linked_queue_{suffix}");
-            let command = BusinessCommand {
-                origin: CommandOrigin::TrustedLocal,
-                id: Some(command_id.clone()),
-                module: "research".to_string(),
-                command_type: "business_os.chat.task".to_string(),
-                record_id: Some("research".to_string()),
-                payload: serde_json::json!({ "prompt": "prove atomic terminal carry" }),
-                client_context: serde_json::json!({ "source": "test" }),
-            };
-            let claimed = channels::claim_business_command_with_queue(
-                root,
-                business_command_core_claim(&command_id, &command)?,
-                channels::QueueTaskCreateRequest {
-                    title: format!("Terminal carry {suffix}"),
-                    prompt: "prove atomic terminal carry".to_string(),
-                    thread_key: format!("business-os/tests/terminal-carry/{suffix}"),
-                    workspace_root: Some(root.display().to_string()),
-                    priority: "normal".to_string(),
-                    suggested_skill: None,
-                    parent_message_key: None,
-                    extra_metadata: Some(serde_json::json!({
-                        "command_id": command_id,
-                    })),
-                },
-            )?;
-            let task_id = claimed.task.message_key;
-            channels::lease_queue_task(root, &task_id, "ctox-test")?;
-            channels::transition_business_command_for_task(
-                root,
-                &task_id,
-                "leased",
-                None,
-                None,
-                None,
-                "test worker leased linked task",
-            )?;
+            for (suffix, terminal_status, expected_route, error_message, reject_projection) in [
+                ("success", "completed", "handled", None, false),
+                (
+                    "failure",
+                    "failed",
+                    "failed",
+                    Some("synthetic terminal failure"),
+                    false,
+                ),
+                ("projection-rollback", "completed", "leased", None, true),
+            ] {
+                let command_id = format!("cmd_terminal_linked_queue_{suffix}");
+                let command = BusinessCommand {
+                    origin: CommandOrigin::TrustedLocal,
+                    id: Some(command_id.clone()),
+                    module: "research".to_string(),
+                    command_type: "business_os.chat.task".to_string(),
+                    record_id: Some("research".to_string()),
+                    payload: serde_json::json!({ "prompt": "prove atomic terminal carry" }),
+                    client_context: serde_json::json!({ "source": "test" }),
+                };
+                let claimed = channels::claim_business_command_with_queue(
+                    root,
+                    business_command_core_claim(&command_id, &command)?,
+                    channels::QueueTaskCreateRequest {
+                        title: format!("Terminal carry {suffix}"),
+                        prompt: "prove atomic terminal carry".to_string(),
+                        thread_key: format!("business-os/tests/terminal-carry/{suffix}"),
+                        workspace_root: Some(root.display().to_string()),
+                        priority: "normal".to_string(),
+                        suggested_skill: None,
+                        parent_message_key: None,
+                        extra_metadata: Some(serde_json::json!({
+                            "command_id": command_id,
+                        })),
+                    },
+                )?;
+                let task_id = claimed.task.message_key;
+                channels::lease_queue_task(root, &task_id, "ctox-test")?;
+                channels::transition_business_command_for_task(
+                    root,
+                    &task_id,
+                    "leased",
+                    None,
+                    None,
+                    None,
+                    "test worker leased linked task",
+                )?;
 
-            let initial_projection = serde_json::json!({
-                "id": task_id,
-                "command_id": command_id,
-                "status": "running",
-                "route_status": "leased",
-            });
-            upsert_business_record(
-                &business_store,
-                "ctox_queue_tasks",
-                &task_id,
-                1,
-                initial_projection.clone(),
-            )?;
-            rxdb.execute(
-                "INSERT INTO ctox_business_os__ctox_queue_tasks__v0(id, data) VALUES(?1, ?2)",
-                params![task_id, serde_json::to_string(&initial_projection)?],
-            )?;
-            if reject_projection {
-                rxdb.execute_batch(
-                    "CREATE TRIGGER reject_linked_queue_projection
+                let initial_projection = serde_json::json!({
+                    "id": task_id,
+                    "command_id": command_id,
+                    "status": "running",
+                    "route_status": "leased",
+                });
+                upsert_business_record(
+                    &business_store,
+                    "ctox_queue_tasks",
+                    &task_id,
+                    1,
+                    initial_projection.clone(),
+                )?;
+                rxdb.execute(
+                    "INSERT INTO ctox_business_os__ctox_queue_tasks__v0(id, data) VALUES(?1, ?2)",
+                    params![task_id, serde_json::to_string(&initial_projection)?],
+                )?;
+                if reject_projection {
+                    rxdb.execute_batch(
+                        "CREATE TRIGGER reject_linked_queue_projection
                      BEFORE UPDATE ON ctox_business_os__ctox_queue_tasks__v0
                      BEGIN SELECT RAISE(ABORT, 'injected linked queue projection failure'); END;",
-                )?;
-            }
-            let completion = channels::complete_business_control_command(
-                root,
-                &command_id,
-                terminal_status,
-                &serde_json::json!({
-                    "ok": terminal_status == "completed",
-                    "status": terminal_status,
-                }),
-                error_message,
-            );
-            if reject_projection {
-                let error = completion.expect_err("a failed projection must abort completion");
-                assert!(format!("{error:#}").contains("injected linked queue projection failure"));
-                let canonical = channels::business_command_projection(root, &command_id)?;
-                assert_eq!(canonical["execution_phase"], "leased");
-                assert_eq!(canonical["terminal_status"], "none");
-            } else {
-                completion?;
-            }
+                    )?;
+                }
+                let completion = channels::complete_business_control_command(
+                    root,
+                    &command_id,
+                    terminal_status,
+                    &serde_json::json!({
+                        "ok": terminal_status == "completed",
+                        "status": terminal_status,
+                    }),
+                    error_message,
+                );
+                if reject_projection {
+                    let error = completion.expect_err("a failed projection must abort completion");
+                    assert!(
+                        format!("{error:#}").contains("injected linked queue projection failure")
+                    );
+                    let canonical = channels::business_command_projection(root, &command_id)?;
+                    assert_eq!(canonical["execution_phase"], "leased");
+                    assert_eq!(canonical["terminal_status"], "none");
+                } else {
+                    completion?;
+                }
 
-            let task = channels::load_queue_task(root, &task_id)?
-                .context("linked queue task must remain loadable after terminalization")?;
-            assert_eq!(
-                task.route_status, expected_route,
-                "terminal command must settle its canonical queue task without repair"
-            );
-            if reject_projection {
-                assert_eq!(task.lease_owner.as_deref(), Some("ctox-test"));
-                assert!(task.leased_at.is_some());
-            } else {
-                assert!(task.lease_owner.is_none());
-                assert!(task.leased_at.is_none());
-            }
-            let local_projection: String = business_store.query_row(
+                let task = channels::load_queue_task(root, &task_id)?
+                    .context("linked queue task must remain loadable after terminalization")?;
+                assert_eq!(
+                    task.route_status, expected_route,
+                    "terminal command must settle its canonical queue task without repair"
+                );
+                if reject_projection {
+                    assert_eq!(task.lease_owner.as_deref(), Some("ctox-test"));
+                    assert!(task.leased_at.is_some());
+                } else {
+                    assert!(task.lease_owner.is_none());
+                    assert!(task.leased_at.is_none());
+                }
+                let local_projection: String = business_store.query_row(
                 "SELECT payload_json FROM business_records WHERE collection = 'ctox_queue_tasks' AND record_id = ?1",
                 [&task_id], |row| row.get(0),
             )?;
-            let replicated_projection: String = rxdb.query_row(
-                "SELECT data FROM ctox_business_os__ctox_queue_tasks__v0 WHERE id = ?1",
-                [&task_id],
-                |row| row.get(0),
-            )?;
-            for raw in [local_projection, replicated_projection] {
-                let projection: Value = serde_json::from_str(&raw)?;
-                assert_eq!(projection["route_status"], expected_route);
-                if reject_projection {
-                    assert_eq!(projection["status"], "running");
+                let replicated_projection: String = rxdb.query_row(
+                    "SELECT data FROM ctox_business_os__ctox_queue_tasks__v0 WHERE id = ?1",
+                    [&task_id],
+                    |row| row.get(0),
+                )?;
+                for raw in [local_projection, replicated_projection] {
+                    let projection: Value = serde_json::from_str(&raw)?;
+                    assert_eq!(projection["route_status"], expected_route);
+                    if reject_projection {
+                        assert_eq!(projection["status"], "running");
+                    }
                 }
             }
-        }
 
-        Ok(())
+            Ok(())
+        })
     }
 
     #[test]
@@ -4508,168 +4555,68 @@ mod tests {
 
     #[test]
     fn control_command_outcome_updates_an_existing_intake_projection() -> anyhow::Result<()> {
-        let temp = tempdir()?;
-        let root = temp.path();
-        let command_id = "cmd_long_running_control_outcome";
-        let command = BusinessCommand {
-            origin: CommandOrigin::TrustedLocal,
-            id: Some(command_id.to_string()),
-            module: "inventory".to_string(),
-            command_type: "external_sql.sync.refresh".to_string(),
-            record_id: None,
-            payload: serde_json::json!({ "input": { "mode": "full" } }),
-            client_context: serde_json::json!({ "actor": { "id": "mcp-admin" } }),
-        };
+        crate::persistence::test_support::run_scoped(move || {
+            let temp = tempdir()?;
+            let root = temp.path();
+            let command_id = "cmd_long_running_control_outcome";
+            let command = BusinessCommand {
+                origin: CommandOrigin::TrustedLocal,
+                id: Some(command_id.to_string()),
+                module: "inventory".to_string(),
+                command_type: "external_sql.sync.refresh".to_string(),
+                record_id: None,
+                payload: serde_json::json!({ "input": { "mode": "full" } }),
+                client_context: serde_json::json!({ "actor": { "id": "mcp-admin" } }),
+            };
 
-        let claim = channels::claim_business_control_command(
-            root,
-            business_command_core_claim(command_id, &command)?,
-        )?;
-        assert_eq!(claim.disposition, "new");
+            let claim = channels::claim_business_control_command(
+                root,
+                business_command_core_claim(command_id, &command)?,
+            )?;
+            assert_eq!(claim.disposition, "new");
 
-        let conn = open_store(root)?;
-        conn.execute(
+            let conn = open_store(root)?;
+            conn.execute(
             "INSERT INTO business_commands
                 (command_id, module, command_type, record_id, status, payload_json, client_context_json, observed_at_ms)
              VALUES (?1, 'inventory', 'external_sql.sync.refresh', '', 'accepted', '{}', '{}', 1)",
             params![command_id],
         )?;
-        drop(conn);
+            drop(conn);
 
-        let outcome = write_rxdb_control_command_outcome(
-            root,
-            &command,
-            "completed",
-            None,
-            Some("completed"),
-            serde_json::json!({ "ok": true, "synced": 1 }),
-        )?;
-        assert_eq!(
-            outcome.get("status").and_then(Value::as_str),
-            Some("completed")
-        );
+            let outcome = write_rxdb_control_command_outcome(
+                root,
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                serde_json::json!({ "ok": true, "synced": 1 }),
+            )?;
+            assert_eq!(
+                outcome.get("status").and_then(Value::as_str),
+                Some("completed")
+            );
 
-        let conn = open_store(root)?;
-        let (count, status): (i64, String) = conn.query_row(
-            "SELECT COUNT(*), MAX(status) FROM business_commands WHERE command_id = ?1",
-            params![command_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
-        assert_eq!(count, 1);
-        assert_eq!(status, "completed");
-        Ok(())
+            let conn = open_store(root)?;
+            let (count, status): (i64, String) = conn.query_row(
+                "SELECT COUNT(*), MAX(status) FROM business_commands WHERE command_id = ?1",
+                params![command_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(count, 1);
+            assert_eq!(status, "completed");
+            Ok(())
+        })
     }
 
     #[test]
     fn command_timing_probe_is_absent_without_explicit_marker() -> anyhow::Result<()> {
-        let root = tempdir()?;
-        let command_id = "cmd_timing_probe_off";
-        let command = BusinessCommand {
-            origin: CommandOrigin::TrustedLocal,
-            id: Some(command_id.to_string()),
-            module: "ctox".to_string(),
-            command_type: "ctox.provider_subscription.status".to_string(),
-            record_id: None,
-            payload: serde_json::json!({}),
-            client_context: serde_json::json!({ "actor": { "id": "local-dev" } }),
-        };
-        channels::claim_business_control_command(
-            root.path(),
-            business_command_core_claim(command_id, &command)?,
-        )?;
-        let outcome = write_rxdb_control_command_outcome(
-            root.path(),
-            &command,
-            "completed",
-            None,
-            Some("completed"),
-            serde_json::json!({ "ok": true }),
-        )?;
-        assert!(outcome.get(COMMAND_TIMING_RESULT_FIELD).is_none());
-        assert!(outcome["result"].get(COMMAND_TIMING_RESULT_FIELD).is_none());
-        Ok(())
-    }
-
-    #[test]
-    fn command_timing_probe_writes_ordered_native_marks() -> anyhow::Result<()> {
-        let root = tempdir()?;
-        let rxdb = create_repair_rxdb_tables(root.path())?;
-        super::super::store::reset_rxdb_collection_writer_open_count(
-            root.path(),
-            "business_commands",
-        );
-        let command_id = "cmd_timing_probe_on";
-        let command = BusinessCommand {
-            origin: CommandOrigin::TrustedLocal,
-            id: Some(command_id.to_string()),
-            module: "ctox".to_string(),
-            command_type: "ctox.provider_subscription.status".to_string(),
-            record_id: None,
-            payload: serde_json::json!({}),
-            client_context: serde_json::json!({
-                "actor": { "id": "local-dev" },
-                "command_timing_probe": true
-            }),
-        };
-        channels::claim_business_control_command(
-            root.path(),
-            business_command_core_claim(command_id, &command)?,
-        )?;
-        let _guard = install_command_timing_probe(&command);
-        std::thread::sleep(std::time::Duration::from_millis(2));
-        let outcome = write_rxdb_control_command_outcome(
-            root.path(),
-            &command,
-            "completed",
-            None,
-            Some("completed"),
-            serde_json::json!({ "ok": true }),
-        )?;
-        let timing = outcome
-            .get("result")
-            .and_then(|value| value.get(COMMAND_TIMING_RESULT_FIELD))
-            .cloned()
-            .unwrap_or(Value::Null);
-        let entered = timing["native_dispatch_entered"].as_i64().unwrap();
-        let completed = timing["native_handler_completed"].as_i64().unwrap();
-        let committed = timing["native_rxdb_projection_committed"].as_i64().unwrap();
-        assert!(entered > 0);
-        assert!(completed >= entered);
-        assert!(committed >= completed);
-        assert!(timing.get("capability_token").is_none());
-        assert!(timing.get("payload").is_none());
-        assert_eq!(
-            super::super::store::rxdb_collection_writer_open_count(
-                root.path(),
-                "business_commands"
-            ),
-            1,
-            "one command must retain its projection writer through canonical completion",
-        );
-        let persisted: String = rxdb.query_row(
-            "SELECT data FROM ctox_business_os__business_commands__v1 WHERE id = ?1",
-            [command_id],
-            |row| row.get(0),
-        )?;
-        let persisted: Value = serde_json::from_str(&persisted)?;
-        assert_eq!(persisted["execution_phase"], "terminal");
-        assert_eq!(persisted["terminal_status"], "completed");
-        Ok(())
-    }
-
-    #[test]
-    fn control_projection_cache_reuses_writer_across_completed_commands() -> anyhow::Result<()> {
-        let root = tempdir()?;
-        let rxdb = create_repair_rxdb_tables(root.path())?;
-        super::super::store::reset_rxdb_collection_writer_open_count(
-            root.path(),
-            "business_commands",
-        );
-        for index in 0..3 {
-            let command_id = format!("control_cache_command_{index}");
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let command_id = "cmd_timing_probe_off";
             let command = BusinessCommand {
                 origin: CommandOrigin::TrustedLocal,
-                id: Some(command_id.clone()),
+                id: Some(command_id.to_string()),
                 module: "ctox".to_string(),
                 command_type: "ctox.provider_subscription.status".to_string(),
                 record_id: None,
@@ -4678,9 +4625,9 @@ mod tests {
             };
             channels::claim_business_control_command(
                 root.path(),
-                business_command_core_claim(&command_id, &command)?,
+                business_command_core_claim(command_id, &command)?,
             )?;
-            write_rxdb_control_command_outcome(
+            let outcome = write_rxdb_control_command_outcome(
                 root.path(),
                 &command,
                 "completed",
@@ -4688,64 +4635,174 @@ mod tests {
                 Some("completed"),
                 serde_json::json!({ "ok": true }),
             )?;
+            assert!(outcome.get(COMMAND_TIMING_RESULT_FIELD).is_none());
+            assert!(outcome["result"].get(COMMAND_TIMING_RESULT_FIELD).is_none());
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn command_timing_probe_writes_ordered_native_marks() -> anyhow::Result<()> {
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let rxdb = create_repair_rxdb_tables(root.path())?;
+            super::super::store::reset_rxdb_collection_writer_open_count(
+                root.path(),
+                "business_commands",
+            );
+            let command_id = "cmd_timing_probe_on";
+            let command = BusinessCommand {
+                origin: CommandOrigin::TrustedLocal,
+                id: Some(command_id.to_string()),
+                module: "ctox".to_string(),
+                command_type: "ctox.provider_subscription.status".to_string(),
+                record_id: None,
+                payload: serde_json::json!({}),
+                client_context: serde_json::json!({
+                    "actor": { "id": "local-dev" },
+                    "command_timing_probe": true
+                }),
+            };
+            channels::claim_business_control_command(
+                root.path(),
+                business_command_core_claim(command_id, &command)?,
+            )?;
+            let _guard = install_command_timing_probe(&command);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+            let outcome = write_rxdb_control_command_outcome(
+                root.path(),
+                &command,
+                "completed",
+                None,
+                Some("completed"),
+                serde_json::json!({ "ok": true }),
+            )?;
+            let timing = outcome
+                .get("result")
+                .and_then(|value| value.get(COMMAND_TIMING_RESULT_FIELD))
+                .cloned()
+                .unwrap_or(Value::Null);
+            let entered = timing["native_dispatch_entered"].as_i64().unwrap();
+            let completed = timing["native_handler_completed"].as_i64().unwrap();
+            let committed = timing["native_rxdb_projection_committed"].as_i64().unwrap();
+            assert!(entered > 0);
+            assert!(completed >= entered);
+            assert!(committed >= completed);
+            assert!(timing.get("capability_token").is_none());
+            assert!(timing.get("payload").is_none());
+            assert_eq!(
+                super::super::store::rxdb_collection_writer_open_count(
+                    root.path(),
+                    "business_commands"
+                ),
+                1,
+                "one command must retain its projection writer through canonical completion",
+            );
             let persisted: String = rxdb.query_row(
                 "SELECT data FROM ctox_business_os__business_commands__v1 WHERE id = ?1",
-                [&command_id],
+                [command_id],
                 |row| row.get(0),
             )?;
             let persisted: Value = serde_json::from_str(&persisted)?;
             assert_eq!(persisted["execution_phase"], "terminal");
             assert_eq!(persisted["terminal_status"], "completed");
-        }
-        #[cfg(unix)]
-        assert_eq!(
-            super::super::store::rxdb_collection_writer_open_count(
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn control_projection_cache_reuses_writer_across_completed_commands() -> anyhow::Result<()> {
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            let rxdb = create_repair_rxdb_tables(root.path())?;
+            super::super::store::reset_rxdb_collection_writer_open_count(
                 root.path(),
-                "business_commands"
-            ),
-            1
-        );
-        Ok(())
+                "business_commands",
+            );
+            for index in 0..3 {
+                let command_id = format!("control_cache_command_{index}");
+                let command = BusinessCommand {
+                    origin: CommandOrigin::TrustedLocal,
+                    id: Some(command_id.clone()),
+                    module: "ctox".to_string(),
+                    command_type: "ctox.provider_subscription.status".to_string(),
+                    record_id: None,
+                    payload: serde_json::json!({}),
+                    client_context: serde_json::json!({ "actor": { "id": "local-dev" } }),
+                };
+                channels::claim_business_control_command(
+                    root.path(),
+                    business_command_core_claim(&command_id, &command)?,
+                )?;
+                write_rxdb_control_command_outcome(
+                    root.path(),
+                    &command,
+                    "completed",
+                    None,
+                    Some("completed"),
+                    serde_json::json!({ "ok": true }),
+                )?;
+                let persisted: String = rxdb.query_row(
+                    "SELECT data FROM ctox_business_os__business_commands__v1 WHERE id = ?1",
+                    [&command_id],
+                    |row| row.get(0),
+                )?;
+                let persisted: Value = serde_json::from_str(&persisted)?;
+                assert_eq!(persisted["execution_phase"], "terminal");
+                assert_eq!(persisted["terminal_status"], "completed");
+            }
+            #[cfg(unix)]
+            assert_eq!(
+                super::super::store::rxdb_collection_writer_open_count(
+                    root.path(),
+                    "business_commands"
+                ),
+                1
+            );
+            Ok(())
+        })
     }
 
     #[test]
     fn control_completion_without_queue_link_does_not_open_queue_projections() -> anyhow::Result<()>
     {
-        let root = tempdir()?;
-        drop(open_store(root.path())?); // Register the real projection hooks.
-        let command_id = "cmd_core_only_completion";
-        let command = BusinessCommand {
-            origin: CommandOrigin::TrustedLocal,
-            id: Some(command_id.into()),
-            module: "ctox".into(),
-            command_type: "ctox.provider_subscription.status".into(),
-            record_id: None,
-            payload: serde_json::json!({}),
-            client_context: serde_json::json!({}),
-        };
-        channels::claim_business_control_command(
-            root.path(),
-            business_command_core_claim(command_id, &command)?,
-        )?;
-        let projection_path = rxdb_store_path(root.path());
-        std::fs::create_dir_all(projection_path.parent().unwrap())?;
-        std::fs::write(&projection_path, b"unavailable queue projection database")?;
-        channels::complete_business_control_command(
-            root.path(),
-            command_id,
-            "completed",
-            &serde_json::json!({"ok": true}),
-            None,
-        )?;
-        let canonical = channels::business_command_projection(root.path(), command_id)?;
-        assert_eq!(canonical["terminal_status"], "completed");
-        // Completion stays durable/idempotent even when unrelated queue
-        // projection storage cannot be opened. Delivery still has its outbox.
-        let replay = channels::claim_business_control_command(
-            root.path(),
-            business_command_core_claim(command_id, &command)?,
-        )?;
-        assert_eq!(replay.disposition, "terminal");
-        Ok(())
+        crate::persistence::test_support::run_scoped(move || {
+            let root = tempdir()?;
+            drop(open_store(root.path())?); // Register the real projection hooks.
+            let command_id = "cmd_core_only_completion";
+            let command = BusinessCommand {
+                origin: CommandOrigin::TrustedLocal,
+                id: Some(command_id.into()),
+                module: "ctox".into(),
+                command_type: "ctox.provider_subscription.status".into(),
+                record_id: None,
+                payload: serde_json::json!({}),
+                client_context: serde_json::json!({}),
+            };
+            channels::claim_business_control_command(
+                root.path(),
+                business_command_core_claim(command_id, &command)?,
+            )?;
+            let projection_path = rxdb_store_path(root.path());
+            std::fs::create_dir_all(projection_path.parent().unwrap())?;
+            std::fs::write(&projection_path, b"unavailable queue projection database")?;
+            channels::complete_business_control_command(
+                root.path(),
+                command_id,
+                "completed",
+                &serde_json::json!({"ok": true}),
+                None,
+            )?;
+            let canonical = channels::business_command_projection(root.path(), command_id)?;
+            assert_eq!(canonical["terminal_status"], "completed");
+            // Completion stays durable/idempotent even when unrelated queue
+            // projection storage cannot be opened. Delivery still has its outbox.
+            let replay = channels::claim_business_control_command(
+                root.path(),
+                business_command_core_claim(command_id, &command)?,
+            )?;
+            assert_eq!(replay.disposition, "terminal");
+            Ok(())
+        })
     }
 }

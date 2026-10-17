@@ -566,22 +566,24 @@ pub(super) async fn consume_pending_business_commands(
                 let failed_document = document.clone();
                 let failure_message = format!("{err:#}");
                 let persisted_failure_message = failure_message.clone();
-                let persisted_failure = match tokio::task::spawn_blocking(move || {
-                    match capability_rejection {
-                        Some(reason) => store::record_business_command_capability_rejection(
-                            &failure_root,
-                            &failed_document,
-                            &persisted_failure_message,
-                            reason,
-                            capability_rejection_retry_budget(reason),
-                        ),
-                        None => store::record_business_command_intake_failure(
-                            &failure_root,
-                            &failed_document,
-                            &persisted_failure_message,
-                            BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET,
-                        ),
-                    }
+                let persisted_failure = match crate::persistence::run_core_sync(move || {
+                    Ok({
+                        match capability_rejection {
+                            Some(reason) => store::record_business_command_capability_rejection(
+                                &failure_root,
+                                &failed_document,
+                                &persisted_failure_message,
+                                reason,
+                                capability_rejection_retry_budget(reason),
+                            ),
+                            None => store::record_business_command_intake_failure(
+                                &failure_root,
+                                &failed_document,
+                                &persisted_failure_message,
+                                BUSINESS_COMMAND_ACCEPT_RETRY_BUDGET,
+                            ),
+                        }
+                    })
                 })
                 .await
                 {
@@ -921,8 +923,13 @@ pub(super) async fn accept_pending_business_command(
     // command type, age or payload. This branch cannot invoke a handler.
     let recovery_root = root.to_path_buf();
     let recovery_id = command_id_from_document(&document)?;
-    let recovered = tokio::task::spawn_blocking(move || {
-        super::command_plane::recover_applied_domain_effect_for_intake(&recovery_root, &recovery_id)
+    let recovered = crate::persistence::run_core_sync(move || {
+        Ok({
+            super::command_plane::recover_applied_domain_effect_for_intake(
+                &recovery_root,
+                &recovery_id,
+            )
+        })
     })
     .await
     .context("join applied domain effect recovery")??;
@@ -993,28 +1000,30 @@ pub(super) async fn accept_pending_business_command(
                 command_id_from_document(&document_for_store).ok(),
             )
         });
-    let accepted_result = tokio::task::spawn_blocking(move || {
-        let queue_wait_ms = intake_probe
-            .as_ref()
-            .map(|(started, _)| started.elapsed().as_secs_f64() * 1_000.0);
-        let result = store::accept_rxdb_business_command_with_origin(
-            &accept_root,
-            document_for_store,
-            store::CommandOrigin::ReplicatedPeer,
-        );
-        if let Some(((started, command_id), queue_wait_ms)) = intake_probe.zip(queue_wait_ms) {
-            eprintln!(
-                "command_intake_queue_sample={}",
-                json!({
-                    "command_id": command_id,
-                    "queue_wait_ms": queue_wait_ms,
-                    "store_execution_ms":
-                        started.elapsed().as_secs_f64() * 1_000.0 - queue_wait_ms,
-                    "ok": result.is_ok(),
-                })
+    let accepted_result = crate::persistence::run_core_sync(move || {
+        Ok({
+            let queue_wait_ms = intake_probe
+                .as_ref()
+                .map(|(started, _)| started.elapsed().as_secs_f64() * 1_000.0);
+            let result = store::accept_rxdb_business_command_with_origin(
+                &accept_root,
+                document_for_store,
+                store::CommandOrigin::ReplicatedPeer,
             );
-        }
-        result
+            if let Some(((started, command_id), queue_wait_ms)) = intake_probe.zip(queue_wait_ms) {
+                eprintln!(
+                    "command_intake_queue_sample={}",
+                    json!({
+                        "command_id": command_id,
+                        "queue_wait_ms": queue_wait_ms,
+                        "store_execution_ms":
+                            started.elapsed().as_secs_f64() * 1_000.0 - queue_wait_ms,
+                        "ok": result.is_ok(),
+                    })
+                );
+            }
+            result
+        })
     })
     .await;
 

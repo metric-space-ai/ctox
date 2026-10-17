@@ -140,7 +140,7 @@ impl AuxiliaryRouteHandler for ClaudeCountTokensRouteHandler {
                     ))
                 }
             };
-            let auth_id = match self.pool.select_configured_auth_id(&model) {
+            let auth_id = match self.pool.select_configured_auth_id_async(&model).await {
                 Ok(auth_id) => auth_id,
                 Err(error) => return Some(claude_count_tokens_error_response(error)),
             };

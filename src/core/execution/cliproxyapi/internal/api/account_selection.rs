@@ -11,6 +11,28 @@ pub(crate) struct AccountSelection {
     upstream_status: Option<u16>,
 }
 tokio::task_local! { pub(crate) static ACCOUNT_SELECTION: Mutex<AccountSelection>; }
+/// Carry only request input across an owner phase; acknowledgement/error
+/// output stays on the original HTTP task. No credentials cross this seam.
+pub(crate) fn owner_phase<T: Send + 'static>(
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> impl FnOnce() -> T + Send + 'static {
+    let requested = requested_account();
+    let session = ACCOUNT_SELECTION
+        .try_with(|state| state.lock().unwrap().session.clone())
+        .ok()
+        .flatten();
+    move || {
+        ACCOUNT_SELECTION.sync_scope(
+            Mutex::new(AccountSelection {
+                requested,
+                session,
+                ..Default::default()
+            }),
+            operation,
+        )
+    }
+}
+
 pub fn requested_account() -> Option<String> {
     ACCOUNT_SELECTION
         .try_with(|state| state.lock().unwrap().requested.clone())

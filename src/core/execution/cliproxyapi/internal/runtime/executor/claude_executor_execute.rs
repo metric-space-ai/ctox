@@ -1612,6 +1612,17 @@ impl ClaudeSubscriptionAccountPool {
     /// Selects one eligible Claude account using the same persisted scheduler
     /// and cooldown authority as Messages. The returned lane remains fixed for
     /// preparation, transport and an optional 401 replay.
+    pub async fn select_configured_auth_id_async(
+        &self,
+        model: &str,
+    ) -> Result<String, ClaudeAccountPoolError> {
+        self.router
+            .select_async("claude", Some(model), self.clock.now_ms(), &self.candidates)
+            .await
+            .map(|selected| selected.auth_id)
+            .map_err(ClaudeAccountPoolError::Routing)
+    }
+
     pub fn select_configured_auth_id(&self, model: &str) -> Result<String, ClaudeAccountPoolError> {
         self.router
             .select("claude", Some(model), self.clock.now_ms(), &self.candidates)
@@ -1876,20 +1887,20 @@ impl ClaudeSubscriptionAccountPool {
         let mut last_outcome = None;
 
         while !remaining.is_empty() {
-            let selected =
-                match self
-                    .router
-                    .select("claude", Some(model), self.clock.now_ms(), &remaining)
-                {
-                    Ok(selected) => selected,
-                    // Preserve the prior upstream result when no eligible fallback remains.
-                    Err(AccountRoutingError::Selection(
-                        AccountSelectionError::NotFound
-                        | AccountSelectionError::Unavailable
-                        | AccountSelectionError::Cooldown { .. },
-                    )) if !attempted_auth_ids.is_empty() => break,
-                    Err(error) => return Err(ClaudeAccountPoolError::Routing(error)),
-                };
+            let selected = match self
+                .router
+                .select_async("claude", Some(model), self.clock.now_ms(), &remaining)
+                .await
+            {
+                Ok(selected) => selected,
+                // Preserve the prior upstream result when no eligible fallback remains.
+                Err(AccountRoutingError::Selection(
+                    AccountSelectionError::NotFound
+                    | AccountSelectionError::Unavailable
+                    | AccountSelectionError::Cooldown { .. },
+                )) if !attempted_auth_ids.is_empty() => break,
+                Err(error) => return Err(ClaudeAccountPoolError::Routing(error)),
+            };
             crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
             attempted_auth_ids.push(selected.auth_id.clone());
@@ -1915,7 +1926,8 @@ impl ClaudeSubscriptionAccountPool {
             });
             let quota_observation = self
                 .router
-                .begin_claude_quota_observation(&selected.auth_id)
+                .begin_claude_quota_observation_async(&selected.auth_id)
+                .await
                 .map_err(ClaudeAccountPoolError::Routing)?;
             match executor
                 .execute_stream_for_model_with_context(
@@ -1931,11 +1943,12 @@ impl ClaudeSubscriptionAccountPool {
                         return Err(ClaudeAccountPoolError::OutcomePersistence);
                     }
                     self.router
-                        .observe_claude_quota(
+                        .observe_claude_quota_async(
                             quota_observation,
                             outcome.response().headers(),
                             self.clock.now_ms(),
                         )
+                        .await
                         .map_err(ClaudeAccountPoolError::Routing)?;
                     let status = outcome.response().status();
                     if outcome.request_scoped()
@@ -1981,20 +1994,20 @@ impl ClaudeSubscriptionAccountPool {
         let mut last_outcome = None;
 
         while !remaining.is_empty() {
-            let selected =
-                match self
-                    .router
-                    .select("claude", Some(model), self.clock.now_ms(), &remaining)
-                {
-                    Ok(selected) => selected,
-                    // Preserve the prior upstream result when no eligible fallback remains.
-                    Err(AccountRoutingError::Selection(
-                        AccountSelectionError::NotFound
-                        | AccountSelectionError::Unavailable
-                        | AccountSelectionError::Cooldown { .. },
-                    )) if !attempted_auth_ids.is_empty() => break,
-                    Err(error) => return Err(ClaudeAccountPoolError::Routing(error)),
-                };
+            let selected = match self
+                .router
+                .select_async("claude", Some(model), self.clock.now_ms(), &remaining)
+                .await
+            {
+                Ok(selected) => selected,
+                // Preserve the prior upstream result when no eligible fallback remains.
+                Err(AccountRoutingError::Selection(
+                    AccountSelectionError::NotFound
+                    | AccountSelectionError::Unavailable
+                    | AccountSelectionError::Cooldown { .. },
+                )) if !attempted_auth_ids.is_empty() => break,
+                Err(error) => return Err(ClaudeAccountPoolError::Routing(error)),
+            };
             crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
             attempted_auth_ids.push(selected.auth_id.clone());
@@ -2021,7 +2034,8 @@ impl ClaudeSubscriptionAccountPool {
             });
             let quota_observation = self
                 .router
-                .begin_claude_quota_observation(&selected.auth_id)
+                .begin_claude_quota_observation_async(&selected.auth_id)
+                .await
                 .map_err(ClaudeAccountPoolError::Routing)?;
             match executor
                 .execute_for_model_with_context(
@@ -2038,11 +2052,12 @@ impl ClaudeSubscriptionAccountPool {
                         return Err(ClaudeAccountPoolError::OutcomePersistence);
                     }
                     self.router
-                        .observe_claude_quota(
+                        .observe_claude_quota_async(
                             quota_observation,
                             outcome.response().headers(),
                             self.clock.now_ms(),
                         )
+                        .await
                         .map_err(ClaudeAccountPoolError::Routing)?;
                     let status = outcome.response().status();
                     if outcome.request_scoped()

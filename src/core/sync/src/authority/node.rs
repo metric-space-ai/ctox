@@ -189,6 +189,29 @@ impl AuthorityNode {
         self.stopped.store(true, Ordering::Release);
         self.raft.shutdown().await.map_err(|e| error(e.to_string()))
     }
+    /// Observe shutdown completion after all node/store handles are dropped.
+    pub fn storage_closed_signal(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.store.closed_signal()
+    }
+
+    /// Local durable observation, never a quorum-backed admission decision.
+    pub async fn local_worker(&self, id: NodeId) -> io::Result<Option<WorkerMembership>> {
+        self.store
+            .worker(id)
+            .await
+            .map_err(|e| error(e.to_string()))
+    }
+
+    /// Build a local snapshot through the existing file owner, not a reopen.
+    pub async fn local_snapshot(&self) -> io::Result<openraft::Snapshot<super::TypeConfig>> {
+        use openraft::RaftSnapshotBuilder;
+        self.store
+            .clone()
+            .build_snapshot()
+            .await
+            .map_err(|e| error(e.to_string()))
+    }
+
     pub async fn local_job(&self, id: &str) -> io::Result<Option<Job>> {
         self.store.job(id).await.map_err(|e| error(e.to_string()))
     }

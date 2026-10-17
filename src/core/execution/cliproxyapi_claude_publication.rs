@@ -191,53 +191,56 @@ mod tests {
 
     #[test]
     fn metadata_check_pins_encrypted_generation_even_when_plaintext_is_restored() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        let original = account("private-access", "private-refresh");
-        persist(root.path(), &original)?;
-        let check = NativeClaudeSdkPublicationCheck::open(root.path(), &original.account)?;
-        check.with_current_records(|| Ok(()))?;
-        assert_eq!(check.encrypted_revision.len(), 64);
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            let original = account("private-access", "private-refresh");
+            persist(root.path(), &original)?;
+            let check = NativeClaudeSdkPublicationCheck::open(root.path(), &original.account)?;
+            check.with_current_records(|| Ok(()))?;
+            assert_eq!(check.encrypted_revision.len(), 64);
 
-        let store = crate::execution::cliproxyapi_host::CtoxClaudeSecretStore::new(root.path());
-        use ctox_cliproxyapi::internal::auth::claude::ClaudeSecretStore;
-        let handles = original.account.credential_handles().unwrap();
-        store.store_credentials(
-            &handles,
-            &account("other-access", "other-refresh").credentials,
-        )?;
-        assert!(check
-            .with_current_records::<()>(|| panic!("rotated record cannot publish"))
-            .is_err());
-        store.store_credentials(&handles, &original.credentials)?;
-        assert!(check
-            .with_current_records::<()>(|| panic!(
-                "restoring plaintext cannot restore the encrypted generation"
-            ))
-            .is_err());
-        Ok(())
+            let store = crate::execution::cliproxyapi_host::CtoxClaudeSecretStore::new(root.path());
+            use ctox_cliproxyapi::internal::auth::claude::ClaudeSecretStore;
+            let handles = original.account.credential_handles().unwrap();
+            store.store_credentials(
+                &handles,
+                &account("other-access", "other-refresh").credentials,
+            )?;
+            assert!(check
+                .with_current_records::<()>(|| panic!("rotated record cannot publish"))
+                .is_err());
+            store.store_credentials(&handles, &original.credentials)?;
+            assert!(check
+                .with_current_records::<()>(|| panic!(
+                    "restoring plaintext cannot restore the encrypted generation"
+                ))
+                .is_err());
+            Ok(())
+        })
     }
 
     #[test]
     fn physical_check_uses_existing_issuer_fence_without_secret_reentry() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        // Normal bootstrap, never schema initialization under the issuer.
-        crate::persistence::store_json_payload(root.path(), "publication-test", Some(&true))?;
-        let original = account("private-access", "private-refresh");
-        persist(root.path(), &original)?;
-        let check = NativeClaudeSdkPublicationCheck::open(root.path(), &original.account)?;
-        let handles = original.account.credential_handles().unwrap();
-        let access = handles.access_token();
-        let refresh = handles.refresh_token();
-        let other = Connection::open(crate::secrets::resolve_db_path(root.path()))?;
-        other.busy_timeout(std::time::Duration::ZERO)?;
-        crate::secrets::with_current_secret_values(
-            root.path(),
-            &[
-                (access.scope(), access.name()),
-                (refresh.scope(), refresh.name()),
-            ],
-            |_| {
-                check.with_current_records(|| {
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            // Normal bootstrap, never schema initialization under the issuer.
+            crate::persistence::store_json_payload(root.path(), "publication-test", Some(&true))?;
+            let original = account("private-access", "private-refresh");
+            persist(root.path(), &original)?;
+            let check = NativeClaudeSdkPublicationCheck::open(root.path(), &original.account)?;
+            let handles = original.account.credential_handles().unwrap();
+            let access = handles.access_token();
+            let refresh = handles.refresh_token();
+            let other = Connection::open(crate::secrets::resolve_db_path(root.path()))?;
+            other.busy_timeout(std::time::Duration::ZERO)?;
+            crate::secrets::with_current_secret_values(
+                root.path(),
+                &[
+                    (access.scope(), access.name()),
+                    (refresh.scope(), refresh.name()),
+                ],
+                |_| {
+                    check.with_current_records(|| {
                 // Metadata reads succeed while the already-held issuer fence
                 // excludes a second encrypted-record writer.
                 let err = other.execute(
@@ -248,63 +251,68 @@ mod tests {
                     if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)));
                 Ok(())
             })
-            },
-        )?;
-        Ok(())
+                },
+            )?;
+            Ok(())
+        })
     }
 
     #[test]
     fn native_runtime_edit_or_account_removal_prevents_publication() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        let original = account("private-access", "private-refresh");
-        persist(root.path(), &original)?;
-        let check = NativeClaudeSdkPublicationCheck::open(root.path(), &original.account)?;
-        let runtime = Connection::open(crate::inference::runtime_env::runtime_config_path(
-            root.path(),
-        ))?;
-        let mut changed = original.account.clone();
-        changed.disabled = true;
-        let value = serde_json::to_string(&serde_json::json!({"claude_accounts":[changed]}))?;
-        runtime.execute(
-            "UPDATE cliproxyapi_runtime_config SET config_json=?1,revision=revision+1",
-            [value],
-        )?;
-        assert!(check
-            .with_current_records::<()>(|| panic!("disabled account cannot publish"))
-            .is_err());
-        runtime.execute(
-            "UPDATE cliproxyapi_runtime_config SET config_json=?1,revision=revision+1",
-            [r#"{"claude_accounts":[]}"#],
-        )?;
-        assert!(check
-            .with_current_records::<()>(|| panic!("removed account cannot publish"))
-            .is_err());
-        Ok(())
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            let original = account("private-access", "private-refresh");
+            persist(root.path(), &original)?;
+            let check = NativeClaudeSdkPublicationCheck::open(root.path(), &original.account)?;
+            let runtime = Connection::open(crate::inference::runtime_env::runtime_config_path(
+                root.path(),
+            ))?;
+            let mut changed = original.account.clone();
+            changed.disabled = true;
+            let value = serde_json::to_string(&serde_json::json!({"claude_accounts":[changed]}))?;
+            runtime.execute(
+                "UPDATE cliproxyapi_runtime_config SET config_json=?1,revision=revision+1",
+                [value],
+            )?;
+            assert!(check
+                .with_current_records::<()>(|| panic!("disabled account cannot publish"))
+                .is_err());
+            runtime.execute(
+                "UPDATE cliproxyapi_runtime_config SET config_json=?1,revision=revision+1",
+                [r#"{"claude_accounts":[]}"#],
+            )?;
+            assert!(check
+                .with_current_records::<()>(|| panic!("removed account cannot publish"))
+                .is_err());
+            Ok(())
+        })
     }
 
     #[test]
     fn physical_account_check_fences_runtime_writer_and_ignores_unrelated_accounts() -> Result<()> {
-        let root = tempfile::tempdir()?;
-        let original = account("private-access", "private-refresh");
-        persist(root.path(), &original)?;
-        let check = NativeClaudeSdkPublicationCheck::open(root.path(), &original.account)?;
-        let other = Connection::open(crate::inference::runtime_env::runtime_config_path(
-            root.path(),
-        ))?;
-        other.busy_timeout(std::time::Duration::ZERO)?;
-        check.with_current_records(|| {
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root;
+            let original = account("private-access", "private-refresh");
+            persist(root.path(), &original)?;
+            let check = NativeClaudeSdkPublicationCheck::open(root.path(), &original.account)?;
+            let other = Connection::open(crate::inference::runtime_env::runtime_config_path(
+                root.path(),
+            ))?;
+            other.busy_timeout(std::time::Duration::ZERO)?;
+            check.with_current_records(|| {
             let err = other.execute("UPDATE cliproxyapi_runtime_config SET revision=revision+1", []).unwrap_err();
             assert!(matches!(err, rusqlite::Error::SqliteFailure(code, _)
                 if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)));
             Ok(())
         })?;
-        other.execute(
-            "UPDATE cliproxyapi_runtime_config SET revision=revision+1",
-            [],
-        )?;
-        // A global revision edit with the exact account unchanged does not
-        // unnecessarily move/cache-reset a still current account session.
-        check.with_current_records(|| Ok(()))?;
-        Ok(())
+            other.execute(
+                "UPDATE cliproxyapi_runtime_config SET revision=revision+1",
+                [],
+            )?;
+            // A global revision edit with the exact account unchanged does not
+            // unnecessarily move/cache-reset a still current account session.
+            check.with_current_records(|| Ok(()))?;
+            Ok(())
+        })
     }
 }

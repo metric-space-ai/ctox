@@ -175,23 +175,47 @@ impl CtoxXaiLogin {
                 result = tokio::time::timeout(expires, auth.wait_for_authorization(&cancel, &code)) => Some(result),
                 () = retirement => None,
             };
-            if let Ok(mut state) = sessions.lock() {
-                if let Some(login) = state.get_mut(&id) {
-                    if login.progress != XaiLoginProgress::Pending {
-                        return;
-                    }
-                    login.progress = match result {
-                        Some(Ok(Ok(bundle))) if !cancel.is_cancelled() && current() => {
-                            if authorize_commit().is_ok() && install_bundle(&root, &bundle).is_ok()
-                            {
-                                XaiLoginProgress::Accepted
-                            } else {
-                                XaiLoginProgress::Failed
-                            }
+            let failed_sessions = sessions.clone();
+            let failed_id = id.clone();
+            if let Err(error) = crate::persistence::run_core_sync(move || {
+                if let Ok(mut state) = sessions.lock() {
+                    if let Some(login) = state.get_mut(&id) {
+                        if login.progress != XaiLoginProgress::Pending {
+                            return Ok(());
                         }
-                        _ if cancel.is_cancelled() || !current() => XaiLoginProgress::Cancelled,
-                        _ => XaiLoginProgress::Failed,
-                    };
+                        login.progress = match result {
+                            Some(Ok(Ok(bundle))) if !cancel.is_cancelled() && current() => {
+                                if authorize_commit().is_ok()
+                                    && install_bundle(&root, &bundle).is_ok()
+                                {
+                                    XaiLoginProgress::Accepted
+                                } else {
+                                    XaiLoginProgress::Failed
+                                }
+                            }
+                            _ if cancel.is_cancelled() || !current() => XaiLoginProgress::Cancelled,
+                            _ => XaiLoginProgress::Failed,
+                        };
+                    }
+                }
+                Ok(())
+            })
+            .await
+            {
+                // No provider credential material is included in diagnostics.
+                eprintln!(
+                    "Grok login persistence failed: {}",
+                    error
+                        .downcast_ref::<crate::persistence::CoreSyncError>()
+                        .map(ToString::to_string)
+                        .unwrap_or_else(|| "owner job failed".into())
+                );
+                if let Ok(mut sessions) = failed_sessions.lock() {
+                    if let Some(login) = sessions.get_mut(&failed_id) {
+                        if login.progress == XaiLoginProgress::Pending {
+                            login.progress = XaiLoginProgress::Failed;
+                        }
+                    }
                 }
             }
         });
@@ -211,7 +235,11 @@ impl CtoxXaiLogin {
     pub async fn remove(&self) -> anyhow::Result<()> {
         self.cancel_all();
         let _guard = AUTH_USE.lock().await;
-        crate::secrets::delete_secret_record(&self.root, SCOPE, NAME)
+        let root = self.root.clone();
+        crate::persistence::run_core_sync(move || {
+            crate::secrets::delete_secret_record(&root, SCOPE, NAME)
+        })
+        .await
     }
     fn set_progress(&self, id: &str, value: XaiLoginProgress) {
         if let Ok(mut sessions) = self.sessions.lock() {
@@ -582,21 +610,30 @@ async fn active_record(
     root: &Path,
     client: &native_http::Client,
 ) -> Result<Stored, GrokCatalogFailure> {
-    let encoded = crate::secrets::read_secret_value_optional(root, SCOPE, NAME)
-        .map_err(|error| {
-            GrokCatalogFailure::new(
-                match error {
-                    crate::secrets::SecretReadError::Unavailable => {
-                        GrokCatalogErrorKind::SecretStoreUnavailable
-                    }
-                    _ => GrokCatalogErrorKind::InvalidCredential,
-                },
-                "credential",
-            )
-        })?
-        .ok_or_else(|| {
-            GrokCatalogFailure::new(GrokCatalogErrorKind::AccountNotConfigured, "credential")
-        })?;
+    let work = root.to_owned();
+    let encoded = crate::persistence::run_core_sync(move || {
+        Ok(crate::secrets::read_secret_value_optional(
+            &work, SCOPE, NAME,
+        ))
+    })
+    .await
+    .map_err(|_| {
+        GrokCatalogFailure::new(GrokCatalogErrorKind::SecretStoreUnavailable, "credential")
+    })?
+    .map_err(|error| {
+        GrokCatalogFailure::new(
+            match error {
+                crate::secrets::SecretReadError::Unavailable => {
+                    GrokCatalogErrorKind::SecretStoreUnavailable
+                }
+                _ => GrokCatalogErrorKind::InvalidCredential,
+            },
+            "credential",
+        )
+    })?
+    .ok_or_else(|| {
+        GrokCatalogFailure::new(GrokCatalogErrorKind::AccountNotConfigured, "credential")
+    })?;
     let encoded = Zeroizing::new(encoded);
     let mut record: Stored = serde_json::from_str(&encoded).map_err(|_| {
         GrokCatalogFailure::new(GrokCatalogErrorKind::InvalidCredential, "credential")
@@ -663,21 +700,19 @@ async fn active_record(
             redirect_uri: String::new(),
             token_endpoint: record.token_endpoint.clone(),
         };
-        save_bundle(root, &bundle).map_err(|_| {
+        let work = root.to_owned();
+        let refreshed = crate::persistence::run_core_sync(move || {
+            save_bundle(&work, &bundle)?;
+            crate::secrets::read_secret_value(&work, SCOPE, NAME)
+        })
+        .await
+        .map_err(|_| {
             GrokCatalogFailure::new(
                 GrokCatalogErrorKind::SecretStoreUnavailable,
                 "token_refresh",
             )
         })?;
-        record = serde_json::from_str(&Zeroizing::new(
-            crate::secrets::read_secret_value(root, SCOPE, NAME).map_err(|_| {
-                GrokCatalogFailure::new(
-                    GrokCatalogErrorKind::SecretStoreUnavailable,
-                    "token_refresh",
-                )
-            })?,
-        ))
-        .map_err(|_| {
+        record = serde_json::from_str(&Zeroizing::new(refreshed)).map_err(|_| {
             GrokCatalogFailure::new(GrokCatalogErrorKind::InvalidCredential, "token_refresh")
         })?;
     }
@@ -696,9 +731,12 @@ async fn discover_models_detailed(root: &Path) -> Result<Vec<String>, GrokCatalo
         .build()
         .map_err(|_| GrokCatalogFailure::new(GrokCatalogErrorKind::Transport, "client"))?;
     let record = active_record(root, &client).await?;
-    let catalog_binding = credential_binding(root).map_err(|_| {
-        GrokCatalogFailure::new(GrokCatalogErrorKind::SecretStoreUnavailable, "credential")
-    })?;
+    let work = root.to_owned();
+    let catalog_binding = crate::persistence::run_core_sync(move || credential_binding(&work))
+        .await
+        .map_err(|_| {
+            GrokCatalogFailure::new(GrokCatalogErrorKind::SecretStoreUnavailable, "credential")
+        })?;
     let mut auth = Auth::default();
     auth.attributes.insert("auth_kind".into(), "oauth".into());
     auth.attributes
@@ -737,9 +775,12 @@ async fn discover_models_detailed(root: &Path) -> Result<Vec<String>, GrokCatalo
         }
         bytes.extend_from_slice(&chunk);
     }
-    let current = credential_binding(root).map_err(|_| {
-        GrokCatalogFailure::new(GrokCatalogErrorKind::SecretStoreUnavailable, "credential")
-    })?;
+    let work = root.to_owned();
+    let current = crate::persistence::run_core_sync(move || credential_binding(&work))
+        .await
+        .map_err(|_| {
+            GrokCatalogFailure::new(GrokCatalogErrorKind::SecretStoreUnavailable, "credential")
+        })?;
     if current != catalog_binding {
         return Err(GrokCatalogFailure::new(
             GrokCatalogErrorKind::CredentialChanged,
