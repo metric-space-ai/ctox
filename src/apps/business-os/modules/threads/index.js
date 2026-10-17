@@ -1442,7 +1442,7 @@ function selectedSourceContext() {
     module: thread.source_module || 'threads',
     record_type: thread.source_record_type || 'thread',
     record_id: thread.source_record_id || thread.id,
-    label: threadDisplayTitle(thread, threadsLang()),
+    label: thread.source_label || thread.title || thread.id,
     deep_link: thread.source_deep_link || link?.deep_link || '',
   };
 }

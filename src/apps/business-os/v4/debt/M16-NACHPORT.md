@@ -450,3 +450,28 @@ Regel: Für nach v4 portierte Apps blieb der v4-Stand; Blöcke, in denen main me
 - `modules/threads/index.css`: Regel „keine Zahlen hinter Tabs“ (workjet#801) auf `[data-app="threads"]` eingeschränkt übernommen.
 - `shared/sync.js`: v4-Seite behalten (Fähigkeits-Token aus `kernel/session.mjs`, V3-Kompatibilität bis Cutover); main nutzte noch `command-bus.js`.
 
+
+## Zweite Runde (Gate ROT auf 1b7b40b55): automatisch übernommene main-Teile in portierten Apps zurückgenommen
+
+git hatte main-Änderungen außerhalb der Konfliktblöcke in diese v4-Dateien gemischt (V2-Code im v4-Modul, news startete nicht). Sie stehen jetzt komplett auf d5e424dd2; die main-Änderung je Datei ist `git diff 4794af03d 2ce94bd22 -- <datei>` (Nachport):
+
+- `customer-modules/outbound-lead-generation/index.css` (+5 −2)
+- `customer-modules/outbound-lead-generation/index.js` (+106 −177)
+- `modules/app-store/index.js` (+1 −1)
+- `modules/ctox/index.js` (+37 −8)
+- `modules/news/core/news-model.mjs` (+88 −9)
+- `modules/news/index.css` (+14 −0)
+- `modules/news/index.html` (+17 −13)
+- `modules/news/index.js` (+306 −21)
+- `modules/news/locales/de.json` (+11 −1)
+- `modules/news/locales/en.json` (+11 −1)
+- `modules/news/tests/news.test.mjs` (+51 −0)
+- `modules/threads/index.css` (+5 −0)
+- `modules/threads/index.html` (+9 −9)
+- `modules/threads/index.js` (+37 −4)
+
+Nicht zurückgenommen (bewusst): `customer-modules/outbound-lead-generation/module.json` steht auf dem main-Stand aus dem Merge – Kern E60(b): Unterschied nur die Version (1.0.317 → 1.0.323), Versionen steigen nur; sonst unangetastet. Neue main-Dateien der OLG (`adapter-dedupe.mjs`, `stacked-detail-reveal.mjs` und ihre `scripts/tests/*`) bleiben; der v4-Stand von `index.js` importiert sie nicht (V2-Funktionen, Nachport).
+
+## Befund unter Last
+
+- Mail-QA `editor.undo-redo`: im parallelen Gate-Lauf fehlte der letzte getippte Buchstabe dauerhaft („…Kampagneninhal“), allein 2/2 grün. Verdacht: EasyEmail-`debounce(200)` verliert unter Last den letzten Tastendruck. Eigener Punkt nach Zug 16.

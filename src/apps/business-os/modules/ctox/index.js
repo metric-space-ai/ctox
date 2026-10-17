@@ -4200,18 +4200,7 @@ function humanTaskActionError(error, t) {
   const message = String(error?.message || error || '');
   if (error?.code === 'forbidden' || /forbidden/i.test(message)) return t.chefAdminOnly;
   if (message.includes('403') || /chef|admin/i.test(message)) return t.chefAdminOnly;
-  return taskRejectionReason(message, error?.code, t) || t.taskActionFailed;
-}
-
-// Name why native refused a task control instead of a bare "failed".
-function taskRejectionReason(message, code, t) {
-  if (/retry requires a failed or blocked task/i.test(message)) return t.rejectNotFailed;
-  if (/active leases must finish/i.test(message)) return t.rejectLeased;
-  if (/queue task not found/i.test(message)) return t.rejectNotFound;
-  if (code === 'timeout' || /timed? ?out/i.test(message)) return t.rejectTimeout;
-  const reason = message.replace(/^Error:\s*/, '').trim();
-  if (!reason) return '';
-  return t.taskActionRejected.replace('{reason}', reason.length > 200 ? `${reason.slice(0, 199)}…` : reason);
+  return t.taskActionFailed;
 }
 
 function flowNodeDrawer(node, task, state) {

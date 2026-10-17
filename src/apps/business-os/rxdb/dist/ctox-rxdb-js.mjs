@@ -12939,8 +12939,8 @@ var CtoxWebRtcReplicationState = class {
     for (const document2 of documents) {
       let master = null;
       try {
-        const record = await storage.getStoredRecord(primaryValue(document2, primaryPath));
-        master = record?.replicationOriginRole ? null : record?.base || null;
+        const record2 = await storage.getStoredRecord(primaryValue(document2, primaryPath));
+        master = record2?.replicationOriginRole ? null : record2?.base || null;
       } catch {
       }
       rebased.push(master ? rebaseNativeOwnedFields(this.collection.name, document2, master) : document2);
@@ -12983,8 +12983,8 @@ var CtoxWebRtcReplicationState = class {
             query: { selector, sort: [], limit: chunk.length, skip: 0 },
             window: window2
           }),
-          new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error("native-owned master fetch timed out")), NATIVE_OWNED_MASTER_FETCH_TIMEOUT_MS);
+          new Promise((_, reject2) => {
+            timer = setTimeout(() => reject2(new Error("native-owned master fetch timed out")), NATIVE_OWNED_MASTER_FETCH_TIMEOUT_MS);
           })
         ]);
         for (const document2 of Array.isArray(result?.documents) ? result.documents : []) {

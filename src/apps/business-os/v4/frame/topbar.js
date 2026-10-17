@@ -37,7 +37,7 @@ const TABS_CSS = `
 :where([data-v4-topbar]) .topbar .module-tab-count[hidden] { display: none; }
 :where([data-v4-topbar]) .module-tabs.is-drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: 6px; }
 :where([data-v4-topbar]) .module-tab.is-drop-before { box-shadow: inset 2px 0 0 var(--accent); }
-@media (max-width: 559.98px) { :where([data-v4-topbar]) [data-v4-settings-button] { display: none; } }
+@media (max-width: 559.98px) { :where([data-v4-topbar]) .topbar .app-menu-button[data-v4-settings-button] { display: none; } } /* (0,3,0): schlägt .topbar .app-menu-button der V2-Kopfleiste (main, Zug 16m) */
 .v4f-task-menu {
   position: fixed; z-index: 9600; min-width: 200px; max-width: min(320px, calc(100vw - 16px)); max-height: 60vh;
   overflow: auto; padding: 4px; box-sizing: border-box; display: flex; flex-direction: column; gap: 1px;
