@@ -17,8 +17,9 @@ if(!out.startsWith(allowed+'/')||!expected.startsWith(allowed+'/'))throw Error('
 const digest=x=>createHash('sha256').update(x).digest('hex');
 const r={startedAtMs:Date.now(),terminal:false,pass:false,criteria:[],console:[],pageErrors:[],requestsFailed:[]};let browser;
 const pendingSignaling=process.env.M7_EXPECT_SIGNALING_DEPLOY==='1';
+const browserSignalingBlocked=()=>r.browserBoot?.stage==='boot'&&r.browserBoot.reason==='launch_context_unavailable'&&r.browserResponses?.some(x=>x.path==='/api/business-os/launch-context'&&x.status===503);
 const criterion=(id,pass,details)=>{
- const blocked=pendingSignaling&&!pass&&((id.startsWith('launch-context')&&(details.httpStatus===503||details.http503===20))||((id==='browser-boot'||(id==='platform-command-roundtrip'&&details.submitted===false))&&r.launchSeries?.every(x=>x.samples.every(s=>s.httpStatus===503))));
+ const blocked=pendingSignaling&&!pass&&((id.startsWith('launch-context')&&(details.httpStatus===503||details.http503===20))||(id==='browser-boot'&&browserSignalingBlocked()));
  r.criteria.push({id,status:blocked?'not_run':pass?'pass':'fail',...(blocked?{reason:'signaling-deploy',observed:'blocked by expected HTTP503; never a passing launch claim'}:{}),...details});
 };
 const save=()=>fs.writeFileSync(join(out,'smoke.json'),JSON.stringify(r,null,2),{mode:0o600});
@@ -73,10 +74,17 @@ try{
  const context=await browser.newContext();await context.addInitScript(()=>{globalThis.__CTOX_V4_BOOT_MANUAL__=true;});const page=await context.newPage();
  page.on('console',message=>{if(message.type()==='error'){const text=message.text();r.console.push({type:'error',sha256:digest(text),v4BootError:text.includes('[ctox v4 boot]')});}});
  page.on('pageerror',error=>r.pageErrors.push({name:error.name,sha256:digest(error.message)}));
- page.on('requestfailed',request=>r.requestsFailed.push({path:new URL(request.url()).pathname}));
+ r.browserResponses=[];
+ page.on('response',response=>{if(response.status()>=400)r.browserResponses.push({path:new URL(response.url()).pathname,status:response.status()});});
+ page.on('requestfailed',request=>{const code=request.failure()?.errorText;r.requestsFailed.push({path:new URL(request.url()).pathname,...(/^net::[A-Z0-9_]+$/.test(code||'')?{code}:{})});});
  const at=Date.now();let frame=false,navigationStatus=null,errorClass;
- try{const response=await page.goto(base,{waitUntil:'domcontentloaded',timeout:10000});navigationStatus=response?.status();await page.evaluate(async()=>{const {boot}=await import('/business-os/v4/boot.js');globalThis.__m7Boot=await Promise.race([boot(),new Promise((_,reject)=>setTimeout(()=>reject(Error('private boot deadline')),25000))]);});await page.locator('[data-v4-frame]').waitFor({state:'attached',timeout:25000});frame=true;}catch(error){errorClass=error.name;}
+ try{const response=await page.goto(base,{waitUntil:'domcontentloaded',timeout:10000});navigationStatus=response?.status();r.browserBoot=await page.evaluate(async()=>{
+    let stage='import';const safe=v=>typeof v==='string'&&/^[a-zA-Z0-9_.:-]{1,100}$/.test(v)?v:null;
+    try{const {boot}=await import('/business-os/v4/boot.js');stage='boot';globalThis.__m7Boot=await Promise.race([boot(),new Promise((_,reject)=>setTimeout(()=>reject(Error('private boot deadline')),25000))]);return{ok:true,stage};}
+    catch(error){return{ok:false,stage,name:safe(error.name),code:safe(error.code),reason:safe(error.reason)};}
+   });if(!r.browserBoot.ok)throw Error('Typed private browser boot failure');await page.locator('[data-v4-frame]').waitFor({state:'attached',timeout:25000});frame=true;}catch(error){errorClass=error.name;}
  const visible=frame?await page.locator('[data-v4-frame]').first().evaluate(el=>({shellVersion:el.dataset.shellVer,visible:!!el.getBoundingClientRect().width})):null;
+ criterion('browser-static-http',r.browserResponses.every(x=>x.path==='/api/business-os/launch-context'&&x.status===503),{failures:r.browserResponses.filter(x=>x.path!=='/api/business-os/launch-context')});
  criterion('browser-boot',frame&&navigationStatus===200&&!r.console.some(x=>x.v4BootError),{durationMs:Date.now()-at,navigationStatus,frame,visible,errorClass});
  if(frame){
   const command=await page.evaluate(async()=>{
@@ -86,7 +94,7 @@ try{
    const status=h.status.get();return {commandId:h.id,type:'ctox.workjet.device.v1',terminalStatus:status.status,localMs,acceptedMs,terminalMs:performance.now()-begin};
   }).catch(error=>({terminalStatus:'failed',errorClass:error.name}));
   criterion('platform-command-roundtrip',command.terminalStatus==='done',command);
- }else criterion('platform-command-roundtrip',false,{observed:'Browser did not boot; no command was submitted',submitted:false});
+ }else r.criteria.push({id:'platform-command-roundtrip',status:'not_run',reason:pendingSignaling&&browserSignalingBlocked()?'signaling-deploy':'browser-boot',observed:'Browser did not boot; no command was submitted',submitted:false});
  r.visualEvidence='whitelisted frame/visibility metadata only; no session or grant-bearing screenshot';await context.close();
  r.pass=r.criteria.every(x=>x.status==='pass');
 }catch(error){r.errorClass=error.name;r.errorSha256=digest(String(error.message));criterion('runner-completed',false,{phase:r.phase||'setup',errorClass:error.name});}

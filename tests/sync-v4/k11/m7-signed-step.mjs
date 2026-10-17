@@ -45,7 +45,7 @@ export async function performDressSmoke({config,root,output,env,cli,quiesce,phas
   result.smokeExit=child.status;result.smokeError=child.error?.message;
   if(fs.existsSync(join(out,'smoke.json')))result.smoke=JSON.parse(fs.readFileSync(join(out,'smoke.json')));
   const commandCriterion=result.smoke?.criteria?.find(c=>c.id==='platform-command-roundtrip');
-  result.commandNativeReceipt={status:'not_run',owner:'signaling-deploy',reason:'No successful kernel command; no native receipt claimed'};
+  result.commandNativeReceipt={status:'not_run',owner:commandCriterion?.reason||'browser-boot',reason:'No successful kernel command; no native receipt claimed'};
   if(commandCriterion?.status==='pass'){
    const file=join(out,'native-command-receipt.json'),log=fs.openSync(join(out,'native-command-readback.log'),'w',0o600);
    const read=spawnSync('python3',[new URL('./m7-command-readback.py',import.meta.url).pathname,'--root',root,'--id',commandCriterion.commandId,'--output',file],{env,stdio:['ignore',log,log],timeout:30000});fs.closeSync(log);
