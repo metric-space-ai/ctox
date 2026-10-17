@@ -1,8 +1,8 @@
 <main class="ctox-workspace ctox-workspace--two-pane ctox-harness-app" data-ctox-harness data-resize-frame>
   <!-- The task column chrome (canonical data-pg grammar) is built once by the
        module in JS (buildTaskColumn → taskColumnMarkup) so it is localized and
-       is never rebuilt on data refresh — the shell wires the data-pg-* markup
-       and the module only refreshes the list inside the well. -->
+       is never rebuilt on data refresh. v4: the app wires the data-pg-* markup
+       itself (autoWirePaneGrammar(root)) and its own column resizer. -->
   <aside class="ctox-pane ctox-harness-left" data-ctox-left aria-label="Aufgaben der Crew"></aside>
   <button class="ctox-column-resizer" type="button" data-ctox-column-resizer data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="220" data-resizer-max="560" aria-label="Aufgabenspalte verbreitern oder verkleinern"></button>
   <section class="ctox-pane ctox-harness-main" data-ctox-main aria-label="Crew im Einsatz">
@@ -12,7 +12,6 @@
         <div class="ctox-pane-actions"></div>
       </div>
     </header>
-    <div class="ctox-pane-body ctox-flow-well"><div class="ctox-empty">Arbeitsstand wird geladen.</div></div>
-    <footer class="ctox-harness-footer">Crew · noch keine aktuellen Daten</footer>
+    <div class="ctox-pane-body ctox-flow-well"></div>
   </section>
 </main>

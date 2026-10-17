@@ -1,6 +1,35 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { __shiftflowTestHooks as hooks } from './index.js';
+import { Buffer } from 'node:buffer';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+// v4: index.js importiert `ctox:shared/…` (nur über den Service Worker auflösbar, §16.15) → esbuild-Bundle mit
+// onResolve-Plugin. esbuild aus src/apps/business-os/node_modules, sonst ESBUILD_MODULE bzw. dem Haupt-Checkout.
+async function loadEsbuild() {
+  try { return await import('esbuild'); } catch (error) {
+    if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+    const require = createRequire(import.meta.url);
+    return require(process.env.ESBUILD_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/esbuild'));
+  }
+}
+const { build } = await loadEsbuild();
+const bundled = await build({
+  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  write: false,
+  plugins: [{
+    name: 'ctox-shared',
+    setup(b) {
+      b.onResolve({ filter: /^ctox:shared\// }, (args) => ({ path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)) }));
+    },
+  }],
+});
+const { __shiftflowTestHooks: hooks } = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`);
 
 const {
   filterShiftflowEmployeesForPlanner,
@@ -8,8 +37,6 @@ const {
   getWeekBoundsMs,
   applyShiftListSelection,
   collectPlanningConflicts,
-  dataDrivenEmptyHtml,
-  setShiftflowReadinessForTests,
 } = hooks;
 
 const tests = [];
@@ -65,7 +92,8 @@ test('week publish bounds cover exactly seven days', () => {
 });
 
 test('presentation follows compact Business OS planning contract', async () => {
-  const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
+  // v4: Selektoren sind unter [data-app="shiftflow"] gescoped; die Regeln dahinter prüfen wir unverändert.
+  const css = (await readFile(new URL('./index.css', import.meta.url), 'utf8')).replaceAll('[data-app="shiftflow"] ', '');
   const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
 
   assert.doesNotMatch(css, /Premium/);
@@ -89,7 +117,8 @@ test('presentation follows compact Business OS planning contract', async () => {
 
 test('IA is a canonical shift list plus planning board with conflicts in the main band', async () => {
   const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
-  const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
+  // v4: Selektoren sind unter [data-app="shiftflow"] gescoped; die Regeln dahinter prüfen wir unverändert.
+  const css = (await readFile(new URL('./index.css', import.meta.url), 'utf8')).replaceAll('[data-app="shiftflow"] ', '');
   const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
   const manifest = JSON.parse(await readFile(new URL('./module.json', import.meta.url), 'utf8'));
 
@@ -106,7 +135,7 @@ test('IA is a canonical shift list plus planning board with conflicts in the mai
   assert.match(html, /data-pg-reset/);
   assert.equal((html.match(/data-pg-band=/g) || []).length, 2);
   assert.match(html, /class="ctox-pane-body ctox-well"/);
-  assert.match(html, /class="ctox-pane-footer"/);
+  assert.doesNotMatch(html, /data-pg-footer/, 'keine Fußzeile, die nur den Reiterzähler wiederholt');
   assert.match(html, /id="addShiftBtn"[\s\S]*id="importShiftsBtn"[\s\S]*id="exportShiftsBtn"/);
   assert.match(html, /data-main-view="conflicts"[\s\S]*data-main-count="conflicts"/);
   assert.doesNotMatch(html, /shiftflow-right-pane|data-resizer="right"/);
@@ -127,9 +156,9 @@ test('IA is a canonical shift list plus planning board with conflicts in the mai
   assert.match(css, /\.shiftflow-shift-list\.is-cards \[data-shift-meta="brief"\]\s*\{[\s\S]*?display:\s*none/);
   assert.match(css, /\.shiftflow-shift-list\.is-list \[data-shift-meta="when"\],\s*\.shiftflow-shift-list\.is-list \[data-shift-meta="who"\]\s*\{[\s\S]*?display:\s*none/);
   assert.doesNotMatch(js, /window\.dispatchEvent|ctox-business-os-chat-submit/);
-  assert.match(js, /const markupVersion = String\(import\.meta\.url\)\.split\('\?v='\)\[1\] \|\| MOD_BUILD/);
-  assert.match(js, /const markupHref = new URL\('\.\/index\.html', import\.meta\.url\)\.pathname \+ \(markupVersion \? `\?v=\$\{markupVersion\}` : ''\)/);
-  assert.match(js, /const cssVersion = String\(import\.meta\.url\)\.split\('\?v='\)\[1\] \|\| MOD_BUILD/);
+  // v4 (R10): Markup relativ ohne Cache-Buster, CSS lädt die Shell aus dem Manifest.
+  assert.match(js, /fetch\(new URL\('\.\/index\.html', import\.meta\.url\)\)/);
+  assert.doesNotMatch(js, /\?v=|MOD_BUILD|ensureStyles/);
   assert.match(js, /data-open-employee-id/);
   assert.match(js, /addEventListener\('dragstart'/);
   assert.match(js, /quick-assign-day-btn/);
@@ -189,27 +218,11 @@ test('conflict collection preserves overlap, rest, daily and assignment rules', 
   assert.ok(conflicts.some((entry) => entry.type === 'daily_hours'));
 });
 
-test('data-driven empties render the syncing shell only while the source collection is unready', () => {
-  const emptyHtml = '<div class="ctox-empty">Keine Schichten für diese Ansicht.</div>';
-
-  // Empty source + unready collection ⇒ syncing shell, not "no data".
-  setShiftflowReadinessForTests('planning_shifts', { collection: 'planning_shifts', state: 'catching-up', ready: false, syncing: true, updatedAt: null });
-  const syncing = dataDrivenEmptyHtml('planning_shifts', 0, emptyHtml);
-  assert.match(syncing, /class="ctox-syncing"/);
-  assert.match(syncing, /role="status"/);
-  assert.doesNotMatch(syncing, /ctox-empty/);
-
-  // Empty source + live collection ⇒ canonical empty state.
-  setShiftflowReadinessForTests('planning_shifts', { collection: 'planning_shifts', state: 'live', ready: true, syncing: false, updatedAt: 1 });
-  assert.equal(dataDrivenEmptyHtml('planning_shifts', 0, emptyHtml), emptyHtml);
-
-  // Non-empty source ⇒ filter/selection empty keeps its markup even when unready.
-  setShiftflowReadinessForTests('planning_shifts', { collection: 'planning_shifts', state: 'catching-up', ready: false, syncing: true, updatedAt: null });
-  assert.equal(dataDrivenEmptyHtml('planning_shifts', 3, emptyHtml), emptyHtml);
-
-  // No readiness snapshot (older shell/test harness) ⇒ previous behavior.
-  setShiftflowReadinessForTests('planning_shifts', null);
-  assert.equal(dataDrivenEmptyHtml('planning_shifts', 0, emptyHtml), emptyHtml);
+// v4-Vertrag (PORTING.md R4/R11): keine Readiness, kein Synchronisierungs- oder Leertext im Inhalt.
+test('no readiness path and empty sources render no state text', async () => {
+  const js = await readFile(new URL('./index.js', import.meta.url), 'utf8');
+  assert.doesNotMatch(js, /ctox-syncing|ctox-empty|subscribeCollectionReadiness|collectionReadiness|dataDrivenEmptyHtml|ctx\.db|commandBus/);
+  assert.equal('dataDrivenEmptyHtml' in hooks, false);
 });
 
 let passed = 0;

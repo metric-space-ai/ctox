@@ -1,3 +1,9 @@
+/* v4: Der Fenster-Container der Shell (business-app-window) liegt ausserhalb von root; das App-root ist
+   selbst Container, damit die Breiten-Haltepunkte (1024/768 px) im Inhaltsbereich greifen. */
+[data-app="cv-print-builder"] {
+  container: business-app-window / inline-size;
+}
+
 /* cv-print-builder — module CSS.
    Standard chrome (workspace, panes, pane headers, tools, search, filter,
    buttons, badges, tabs, fields, empty states) comes from shared/base.css +
@@ -8,11 +14,11 @@
 /* 344px, not 332: the V2 head is ONE 37px row that already gives up 94px to the
    app icon and carries four action icons, so a narrower default column left the
    version-menu title ellipsized at 76px against an 84px word (measured). */
-.cv-print-builder {
+[data-app="cv-print-builder"] .cv-print-builder {
   --ctox-left-width: 344px;
 }
 
-.cv-hidden-input {
+[data-app="cv-print-builder"] .cv-hidden-input {
   display: none;
 }
 
@@ -22,27 +28,43 @@
    head exactly one 37px row. The chrome itself is shell-owned
    (base.css .ctox-filterbar / .ctox-view-switch / .ctox-well /
    .ctox-pane-footer) — this module writes no chrome CSS. */
-.cv-sidebar {
+[data-app="cv-print-builder"] .cv-sidebar {
   grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
+  /* v4 (Bildschirmfoto 1280): ohne explizite Spalte weitete die Reiterleiste (min-width: max-content, 345 px)
+     die Spur auf 369 px über die 344-px-Spalte; Karten, Reiter und Kopf-Icons wurden rechts abgeschnitten. */
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* VIS4: the status band wraps into a second row instead of scrolling sideways
+   when the sidebar column is narrower than the four counted tabs (396 > 342 px
+   at window 1280/900). No horizontal scroller outside real data tables. */
+[data-app="cv-print-builder"] .cv-sidebar > .ctox-view-switch {
+  min-width: 0;
+}
+
+[data-app="cv-print-builder"] .cv-sidebar > .ctox-view-switch > .ctox-pane-tabs {
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
 }
 
 /* Explicit rows: the tray is `hidden` most of the time and would otherwise
    pull the well out of the 1fr track. */
-.cv-sidebar > .ctox-pane-header { grid-row: 1; }
-.cv-sidebar > .ctox-filterbar { grid-row: 2; }
-.cv-sidebar > .ctox-filter-tray { grid-row: 3; }
-.cv-sidebar > .ctox-view-switch { grid-row: 4; }
-.cv-sidebar > .ctox-pane-body { grid-row: 5; }
-.cv-sidebar > .ctox-pane-footer { grid-row: 6; }
+[data-app="cv-print-builder"] .cv-sidebar > .ctox-pane-header { grid-row: 1; }
+[data-app="cv-print-builder"] .cv-sidebar > .ctox-filterbar { grid-row: 2; }
+[data-app="cv-print-builder"] .cv-sidebar > .ctox-filter-tray { grid-row: 3; }
+[data-app="cv-print-builder"] .cv-sidebar > .ctox-view-switch { grid-row: 4; }
+[data-app="cv-print-builder"] .cv-sidebar > .ctox-pane-body { grid-row: 5; }
+[data-app="cv-print-builder"] .cv-sidebar > .ctox-pane-footer { grid-row: 6; }
 
 /* custom: the card/list switch is ONE control, so it is a plain filterbar icon
    and not a .ctox-view-toggle group. It carries no aria-pressed — the kit's
    pressed fill would read as state on what is an action. */
-.cv-view-toggle {
+[data-app="cv-print-builder"] .cv-view-toggle {
   flex: 0 0 auto;
 }
 
-.cv-candidate-list {
+[data-app="cv-print-builder"] .cv-candidate-list {
   display: grid;
   align-content: start;
   gap: 6px;
@@ -51,7 +73,7 @@
 
 /* List view = maximum density: no gap between rows, minimal well padding, so
    the rows read as one continuous ledger instead of a stack of cards. */
-.cv-candidate-list.is-compact {
+[data-app="cv-print-builder"] .cv-candidate-list.is-compact {
   gap: 0;
   padding: 2px 4px;
 }
@@ -59,7 +81,7 @@
 /* Shard = pure selector: avatar + bold name + two muted meta lines. Roomier
    than the list row on purpose (scanning vs. density). Selection is an accent
    fill plus a flat 2px ::before bar (no inset shadow — kit guard). */
-.cv-card {
+[data-app="cv-print-builder"] .cv-card {
   position: relative;
   width: 100%;
   display: grid;
@@ -76,16 +98,16 @@
   cursor: pointer;
 }
 
-.cv-card:hover {
+[data-app="cv-print-builder"] .cv-card:hover {
   background: var(--kit-hover);
 }
 
-.cv-card.is-selected {
+[data-app="cv-print-builder"] .cv-card.is-selected {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
   background: var(--accent-soft);
 }
 
-.cv-card.is-selected::before {
+[data-app="cv-print-builder"] .cv-card.is-selected::before {
   content: "";
   position: absolute;
   inset: 0 auto 0 0;
@@ -94,11 +116,11 @@
   background: var(--accent);
 }
 
-.cv-card-info {
+[data-app="cv-print-builder"] .cv-card-info {
   min-width: 0;
 }
 
-.cv-card-name {
+[data-app="cv-print-builder"] .cv-card-name {
   margin: 0 0 3px;
   overflow: hidden;
   color: var(--text);
@@ -111,7 +133,7 @@
 
 /* Two meta lines: the workflow status line carries the record's weight, the
    sub line (template · location · last change) recedes. */
-.cv-card-meta {
+[data-app="cv-print-builder"] .cv-card-meta {
   overflow: hidden;
   color: var(--muted);
   font-size: 11.5px;
@@ -120,22 +142,22 @@
   white-space: nowrap;
 }
 
-.cv-card-meta--phase {
+[data-app="cv-print-builder"] .cv-card-meta--phase {
   color: color-mix(in srgb, var(--text) 72%, var(--muted));
   font-weight: 620;
 }
 
-.cv-card-meta--sub {
+[data-app="cv-print-builder"] .cv-card-meta--sub {
   margin-top: 1px;
   font-size: 11px;
-  opacity: 0.82;
+  /* DARK: keine zusätzliche Abschwächung (opacity 0.82 ergab Kontrast 3,4). */
 }
 
 /* Compact row variant (list view toggle) — exactly ONE dense line: name plus a
    single short meta flush right. Tight leading, no card fill, no border radius;
    hairline separators make the run of rows read as a ledger. Same 2px accent
    selection bar as the shard. */
-.cv-row {
+[data-app="cv-print-builder"] .cv-row {
   position: relative;
   width: 100%;
   display: flex;
@@ -155,19 +177,19 @@
   cursor: pointer;
 }
 
-.cv-row:last-child {
+[data-app="cv-print-builder"] .cv-row:last-child {
   border-bottom: 0;
 }
 
-.cv-row:hover {
+[data-app="cv-print-builder"] .cv-row:hover {
   background: var(--kit-hover);
 }
 
-.cv-row.is-selected {
+[data-app="cv-print-builder"] .cv-row.is-selected {
   background: var(--accent-soft);
 }
 
-.cv-row.is-selected::before {
+[data-app="cv-print-builder"] .cv-row.is-selected::before {
   content: "";
   position: absolute;
   inset: 0 auto 0 0;
@@ -175,7 +197,7 @@
   background: var(--accent);
 }
 
-.cv-row-name {
+[data-app="cv-print-builder"] .cv-row-name {
   min-width: 0;
   overflow: hidden;
   color: var(--text);
@@ -186,7 +208,7 @@
   white-space: nowrap;
 }
 
-.cv-row-meta {
+[data-app="cv-print-builder"] .cv-row-meta {
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 11px;
@@ -194,7 +216,7 @@
 }
 
 /* custom: inline pill linking a parsing card to its CTOX flow task. */
-.cv-task-link {
+[data-app="cv-print-builder"] .cv-task-link {
   min-width: 0;
   border: 0;
   border-radius: 999px;
@@ -212,19 +234,19 @@
   font-weight: 700;
 }
 
-.cv-task-link span {
+[data-app="cv-print-builder"] .cv-task-link span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
-.cv-task-link:hover,
-.cv-task-link:focus-visible {
+[data-app="cv-print-builder"] .cv-task-link:hover,
+[data-app="cv-print-builder"] .cv-task-link:focus-visible {
   background: color-mix(in srgb, var(--accent) 20%, transparent);
   outline: none;
 }
 
-.cv-task-link.is-error {
+[data-app="cv-print-builder"] .cv-task-link.is-error {
   background: var(--danger-soft);
   color: var(--danger);
 }
@@ -232,25 +254,25 @@
 /* Workbench pane = the stage: a header (identity + element actions + the
    view-switch/template controls) that only exists with a revealed selection,
    over the stage body. */
-.cv-workbench {
+[data-app="cv-print-builder"] .cv-workbench {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 /* Head band / controls / stage — explicit, because head and controls are
    hidden together whenever no CV is revealed. */
-.cv-workbench > .ctox-pane-header { grid-row: 1; }
-.cv-workbench > .cv-stage-controls { grid-row: 2; }
-.cv-workbench > .cv-stage { grid-row: 3; }
+[data-app="cv-print-builder"] .cv-workbench > .ctox-pane-header { grid-row: 1; }
+[data-app="cv-print-builder"] .cv-workbench > .cv-stage-controls { grid-row: 2; }
+[data-app="cv-print-builder"] .cv-workbench > .cv-stage { grid-row: 3; }
 
-.cv-stage-head[hidden] {
+[data-app="cv-print-builder"] .cv-stage-head[hidden] {
   display: none;
 }
 
-.cv-stage-head[hidden] + .cv-stage-controls {
+[data-app="cv-print-builder"] .cv-stage-head[hidden] + .cv-stage-controls {
   display: none;
 }
 
-.cv-print-builder > .cv-workbench > .cv-stage-controls {
+[data-app="cv-print-builder"] .cv-print-builder > .cv-workbench > .cv-stage-controls {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -258,17 +280,17 @@
   padding: 0 12px 8px;
 }
 
-.cv-view-switch-tabs {
+[data-app="cv-print-builder"] .cv-view-switch-tabs {
   display: flex;
   flex: 0 0 auto;
 }
 
-.cv-template-select {
+[data-app="cv-print-builder"] .cv-template-select {
   flex: 0 0 auto;
   max-width: 180px;
 }
 
-.cv-stage-foot {
+[data-app="cv-print-builder"] .cv-stage-foot {
   flex: 1 1 auto;
   min-width: 0;
   display: flex;
@@ -282,11 +304,11 @@
   white-space: nowrap;
 }
 
-.cv-stage-show {
+[data-app="cv-print-builder"] .cv-stage-show {
   margin-top: 8px;
 }
 
-.cv-stage {
+[data-app="cv-print-builder"] .cv-stage {
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -295,7 +317,7 @@
 /* custom: original/print split stage inside the workbench pane. The inner
    panes are document surfaces, not app panels — they reuse the kit pane
    header typography via .ctox-pane-header/.ctox-pane-title. */
-.cv-view-grid {
+[data-app="cv-print-builder"] .cv-view-grid {
   height: 100%;
   min-height: 0;
   display: grid;
@@ -303,11 +325,11 @@
   gap: 0;
 }
 
-.cv-view-grid.is-split {
+[data-app="cv-print-builder"] .cv-view-grid.is-split {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 
-.cv-pane {
+[data-app="cv-print-builder"] .cv-pane {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
@@ -316,11 +338,11 @@
   background: var(--surface);
 }
 
-.cv-view-grid.is-split .cv-pane + .cv-pane {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-pane + .cv-pane {
   border-left: 1px solid var(--hairline, var(--line));
 }
 
-.cv-pane-head {
+[data-app="cv-print-builder"] .cv-pane-head {
   display: flex;
   align-items: center;
   min-height: 40px;
@@ -328,18 +350,18 @@
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.cv-view-grid.is-split .cv-pane-head {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-pane-head {
   min-height: 34px;
   padding: 0 10px;
 }
 
-.cv-pane-body {
+[data-app="cv-print-builder"] .cv-pane-body {
   min-height: 0;
   overflow: auto;
   background: var(--surface-2);
 }
 
-.cv-original-frame {
+[data-app="cv-print-builder"] .cv-original-frame {
   width: 100%;
   height: 100%;
   min-height: 420px;
@@ -347,30 +369,30 @@
   background: white;
 }
 
-.cv-view-grid.is-split .cv-original-frame {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-original-frame {
   min-height: 0;
 }
 
-.cv-print-wrap {
+[data-app="cv-print-builder"] .cv-print-wrap {
   min-height: 100%;
   padding: 14px;
   display: grid;
   justify-items: center;
 }
 
-.cv-print-workarea {
+[data-app="cv-print-builder"] .cv-print-workarea {
   min-height: 100%;
   display: grid;
   align-items: start;
 }
 
-.cv-print-workarea.has-editor {
+[data-app="cv-print-builder"] .cv-print-workarea.has-editor {
   grid-template-columns: minmax(286px, 330px) minmax(0, 1fr);
 }
 
 /* custom: sticky correction-field editor rail inside the print workarea.
    Fields/labels/inputs themselves are kit classes in the markup. */
-.cv-field-editor {
+[data-app="cv-print-builder"] .cv-field-editor {
   position: sticky;
   top: 0;
   z-index: 2;
@@ -381,7 +403,7 @@
   background: var(--surface);
 }
 
-.cv-field-editor-head {
+[data-app="cv-print-builder"] .cv-field-editor-head {
   position: sticky;
   top: 0;
   z-index: 1;
@@ -393,16 +415,16 @@
   background: var(--surface);
 }
 
-.cv-editor-block {
+[data-app="cv-print-builder"] .cv-editor-block {
   padding: 8px 10px;
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.cv-editor-block > h4 {
+[data-app="cv-print-builder"] .cv-editor-block > h4 {
   margin: 0 0 7px;
 }
 
-.cv-editor-title-row {
+[data-app="cv-print-builder"] .cv-editor-title-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -410,17 +432,17 @@
   margin-bottom: 7px;
 }
 
-.cv-editor-title-row > h4 {
+[data-app="cv-print-builder"] .cv-editor-title-row > h4 {
   margin: 0;
 }
 
-.cv-editor-grid {
+[data-app="cv-print-builder"] .cv-editor-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 
-.cv-editor-row {
+[data-app="cv-print-builder"] .cv-editor-row {
   display: grid;
   grid-template-columns: 24px repeat(2, minmax(0, 1fr));
   gap: 5px;
@@ -432,34 +454,34 @@
   background: var(--surface-2);
 }
 
-.cv-editor-row > .ctox-icon-button {
+[data-app="cv-print-builder"] .cv-editor-row > .ctox-icon-button {
   grid-row: span 3;
 }
 
-.cv-editor-row textarea {
+[data-app="cv-print-builder"] .cv-editor-row textarea {
   grid-column: 2 / -1;
 }
 
-.cv-editor-skill {
+[data-app="cv-print-builder"] .cv-editor-skill {
   margin-bottom: 6px;
 }
 
-.cv-editor-empty {
+[data-app="cv-print-builder"] .cv-editor-empty {
   color: var(--muted);
   font-size: 11px;
   padding: 4px 0;
 }
 
-.cv-view-grid.is-split .cv-print-wrap {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-print-wrap {
   padding: 10px;
   align-items: start;
 }
 
-.cv-view-grid.is-split .cv-print-workarea.has-editor {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-print-workarea.has-editor {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.cv-view-grid.is-split .cv-field-editor {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-field-editor {
   position: relative;
   max-height: 240px;
   border-right: 0;
@@ -471,7 +493,7 @@
    and mm-based rhythm are deliberate — this is the rendered A4 artifact,
    not app chrome, and it must print identically in both themes.
    -------------------------------------------------------------------------- */
-.cv-print-sheet {
+[data-app="cv-print-builder"] .cv-print-sheet {
   width: min(100%, 760px);
   min-height: 980px;
   background: #fff;
@@ -480,47 +502,47 @@
   box-shadow: 0 12px 35px rgba(15, 23, 42, 0.14);
 }
 
-.cv-view-grid.is-split .cv-print-sheet {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-print-sheet {
   width: min(100%, 560px);
   min-height: 790px;
   box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
 }
 
-.cv-view-grid.is-split .cv-print-head {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-print-head {
   padding: 22px 26px 16px;
 }
 
-.cv-view-grid.is-split .cv-modern-body {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-modern-body {
   gap: 18px;
   padding: 18px 26px 26px;
 }
 
-.cv-view-grid.is-split .cv-minimal-head {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-minimal-head {
   padding: 24px 28px 10px;
 }
 
-.cv-view-grid.is-split .cv-minimal-facts {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-minimal-facts {
   margin-inline: 28px;
 }
 
-.cv-view-grid.is-split .cv-minimal-body,
-.cv-view-grid.is-split .cv-classic-body {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-minimal-body,
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-classic-body {
   padding: 18px 28px 28px;
 }
 
-.cv-view-grid.is-split .cv-classic-head {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-classic-head {
   padding: 24px 30px 18px;
 }
 
-.cv-view-grid.is-split .cv-print-name {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-print-name {
   font-size: 27px;
 }
 
-.cv-view-grid.is-split .cv-print-section {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-print-section {
   margin-bottom: 14px;
 }
 
-.cv-qprofile {
+[data-app="cv-print-builder"] .cv-qprofile {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   min-height: 1040px;
@@ -529,11 +551,11 @@
   font-family: Arial, Helvetica, sans-serif;
 }
 
-.cv-view-grid.is-split .cv-qprofile {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-qprofile {
   min-height: 790px;
 }
 
-.cv-q-head {
+[data-app="cv-print-builder"] .cv-q-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 18px;
@@ -541,7 +563,7 @@
   padding: 30px 38px 14px;
 }
 
-.cv-q-head h1 {
+[data-app="cv-print-builder"] .cv-q-head h1 {
   margin: 0;
   color: #202820;
   font-size: 24px;
@@ -550,7 +572,7 @@
   letter-spacing: 0;
 }
 
-.cv-q-rule {
+[data-app="cv-print-builder"] .cv-q-rule {
   width: 82mm;
   max-width: 100%;
   height: 3px;
@@ -558,11 +580,11 @@
   background: #a0a727;
 }
 
-.cv-q-body {
+[data-app="cv-print-builder"] .cv-q-body {
   padding: 0 38px 18px;
 }
 
-.cv-q-profile {
+[data-app="cv-print-builder"] .cv-q-profile {
   display: grid;
   grid-template-columns: 46mm minmax(0, 1fr);
   gap: 14px;
@@ -570,7 +592,7 @@
   margin-bottom: 11mm;
 }
 
-.cv-q-avatar {
+[data-app="cv-print-builder"] .cv-q-avatar {
   width: 46mm;
   height: 46mm;
   display: grid;
@@ -582,7 +604,7 @@
   font-weight: 850;
 }
 
-.cv-q-profile h2 {
+[data-app="cv-print-builder"] .cv-q-profile h2 {
   margin: 0 0 4mm;
   color: #111815;
   font-size: 22px;
@@ -590,36 +612,36 @@
   line-height: 1.05;
 }
 
-.cv-q-role {
+[data-app="cv-print-builder"] .cv-q-role {
   margin: -2mm 0 4mm;
   color: #596660;
   font-size: 12px;
   font-weight: 760;
 }
 
-.cv-q-facts,
-.cv-q-methods {
+[data-app="cv-print-builder"] .cv-q-facts,
+[data-app="cv-print-builder"] .cv-q-methods {
   display: grid;
   gap: 3mm;
   margin: 0;
 }
 
-.cv-q-facts div,
-.cv-q-methods div {
+[data-app="cv-print-builder"] .cv-q-facts div,
+[data-app="cv-print-builder"] .cv-q-methods div {
   display: grid;
   grid-template-columns: 38mm minmax(0, 1fr);
   gap: 5mm;
 }
 
-.cv-q-facts dt,
-.cv-q-methods dt {
+[data-app="cv-print-builder"] .cv-q-facts dt,
+[data-app="cv-print-builder"] .cv-q-methods dt {
   color: #596660;
   font-size: 9.5px;
   font-weight: 780;
 }
 
-.cv-q-facts dd,
-.cv-q-methods dd {
+[data-app="cv-print-builder"] .cv-q-facts dd,
+[data-app="cv-print-builder"] .cv-q-methods dd {
   min-width: 0;
   margin: 0;
   color: #202820;
@@ -627,11 +649,11 @@
   font-weight: 650;
 }
 
-.cv-q-section {
+[data-app="cv-print-builder"] .cv-q-section {
   margin-bottom: 8mm;
 }
 
-.cv-q-section h3 {
+[data-app="cv-print-builder"] .cv-q-section h3 {
   margin: 0 0 4mm;
   padding: 2.5mm 3mm;
   background: #d9ddc7;
@@ -641,51 +663,51 @@
   letter-spacing: 0;
 }
 
-.cv-q-entries {
+[data-app="cv-print-builder"] .cv-q-entries {
   display: grid;
   gap: 4mm;
 }
 
-.cv-q-entry {
+[data-app="cv-print-builder"] .cv-q-entry {
   display: grid;
   grid-template-columns: 42mm minmax(0, 1fr);
   gap: 7mm;
   page-break-inside: avoid;
 }
 
-.cv-q-when {
+[data-app="cv-print-builder"] .cv-q-when {
   color: #333d38;
   font-size: 10.5px;
   font-weight: 760;
 }
 
-.cv-q-entry-main strong {
+[data-app="cv-print-builder"] .cv-q-entry-main strong {
   display: block;
   color: #111815;
   font-size: 11.5px;
   font-weight: 850;
 }
 
-.cv-q-entry-main span,
-.cv-q-entry-main em,
-.cv-q-entry-main li {
+[data-app="cv-print-builder"] .cv-q-entry-main span,
+[data-app="cv-print-builder"] .cv-q-entry-main em,
+[data-app="cv-print-builder"] .cv-q-entry-main li {
   color: #26312c;
   font-size: 10.5px;
   font-style: normal;
   line-height: 1.25;
 }
 
-.cv-q-entry-main span,
-.cv-q-entry-main em {
+[data-app="cv-print-builder"] .cv-q-entry-main span,
+[data-app="cv-print-builder"] .cv-q-entry-main em {
   display: block;
 }
 
-.cv-q-entry-main ul {
+[data-app="cv-print-builder"] .cv-q-entry-main ul {
   margin: 2mm 0 0;
   padding-left: 4mm;
 }
 
-.cv-q-foot {
+[data-app="cv-print-builder"] .cv-q-foot {
   display: flex;
   align-items: end;
   justify-content: space-between;
@@ -697,94 +719,94 @@
   line-height: 1.3;
 }
 
-.cv-q-foot span {
+[data-app="cv-print-builder"] .cv-q-foot span {
   display: block;
 }
 
-.cv-template-minimal.cv-qprofile {
+[data-app="cv-print-builder"] .cv-template-minimal.cv-qprofile {
   border-color: #dfe4e1;
 }
 
-.cv-template-minimal .cv-q-head {
+[data-app="cv-print-builder"] .cv-template-minimal .cv-q-head {
   padding-top: 28px;
 }
 
-.cv-template-minimal .cv-q-rule {
+[data-app="cv-print-builder"] .cv-template-minimal .cv-q-rule {
   height: 1px;
   background: #cbd5d0;
 }
 
-.cv-template-minimal .cv-q-section h3 {
+[data-app="cv-print-builder"] .cv-template-minimal .cv-q-section h3 {
   background: transparent;
   border-top: 1px solid #d7dedb;
   border-bottom: 1px solid #d7dedb;
 }
 
-.cv-template-classic.cv-qprofile {
+[data-app="cv-print-builder"] .cv-template-classic.cv-qprofile {
   border-color: #cfc7bb;
   color: #1d1a16;
   font-family: Georgia, "Times New Roman", serif;
 }
 
-.cv-template-classic .cv-q-rule,
-.cv-template-classic .cv-q-section h3 {
+[data-app="cv-print-builder"] .cv-template-classic .cv-q-rule,
+[data-app="cv-print-builder"] .cv-template-classic .cv-q-section h3 {
   background: #d8cfbd;
 }
 
-.cv-template-classic .cv-q-avatar {
+[data-app="cv-print-builder"] .cv-template-classic .cv-q-avatar {
   background: #f4f0e8;
   color: #6a5a3b;
 }
 
-.cv-view-grid.is-split .cv-q-head {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-q-head {
   padding: 22px 26px 10px;
 }
 
-.cv-view-grid.is-split .cv-q-body {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-q-body {
   padding: 0 26px 14px;
 }
 
-.cv-view-grid.is-split .cv-q-profile {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-q-profile {
   grid-template-columns: 34mm minmax(0, 1fr);
   gap: 10px;
   margin-bottom: 7mm;
 }
 
-.cv-view-grid.is-split .cv-q-avatar {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-q-avatar {
   width: 34mm;
   height: 34mm;
   font-size: 24px;
 }
 
-.cv-view-grid.is-split .cv-q-head h1 {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-q-head h1 {
   font-size: 19px;
 }
 
-.cv-view-grid.is-split .cv-q-profile h2 {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-q-profile h2 {
   font-size: 18px;
 }
 
-.cv-view-grid.is-split .cv-q-section {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-q-section {
   margin-bottom: 6mm;
 }
 
-.cv-view-grid.is-split .cv-q-entry {
+[data-app="cv-print-builder"] .cv-view-grid.is-split .cv-q-entry {
   grid-template-columns: 32mm minmax(0, 1fr);
   gap: 5mm;
 }
 
-.cv-print-head {
+[data-app="cv-print-builder"] .cv-print-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
   padding: 30px 34px 20px;
 }
 
-.cv-modern-head {
+[data-app="cv-print-builder"] .cv-modern-head {
   border-bottom: 4px solid #2f7f75;
 }
 
-.cv-print-kicker {
+[data-app="cv-print-builder"] .cv-print-kicker {
   color: #5f6c66;
   font-size: 11px;
   font-weight: 800;
@@ -792,27 +814,27 @@
   letter-spacing: 0.06em;
 }
 
-.cv-print-name {
+[data-app="cv-print-builder"] .cv-print-name {
   margin: 4px 0 6px;
   font-size: 34px;
   font-weight: 860;
   line-height: 1.02;
 }
 
-.cv-print-role {
+[data-app="cv-print-builder"] .cv-print-role {
   color: #33413c;
   font-size: 17px;
   font-weight: 720;
 }
 
-.cv-print-meta {
+[data-app="cv-print-builder"] .cv-print-meta {
   margin-top: 8px;
   color: #5f6c66;
   font-size: 12px;
   font-weight: 650;
 }
 
-.cv-print-logo {
+[data-app="cv-print-builder"] .cv-print-logo {
   width: 96px;
   height: 58px;
   display: grid;
@@ -825,24 +847,24 @@
   font-weight: 860;
 }
 
-.cv-print-logo img {
+[data-app="cv-print-builder"] .cv-print-logo img {
   width: 100%;
   height: 100%;
   object-fit: contain;
 }
 
-.cv-modern-body {
+[data-app="cv-print-builder"] .cv-modern-body {
   display: grid;
   grid-template-columns: 34% 1fr;
   gap: 24px;
   padding: 24px 34px 36px;
 }
 
-.cv-print-section {
+[data-app="cv-print-builder"] .cv-print-section {
   margin-bottom: 22px;
 }
 
-.cv-print-section h3 {
+[data-app="cv-print-builder"] .cv-print-section h3 {
   margin: 0 0 8px;
   color: #2f7f75;
   font-size: 12px;
@@ -851,41 +873,41 @@
   letter-spacing: 0.05em;
 }
 
-.cv-print-section p,
-.cv-print-section li {
+[data-app="cv-print-builder"] .cv-print-section p,
+[data-app="cv-print-builder"] .cv-print-section li {
   color: #25312d;
   font-size: 12px;
 }
 
-.cv-print-section p {
+[data-app="cv-print-builder"] .cv-print-section p {
   margin: 0;
 }
 
-.cv-print-list,
-.cv-print-tags {
+[data-app="cv-print-builder"] .cv-print-list,
+[data-app="cv-print-builder"] .cv-print-tags {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.cv-print-list li {
+[data-app="cv-print-builder"] .cv-print-list li {
   padding: 0 0 8px;
 }
 
-.cv-print-list strong {
+[data-app="cv-print-builder"] .cv-print-list strong {
   display: block;
   color: #17211e;
   font-size: 13px;
   font-weight: 820;
 }
 
-.cv-print-tags {
+[data-app="cv-print-builder"] .cv-print-tags {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.cv-print-tags li {
+[data-app="cv-print-builder"] .cv-print-tags li {
   padding: 5px 7px;
   border: 1px solid #d6dfdc;
   border-radius: 999px;
@@ -893,13 +915,13 @@
   font-weight: 700;
 }
 
-.cv-template-minimal {
+[data-app="cv-print-builder"] .cv-template-minimal {
   border-color: #dfe4e1;
   color: #1f2724;
   box-shadow: 0 10px 28px rgba(15, 23, 42, 0.10);
 }
 
-.cv-minimal-head {
+[data-app="cv-print-builder"] .cv-minimal-head {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 16px;
@@ -907,19 +929,19 @@
   padding: 34px 38px 12px;
 }
 
-.cv-minimal-title .cv-print-name {
+[data-app="cv-print-builder"] .cv-minimal-title .cv-print-name {
   margin: 0 0 5px;
   font-size: 30px;
   font-weight: 760;
 }
 
-.cv-minimal-title .cv-print-role {
+[data-app="cv-print-builder"] .cv-minimal-title .cv-print-role {
   color: #47534f;
   font-size: 14px;
   font-weight: 650;
 }
 
-.cv-minimal-facts {
+[data-app="cv-print-builder"] .cv-minimal-facts {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
@@ -932,55 +954,55 @@
   font-weight: 650;
 }
 
-.cv-minimal-facts span {
+[data-app="cv-print-builder"] .cv-minimal-facts span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.cv-minimal-body {
+[data-app="cv-print-builder"] .cv-minimal-body {
   padding: 22px 38px 38px;
 }
 
-.cv-minimal-body .cv-print-section {
+[data-app="cv-print-builder"] .cv-minimal-body .cv-print-section {
   margin-bottom: 18px;
 }
 
-.cv-minimal-body .cv-print-section h3 {
+[data-app="cv-print-builder"] .cv-minimal-body .cv-print-section h3 {
   color: #1f2724;
   font-size: 11px;
   letter-spacing: 0.04em;
 }
 
-.cv-minimal-summary p {
+[data-app="cv-print-builder"] .cv-minimal-summary p {
   max-width: 68ch;
 }
 
-.cv-minimal-tags li {
+[data-app="cv-print-builder"] .cv-minimal-tags li {
   border-radius: 4px;
   background: #fff;
 }
 
-.cv-minimal-timeline li {
+[data-app="cv-print-builder"] .cv-minimal-timeline li {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   border-top: 1px solid #eef1ef;
   padding: 10px 0;
 }
 
-.cv-minimal-columns {
+[data-app="cv-print-builder"] .cv-minimal-columns {
   display: grid;
   grid-template-columns: minmax(0, 1.35fr) minmax(0, 0.65fr);
   gap: 26px;
 }
 
-.cv-template-classic {
+[data-app="cv-print-builder"] .cv-template-classic {
   border-color: #cfc7bb;
   color: #1d1a16;
 }
 
-.cv-classic-head {
+[data-app="cv-print-builder"] .cv-classic-head {
   display: grid;
   justify-items: center;
   gap: 5px;
@@ -989,7 +1011,7 @@
   text-align: center;
 }
 
-.cv-classic-head .cv-print-logo {
+[data-app="cv-print-builder"] .cv-classic-head .cv-print-logo {
   width: 46px;
   height: 32px;
   margin-bottom: 4px;
@@ -998,33 +1020,33 @@
   font-size: 12px;
 }
 
-.cv-classic-head .cv-print-name {
+[data-app="cv-print-builder"] .cv-classic-head .cv-print-name {
   margin: 0;
   font-family: Georgia, "Times New Roman", serif;
   font-size: 32px;
   font-weight: 700;
 }
 
-.cv-classic-head .cv-print-role {
+[data-app="cv-print-builder"] .cv-classic-head .cv-print-role {
   color: #3a332d;
   font-size: 14px;
   font-weight: 650;
 }
 
-.cv-classic-head .cv-print-meta {
+[data-app="cv-print-builder"] .cv-classic-head .cv-print-meta {
   color: #665c52;
   font-size: 11px;
 }
 
-.cv-classic-body {
+[data-app="cv-print-builder"] .cv-classic-body {
   padding: 26px 44px 42px;
 }
 
-.cv-classic-body .cv-print-section {
+[data-app="cv-print-builder"] .cv-classic-body .cv-print-section {
   margin-bottom: 22px;
 }
 
-.cv-classic-body .cv-print-section h3 {
+[data-app="cv-print-builder"] .cv-classic-body .cv-print-section h3 {
   border-bottom: 1px solid #cfc7bb;
   color: #1d1a16;
   font-family: Georgia, "Times New Roman", serif;
@@ -1035,14 +1057,14 @@
   text-transform: none;
 }
 
-.cv-classic-timeline li {
+[data-app="cv-print-builder"] .cv-classic-timeline li {
   display: grid;
   grid-template-columns: 86px minmax(0, 1fr);
   gap: 16px;
   padding: 0 0 13px;
 }
 
-.cv-classic-timeline em {
+[data-app="cv-print-builder"] .cv-classic-timeline em {
   display: block;
   color: #665c52;
   font-size: 11px;
@@ -1050,24 +1072,24 @@
   margin-top: 1px;
 }
 
-.cv-classic-period {
+[data-app="cv-print-builder"] .cv-classic-period {
   color: #665c52;
   font-size: 11px;
   font-weight: 700;
 }
 
-.cv-classic-skills p {
+[data-app="cv-print-builder"] .cv-classic-skills p {
   color: #25312d;
   font-size: 12px;
 }
 
 /* Inline correction directly on the document (contenteditable). */
-.cv-editable[contenteditable="true"] {
+[data-app="cv-print-builder"] .cv-editable[contenteditable="true"] {
   outline: 1px dashed transparent;
   outline-offset: 2px;
 }
 
-.cv-editable[contenteditable="true"]:focus {
+[data-app="cv-print-builder"] .cv-editable[contenteditable="true"]:focus {
   outline-color: #2f7f75;
   background: #eef8f5;
 }
@@ -1076,26 +1098,26 @@
    document columns collapse once the window is narrow. Shell breakpoint, not
    an app-owned one — the shell collapses three columns to two at 1024px. */
 @container business-app-window (max-width: 1024px) {
-  .cv-view-grid.is-split {
+  [data-app="cv-print-builder"] .cv-view-grid.is-split {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
   }
 
-  .cv-view-grid.is-split .cv-pane + .cv-pane {
+  [data-app="cv-print-builder"] .cv-view-grid.is-split .cv-pane + .cv-pane {
     border-left: 0;
     border-top: 1px solid var(--hairline, var(--line));
   }
 
-  .cv-modern-body,
-  .cv-minimal-columns {
+  [data-app="cv-print-builder"] .cv-modern-body,
+  [data-app="cv-print-builder"] .cv-minimal-columns {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .cv-minimal-facts {
+  [data-app="cv-print-builder"] .cv-minimal-facts {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .cv-classic-timeline li {
+  [data-app="cv-print-builder"] .cv-classic-timeline li {
     grid-template-columns: minmax(0, 1fr);
     gap: 4px;
   }
@@ -1109,7 +1131,7 @@
      edge at x=12 — inside the shell's 80x74 icon zone. Dropping the inset moves
      the pane under the frame border, where the icon overlay owns the corner and
      the pane's first rows (header band + filterbar) keep their 94px indent. */
-  .cv-print-builder {
+  [data-app="cv-print-builder"] .cv-print-builder {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: auto minmax(0, 1fr);
     padding: 0;
@@ -1120,38 +1142,41 @@
      view band, footer — already eats ~154px), which squeezed the list to two
      rows. Capping the well instead keeps the rail content-sized (a one-card
      strip stays a strip) while the list scrolls at a useful height. */
-  .cv-sidebar {
+  [data-app="cv-print-builder"] .cv-sidebar {
     grid-column: 1;
     grid-row: 1;
     min-height: 0;
     border-bottom: 1px solid var(--hairline, var(--line));
   }
 
-  .cv-sidebar > .ctox-pane-body {
+  [data-app="cv-print-builder"] .cv-sidebar > .ctox-pane-body {
     max-height: 216px;
   }
 
-  .cv-workbench {
+  [data-app="cv-print-builder"] .cv-workbench {
     grid-column: 1;
     grid-row: 2;
   }
 
-  .cv-print-builder > .ctox-column-resizer {
+  [data-app="cv-print-builder"] .cv-print-builder > .ctox-column-resizer {
     display: none;
   }
 
-  .cv-candidate-list {
-    grid-auto-flow: column;
-    grid-auto-columns: minmax(270px, 310px);
-    overflow-x: auto;
-    overflow-y: hidden;
+  /* VIS4: stacked, the cards stack vertically inside the capped well
+     (.ctox-well, overflow-y:auto) instead of a sideways strip (1422 > 418 px at
+     window 420): no horizontal scroller outside real data tables. */
+  [data-app="cv-print-builder"] .cv-candidate-list {
+    grid-auto-flow: row;
+    grid-auto-columns: auto;
+    overflow-x: hidden;
+    overflow-y: visible;
   }
 
   /* List mode is never a horizontal strip: it stacks and lets the recessed well
      (.ctox-well, overflow-y:auto) do the scrolling. Without restoring
      overflow-y the strip's `hidden` clipped the rows and the grid squeezed them
      to 16px inside the 244px-capped rail. */
-  .cv-candidate-list.is-compact {
+  [data-app="cv-print-builder"] .cv-candidate-list.is-compact {
     grid-auto-flow: row;
     grid-auto-columns: auto;
     overflow-x: hidden;
@@ -1159,21 +1184,14 @@
   }
 }
 
+/* v4: gedruckt wird in einem versteckten iframe im App-root, das nur den Druckbogen enthält
+   (printApprovedSheet); der Bogen füllt die A4-Seite ohne Rahmen. */
 @media print {
-  body * {
-    visibility: hidden;
-  }
-
-  .cv-print-sheet,
-  .cv-print-sheet * {
-    visibility: visible;
-  }
-
-  .cv-print-sheet {
-    position: absolute;
-    inset: 0 auto auto 0;
+  [data-app="cv-print-builder"] .cv-print-frame .cv-print-sheet {
+    position: static;
     width: 210mm;
     min-height: 297mm;
+    margin: 0;
     border: 0;
     box-shadow: none;
   }
@@ -1188,132 +1206,127 @@
    38/42mm fact columns) reflow so the A4 preview never forces sideways
    scrolling of the whole pane. */
 @container business-app-window (max-width: 768px) {
-  .cv-print-builder .ctox-button,
-  .cv-print-builder .ctox-run-control,
-  .cv-print-builder .ctox-pane-icon,
-  .cv-print-builder .ctox-icon-button,
-  .cv-print-builder .ctox-sort-dir {
+  [data-app="cv-print-builder"] .cv-print-builder .ctox-button,
+  [data-app="cv-print-builder"] .cv-print-builder .ctox-run-control,
+  [data-app="cv-print-builder"] .cv-print-builder .ctox-pane-icon,
+  [data-app="cv-print-builder"] .cv-print-builder .ctox-icon-button,
+  [data-app="cv-print-builder"] .cv-print-builder .ctox-sort-dir {
     min-width: 44px;
     min-height: 44px;
   }
 
-  .cv-print-builder .ctox-pane-tab {
+  [data-app="cv-print-builder"] .cv-print-builder .ctox-pane-tab {
     min-height: 44px;
   }
 
   /* The list row stays the densest view, but a 23px tap target is not
      operable on a phone — it keeps one line and grows to the 44px floor. */
-  .cv-row {
+  [data-app="cv-print-builder"] .cv-row {
     align-items: center;
     min-height: 44px;
   }
 
-  .cv-print-builder .ctox-input,
-  .cv-print-builder .ctox-select,
-  .cv-print-builder textarea {
+  [data-app="cv-print-builder"] .cv-print-builder .ctox-input,
+  [data-app="cv-print-builder"] .cv-print-builder .ctox-select,
+  [data-app="cv-print-builder"] .cv-print-builder textarea {
     min-height: 44px;
     font-size: 16px;
   }
 
-  .cv-task-link {
+  [data-app="cv-print-builder"] .cv-task-link {
     height: auto;
     min-height: 44px;
     max-width: 100%;
   }
 
-  /* Candidate strip: one card per swipe, always inside the viewport. */
-  .cv-candidate-list {
-    grid-auto-columns: minmax(230px, 78vw);
-  }
-
   /* Editor rail above the document, capped so the sheet stays visible. */
-  .cv-print-workarea.has-editor {
+  [data-app="cv-print-builder"] .cv-print-workarea.has-editor {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .cv-field-editor {
+  [data-app="cv-print-builder"] .cv-field-editor {
     position: relative;
     max-height: 44vh;
     border-right: 0;
     border-bottom: 1px solid var(--hairline, var(--line));
   }
 
-  .cv-editor-grid {
+  [data-app="cv-print-builder"] .cv-editor-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .cv-editor-row {
+  [data-app="cv-print-builder"] .cv-editor-row {
     grid-template-columns: 44px minmax(0, 1fr);
   }
 
-  .cv-editor-row > label {
+  [data-app="cv-print-builder"] .cv-editor-row > label {
     grid-column: 2;
   }
 
   /* A4 preview: shrink the fixed print geometry so 100% width fits. */
-  .cv-q-head,
-  .cv-minimal-head {
+  [data-app="cv-print-builder"] .cv-q-head,
+  [data-app="cv-print-builder"] .cv-minimal-head {
     padding: 20px 18px 10px;
   }
 
-  .cv-q-body {
+  [data-app="cv-print-builder"] .cv-q-body {
     padding: 0 18px 14px;
   }
 
-  .cv-minimal-body,
-  .cv-classic-body {
+  [data-app="cv-print-builder"] .cv-minimal-body,
+  [data-app="cv-print-builder"] .cv-classic-body {
     padding: 16px 18px 24px;
   }
 
-  .cv-classic-head {
+  [data-app="cv-print-builder"] .cv-classic-head {
     padding: 22px 18px 16px;
   }
 
-  .cv-print-head {
+  [data-app="cv-print-builder"] .cv-print-head {
     padding: 20px 18px 14px;
   }
 
-  .cv-modern-body {
+  [data-app="cv-print-builder"] .cv-modern-body {
     padding: 18px;
   }
 
-  .cv-q-foot {
+  [data-app="cv-print-builder"] .cv-q-foot {
     padding: 8px 18px 14px;
   }
 
-  .cv-minimal-facts {
+  [data-app="cv-print-builder"] .cv-minimal-facts {
     margin-inline: 18px;
   }
 
-  .cv-q-profile {
+  [data-app="cv-print-builder"] .cv-q-profile {
     grid-template-columns: 30mm minmax(0, 1fr);
     gap: 10px;
   }
 
-  .cv-q-avatar {
+  [data-app="cv-print-builder"] .cv-q-avatar {
     width: 30mm;
     height: 30mm;
     font-size: 22px;
   }
 
-  .cv-q-facts div,
-  .cv-q-methods div,
-  .cv-q-entry {
+  [data-app="cv-print-builder"] .cv-q-facts div,
+  [data-app="cv-print-builder"] .cv-q-methods div,
+  [data-app="cv-print-builder"] .cv-q-entry {
     grid-template-columns: minmax(0, 1fr);
     gap: 2mm;
   }
 
-  .cv-print-head,
-  .cv-q-head,
-  .cv-minimal-head {
+  [data-app="cv-print-builder"] .cv-print-head,
+  [data-app="cv-print-builder"] .cv-q-head,
+  [data-app="cv-print-builder"] .cv-minimal-head {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .cv-print-logo {
+  [data-app="cv-print-builder"] .cv-print-logo {
     justify-self: start;
   }
 
-  .cv-print-name {
+  [data-app="cv-print-builder"] .cv-print-name {
     font-size: 24px;
   }
 }
@@ -1330,7 +1343,7 @@
    .cv-field-editor-head — they reuse .ctox-pane-header for typography) keep
    their own geometry.
    ========================================================================== */
-.shell-window[data-shell-contract="v2"] .cv-print-builder > .ctox-pane > .ctox-pane-header {
+[data-app="cv-print-builder"] .cv-print-builder > .ctox-pane > .ctox-pane-header {
   box-sizing: border-box;
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
@@ -1338,7 +1351,7 @@
   padding-bottom: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .cv-print-builder > .ctox-pane > .ctox-pane-header .ctox-pane-title-row {
+[data-app="cv-print-builder"] .cv-print-builder > .ctox-pane > .ctox-pane-header .ctox-pane-title-row {
   height: 100%;
   min-width: 0;
 }
@@ -1347,7 +1360,7 @@
    title may shrink so long labels ellipsize instead of being squeezed to a few
    pixels — it carries the shell's version menu. The action block keeps its
    intrinsic width (never flex: 1). */
-.shell-window[data-shell-contract="v2"] .cv-print-builder > .ctox-pane > .ctox-pane-header .ctox-pane-titles {
+[data-app="cv-print-builder"] .cv-print-builder > .ctox-pane > .ctox-pane-header .ctox-pane-titles {
   flex: 1 1 auto;
   flex-direction: row;
   align-items: baseline;
@@ -1361,7 +1374,7 @@
    kicker before it eats the title. Contract §4: the title IS the window's
    version-menu trigger; squeezing it to a few pixels destroys its hit area, so
    it keeps the shell's guaranteed 44px minimum and ellipsizes instead. */
-.shell-window[data-shell-contract="v2"] .cv-print-builder > .ctox-pane > .ctox-pane-header .ctox-pane-kicker {
+[data-app="cv-print-builder"] .cv-print-builder > .ctox-pane > .ctox-pane-header .ctox-pane-kicker {
   flex: 0 1000 auto;
   min-width: 0;
   overflow: hidden;
@@ -1369,7 +1382,7 @@
   white-space: nowrap;
 }
 
-.shell-window[data-shell-contract="v2"] .cv-print-builder > .ctox-pane > .ctox-pane-header .ctox-pane-title {
+[data-app="cv-print-builder"] .cv-print-builder > .ctox-pane > .ctox-pane-header .ctox-pane-title {
   flex: 0 1 auto;
   margin-top: 0;
   min-width: 44px;
@@ -1379,25 +1392,25 @@
   white-space: nowrap;
 }
 
-.shell-window[data-shell-contract="v2"] .cv-print-builder > .ctox-pane > .ctox-pane-header .ctox-pane-actions {
+[data-app="cv-print-builder"] .cv-print-builder > .ctox-pane > .ctox-pane-header .ctox-pane-actions {
   flex: 0 0 auto;
 }
 
 /* First head of the top row: clear the app icon. Row 2 (filterbar) still sits
    beside the 80px icon, so it keeps the same indent and a min-height that lets
    the tray in row 3 start below the icon. */
-.shell-window[data-shell-contract="v2"] .cv-sidebar > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .cv-sidebar > .ctox-filterbar {
+[data-app="cv-print-builder"] .cv-sidebar > .ctox-pane-header,
+[data-app="cv-print-builder"] .cv-sidebar > .ctox-filterbar {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
 }
 
-.shell-window[data-shell-contract="v2"] .cv-sidebar > .ctox-filterbar {
+[data-app="cv-print-builder"] .cv-sidebar > .ctox-filterbar {
   box-sizing: border-box;
   min-height: calc(var(--shell-v2-icon-size, 80px) - var(--shell-v2-header-row-size, 37px));
 }
 
 /* Last head of the top row: clear the window control. */
-.shell-window[data-shell-contract="v2"] .cv-workbench > .ctox-pane-header {
+[data-app="cv-print-builder"] .cv-workbench > .ctox-pane-header {
   padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
 }
 
@@ -1405,12 +1418,27 @@
    and the filterbar below it, still inside the icon's two rows — clear the
    window control, and the stage head no longer needs the reservation. */
 @container business-app-window (max-width: 768px) {
-  .shell-window[data-shell-contract="v2"] .cv-sidebar > .ctox-pane-header,
-  .shell-window[data-shell-contract="v2"] .cv-sidebar > .ctox-filterbar {
+  [data-app="cv-print-builder"] .cv-sidebar > .ctox-pane-header,
+  [data-app="cv-print-builder"] .cv-sidebar > .ctox-filterbar {
     padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
   }
 
-  .shell-window[data-shell-contract="v2"] .cv-workbench > .ctox-pane-header {
+  [data-app="cv-print-builder"] .cv-workbench > .ctox-pane-header {
     padding-right: 14px;
+  }
+}
+
+/* FIX11 (G4, 420 px): im Detailkopf neben „Zurück“ und vier Werkzeugknoepfen blieben vom Kicker „PD…“ und vom Titel
+   „Neuer …“. Schmal weicht der Kicker (die Phase steht auch in der Liste), der Titel bricht an Wortgrenzen um, und die
+   Werkzeuge rutschen in die zweite Zeile (Titelzeile umbrechend, Kit-Regel fuer Detailkoepfe). */
+@container business-app-window (max-width: 768px) {
+  [data-app="cv-print-builder"] .cv-print-builder > .ctox-pane > .ctox-pane-header .ctox-pane-kicker { display: none; }
+  [data-app="cv-print-builder"] .cv-print-builder > .ctox-pane > .ctox-pane-header .ctox-pane-titles { overflow: visible; }
+  [data-app="cv-print-builder"] .cv-print-builder > .ctox-pane > .ctox-pane-header .ctox-pane-title {
+    flex: 1 1 auto;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: normal;
   }
 }

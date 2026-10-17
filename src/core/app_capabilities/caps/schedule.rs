@@ -1,0 +1,39 @@
+//! Typed route catalog; native implementation lives in cap4.
+use super::{task::route, NativeRoute};
+pub(super) const ROUTES: &[NativeRoute] = &[
+    route(
+        "schedule",
+        "ensure",
+        "cap.schedule.ensure",
+        "schedule::ensure_task_with_calendar",
+        "src/core/mission/schedule.rs:443",
+    ),
+    route(
+        "schedule",
+        "upsert",
+        "cap.schedule.ensure",
+        "schedule::ensure_task_with_calendar",
+        "src/core/mission/schedule.rs:443",
+    ),
+    route(
+        "schedule",
+        "list",
+        "cap.schedule.list",
+        "schedule::list_tasks",
+        "src/core/mission/schedule.rs:355",
+    ),
+    route(
+        "schedule",
+        "set_enabled",
+        "cap.schedule.set_enabled",
+        "schedule::set_task_enabled",
+        "src/core/mission/schedule.rs:370",
+    ),
+    route(
+        "schedule",
+        "remove",
+        "cap.schedule.remove",
+        "schedule::remove_task",
+        "src/core/mission/schedule.rs:395",
+    ),
+];

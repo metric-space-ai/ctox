@@ -80,21 +80,19 @@ fn read(conn: &Connection, id: &str) -> anyhow::Result<Option<Effect>> {
         .transpose()
 }
 pub(crate) fn has_effect(root: &Path, id: &str) -> anyhow::Result<bool> {
-    let path = crate::inference::runtime_env::runtime_config_path(root);
-    if !path.exists() {
-        return Ok(false);
-    }
-    let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    let exists: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type=\"table\" AND name=?1)",
-        [TABLE],
-        |r| r.get(0),
-    )?;
-    if !exists {
-        return Ok(false);
-    }
-    Ok(read(&conn, id)?.is_some())
+    let id = id.to_owned();
+    Ok(with_instance_proxy_read(root, move |conn| {
+        let exists: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type=\"table\" AND name=?1)",
+            [TABLE],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            return Ok(false);
+        }
+        Ok(read(conn, &id)?.is_some())
+    })?
+    .unwrap_or(false))
 }
 
 /// Compatibility helper for existing Claude control fixtures.

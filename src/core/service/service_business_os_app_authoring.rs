@@ -864,25 +864,25 @@ fn is_business_os_chat_queue_job(root: &Path, job: &QueuedPrompt) -> bool {
     if job.prompt.contains("business_os.chat.task") {
         return true;
     }
-    let db_path = crate::paths::core_db(root);
-    let Ok(conn) = Connection::open(db_path) else {
-        return false;
-    };
-    job.leased_message_keys.iter().any(|message_key| {
-        conn.query_row(
-            "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
-            params![message_key],
-            |row| row.get::<_, String>(0),
-        )
-        .ok()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-        .and_then(|metadata| {
-            metadata
-                .get("business_os_command_type")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string)
-        })
-        .as_deref()
-            == Some("business_os.chat.task")
+    let keys = job.leased_message_keys.clone();
+    super::store_inputs::owned_read(root, false, move |conn| {
+        Ok(keys.iter().any(|message_key| {
+            conn.query_row(
+                "SELECT metadata_json FROM communication_messages WHERE message_key = ?1",
+                params![message_key],
+                |row| row.get::<_, String>(0),
+            )
+            .ok()
+            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
+            .and_then(|metadata| {
+                metadata
+                    .get("business_os_command_type")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            })
+            .as_deref()
+                == Some("business_os.chat.task")
+        }))
     })
+    .unwrap_or(false)
 }

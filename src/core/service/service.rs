@@ -1145,14 +1145,16 @@ fn queue_supports_plan_failure(root: &Path, job: &QueuedPrompt) -> Result<bool> 
     if job.source_label != "queue" || job.leased_message_keys.len() != 1 {
         return Ok(false);
     }
-    let conn = Connection::open(crate::paths::core_db(root))?;
-    Ok(conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM business_command_task_links l
+    let key = job.leased_message_keys[0].clone();
+    super::store_inputs::owned_read(root, false, move |conn| {
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM business_command_task_links l
          JOIN business_command_aggregates a ON a.command_id=l.command_id
          WHERE l.task_id=?1 AND a.command_type='business_os.chat.task')",
-        [&job.leased_message_keys[0]],
-        |row| row.get(0),
-    )?)
+            [key],
+            |row| row.get(0),
+        )?)
+    })
 }
 
 fn accepted_queue_plan_failure(
@@ -1590,181 +1592,31 @@ fn start_glibc_heap_trimmer() {
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 fn start_glibc_heap_trimmer() {}
 
-pub fn run_foreground(root: &Path) -> Result<()> {
-    let runtime_dir = root.join("runtime");
-    std::fs::create_dir_all(&runtime_dir)
-        .with_context(|| format!("failed to create runtime dir {}", runtime_dir.display()))?;
-    // Configured execution hosts use the same lifecycle as `ctox sync run`.
-    // Bring-up failure is fatal before any Business OS worker is started.
-    let _sync_host = crate::sync_host::start_if_configured(root)?;
-    install_service_panic_hook();
-    start_glibc_heap_trimmer();
-    #[cfg(unix)]
-    unsafe {
-        signal(SIGPIPE, SIG_IGN);
-    }
-    let _exit_guard = ServiceExitGuard {
-        pid: std::process::id(),
-        root: root.to_path_buf(),
-    };
-    eprintln!(
-        "ctox service boot pid={} root={}",
-        std::process::id(),
-        root.display()
-    );
-    let active_level = crate::autonomy::AutonomyLevel::from_root(root);
-    eprintln!("ctox service autonomy level: {active_level}");
-    channels::ensure_store(root)?;
-    governance::ensure_governance(root)?;
-    if runtime_env::config_flag(root, "CTOX_SERVICE_BOOTSTRAP_SYSTEM_SKILLS") {
-        if let Err(err) = crate::skill_store::bootstrap_embedded_system_skills(root) {
-            eprintln!("ctox service: bootstrap_embedded_system_skills failed: {err:#}");
-        }
-    }
-    let db_path = crate::paths::core_db(&root);
-    let _ = crate::lcm::LcmEngine::open(&db_path, crate::lcm::LcmConfig::default())?;
-    let listen_addr = service_listen_addr(root);
-    write_pid_file(root, std::process::id())?;
-    let _ = write_service_performance_status_artifact(root);
-    let initial_state = SharedState {
-        #[cfg(unix)]
-        native_guest_registry: _sync_host.as_ref().and_then(|host| host.guest_registry()),
-        ..SharedState::default()
-    };
-    let state = Arc::new(Mutex::new(initial_state));
-    publish_cockpit_worker_state(root, &lock_shared_state(&state));
-    run_boot_state_invariant_check(root, &state);
-    run_boot_auto_submitted_reclassifier(root, &state);
-    release_stale_service_communication_leases_on_boot(root, &state);
-    quarantine_synthetic_e2e_queue_tasks_on_boot(root, &state);
-    // A configuration failure must not leave queue/app workers running with
-    // an unusable native data path. The peer supervisor owns later readiness
-    // and respawn; the daemon must first accept its actual configuration.
-    if !start_business_os_native_peer(root)? {
-        push_event(
-            &state,
-            "Business OS native RxDB peer autostart disabled".to_string(),
-        );
-        eprintln!("ctox service: Business OS native RxDB peer autostart disabled");
-    }
-    push_event(&state, format!("Loop ready on {}", listen_addr));
-    start_channel_router(root.to_path_buf(), state.clone());
-    start_business_os_app_recovery_loop(root.to_path_buf(), state.clone());
-    crate::business_os::start_background_sync(root);
-    start_channel_syncer(root.to_path_buf());
-    start_mission_maintenance_loop(root.to_path_buf(), state.clone());
-    start_harness_audit_watcher(root.to_path_buf(), state.clone());
-    start_appsec_pipeline_worker_loop(root.to_path_buf(), state.clone());
-    start_work_hours_dispatcher(root.to_path_buf(), state.clone());
-    // Start mail/collaboration server (SMTP, IMAP, CalDAV, CardDAV)
-    let mail_db_str = db_path.to_string_lossy().into_owned();
-    ctox_mailserver::start_services_thread(mail_db_str);
-    // Keep the service control plane idle-cheap. Managed runtimes are started
-    // on demand by agent turns; boot-time prewarm is opt-in because a local
-    // model supervisor can consume CPU even when there is no queued work.
-    if runtime_env::config_flag(root, "CTOX_SERVICE_PREWARM_BACKENDS") {
-        supervisor::start_backend_supervisor(root.to_path_buf());
-    }
+// This adapter consumes the native catalog and live Core/Transfer authority.
+// Registration remains in run_foreground when CUTOVER supplies its owner handles.
+#[path = "../app_runtime/native_adapter.rs"]
+pub(crate) mod app_runtime_native;
 
-    let _transfer_worker = crate::transfers_cli::start_daemon(root)?;
-    start_business_os_surfaces(root, state.clone());
-    match crate::execution::cliproxyapi_host::start_instance_codex_proxy_supervisor(
-        root.to_path_buf(),
-    ) {
-        Ok(()) => push_event(
-            &state,
-            format!(
-                "CLIProxyAPI Codex subscription gateway supervising {}",
-                crate::execution::cliproxyapi_host::instance_codex_proxy_base_url()
-            ),
-        ),
-        Err(error) => eprintln!("ctox service: Codex subscription gateway failed: {error:#}"),
-    }
-    match crate::execution::cliproxyapi_host::start_instance_management_supervisor(
-        root.to_path_buf(),
-    ) {
-        Ok(()) => push_event(
-            &state,
-            format!(
-                "CLIProxyAPI management gateway supervising {}",
-                crate::execution::cliproxyapi_host::instance_management_base_url()
-            ),
-        ),
-        Err(error) => eprintln!("ctox service: CLIProxyAPI management gateway failed: {error:#}"),
-    }
-    #[cfg(unix)]
-    let socket_path = service_socket_path(root);
-    let mut announced_ready = false;
-    loop {
-        #[cfg(unix)]
-        let bind_result = {
-            let _ = std::fs::remove_file(&socket_path);
-            UnixListener::bind(&socket_path)
-        };
-        #[cfg(not(unix))]
-        let server = match Server::http(&listen_addr) {
-            Ok(server) => server,
-            Err(err) => {
-                eprintln!("ctox service bind error on {listen_addr}: {err}");
-                thread::sleep(Duration::from_millis(250));
-                continue;
-            }
-        };
-        #[cfg(unix)]
-        let listener = match bind_result {
-            Ok(listener) => listener,
-            Err(err) => {
-                eprintln!(
-                    "ctox service bind error on {}: {err}",
-                    socket_path.display()
-                );
-                thread::sleep(Duration::from_millis(250));
-                continue;
-            }
-        };
-        if !announced_ready {
-            eprintln!("ctox service listening on {listen_addr}");
-            announced_ready = true;
-        } else {
-            eprintln!("ctox service re-bound on {listen_addr}");
-        }
-        #[cfg(unix)]
-        for stream in listener.incoming() {
-            match stream {
-                Ok(stream) => {
-                    let root = root.to_path_buf();
-                    let state = state.clone();
-                    let connection_id = SERVICE_IPC_THREAD_SEQUENCE
-                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if let Err(err) = std::thread::Builder::new()
-                        .name(format!("ctox-ipc-{connection_id}"))
-                        .spawn(move || {
-                            if let Err(err) = handle_service_ipc_stream(stream, &root, state) {
-                                eprintln!("ctox service request error: {err}");
-                            }
-                        })
-                    {
-                        eprintln!("ctox service IPC thread spawn error: {err}");
-                    }
-                }
-                Err(err) => {
-                    eprintln!(
-                        "ctox service accept error on {}: {err}",
-                        socket_path.display()
-                    );
-                    break;
-                }
-            }
-        }
-        #[cfg(not(unix))]
-        for request in server.incoming_requests() {
-            if let Err(err) = handle_request(request, root, state.clone()) {
-                eprintln!("ctox service request error: {err}");
-            }
-        }
-        eprintln!("ctox service accept loop ended unexpectedly; retrying bind");
-        thread::sleep(Duration::from_millis(250));
-    }
+pub fn run_foreground(root: &Path) -> Result<()> {
+    anyhow::ensure!(
+        tokio::runtime::Handle::try_current().is_err(),
+        "foreground service must start on its OS main thread"
+    );
+    install_service_panic_hook();
+    let root = root.to_path_buf();
+    let runtime = crate::runtime::shared()?;
+    let (send, receive) = std::sync::mpsc::sync_channel(1);
+    let run_root = root.clone();
+    // The process main thread may wait, but no SQLite job or runtime worker
+    // waits synchronously for another executor. Only core/runtime.rs owns it.
+    runtime.spawn(async move {
+        let result = super::store_startup::run(run_root).await;
+        let _ = send.send(result);
+    });
+    let result = receive
+        .recv()
+        .context("store daemon task stopped without an outcome")?;
+    result
 }
 
 fn run_boot_state_invariant_check(root: &Path, state: &Arc<Mutex<SharedState>>) {
@@ -2008,7 +1860,7 @@ fn attempt_state_invariant_repair(
     state_invariants::RuntimeStateInvariantReport,
 )> {
     let db_path = crate::paths::core_db(&root);
-    let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(&db_path)?;
     let mut repair = engine.sync_mission_state_from_continuity_with_repair(conversation_id)?;
     let mut report = state_invariants::evaluate_runtime_state_invariants(root, conversation_id)?;
     let repaired_codes = report
@@ -4181,7 +4033,7 @@ fn handle_service_ipc_request(
         }
         ServiceIpcRequest::CodingModelCapabilities => Ok(ServiceIpcResponse::Json {
             status: 200,
-            payload: crate::coding_agents::pi_sidecar::coding_model_capabilities(root),
+            payload: crate::coding_agents::pi_sidecar::coding_model_capabilities(root)?,
         }),
         ServiceIpcRequest::KnowledgeData { argv } => {
             // Dispatch the knowledge subcommand inside the daemon process so
@@ -5196,7 +5048,7 @@ mod web_stack_ipc_timeout_tests {
     }
 }
 
-fn write_pid_file(root: &Path, pid: u32) -> Result<()> {
+pub(super) fn write_pid_file(root: &Path, pid: u32) -> Result<()> {
     let path = service_pid_path(root);
     std::fs::write(&path, format!("{pid}\n"))
         .with_context(|| format!("failed to write service pid file {}", path.display()))
@@ -5211,7 +5063,7 @@ fn read_pid_file(root: &Path) -> Option<u32> {
     raw.trim().parse::<u32>().ok()
 }
 
-fn service_pid_path(root: &Path) -> std::path::PathBuf {
+pub(super) fn service_pid_path(root: &Path) -> std::path::PathBuf {
     root.join(SERVICE_PID_RELATIVE_PATH)
 }
 
@@ -6895,7 +6747,7 @@ fn start_prompt_worker(
                     })
                 },
             );
-            let mut session_options = chat_turn_session_options_for_queue_job(&job);
+            let mut session_options = chat_turn_session_options_for_queue_job(&root, &job);
             session_options.crew_persona = crew.as_ref().map(|context| context.persona.clone());
             session_options.crew_memory_block = crew
                 .as_ref()
@@ -7195,7 +7047,7 @@ fn start_prompt_worker(
             // non-success outcomes increment it for status and explicit
             // mission-governance decisions.
             let mut agent_failure_threshold_hit = false;
-            if let Ok(engine) = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default()) {
+            if let Ok(engine) = lcm::LcmClient::attach(&db_path) {
                 if agent_outcome.is_agent_failure() && !retryable_runtime_failure {
                     match engine.increment_mission_agent_failure_count(conversation_id) {
                         Ok(record) => {
@@ -7258,7 +7110,7 @@ fn start_prompt_worker(
             let mut mission_sync_outcome = if founder_visible_mail_turn {
                 None
             } else {
-                lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
+                lcm::LcmClient::attach(&db_path)
                     .and_then(|engine| engine.sync_mission_state_from_continuity(conversation_id))
                     .ok()
             };
@@ -7280,11 +7132,9 @@ fn start_prompt_worker(
             // missing observability/authority without a competing retry loop.
             if !founder_visible_mail_turn && latest_runtime_error.is_some() {
                 if let Some(work_id) = job.ticket_self_work_id.as_deref() {
-                    let mission_record = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())
-                        .ok()
-                        .and_then(|engine| {
-                            engine.stored_mission_state(conversation_id).ok().flatten()
-                        });
+                    let mission_record = lcm::LcmClient::attach(&db_path).ok().and_then(|engine| {
+                        engine.stored_mission_state(conversation_id).ok().flatten()
+                    });
                     let decision = crate::service::mission_governor::evaluate_loop_governor(
                         &job.goal,
                         mission_record.as_ref(),
@@ -11895,6 +11745,7 @@ fn cv_print_parse_dated_line(line: &str) -> Option<(String, String, String)> {
 }
 
 fn chat_turn_session_options_for_queue_job(
+    root: &Path,
     job: &QueuedPrompt,
 ) -> turn_loop::ChatTurnSessionOptions {
     if is_person_research_gap_closure_job(job) {
@@ -11975,6 +11826,21 @@ fn chat_turn_session_options_for_queue_job(
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty()),
         required_initial_tool: Some("update_plan".to_string()),
+        // News retries share a persistent per-issue checkpoint outside their
+        // individual workspaces. Grant only its directory, never all runtime.
+        additional_writable_roots: if metadata_string(
+            &job.queue_task_metadata,
+            "business_os_command_type",
+        )
+        .as_deref()
+            == Some("news.issue.generate")
+            && metadata_string(&job.queue_task_metadata, "business_os_module").as_deref()
+                == Some("news")
+        {
+            vec![root.join("runtime/news/checkpoints")]
+        } else {
+            Vec::new()
+        },
         additional_readable_roots: inbound_attachment_readable_roots(&job.queue_task_metadata),
         ..turn_loop::ChatTurnSessionOptions::default()
     }
@@ -14375,19 +14241,12 @@ fn workspace_files_are_published_to_business_os(root: &Path, job: &QueuedPrompt)
     let Ok(workspace_root) = Path::new(workspace_root).canonicalize() else {
         return false;
     };
-    let database_path = crate::business_os::store::rxdb_store_path(root);
-    let Ok(connection) = Connection::open(database_path) else {
-        return false;
-    };
     let prefix = format!("{}%", workspace_root.to_string_lossy());
-    connection
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM ctox_business_os__desktop_files__v0 WHERE COALESCE(json_extract(data, '$.is_deleted'), 0) = 0 AND json_extract(data, '$.local_path') LIKE ?1)",
-            [prefix],
-            |row| row.get::<_, i64>(0),
-        )
-        .map(|value| value != 0)
-        .unwrap_or(false)
+    super::store_inputs::owned_read(root,true,move |conn| {
+        let Some(table_name)=conn.query_row("SELECT table_name FROM _collections WHERE name='desktop_files' AND state='active'",[],|r|r.get::<_,String>(0)).optional()? else {return Ok(false)};
+        let query=format!("SELECT EXISTS(SELECT 1 FROM \"{}\" WHERE deleted=0 AND COALESCE(json_extract(data,'$.is_deleted'),0)=0 AND json_extract(data,'$.local_path') LIKE ?1)",table_name.replace('"', "\"\""));
+        Ok(conn.query_row(&query,[prefix],|row|row.get::<_,i64>(0))?!=0)
+    }).unwrap_or(false)
 }
 
 fn append_business_os_file_delivery_notice(reply: &str, job: &QueuedPrompt) -> String {
@@ -15557,29 +15416,28 @@ fn queue_legacy_verification_review_attempt_count(
     message_key: &str,
     retry_floor: Option<&str>,
 ) -> Result<usize> {
-    let db_path = root.join("runtime/ctox.sqlite3");
-    if !db_path.exists() {
-        return Ok(0);
-    }
-    let conn = rusqlite::Connection::open(db_path)?;
-    if !table_exists(&conn, "verification_runs")? || !table_exists(&conn, "communication_messages")?
-    {
-        return Ok(0);
-    }
-    let Some(mut floor_ms) = queue_message_review_floor_millis(&conn, message_key)? else {
-        return Ok(0);
-    };
-    if let Some(retry_floor_ms) = retry_floor.and_then(parse_rfc3339_millis) {
-        floor_ms = floor_ms.max(retry_floor_ms);
-    }
-    if let Some(workspace_root) = job
-        .workspace_root
-        .as_deref()
-        .filter(|value| !value.is_empty())
-    {
-        let workspace_pattern = format!("%{workspace_root}%");
-        let count: i64 = conn.query_row(
-            r#"
+    let message_key = message_key.to_owned();
+    let retry_floor = retry_floor.map(str::to_owned);
+    let source_label = job.source_label.clone();
+    let goal = job.goal.clone();
+    let preview = job.preview.clone();
+    let workspace_root = job.workspace_root.clone();
+    super::store_inputs::owned_read(root, false, move |conn| {
+        if !table_exists(conn, "verification_runs")?
+            || !table_exists(conn, "communication_messages")?
+        {
+            return Ok(0);
+        }
+        let Some(mut floor_ms) = queue_message_review_floor_millis(conn, &message_key)? else {
+            return Ok(0);
+        };
+        if let Some(retry_floor_ms) = retry_floor.as_deref().and_then(parse_rfc3339_millis) {
+            floor_ms = floor_ms.max(retry_floor_ms);
+        }
+        if let Some(workspace_root) = workspace_root.as_deref().filter(|value| !value.is_empty()) {
+            let workspace_pattern = format!("%{workspace_root}%");
+            let count: i64 = conn.query_row(
+                r#"
             SELECT COUNT(*)
             FROM verification_runs
             WHERE review_required = 1
@@ -15593,13 +15451,13 @@ fn queue_legacy_verification_review_attempt_count(
                  OR raw_report LIKE ?3
               )
             "#,
-            params![job.source_label, floor_ms, workspace_pattern],
-            |row| row.get(0),
-        )?;
-        return Ok(count.max(0) as usize);
-    }
-    let count: i64 = conn.query_row(
-        r#"
+                params![source_label, floor_ms, workspace_pattern],
+                |row| row.get(0),
+            )?;
+            return Ok(count.max(0) as usize);
+        }
+        let count: i64 = conn.query_row(
+            r#"
         SELECT COUNT(*)
         FROM verification_runs
         WHERE review_required = 1
@@ -15609,10 +15467,11 @@ fn queue_legacy_verification_review_attempt_count(
           AND preview = ?3
           AND CAST(created_at AS INTEGER) >= ?4
         "#,
-        params![job.source_label, job.goal, job.preview, floor_ms],
-        |row| row.get(0),
-    )?;
-    Ok(count.max(0) as usize)
+            params![source_label, goal, preview, floor_ms],
+            |row| row.get(0),
+        )?;
+        Ok(count.max(0) as usize)
+    })
 }
 
 fn queue_review_budget_attempt_count(
@@ -21939,7 +21798,7 @@ fn maybe_redirect_owner_visible_work_to_strategy_setup(
         .unwrap_or_else(|| default_follow_up_thread_key(&job.goal));
     let conversation_id = turn_loop::conversation_id_for_thread_key(Some(thread_key.as_str()));
     let db_path = crate::paths::core_db(&root);
-    let engine = lcm::LcmEngine::open(&db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(&db_path)?;
     let strategy = engine.active_strategy_snapshot(conversation_id, Some(thread_key.as_str()))?;
     if strategy.active_vision.is_some() && strategy.active_mission.is_some() {
         return Ok(false);
@@ -25464,7 +25323,7 @@ fn recover_mission_after_accepted_attempt(
     if !accepted {
         return Ok(None);
     }
-    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(db_path)?;
     engine
         .reset_mission_agent_failure_count(conversation_id)
         .map(Some)
@@ -34107,11 +33966,62 @@ Business OS command:
     }
 
     #[test]
+    fn news_queue_session_grants_only_the_persistent_checkpoint_directory() {
+        let root = temp_root("news-checkpoint-session-options");
+        let mut job = QueuedPrompt {
+            queue_task_metadata: json!({
+                "business_os_module": "news",
+                "business_os_command_type": "news.issue.generate",
+            }),
+            prompt: "Generate a news issue".into(),
+            goal: "News issue".into(),
+            preview: "News issue".into(),
+            source_label: "queue".into(),
+            suggested_skill: None,
+            leased_message_keys: vec!["queue:system::news".into()],
+            leased_ticket_event_keys: Vec::new(),
+            thread_key: Some("business-os/news/issue".into()),
+            workspace_root: Some(root.join("workspace/news-attempt").display().to_string()),
+            ticket_self_work_id: None,
+            outbound_email: None,
+            outbound_anchor: None,
+        };
+        let expected = vec![root.join("runtime/news/checkpoints")];
+        let options = chat_turn_session_options_for_queue_job(&root, &job);
+        assert_eq!(options.additional_writable_roots, expected);
+        assert_eq!(
+            options.required_initial_tool.as_deref(),
+            Some("update_plan")
+        );
+        assert!(options.force_isolated_session);
+
+        // Another attempt's workspace must not change the shared checkpoint.
+        job.workspace_root = Some(root.join("workspace/retry").display().to_string());
+        assert_eq!(
+            chat_turn_session_options_for_queue_job(&root, &job).additional_writable_roots,
+            expected
+        );
+        for metadata in [
+            Value::Null,
+            json!({"business_os_module":"news", "business_os_command_type":"news.source.adapter"}),
+            json!({"business_os_module":"other", "business_os_command_type":"news.issue.generate"}),
+        ] {
+            job.queue_task_metadata = metadata;
+            // Prompt text must never grant this filesystem authority.
+            job.prompt = "news.issue.generate runtime/news/checkpoints".into();
+            assert!(chat_turn_session_options_for_queue_job(&root, &job)
+                .additional_writable_roots
+                .is_empty());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn person_research_gap_closure_queue_jobs_get_one_hour_turn_budget() {
         let workspace = temp_root("person-research-gap-session-options");
         let job = person_research_gap_closure_test_job(&workspace);
 
-        let options = chat_turn_session_options_for_queue_job(&job);
+        let options = chat_turn_session_options_for_queue_job(&workspace, &job);
 
         assert_eq!(options.turn_timeout_secs_override, Some(3_600));
         assert_eq!(
@@ -34124,7 +34034,7 @@ Business OS command:
 
         let mut ordinary = job;
         ordinary.queue_task_metadata = Value::Null;
-        let ordinary_options = chat_turn_session_options_for_queue_job(&ordinary);
+        let ordinary_options = chat_turn_session_options_for_queue_job(&workspace, &ordinary);
         assert_eq!(ordinary_options.turn_timeout_secs_override, None);
         assert_eq!(
             ordinary_options.required_initial_tool.as_deref(),
@@ -34137,7 +34047,7 @@ Business OS command:
         let workspace = temp_root("systematic-research-session-options");
         let job = systematic_research_test_job(&workspace);
 
-        let options = chat_turn_session_options_for_queue_job(&job);
+        let options = chat_turn_session_options_for_queue_job(&workspace, &job);
 
         assert!(!options.disable_mcp_servers);
         assert!(options.force_isolated_session);
@@ -34159,7 +34069,7 @@ Business OS command:
             "\nReview feedback: evidence receipt artifacts were not emitted by typed ctox_web_read calls in the current durable research run",
         );
 
-        let options = chat_turn_session_options_for_queue_job(&job);
+        let options = chat_turn_session_options_for_queue_job(&workspace, &job);
 
         // Receipt retries still begin with the durable plan. Once update_plan
         // succeeds, the complete typed research surface is restored.
@@ -34172,6 +34082,7 @@ Business OS command:
 
     #[test]
     fn business_os_app_queue_jobs_use_lean_mcp_free_session() {
+        let root = temp_root("app-queue-session-options");
         let mut job = QueuedPrompt {
             queue_task_metadata: business_os_app_queue_metadata(
                 "contracts",
@@ -34191,7 +34102,7 @@ Business OS command:
             outbound_anchor: None,
         };
 
-        let options = chat_turn_session_options_for_queue_job(&job);
+        let options = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(options.disable_mcp_servers);
         assert!(!options.force_isolated_session);
         assert!(options.plain_prompt);
@@ -34214,7 +34125,7 @@ Business OS command:
 
         job.prompt = "Write a short implementation note.".to_string();
         job.queue_task_metadata = json!({});
-        let options = chat_turn_session_options_for_queue_job(&job);
+        let options = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(!options.disable_mcp_servers);
         assert!(options.force_isolated_session);
         assert!(!options.plain_prompt);
@@ -34227,7 +34138,7 @@ Business OS command:
         assert_eq!(options.turn_timeout_secs_override, None);
 
         job.thread_key = None;
-        let options = chat_turn_session_options_for_queue_job(&job);
+        let options = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(!options.force_isolated_session);
         assert!(queue_job_reuses_persistent_session(&options));
     }
@@ -34254,7 +34165,7 @@ Business OS command:
             .context("missing actual supervisor queue task")?;
         let key = task.message_key.clone();
         let job = queued_prompt_from_queue_task(task);
-        let mut options = chat_turn_session_options_for_queue_job(&job);
+        let mut options = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(configure_business_os_mcp_session_for_queue_job(
             root,
             &job,
@@ -34289,7 +34200,7 @@ Business OS command:
         // Verification authenticates claims; dispatch compares the live lease.
         // The service must also refuse minting a session once the live lease expires.
         core.execute("UPDATE communication_routing_state SET lease_expires_at='2001-01-01T00:00:00Z' WHERE message_key=?1", [&key])?;
-        let mut expired = chat_turn_session_options_for_queue_job(&job);
+        let mut expired = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut expired).is_err());
         assert!(expired.business_os_mcp_command_session.is_none());
         Ok(())
@@ -34322,7 +34233,7 @@ Business OS command:
         let mut unrelated = job.clone();
         unrelated.leased_message_keys = vec!["email:owner::mail".into()];
         assert!(!queue_job_needs_native_turn_lease(&unrelated));
-        let mut options = chat_turn_session_options_for_queue_job(&job);
+        let mut options = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut options).is_err());
         assert!(options.business_os_mcp_command_session.is_none());
         let mut fence = channels::QueueTurnLeaseFence {
@@ -34364,7 +34275,7 @@ Business OS command:
             crate::business_os::mcp_channel::verify_internal_command_session_token(root, token)?;
         assert_eq!(trusted["command_id"], "");
         assert_eq!(trusted["workjet_confirmed_plan"]["lease"]["task_id"], task);
-        let mut wrong = chat_turn_session_options_for_queue_job(&job);
+        let mut wrong = chat_turn_session_options_for_queue_job(&root, &job);
         wrong.queue_turn_lease = options.queue_turn_lease.clone();
         wrong.queue_turn_lease.as_mut().unwrap().worker_id = "foreign-worker".into();
         assert!(configure_business_os_mcp_session_for_queue_job(root, &job, &mut wrong).is_err());
@@ -34400,7 +34311,7 @@ Business OS command:
         let key = accepted["task_id"].as_str().context("missing task")?;
         let task = channels::load_queue_task(root, key)?.context("missing queued task")?;
         let job = queued_prompt_from_queue_task(task);
-        let mut options = chat_turn_session_options_for_queue_job(&job);
+        let mut options = chat_turn_session_options_for_queue_job(&root, &job);
         // Merely selecting an external executor does not admit a Crew attempt.
         assert!(!configure_business_os_mcp_session_for_queue_job(
             root,
@@ -34526,7 +34437,7 @@ Business OS command:
             outbound_email: None,
             outbound_anchor: None,
         };
-        let mut options = chat_turn_session_options_for_queue_job(&job);
+        let mut options = chat_turn_session_options_for_queue_job(&root, &job);
         assert!(configure_business_os_mcp_session_for_queue_job(
             &root,
             &job,
@@ -38569,7 +38480,7 @@ Business OS command:
 
         // The rework may act on Business OS as the sender (lead import from
         // the Excel); a sender without a Business OS user gets no session.
-        let mut options = chat_turn_session_options_for_queue_job(&leased);
+        let mut options = chat_turn_session_options_for_queue_job(&root, &leased);
         assert!(
             !configure_business_os_mcp_session_for_queue_job(&root, &leased, &mut options)
                 .expect("configure without business user")

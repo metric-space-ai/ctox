@@ -1,0 +1,2319 @@
+{
+  "_capability_evidence": {
+    "agent.task.enqueue": [
+      "handlers/_agent-task.js"
+    ],
+    "agent.task.get": [
+      "handlers/_agent-task.js"
+    ]
+  },
+  "_declaration": "modules/support/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/support/index.html",
+  "_rust_basis": "`rs:support.rs` 5 150 Z. (388 Fundstellen), Routing `rs:command_plane.rs:2338`; Projektionen `rs:rxdb_peer_projections.rs` (22), Policy `rs:store_policy_audit.rs` (19).",
+  "_source_dir": "src/apps/business-os/modules/support",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "command_rights support.inbox.upsert (support.manage_inboxes): kein Handler-Datei.",
+    "command_rights support.conversation.open_from_thread (support.triage): kein Handler-Datei.",
+    "command_rights support.conversation.claim (support.triage): kein Handler-Datei.",
+    "command_rights support.conversation.assign (support.assign): kein Handler-Datei.",
+    "command_rights support.conversation.status (support.triage): kein Handler-Datei.",
+    "command_rights support.conversation.priority (support.triage): kein Handler-Datei.",
+    "command_rights support.conversation.snooze (support.triage): kein Handler-Datei.",
+    "command_rights support.conversation.resolve (support.resolve): kein Handler-Datei.",
+    "command_rights support.conversation.reopen (support.triage): kein Handler-Datei.",
+    "command_rights support.identity.link (support.triage): kein Handler-Datei.",
+    "command_rights support.note.create (support.triage): kein Handler-Datei.",
+    "command_rights support.ticket.link (support.triage): kein Handler-Datei.",
+    "command_rights support.ticket.create_from_conversation (support.triage): kein Handler-Datei.",
+    "command_rights support.reply.draft (support.reply): kein Handler-Datei.",
+    "command_rights support.reply.send (support.reply): kein Handler-Datei.",
+    "command_rights support.view.upsert (support.triage): kein Handler-Datei.",
+    "command_rights support.view_filter.upsert (support.triage): kein Handler-Datei.",
+    "command_rights support.bulk.assign (support.assign): kein Handler-Datei.",
+    "command_rights support.bulk.status (support.triage): kein Handler-Datei.",
+    "command_rights support.bulk.priority (support.triage): kein Handler-Datei.",
+    "command_rights support.bulk.snooze (support.triage): kein Handler-Datei.",
+    "command_rights support.bulk.resolve (support.resolve): kein Handler-Datei.",
+    "command_rights support.assignment_policy.upsert (support.assign): kein Handler-Datei.",
+    "command_rights support.macro.upsert (support.manage_macros): kein Handler-Datei.",
+    "command_rights support.macro.run (support.triage): kein Handler-Datei.",
+    "command_rights support.automation_rule.upsert (support.manage_inboxes): kein Handler-Datei.",
+    "command_rights support.automation.evaluate (support.triage): kein Handler-Datei.",
+    "command_rights support.sla_policy.upsert (support.manage_sla): kein Handler-Datei.",
+    "command_rights support.sla.apply (support.manage_sla): kein Handler-Datei.",
+    "command_rights support.sla.recalculate (support.manage_sla): kein Handler-Datei.",
+    "command_rights support.reporting.rebuild_rollups (support.manage_inboxes): kein Handler-Datei.",
+    "command_rights support.agent.writeback (support.agent_request): kein Handler-Datei.",
+    "command_rights support.agent.apply_suggestion (support.agent_apply): kein Handler-Datei.",
+    "command_rights support.agent.reject_suggestion (support.agent_apply): kein Handler-Datei.",
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "support",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "agent.task.enqueue",
+    "agent.task.get"
+  ],
+  "collections": {
+    "support_agent_requests": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "conversation_id",
+          "command_id",
+          "task_id",
+          "status"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "command_id": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "request_kind": {
+            "type": "string"
+          },
+          "required_skills": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "writeback_contract": {
+            "additionalProperties": true,
+            "type": "object"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "conversation_id",
+          "request_kind",
+          "status"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_agent_suggestions": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "conversation_id",
+          "source_command_id",
+          "task_id",
+          "suggestion_kind",
+          "status"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "confidence": {
+            "type": "number"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "required_human_action": {
+            "type": "string"
+          },
+          "source_command_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "suggestion_kind": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "conversation_id",
+          "suggestion_kind",
+          "status"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_applied_slas": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "conversation_id",
+          "policy_id",
+          "status",
+          "resolution_due_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "breached_at_ms": {
+            "type": "number"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "first_response_due_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "next_response_due_at_ms": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "resolution_due_at_ms": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "conversation_id",
+          "policy_id",
+          "status"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_assignment_events": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "conversation_id",
+          "policy_id",
+          "assignee_id",
+          [
+            "conversation_id",
+            "occurred_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "assignee_id": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "occurred_at_ms": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "previous_assignee_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "conversation_id",
+          "event_type",
+          "occurred_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_assignment_policies": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "strategy"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "fair_distribution_limit": {
+            "type": "number"
+          },
+          "fair_distribution_window_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "strategy": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "name",
+          "strategy"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_automation_rules": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "event_name",
+          "active"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "actions_json": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "conditions_json": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "event_name": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "query_operator": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "name",
+          "event_name",
+          "active"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_conversation_events": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "conversation_id",
+          "event_type",
+          "source_command_id",
+          [
+            "conversation_id",
+            "occurred_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "actor_id": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "occurred_at_ms": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "source_command_id": {
+            "type": "string"
+          },
+          "source_task_id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "conversation_id",
+          "event_type",
+          "occurred_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_conversations": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "inbox_id",
+          "status",
+          "priority",
+          "assignee_id",
+          "team_id",
+          "customer_account_id",
+          "customer_contact_id",
+          "last_activity_at_ms",
+          [
+            "status",
+            "last_activity_at_ms"
+          ],
+          [
+            "assignee_id",
+            "last_activity_at_ms"
+          ],
+          [
+            "team_id",
+            "last_activity_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "assignee_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "custom_attributes": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "customer_account_id": {
+            "type": "string"
+          },
+          "customer_contact_id": {
+            "type": "string"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "inbox_id": {
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "label_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "last_activity_at_ms": {
+            "type": "number"
+          },
+          "last_message_key": {
+            "type": "string"
+          },
+          "primary_thread_key": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "search_text": {
+            "type": "string"
+          },
+          "snoozed_until_ms": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          },
+          "ticket_case_id": {
+            "type": "string"
+          },
+          "unread_count": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "waiting_since_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "status",
+          "priority",
+          "last_activity_at_ms",
+          "search_text"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_identity_links": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "channel",
+          "account_key",
+          "normalized_identity",
+          "customer_contact_id",
+          "status"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "account_key": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "confidence": {
+            "type": "number"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "customer_account_id": {
+            "type": "string"
+          },
+          "customer_contact_id": {
+            "type": "string"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "external_identity": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "normalized_identity": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "source": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "channel",
+          "normalized_identity",
+          "status"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_inboxes": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "status",
+          "team_id",
+          "is_default"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "assignment_policy_id": {
+            "type": "string"
+          },
+          "channel_filters_json": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_default": {
+            "type": "boolean"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "policy_json": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "sla_policy_id": {
+            "type": "string"
+          },
+          "sort_key": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "name",
+          "status"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_label_assignments": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "conversation_id",
+          "label_id",
+          [
+            "conversation_id",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "assigned_by_id": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "label_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "conversation_id",
+          "label_id"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_labels": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "title",
+          "sidebar"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "color": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "description": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "sidebar": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "title"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_macros": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "visibility",
+          "owner_id"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "actions_json": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "visibility": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "title",
+          "visibility"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_notes": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "conversation_id",
+          "author_id",
+          [
+            "conversation_id",
+            "created_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "author_id": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "source": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "visibility": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "conversation_id",
+          "body",
+          "visibility"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_reporting_events": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "conversation_id",
+          "event_name",
+          "metric_name",
+          [
+            "event_name",
+            "occurred_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "conversation_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "event_name": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "metric_name": {
+            "type": "string"
+          },
+          "occurred_at_ms": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "value_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "event_name",
+          "occurred_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_reporting_rollups": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "rollup_key",
+          "metric_name",
+          "bucket_start_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "bucket_end_ms": {
+            "type": "number"
+          },
+          "bucket_start_ms": {
+            "type": "number"
+          },
+          "count": {
+            "type": "number"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "dimensions": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "metric_name": {
+            "type": "string"
+          },
+          "rollup_key": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "value": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "rollup_key",
+          "bucket_start_ms",
+          "metric_name"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_sla_events": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "conversation_id",
+          "applied_sla_id",
+          "event_type",
+          [
+            "conversation_id",
+            "occurred_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "applied_sla_id": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "occurred_at_ms": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "conversation_id",
+          "event_type",
+          "occurred_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_sla_policies": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "active"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "business_hours_json": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "first_response_target_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "next_response_target_ms": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "resolution_target_ms": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "name",
+          "active"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_thread_links": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "conversation_id",
+          "thread_key",
+          [
+            "conversation_id",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "account_key": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "conversation_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "link_role": {
+            "type": "string"
+          },
+          "thread_key": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "conversation_id",
+          "thread_key"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "support_view_filters": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "view_id",
+          "field",
+          "position"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "field": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "position": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "value": {
+            "type": [
+              "object",
+              "array",
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          },
+          "view_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "view_id",
+          "field",
+          "operator"
+        ],
+        "type": "object",
+        "version": 1
+      }
+    },
+    "support_views": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/support.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "owner_id",
+          "scope",
+          "position"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "filters_json": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "position": {
+            "type": "number"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "sorts_json": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "title",
+          "scope"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {
+    "support.agent.apply_suggestion": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.agent_apply",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.agent.reject_suggestion": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.agent_apply",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.agent.task": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.agent_request",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.agent.task.complete": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.agent_request",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.agent.task.failed": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.agent_request",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.agent.writeback": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.agent_request",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.assignment_policy.upsert": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.assign",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.automation.evaluate": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.automation_rule.upsert": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.manage_inboxes",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.bulk.assign": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.assign",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.bulk.priority": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.bulk.resolve": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.resolve",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.bulk.snooze": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.bulk.status": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.conversation.assign": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.assign",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.conversation.claim": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.conversation.open_from_thread": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.conversation.priority": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.conversation.reopen": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.conversation.resolve": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.resolve",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.conversation.snooze": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.conversation.status": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.identity.link": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.inbox.upsert": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.manage_inboxes",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.macro.run": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.macro.upsert": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.manage_macros",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.note.create": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.reply.draft": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.reply",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.reply.send": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.reply",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.reporting.rebuild_rollups": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.manage_inboxes",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.sla.apply": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.manage_sla",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.sla.recalculate": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.manage_sla",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.sla_policy.upsert": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.manage_sla",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.ticket.create_from_conversation": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.ticket.link": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.view.upsert": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    },
+    "support.view_filter.upsert": {
+      "_basis": "handlers/_shared.js SUPPORT_COMMAND_PERMISSIONS; Core prüft Chef/Admin oder Modulzuweisung (policy.rs:483-490)",
+      "_permission": "support.triage",
+      "assigned_users": true,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    }
+  },
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "support_agent_requests": [
+      "read"
+    ],
+    "support_conversations": [
+      "read"
+    ],
+    "support_notes": [
+      "read"
+    ]
+  },
+  "files": {
+    "README.md": "bb19cddb7daf950a077d6cfbe2c5515fdbcd2306df9306d746092844dbeb0f3a",
+    "V4-HANDLERS.md": "5a430e9a885f967a23727ec5890182f0984371720c6d3cd48e479566a7758f73",
+    "V4-PORT.md": "21d9a5c9fd674c939bd72067a07500aa0ded76fe40d9bae64a462f2ab2dac845",
+    "assets/icon.jpg": "fd3efd91b523dcb1c454eff58f8ee0afbc293cba25a995288e94680fce188dd2",
+    "assets/icon@512.jpg": "a84fcda3b5e667e5694797913e700e04303a0d255949f2c6134505614eb9cb96",
+    "collections.schema.json": "37594d55b76087bd59564b0a5f4fb9dd0ef46b1b5ec585c36e5ce17982204609",
+    "handlers/_agent-task.js": "3fa8cdd191fe250d56c830ce4f6775f8b5114d61c2ba204fcde7c8038989ccc4",
+    "handlers/_shared.js": "099e211b347171fe04c007479bffa3a768b242858f129e3410928b8f1d4313ae",
+    "handlers/_suggestion-decision.js": "141f24ae6d8161c977b3844ac234e2fc7a5bd192fc68a9eee70e18447bbc7472",
+    "handlers/support.agent.apply_suggestion.js": "7983bf12af95d1c372e160b7ba5bf04a112830640f18bc4079f99482cea9c811",
+    "handlers/support.agent.reject_suggestion.js": "cdf5e78c6aff8b579c947e17ed691d9b9141ec40e9a43f9a8385a7e8ba796bd4",
+    "handlers/support.agent.task.complete.js": "10601408ee709059b8613b3251ef38d39f9436d4be6d1b718fc3105a744049e7",
+    "handlers/support.agent.task.failed.js": "996f5620e3032be66494a410378d6a53cf2c063ac41ba56f6a41d3ad0f735589",
+    "handlers/support.agent.task.js": "1d7acb027a25c23bdaa4c601e23bcaf0d31ef5748660835f4157d8ab0e01a5a9",
+    "handlers/support.agent.writeback.js": "9823aedd7e7d7ad4a14b071f53b4476c7a9164cee8cc1d45a24b745e5816a510",
+    "handlers/support.assignment_policy.upsert.js": "970750ed1cdd626efc9b4483fbda4df64affc068525e997ea369a19d5150be9d",
+    "handlers/support.automation.evaluate.js": "40b58a7fa2ee31f755290eb5c0d494a482dc12e8967af5d4b210c2c0fdcfd3ab",
+    "handlers/support.automation_rule.upsert.js": "d1101f84586ec954a6f146ee74d0885e51f32ff1517700eae3f11b60d60f85d5",
+    "handlers/support.bulk.assign.js": "94846a278c9ac5d22ac88ad3149af2f989033ac88f3289aeb8cc913334fb870a",
+    "handlers/support.bulk.priority.js": "b4795bceb2b8a7ea73460e3ebbef6726187275bf77cc2f471967cf66dee07e5d",
+    "handlers/support.bulk.resolve.js": "0d72eed747ef17cc8add0c88cb3e6415966ceedd5f442ba7475ddef780988a10",
+    "handlers/support.bulk.snooze.js": "4841c2c0ecfe3bfcb1c36a0bee3681f6f93c77be351c9af106b25bb2f60ecd4c",
+    "handlers/support.bulk.status.js": "e6ad670ac7e5190ca1dbe9c171c4f01a43c69375434ac5d1ab883821613cb4eb",
+    "handlers/support.conversation.assign.js": "3ce03b0c6411a77eab1fbe0586b8247d7654a11a4ff8b80178f1fe59baa2e719",
+    "handlers/support.conversation.claim.js": "56245195ecfc492cb0ad3a84d1e5a25b87c350267c22f43fcbd3e2ac5a9966fe",
+    "handlers/support.conversation.open_from_thread.js": "c0870b407f8d253796c84fef44038fb90a89fc155dc8510dea7cf41b1ac16a7d",
+    "handlers/support.conversation.priority.js": "d68d17eb3b2e869cedc7c45864be7d90cd57e10aa2ed10f8c46cac4523a53ead",
+    "handlers/support.conversation.reopen.js": "ecae65ceef7939c47551eeddbdfe5f7a1b8b6a244dd1fe51b8b3a8dd4b048e4f",
+    "handlers/support.conversation.resolve.js": "200f8c0088d04d44a28e458fa85a9d77b1f25551de9461d51e200005f738a3e6",
+    "handlers/support.conversation.snooze.js": "be004b6ee67328d947c900ac6a136cccda5688b57e4878035746c663a549b31b",
+    "handlers/support.conversation.status.js": "d53afbb6cb4666e4be14990feb2126fca868fe19f4100257c842fe1fb8b16575",
+    "handlers/support.identity.link.js": "83b36e69a72540613d9601f84f69f5d98ed3ece646d021e93cc3a3a912494fea",
+    "handlers/support.inbox.upsert.js": "371702e9b8dbfa59089d4d0d26602d5fc087bb58326a31b470d6dc7366ed8d43",
+    "handlers/support.intake.project.js": "69da9b0b5f9c3a4e2c2189bdd4bac35fd75e95ce5fc2575cdba4493e5842f122",
+    "handlers/support.macro.run.js": "19474c40ab43786e68e06e69f86537513a4cee0ea705d296f490c6b11693c908",
+    "handlers/support.macro.upsert.js": "71e40e1bf112f2fd401f7cb9b609f20c7dd79e36ae5938d17e930d8e150c141b",
+    "handlers/support.note.create.js": "64afd0547b68440339c6e8bc4c6e3a92e5d19f9231073ac4d142cc1ca6c4423f",
+    "handlers/support.reply.draft.js": "dbb1afe7597c085fe8b925cacaea22815aef174efc66bc9bf16bca0d3ae678ce",
+    "handlers/support.reply.send.js": "a764ea0b421fa4f8737eca68b8247395f9fc8b907297d9c4d93030f4c5bb5dac",
+    "handlers/support.reporting.rebuild_rollups.js": "f71502b052274ab16fbf216035009e825a08de5a049918c4ea599afd62e40fe0",
+    "handlers/support.sla.apply.js": "672a3fda3fedc51ebb1c215d1cb11e3cf5ec63a475f9da1094ba78b0430d76d5",
+    "handlers/support.sla.recalculate.js": "84ff33ca38179770cc067313defa0c367f8c683e4d462d2ec43b5dac8cb66736",
+    "handlers/support.sla_policy.upsert.js": "73619c13433d78dcdfea0e2efc6984abf51acf72cd76d7fe99a2c4679ac674a6",
+    "handlers/support.ticket.create_from_conversation.js": "71f5f6ab0f1e8f14a3d8cc2f858fcb8015fe85009eb3b55e8dbf1fb1d2c19e06",
+    "handlers/support.ticket.link.js": "5f2c9376a5791675385417f85c062516fd72ee430d018f3af9cd09ee4d382836",
+    "handlers/support.view.upsert.js": "2a2f98cc1cce56f16db3f22ad281f64d1a2fd964b50ba3cc429e46ffe86c5a1b",
+    "handlers/support.view_filter.upsert.js": "d891e2583f027702075a16300253593213e5f23dfa82c9b10c560ea46eb656bb",
+    "icon.svg": "c875f3c38e91436bef3ee3351f8e37148e151260bd4592773163c1f81dcde045",
+    "index.css": "970d5360cb0a1025c25d9171c59a66bf496d854f1b3ac3ed0cb2a4ff0fa2a23c",
+    "index.html": "ec46dba532d4573004e5a9fc77147b8d847d0b476cb897d54e6085fe007331c9",
+    "index.js": "b91642cb24fcf35b27c14346ee786700f19f94bbff16825882859a2ec9e89bb3",
+    "locales/de.json": "aa0be35de88307839d471f1b460a8b171e1e77fa88b23a2bae52992fb47f2ace",
+    "locales/en.json": "10ab4efec61b9762f62ae5a3f0b1049fa7ca9eb9b4e691186ba1f118a75da3bf",
+    "module.json": "2856f496ad8c920eeab8aa6ffa440bde8c0bb94bd482615bfb84d44c4f7ce157",
+    "prompts/agent-task.md": "b06001c1782ec04c0b8a26d6fdb3309a33f791376445dbca25843085ec098570",
+    "skills/support-workflow/SKILL.md": "892d348b77bfbd74e15cb705ef96bd87124a9a92da03de32749c353b736f58b4",
+    "support-commands.mjs": "fd5ca36c160b8d7c5555e49d5b2364d1a7fa632170020889ffa382f18d1ebd20",
+    "support-reducers.mjs": "07e2848d60258fddec40ad82641cfcb763dba7281869fba5eb5436385e4e007f",
+    "v4-manifest.json": "4005f4f1417174355716401e095becf584ef9fd804caa8e21e77b7f99c43b481"
+  },
+  "foreign_collections": {
+    "business_chats": {
+      "_evidence": {
+        "code_read": [
+          "index.js:42",
+          "index.js:1422"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "index.js:43",
+          "index.js:1444"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "communication_messages": {
+      "_evidence": {
+        "code_read": [
+          "handlers/support.intake.project.js:5",
+          "handlers/support.intake.project.js:7",
+          "handlers/support.intake.project.js:33"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/support/V4-HANDLERS.md W5",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "trigger",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "watch"
+      ],
+      "owner_app": "conversations"
+    },
+    "communication_threads": {
+      "_evidence": {
+        "code_read": [
+          "handlers/support.intake.project.js:5",
+          "handlers/support.intake.project.js:7",
+          "handlers/support.intake.project.js:26"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/support/V4-HANDLERS.md W5",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "conversations"
+    },
+    "ctox_queue_tasks": {
+      "_evidence": {
+        "code_read": [
+          "index.js:44",
+          "index.js:1462"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "ctox_ticket_cases": {
+      "_evidence": {
+        "code_read": [
+          "index.js:36",
+          "index.js:1488"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "tickets"
+    },
+    "customer_accounts": {
+      "_evidence": {
+        "code_read": [
+          "index.js:37",
+          "index.js:1472"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "customers"
+    },
+    "customer_contacts": {
+      "_evidence": {
+        "code_read": [
+          "index.js:38",
+          "index.js:1477",
+          "index.js:1483"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "customers"
+    },
+    "desktop_file_chunks": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_shared.js:784"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "desktop"
+    },
+    "desktop_files": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_shared.js:783"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "desktop"
+    },
+    "notes": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_agent-task.js:48"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "notes"
+    }
+  },
+  "handlers": {
+    "support.agent.task": "handlers/support.agent.task.js",
+    "support.agent.task.complete": "handlers/support.agent.task.complete.js",
+    "support.agent.task.failed": "handlers/support.agent.task.failed.js",
+    "support.intake.project": "handlers/support.intake.project.js"
+  },
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/support.jpg (shared/operator-icon-selection.js, sha256 d5058006ec86…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Operations",
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 780,
+        "width": 1180
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#0d9488",
+        "category": "Operations",
+        "iconAssetId": "workjet.business-os.support",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "list-detail",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Support"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {
+    "support_view_filters": {
+      "_reasons": [
+        "Typ von „value“: object → object|array|string|number|boolean|null"
+      ],
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_source": "v4/schemas/support.collections.schema.json migrations",
+      "from_ver": "main@4794af03d",
+      "migrate_fn": null,
+      "steps": []
+    }
+  },
+  "min_app_api": "4.0",
+  "prompts": [
+    {
+      "name": "agent-task",
+      "path": "prompts/agent-task.md"
+    }
+  ],
+  "provenance": {
+    "base_hash": "e11a9c32973b6ed17433874bbb6d8c4de598fb8e2f37d2dd792463847e451d6f",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "skills": [
+    {
+      "name": "support-workflow",
+      "path": "skills/support-workflow/SKILL.md"
+    }
+  ],
+  "styles": [
+    "index.css"
+  ],
+  "title": "Support",
+  "triggers": [
+    {
+      "handler": "handlers/support.intake.project.js",
+      "on": {
+        "collection": "communication_messages",
+        "op": "insert"
+      }
+    },
+    {
+      "handler": "handlers/support.intake.project.js",
+      "on": {
+        "collection": "communication_messages",
+        "op": "update"
+      }
+    }
+  ],
+  "version": "0.1.2"
+}

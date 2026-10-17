@@ -1,0 +1,295 @@
+{
+ "app": "documents",
+ "width": 420,
+ "steps": [
+  {
+   "label": "Launcher",
+   "role": "launcher",
+   "shot": "420-00.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "dialogs": null,
+   "navigations": null,
+   "openedFiles": null,
+   "probs": []
+  },
+  {
+   "label": "geöffnet",
+   "role": "open",
+   "shot": "420-01.jpg",
+   "effect": "",
+   "log": [
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.auto",
+     "data": "{\"id\":\"research.report.auto\",\"document_type\":\"word_document\",\"title\":\"Deep Research Word-Bericht\",\"description\":\"CTOX wählt den passenden Report-Typ und erstellt ein belastbares Word-Dokument.\",\"command_type\":\"research.systematic.report.cre…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.decision_brief",
+     "data": "{\"id\":\"research.report.decision_brief\",\"document_type\":\"word_document\",\"title\":\"Entscheidungsvorlage\",\"description\":\"Kurzes empfehlungsorientiertes Memo mit Optionen, Kriterien und Bewertung.\",\"command_type\":\"research.systematic.report.crea…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.feasibility_study",
+     "data": "{\"id\":\"research.report.feasibility_study\",\"document_type\":\"word_document\",\"title\":\"Machbarkeitsstudie\",\"description\":\"Decision-grade Machbarkeitsstudie mit Evidenz, Bewertung und DOCX-Render.\",\"command_type\":\"research.systematic.report.crea…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.market_research",
+     "data": "{\"id\":\"research.report.market_research\",\"document_type\":\"word_document\",\"title\":\"Marktanalyse\",\"description\":\"Marktgröße, Segmente, Treiber, Wettbewerb, Barrieren und Empfehlung.\",\"command_type\":\"research.systematic.report.create\",\"report_t…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.project_description",
+     "data": "{\"id\":\"research.report.project_description\",\"document_type\":\"word_document\",\"title\":\"Projektbeschreibung / Fördervorhaben\",\"description\":\"Unternehmens- und Projektbeschreibung für Innovations- und Fördervorhaben.\",\"command_type\":\"research.s…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.source_review",
+     "data": "{\"id\":\"research.report.source_review\",\"document_type\":\"word_document\",\"title\":\"Quellenreview\",\"description\":\"Systematische Quellen- und Datenquellenrecherche mit Taxonomie und Priorisierung.\",\"command_type\":\"research.systematic.report.creat…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.literature_review",
+     "data": "{\"id\":\"research.report.literature_review\",\"document_type\":\"word_document\",\"title\":\"Stand der Technik\",\"description\":\"Literature Review mit Themen, Synthese, Lücken und offenen Fragen.\",\"command_type\":\"research.systematic.report.create\",\"rep…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.technology_screening",
+     "data": "{\"id\":\"research.report.technology_screening\",\"document_type\":\"word_document\",\"title\":\"Technologie-Screening\",\"description\":\"Optioneninventar, Kriterien, Shortlist und nächste Schritte.\",\"command_type\":\"research.systematic.report.create\",\"re…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.competitive_analysis",
+     "data": "{\"id\":\"research.report.competitive_analysis\",\"document_type\":\"word_document\",\"title\":\"Wettbewerbsanalyse\",\"description\":\"Wettbewerber-Set, Bewertungsachsen, Matrix, Positionierung, Lücken und Empfehlung.\",\"command_type\":\"research.systematic…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "research.report.whitepaper",
+     "data": "{\"id\":\"research.report.whitepaper\",\"document_type\":\"word_document\",\"title\":\"Whitepaper\",\"description\":\"These, Kontext, Argumente, Gegenargumente, Implikationen und Position.\",\"command_type\":\"research.systematic.report.create\",\"report_type\":…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "document.extract-requirements",
+     "data": "{\"id\":\"document.extract-requirements\",\"document_type\":\"word_document\",\"title\":\"Requirements extrahieren\",\"command_type\":\"document.extract-requirements\",\"prompt_template\":\"prompts/document-extract-requirements.md\",\"description\":\"\",\"created_a…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "document.review-risks",
+     "data": "{\"id\":\"document.review-risks\",\"document_type\":\"word_document\",\"title\":\"Risiken prüfen\",\"command_type\":\"document.review-risks\",\"prompt_template\":\"prompts/document-review-risks.md\",\"description\":\"\",\"created_at_ms\":1792085732392,\"updated_at_ms…",
+     "result": "accepted"
+    },
+    {
+     "kind": "write",
+     "op": "put",
+     "collection": "document_runbooks",
+     "id": "document.summarize",
+     "data": "{\"id\":\"document.summarize\",\"document_type\":\"word_document\",\"title\":\"Zusammenfassen\",\"command_type\":\"document.summarize\",\"prompt_template\":\"prompts/document-summarize.md\",\"description\":\"\",\"created_at_ms\":1792085732392,\"updated_at_ms\":1792085…",
+     "result": "accepted"
+    }
+   ],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Dokumentliste öffnen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-02.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Ausgewähltes Dokument exportieren",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-03.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Markdown Export starten → Auswahl nicht möglich (locator.selectOption: Timeout 3000ms exceeded.)",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "420-04.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Bearbeiten",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-05.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Vorschau",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-06.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Dokumente",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  }
+ ],
+ "flags": []
+}

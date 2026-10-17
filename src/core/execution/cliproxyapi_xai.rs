@@ -15,6 +15,9 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+#[path = "cliproxyapi_xai_quota.rs"]
+pub(crate) mod quota;
+
 static AUTH_USE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const SCOPE: &str = "provider-subscriptions";
 const NAME: &str = "xai-instance-oauth";
@@ -882,7 +885,12 @@ async fn execute_route_at(
             upstream = upstream.header(&key, value);
         }
     }
-    let data = bounded_response(upstream.send().await?, 32 * 1024 * 1024).await?;
+    let response = upstream.send().await?;
+    ctox_cliproxyapi::internal::api::account_selection::record_upstream_status(
+        response.status().as_u16(),
+        &[],
+    );
+    let data = bounded_response(response, 32 * 1024 * 1024).await?;
     let data = if stream {
         data
     } else {

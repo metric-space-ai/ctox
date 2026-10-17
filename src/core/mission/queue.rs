@@ -54,7 +54,7 @@ const QUEUE_USAGE: &str = "usage:
 static QUEUE_BRIDGE_DB_OPEN_COUNTS: OnceLock<Mutex<HashMap<std::path::PathBuf, u64>>> =
     OnceLock::new();
 #[cfg(test)]
-static QUEUE_METADATA_DB_OPEN_COUNTS: OnceLock<Mutex<HashMap<std::path::PathBuf, u64>>> =
+static QUEUE_METADATA_READ_JOB_COUNTS: OnceLock<Mutex<HashMap<std::path::PathBuf, u64>>> =
     OnceLock::new();
 
 #[derive(Debug, Clone, Serialize)]
@@ -830,76 +830,80 @@ fn load_queue_task_metadata_by_message_key(
     root: &Path,
     message_keys: &[String],
 ) -> Result<HashMap<String, serde_json::Value>> {
-    let mut metadata_by_message_key = HashMap::new();
     if message_keys.is_empty() {
-        return Ok(metadata_by_message_key);
+        return Ok(HashMap::new());
     }
-    let db_path = crate::paths::core_db(&root);
+    let message_keys = message_keys.to_vec();
     #[cfg(test)]
-    record_queue_metadata_db_open_for_tests(&db_path);
-    let conn = Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .with_context(|| format!("failed to open queue metadata db {}", db_path.display()))?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-    let mut unique_keys = message_keys
-        .iter()
-        .map(|key| key.trim())
-        .filter(|key| !key.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    unique_keys.sort();
-    unique_keys.dedup();
-    for chunk in unique_keys.chunks(QUEUE_METADATA_LOOKUP_CHUNK_SIZE) {
-        let placeholders = std::iter::repeat("?")
-            .take(chunk.len())
-            .collect::<Vec<_>>()
-            .join(", ");
-        let sql = format!(
-            r#"
+    let query_path = crate::paths::core_db(root);
+    crate::lcm::with_lcm_read(&crate::paths::core_db(root), move |conn: &Connection| {
+        #[cfg(test)]
+        record_queue_metadata_read_job_for_tests(&query_path);
+        let mut metadata_by_message_key = HashMap::new();
+        if message_keys.is_empty() {
+            return Ok(metadata_by_message_key);
+        }
+        let mut unique_keys = message_keys
+            .iter()
+            .map(|key| key.trim())
+            .filter(|key| !key.is_empty())
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        unique_keys.sort();
+        unique_keys.dedup();
+        for chunk in unique_keys.chunks(QUEUE_METADATA_LOOKUP_CHUNK_SIZE) {
+            let placeholders = std::iter::repeat("?")
+                .take(chunk.len())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let sql = format!(
+                r#"
             SELECT message_key, metadata_json
             FROM communication_messages
             WHERE message_key IN ({placeholders})
             "#
-        );
-        let mut statement = conn.prepare(&sql)?;
-        let rows = statement.query_map(params_from_iter(chunk.iter()), |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        for row in rows {
-            let (message_key, raw) = row?;
-            let parsed =
-                serde_json::from_str(&raw).unwrap_or_else(|_| json!({"raw_metadata": raw}));
-            metadata_by_message_key.insert(message_key, parsed);
+            );
+            let mut statement = conn.prepare(&sql)?;
+            let rows = statement.query_map(params_from_iter(chunk.iter()), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                let (message_key, raw) = row?;
+                let parsed =
+                    serde_json::from_str(&raw).unwrap_or_else(|_| json!({"raw_metadata": raw}));
+                metadata_by_message_key.insert(message_key, parsed);
+            }
         }
-    }
-    Ok(metadata_by_message_key)
+        Ok(metadata_by_message_key)
+    })
 }
 
 #[cfg(test)]
-fn queue_metadata_db_open_counts_for_tests() -> &'static Mutex<HashMap<std::path::PathBuf, u64>> {
-    QUEUE_METADATA_DB_OPEN_COUNTS.get_or_init(|| Mutex::new(HashMap::new()))
+fn queue_metadata_read_job_counts_for_tests() -> &'static Mutex<HashMap<std::path::PathBuf, u64>> {
+    QUEUE_METADATA_READ_JOB_COUNTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 #[cfg(test)]
-fn record_queue_metadata_db_open_for_tests(path: &Path) {
-    let mut counts = queue_metadata_db_open_counts_for_tests()
+fn record_queue_metadata_read_job_for_tests(path: &Path) {
+    let mut counts = queue_metadata_read_job_counts_for_tests()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     *counts.entry(path.to_path_buf()).or_insert(0) += 1;
 }
 
 #[cfg(test)]
-fn reset_queue_metadata_db_open_count_for_tests(root: &Path) {
+fn reset_queue_metadata_read_job_count_for_tests(root: &Path) {
     let path = crate::paths::core_db(root);
-    queue_metadata_db_open_counts_for_tests()
+    queue_metadata_read_job_counts_for_tests()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .remove(&path);
 }
 
 #[cfg(test)]
-fn queue_metadata_db_open_count_for_tests(root: &Path) -> u64 {
+fn queue_metadata_read_job_count_for_tests(root: &Path) -> u64 {
     let path = crate::paths::core_db(root);
-    queue_metadata_db_open_counts_for_tests()
+    queue_metadata_read_job_counts_for_tests()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
         .get(&path)
@@ -1859,14 +1863,14 @@ fn score_queue_spill_candidate_with_evidence(
 /// counting raw rows. A missing proofs table (process-mining schema not yet
 /// created on a fresh root) is treated as zero, not an error.
 fn distinct_failure_signature_count(root: &Path, message_key: &str) -> Result<i64> {
-    let conn = Connection::open(crate::paths::core_db(root))
-        .with_context(|| "failed to open core db for failure-signature count")?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-    Ok(
-        distinct_failure_signature_counts_from_conn(&conn, &[message_key.to_string()])?
-            .remove(message_key)
-            .unwrap_or(0),
-    )
+    let message_key = message_key.to_owned();
+    crate::lcm::with_lcm_read(&crate::paths::core_db(root), move |conn: &Connection| {
+        Ok(
+            distinct_failure_signature_counts_from_conn(conn, &[message_key.clone()])?
+                .remove(&message_key)
+                .unwrap_or(0),
+        )
+    })
 }
 
 fn distinct_failure_signature_counts_from_conn(
@@ -2593,8 +2597,8 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn cleanup_scope_batches_metadata_reads_for_scanned_tasks() -> Result<()> {
+    #[tokio::test]
+    async fn cleanup_scope_batches_metadata_reads_for_scanned_tasks() -> Result<()> {
         let root = temp_root("cleanup-metadata-batch");
         std::fs::create_dir_all(&root)?;
 
@@ -2618,35 +2622,52 @@ mod tests {
             )?;
         }
 
-        reset_queue_metadata_db_open_count_for_tests(&root);
-        let report = cleanup_queue_scope(
-            &root,
-            &[
-                "cleanup-scope".to_string(),
-                "--all-open".to_string(),
-                "--dry-run".to_string(),
-                "--limit".to_string(),
-                "10".to_string(),
-            ],
-        )?;
-        assert_eq!(report.scanned_count, 3);
-        assert_eq!(report.matched_count, 3);
-        assert_eq!(queue_metadata_db_open_count_for_tests(&root), 1);
+        let path = crate::paths::core_db(&root);
+        let (writer, readers) =
+            ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&path)?)
+                .await?
+                .into_parts();
+        let adapter =
+            crate::lcm::owner_adapter::OwnerAdapter::attach(&path, writer.clone(), readers.clone())
+                .await?;
+        let work = root.clone();
+        crate::persistence::run_core_sync(move || {
+            let root = work;
+            reset_queue_metadata_read_job_count_for_tests(&root);
+            let report = cleanup_queue_scope(
+                &root,
+                &[
+                    "cleanup-scope".to_string(),
+                    "--all-open".to_string(),
+                    "--dry-run".to_string(),
+                    "--limit".to_string(),
+                    "10".to_string(),
+                ],
+            )?;
+            assert_eq!(report.scanned_count, 3);
+            assert_eq!(report.matched_count, 3);
+            assert_eq!(queue_metadata_read_job_count_for_tests(&root), 1);
 
-        reset_queue_metadata_db_open_count_for_tests(&root);
-        let report = assert_clean_queue_scope(
-            &root,
-            &[
-                "assert-clean-scope".to_string(),
-                "--all-open".to_string(),
-                "--limit".to_string(),
-                "10".to_string(),
-            ],
-        )?;
-        assert!(report.ok);
-        assert_eq!(report.open_total, 3);
-        assert_eq!(queue_metadata_db_open_count_for_tests(&root), 1);
+            reset_queue_metadata_read_job_count_for_tests(&root);
+            let report = assert_clean_queue_scope(
+                &root,
+                &[
+                    "assert-clean-scope".to_string(),
+                    "--all-open".to_string(),
+                    "--limit".to_string(),
+                    "10".to_string(),
+                ],
+            )?;
+            assert!(report.ok);
+            assert_eq!(report.open_total, 3);
+            assert_eq!(queue_metadata_read_job_count_for_tests(&root), 1);
 
+            Ok(())
+        })
+        .await?;
+        drop(adapter);
+        readers.shutdown().await?;
+        writer.shutdown().await?;
         let _ = std::fs::remove_dir_all(&root);
         Ok(())
     }

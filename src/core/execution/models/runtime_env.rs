@@ -3,113 +3,31 @@ use anyhow::Result;
 use rusqlite::params;
 use rusqlite::Connection;
 use std::collections::BTreeMap;
-use std::collections::HashSet;
-use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Mutex;
-use std::sync::OnceLock;
-use std::time::UNIX_EPOCH;
 
 use crate::inference::runtime_state;
 use crate::secrets;
 
 const RUNTIME_ENV_TABLE: &str = "runtime_env_kv";
-const RUNTIME_ENV_STORE_FILE: &str = "ctox-runtime.sqlite3";
-
-fn initialized_runtime_env_paths() -> &'static Mutex<HashSet<PathBuf>> {
-    static INITIALIZED: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
-    INITIALIZED.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RuntimeEnvStoreStamp {
-    db: RuntimeEnvFileStamp,
-    wal: RuntimeEnvFileStamp,
-    shm: RuntimeEnvFileStamp,
-}
-
-#[derive(Debug, Clone)]
-struct CachedRuntimeEnvMap {
-    stamp: RuntimeEnvStoreStamp,
-    map: BTreeMap<String, String>,
-}
-
-type RuntimeEnvFileStamp = (u64, u128);
-
-fn cached_runtime_env_maps() -> &'static Mutex<BTreeMap<PathBuf, CachedRuntimeEnvMap>> {
-    static CACHE: OnceLock<Mutex<BTreeMap<PathBuf, CachedRuntimeEnvMap>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(BTreeMap::new()))
-}
 
 pub fn runtime_config_path(root: &Path) -> PathBuf {
-    root.join("runtime").join(RUNTIME_ENV_STORE_FILE)
+    crate::paths::runtime_config_db(root)
 }
 
-fn runtime_env_file_stamp(path: &Path) -> RuntimeEnvFileStamp {
-    match fs::metadata(path) {
-        Ok(metadata) => (
-            metadata.len(),
-            metadata
-                .modified()
-                .ok()
-                .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-                .map(|duration| duration.as_nanos())
-                .unwrap_or(0),
-        ),
-        Err(_) => (0, 0),
-    }
-}
-
-fn sqlite_sidecar_path(path: &Path, suffix: &str) -> PathBuf {
-    let mut raw = path.as_os_str().to_os_string();
-    raw.push(suffix);
-    PathBuf::from(raw)
-}
-
-fn runtime_env_store_stamp(path: &Path) -> RuntimeEnvStoreStamp {
-    RuntimeEnvStoreStamp {
-        db: runtime_env_file_stamp(path),
-        wal: runtime_env_file_stamp(&sqlite_sidecar_path(path, "-wal")),
-        shm: runtime_env_file_stamp(&sqlite_sidecar_path(path, "-shm")),
-    }
-}
-
-fn invalidate_runtime_env_cache(root: &Path) {
-    let path = runtime_config_path(root);
-    cached_runtime_env_maps()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-        .remove(&path);
-}
-
+/// Connection reuse belongs to the injected read pool. Every operation obtains
+/// a new WAL snapshot; file timestamps never authorize reuse across generations.
 pub(crate) fn load_persisted_runtime_env_map_cached(
     root: &Path,
 ) -> Result<BTreeMap<String, String>> {
-    let path = runtime_config_path(root);
-    let stamp = runtime_env_store_stamp(&path);
-    if let Some(cached) = cached_runtime_env_maps()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-        .get(&path)
-        .filter(|cached| cached.stamp == stamp)
-        .cloned()
-    {
-        return Ok(cached.map);
-    }
-    let map = load_persisted_runtime_env_map(root)?;
-    let stamp = runtime_env_store_stamp(&path);
-    cached_runtime_env_maps()
-        .lock()
-        .unwrap_or_else(|err| err.into_inner())
-        .insert(
-            path,
-            CachedRuntimeEnvMap {
-                stamp,
-                map: map.clone(),
-            },
-        );
-    Ok(map)
+    load_persisted_runtime_env_map(root)
+}
+
+fn runtime_owner(root: &Path) -> Result<crate::lcm::owner_adapter::OwnerAdapter> {
+    crate::persistence::require_sync_owner_context()?;
+    Ok(crate::lcm::owner_adapter::OwnerAdapter::for_path(
+        &runtime_config_path(root),
+    )?)
 }
 
 pub fn load_runtime_env_map(root: &Path) -> Result<BTreeMap<String, String>> {
@@ -269,36 +187,26 @@ pub fn auxiliary_backend_enabled(root: &Path, role_prefix: &str) -> bool {
 }
 
 pub(crate) fn load_persisted_runtime_env_map(root: &Path) -> Result<BTreeMap<String, String>> {
-    let conn = open_runtime_persistence_db(root)?;
-    let env_map = load_runtime_env_map_from_db(&conn)?;
-    Ok(env_map)
+    Ok(runtime_owner(root)?.read_blocking(load_runtime_env_map_from_db)?)
 }
 
 fn write_runtime_env_map(root: &Path, env_map: &BTreeMap<String, String>) -> Result<()> {
-    let filtered_env_map = env_map
+    let values = env_map
         .iter()
-        .filter(|(key, _)| !secrets::is_secret_key(key))
-        .map(|(key, value)| (key.clone(), value.clone()))
+        .filter(|(key, _)| !secrets::is_secret_key(key) && !key.trim().is_empty())
+        .map(|(k, v)| (k.clone(), v.clone()))
         .collect::<BTreeMap<_, _>>();
-    let mut conn = open_runtime_persistence_db(root)?;
-    let tx = conn
-        .transaction()
-        .context("failed to open runtime env transaction")?;
-    tx.execute(&format!("DELETE FROM {RUNTIME_ENV_TABLE}"), [])
-        .context("failed to clear runtime env table")?;
-    for (key, value) in &filtered_env_map {
-        if key.trim().is_empty() {
-            continue;
+    runtime_owner(root)?.write_blocking(move |tx| {
+        tx.execute("DELETE FROM runtime_env_kv", [])?;
+        for (key, value) in values {
+            tx.execute(
+                "INSERT INTO runtime_env_kv (env_key,env_value) VALUES (?1,?2)",
+                params![key, value],
+            )?;
         }
-        tx.execute(
-            &format!("INSERT INTO {RUNTIME_ENV_TABLE} (env_key, env_value) VALUES (?1, ?2)"),
-            params![key, value],
-        )
-        .with_context(|| format!("failed to persist runtime key {key}"))?;
-    }
-    tx.commit()
-        .context("failed to commit runtime env transaction")?;
-    invalidate_runtime_env_cache(root);
+        Ok(())
+    })?;
+    crate::business_os::browser_bootstrap::invalidate(root);
     Ok(())
 }
 
@@ -311,16 +219,12 @@ pub fn set_runtime_env_value(root: &Path, key: &str, value: &str) -> Result<()> 
     if key.trim().is_empty() || secrets::is_secret_key(key) {
         return Ok(());
     }
-    let conn = open_runtime_persistence_db(root)?;
-    conn.execute(
-        &format!(
-            "INSERT INTO {RUNTIME_ENV_TABLE} (env_key, env_value) VALUES (?1, ?2) \
-             ON CONFLICT(env_key) DO UPDATE SET env_value = excluded.env_value"
-        ),
-        params![key, value],
-    )
-    .with_context(|| format!("failed to upsert runtime key {key}"))?;
-    invalidate_runtime_env_cache(root);
+    let (key, value) = (key.to_owned(), value.to_owned());
+    runtime_owner(root)?.write_blocking(move|tx| {
+        tx.execute("INSERT INTO runtime_env_kv (env_key,env_value) VALUES (?1,?2) ON CONFLICT(env_key) DO UPDATE SET env_value=excluded.env_value",params![key,value])?;
+        Ok(())
+    })?;
+    crate::business_os::browser_bootstrap::invalidate(root);
     Ok(())
 }
 
@@ -329,145 +233,150 @@ pub fn clear_runtime_env_value(root: &Path, key: &str) -> Result<()> {
     if key.trim().is_empty() {
         return Ok(());
     }
-    let conn = open_runtime_persistence_db(root)?;
-    conn.execute(
-        &format!("DELETE FROM {RUNTIME_ENV_TABLE} WHERE env_key = ?1"),
-        params![key],
-    )
-    .with_context(|| format!("failed to clear runtime key {key}"))?;
-    invalidate_runtime_env_cache(root);
+    let key = key.to_owned();
+    runtime_owner(root)?.write_blocking(move |tx| {
+        tx.execute("DELETE FROM runtime_env_kv WHERE env_key=?1", [key])?;
+        Ok(())
+    })?;
+    crate::business_os::browser_bootstrap::invalidate(root);
     Ok(())
 }
 
 /// Read exactly ONE persisted key from the runtime_env_kv store (bypassing the
 /// secrets/runtime-state merge). Returns None for an absent or blank value.
 pub fn get_runtime_env_value(root: &Path, key: &str) -> Option<String> {
+    try_get_runtime_env_value(root, key).ok().flatten()
+}
+
+pub fn try_get_runtime_env_value(root: &Path, key: &str) -> Result<Option<String>> {
     if key.trim().is_empty()
         || secrets::is_secret_key(key)
         || runtime_state::is_runtime_state_key(key)
     {
-        return None;
+        return Ok(None);
     }
-    load_persisted_runtime_env_map_cached(root)
-        .ok()
-        .and_then(|map| map.get(key).cloned())
-        .filter(|value| !value.trim().is_empty())
+    Ok(load_persisted_runtime_env_map_cached(root)?
+        .get(key)
+        .cloned()
+        .filter(|value| !value.trim().is_empty()))
 }
 
-fn open_runtime_persistence_db(root: &Path) -> Result<Connection> {
-    let path = runtime_config_path(root);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create runtime db dir {}", parent.display()))?;
-    }
-    let existed_before_open = path.exists();
-    let conn = Connection::open(&path)
-        .with_context(|| format!("failed to open runtime db {}", path.display()))?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
-        .context("failed to configure runtime env busy_timeout")?;
-    let needs_init = {
-        let guard = initialized_runtime_env_paths()
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        !existed_before_open || !guard.contains(&path)
-    };
-    if needs_init {
-        conn.execute_batch(&format!(
-            "PRAGMA journal_mode=WAL;
-             CREATE TABLE IF NOT EXISTS {RUNTIME_ENV_TABLE} (
-                 env_key TEXT PRIMARY KEY,
-                 env_value TEXT NOT NULL
-             );"
-        ))
-        .context("failed to initialize runtime env table")?;
-        migrate_legacy_runtime_env(root, &conn)?;
-        initialized_runtime_env_paths()
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .insert(path);
-    }
-    Ok(conn)
+/// Runtime env and runtime state share this file owner, distinct from Secrets.
+/// Schema registration and legacy import must finish before attachment.
+#[derive(Clone)]
+pub(crate) struct RuntimeStore {
+    pub(super) owner: crate::lcm::owner_adapter::OwnerAdapter,
+    pub(super) root: PathBuf,
 }
 
-fn migrate_legacy_runtime_env(root: &Path, target: &Connection) -> Result<()> {
-    let legacy_path = crate::persistence::sqlite_path(root);
-    if legacy_path == runtime_config_path(root) || !legacy_path.is_file() {
-        return Ok(());
-    }
-    let has_rows = target
-        .query_row(
-            &format!("SELECT EXISTS(SELECT 1 FROM {RUNTIME_ENV_TABLE} LIMIT 1)"),
-            [],
-            |row| row.get::<_, i64>(0),
+impl RuntimeStore {
+    pub(crate) async fn attach(
+        root: &Path,
+        writer: ctox_store::writer::WriterHandle,
+        readers: ctox_store::read_pool::ReadPool,
+    ) -> std::result::Result<Self, ctox_store::StoreError> {
+        let owner = crate::lcm::owner_adapter::OwnerAdapter::attach(
+            &runtime_config_path(root),
+            writer,
+            readers,
         )
-        .unwrap_or(0)
-        != 0;
-    let legacy = Connection::open(&legacy_path).with_context(|| {
-        format!(
-            "failed to open legacy runtime env db {}",
-            legacy_path.display()
-        )
-    })?;
-    legacy
-        .busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
-        .context("failed to configure legacy runtime env busy_timeout")?;
-    let table_exists = legacy
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
-            [RUNTIME_ENV_TABLE],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-        != 0;
-    if !table_exists {
-        return Ok(());
-    }
-    let mut stmt = legacy
-        .prepare(&format!(
-            "SELECT env_key, env_value FROM {RUNTIME_ENV_TABLE} ORDER BY env_key"
-        ))
-        .context("failed to prepare legacy runtime env migration query")?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (key, value) in rows {
-        if value.trim().is_empty() {
-            continue;
-        }
-        if secrets::is_secret_key(&key) {
-            secrets::set_credential(root, &key, &value)
-                .with_context(|| format!("failed to migrate legacy secret {key}"))?;
-            continue;
-        }
-        if has_rows {
-            continue;
-        }
-        target.execute(
-            &format!(
-                "INSERT OR IGNORE INTO {RUNTIME_ENV_TABLE} (env_key, env_value) VALUES (?1, ?2)"
-            ),
-            params![key, value],
-        )?;
-    }
-    Ok(())
-}
-
-fn load_runtime_env_map_from_db(conn: &Connection) -> Result<BTreeMap<String, String>> {
-    let mut stmt = conn
-        .prepare(&format!(
-            "SELECT env_key, env_value FROM {RUNTIME_ENV_TABLE} ORDER BY env_key"
-        ))
-        .context("failed to prepare runtime env query")?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        .await?;
+        Ok(Self {
+            owner,
+            root: root.to_path_buf(),
         })
-        .context("failed to read runtime env rows")?;
+    }
+
+    pub(crate) async fn migrate_legacy_from_core(&self) -> Result<()> {
+        let (env, state) = crate::persistence::read_core_snapshot(&self.root, |conn| {
+            let exists = |table: &str| -> std::result::Result<bool, ctox_store::StoreError> {
+                Ok(conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+                    [table],
+                    |row| row.get(0),
+                )?)
+            };
+            let env = if exists("runtime_env_kv")? {
+                load_runtime_env_map_from_db(conn)?
+            } else {
+                BTreeMap::new()
+            };
+            let state = if exists("runtime_state_store")? {
+                rusqlite::OptionalExtension::optional(conn.query_row(
+                    "SELECT state_json FROM runtime_state_store WHERE state_id=1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                ))?
+            } else {
+                None
+            };
+            Ok((env, state))
+        })
+        .await?;
+        let mut values = BTreeMap::new();
+        for (key, value) in env {
+            if value.trim().is_empty() {
+                continue;
+            }
+            if secrets::is_secret_key(&key) {
+                let root = self.root.clone();
+                crate::persistence::run_core_sync(move || {
+                    secrets::set_credential(&root, &key, &value)
+                })
+                .await?;
+            } else {
+                values.insert(key, value);
+            }
+        }
+        self.owner.write(Default::default(),move|tx| {
+            let existing:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM runtime_env_kv)",[],|row|row.get(0))?;
+            if !existing {for(key,value)in values {tx.execute("INSERT OR IGNORE INTO runtime_env_kv VALUES(?1,?2)",params![key,value])?;}}
+            if let Some(raw)=state {tx.execute("INSERT OR IGNORE INTO runtime_state_store (state_id,state_json) VALUES(1,?1)",[raw])?;}
+            Ok(())
+        }).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn load_env(
+        &self,
+    ) -> std::result::Result<BTreeMap<String, String>, ctox_store::StoreError> {
+        self.owner
+            .read(
+                ctox_store::JobOptions::default(),
+                load_runtime_env_map_from_db,
+            )
+            .await
+    }
+
+    pub(crate) async fn set_value(
+        &self,
+        key: String,
+        value: String,
+    ) -> std::result::Result<(), ctox_store::StoreError> {
+        if key.trim().is_empty() || secrets::is_secret_key(&key) {
+            return Ok(());
+        }
+        self.owner.write(ctox_store::JobOptions::default(), move |tx| {
+            tx.execute("INSERT INTO runtime_env_kv (env_key, env_value) VALUES (?1, ?2) ON CONFLICT(env_key) DO UPDATE SET env_value = excluded.env_value", params![key, value])?;
+            Ok(())
+        }).await?;
+        crate::business_os::browser_bootstrap::invalidate(&self.root);
+        Ok(())
+    }
+}
+
+fn load_runtime_env_map_from_db(
+    conn: &Connection,
+) -> std::result::Result<BTreeMap<String, String>, ctox_store::StoreError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT env_key, env_value FROM {RUNTIME_ENV_TABLE} ORDER BY env_key"
+    ))?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
     let mut env_map = BTreeMap::new();
     for row in rows {
-        let (key, value) = row.context("failed to decode runtime env row")?;
+        let (key, value) = row?;
         env_map.insert(key, value);
     }
     Ok(env_map)
@@ -486,6 +395,173 @@ fn is_disabled_selector(value: &str) -> bool {
         value.trim().to_ascii_lowercase().as_str(),
         "" | "0" | "false" | "off" | "none" | "null" | "disabled" | "disable"
     )
+}
+
+#[cfg(test)]
+pub(crate) struct RuntimeOwnerFixture {
+    pub(crate) store: RuntimeStore,
+    core: std::sync::Arc<crate::persistence::CorePersistence>,
+    _core_adapter: crate::lcm::owner_adapter::OwnerAdapter,
+    core_writer: ctox_store::writer::WriterHandle,
+    writer: ctox_store::writer::WriterHandle,
+    readers: ctox_store::read_pool::ReadPool,
+}
+#[cfg(test)]
+impl RuntimeOwnerFixture {
+    pub(crate) async fn open(root: &Path) -> Result<Self> {
+        use ctox_store::{testkit::StoreFixture, DbId, WriteJob};
+        anyhow::ensure!(
+            runtime_config_path(root).starts_with(root)
+                && crate::persistence::sqlite_path(root).starts_with(root),
+            "isolated Runtime fixture required"
+        );
+        std::fs::create_dir_all(runtime_config_path(root).parent().unwrap())?;
+        // Use the real legacy migration before the canonical writer acquires
+        // the file. Attaching an LCM handle does not initialize its schema;
+        // never open a second legacy engine after the owner is installed.
+        let core_path = crate::persistence::sqlite_path(root);
+        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+            if let Some(parent) = core_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            let schema = crate::lcm::LcmEngine::open(&core_path, crate::lcm::LcmConfig::default())?;
+            drop(schema);
+            Ok(())
+        })
+        .await??;
+        let (core_writer, core_readers) =
+            StoreFixture::open(DbId::new(crate::persistence::sqlite_path(root))?)
+                .await?
+                .into_parts();
+        let core_adapter = crate::lcm::owner_adapter::OwnerAdapter::attach(
+            &crate::persistence::sqlite_path(root),
+            core_writer.clone(),
+            core_readers.clone(),
+        )
+        .await?;
+        let core =
+            crate::persistence::install_core_owner(root, core_writer.clone(), core_readers).await?;
+        let (writer, readers) = StoreFixture::open(DbId::new(runtime_config_path(root))?)
+            .await?
+            .into_parts();
+        writer.submit(WriteJob::new(Default::default(),|tx| {
+            tx.execute_batch("CREATE TABLE runtime_env_kv(env_key TEXT PRIMARY KEY,env_value TEXT NOT NULL);CREATE TABLE runtime_state_store(state_id INTEGER PRIMARY KEY CHECK(state_id=1),state_json TEXT NOT NULL);CREATE TEMP TABLE owner_runtime_audit(k TEXT);CREATE TEMP TRIGGER owner_runtime_insert AFTER INSERT ON runtime_env_kv BEGIN INSERT INTO owner_runtime_audit VALUES(new.env_key);END;")?;
+            Ok(())
+        }))?.await?;
+        let store = RuntimeStore::attach(root, writer.clone(), readers.clone()).await?;
+        Ok(Self {
+            store,
+            core,
+            _core_adapter: core_adapter,
+            core_writer,
+            writer,
+            readers,
+        })
+    }
+    pub(crate) async fn close(self) -> Result<()> {
+        self.readers.shutdown().await?;
+        self.writer.shutdown().await?;
+        self.core.shutdown().await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod owner_runtime_contract {
+    use super::*;
+    #[tokio::test]
+    async fn runtime_callers_use_the_existing_owner_and_import_core_once() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let runtime_path = runtime_config_path(root.path());
+        assert!(load_persisted_runtime_env_map(root.path()).is_err());
+        assert!(
+            !runtime_path.exists(),
+            "missing injection must not create Runtime"
+        );
+        let fixture = RuntimeOwnerFixture::open(root.path()).await?;
+        fixture.core_writer.submit(ctox_store::WriteJob::new(Default::default(),|tx| {
+            tx.execute_batch("CREATE TABLE runtime_env_kv(env_key TEXT PRIMARY KEY,env_value TEXT NOT NULL);INSERT INTO runtime_env_kv VALUES('legacy-setting','legacy');CREATE TABLE runtime_state_store(state_id INTEGER PRIMARY KEY,state_json TEXT);INSERT INTO runtime_state_store VALUES(1,'legacy-json');")?;
+            Ok(())
+        }))?.await?;
+        fixture.store.migrate_legacy_from_core().await?;
+        assert_eq!(
+            fixture
+                .store
+                .load_env()
+                .await?
+                .get("legacy-setting")
+                .map(String::as_str),
+            Some("legacy")
+        );
+        // Direct async/owner-thread compatibility calls must never wait.
+        assert!(set_runtime_env_value(root.path(), "async-must-reject", "bad").is_err());
+        let path = root.path().to_path_buf();
+        crate::persistence::run_core_sync(move || {
+            set_runtime_env_value(&path, "owner-only", "first")?;
+            assert_eq!(
+                load_persisted_runtime_env_map_cached(&path)?
+                    .get("owner-only")
+                    .map(String::as_str),
+                Some("first")
+            );
+            set_runtime_env_value(&path, "owner-only", "second")?;
+            assert_eq!(
+                load_persisted_runtime_env_map_cached(&path)?
+                    .get("owner-only")
+                    .map(String::as_str),
+                Some("second")
+            );
+            clear_runtime_env_value(&path, "legacy-setting")?;
+            assert!(!load_persisted_runtime_env_map_cached(&path)?.contains_key("legacy-setting"));
+            set_runtime_env_value(&path, "OPENAI_API_KEY", "fixture-never-stored")?;
+            assert!(!load_persisted_runtime_env_map_cached(&path)?.contains_key("OPENAI_API_KEY"));
+            Ok(())
+        })
+        .await?;
+        assert!(fixture
+            .store
+            .owner
+            .read(Default::default(), |conn| {
+                conn.execute("DELETE FROM runtime_env_kv", [])?;
+                Ok(())
+            })
+            .await
+            .is_err());
+        // TEMP trigger is connection-local: a second writer would miss this.
+        assert!(
+            fixture
+                .store
+                .owner
+                .write(Default::default(), |tx| Ok(tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM owner_runtime_audit WHERE k='owner-only')",
+                    [],
+                    |r| r.get::<_, bool>(0)
+                )?))
+                .await?
+        );
+        let missing = tempfile::tempdir()?;
+        let missing_path = runtime_config_path(missing.path());
+        let path = missing.path().to_path_buf();
+        crate::persistence::run_core_sync(move || {
+            assert!(set_runtime_env_value(&path, "unregistered", "bad").is_err());
+            Ok(())
+        })
+        .await?;
+        assert!(!missing_path.exists());
+        fixture.store.migrate_legacy_from_core().await?;
+        assert_eq!(
+            fixture
+                .store
+                .load_env()
+                .await?
+                .get("owner-only")
+                .map(String::as_str),
+            Some("second")
+        );
+        fixture.close().await?;
+        assert!(crate::lcm::owner_adapter::OwnerAdapter::for_path(&runtime_path).is_err());
+        Ok(())
+    }
 }
 
 #[cfg(test)]

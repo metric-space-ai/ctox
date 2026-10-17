@@ -1,0 +1,485 @@
+{
+  "_capability_evidence": {
+    "agent.task.enqueue": [
+      "handlers/_lib/news.js"
+    ],
+    "agent.task.get": [
+      "handlers/_lib/news.js"
+    ]
+  },
+  "_declaration": "modules/news/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/news/index.html",
+  "_rust_basis": "`rs:store_news_commands.rs` 1 129 Z. (nur News), Routing `rs:command_plane.rs:2239`.",
+  "_source_dir": "src/apps/business-os/modules/news",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "news",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "agent.task.enqueue",
+    "agent.task.get"
+  ],
+  "collections": {
+    "news_issues": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/news.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "command_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "error": {
+            "type": "string"
+          },
+          "generated_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "issue_date": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "post_count": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "topic_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "topic_id",
+          "issue_date",
+          "status",
+          "payload",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "news_posts": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/news.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "author_handle": {
+            "type": "string"
+          },
+          "author_kind": {
+            "type": "string"
+          },
+          "author_name": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "bookmarked": {
+            "type": "boolean"
+          },
+          "category": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "discussion_count": {
+            "type": "number"
+          },
+          "hype_score": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 220,
+            "type": "string"
+          },
+          "intro": {
+            "type": "string"
+          },
+          "issue_id": {
+            "type": "string"
+          },
+          "link_card": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "published_at_ms": {
+            "type": "number"
+          },
+          "quote": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "rank": {
+            "type": "number"
+          },
+          "sources": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "topic_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "issue_id",
+          "topic_id",
+          "intro",
+          "payload",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "news_sources": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/news.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "account_handle": {
+            "type": "string"
+          },
+          "adapter_kind": {
+            "type": "string"
+          },
+          "auth_mode": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "credential_secret_name": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "last_error": {
+            "type": "string"
+          },
+          "last_run_at_ms": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target_key": {
+            "type": "string"
+          },
+          "topic_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "topic_id",
+          "kind",
+          "label",
+          "enabled",
+          "payload",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "news_topics": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/news.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "cadence": {
+            "type": "string"
+          },
+          "categories": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "cron_expr": {
+            "type": "string"
+          },
+          "deadline_date": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "language": {
+            "type": "string"
+          },
+          "last_issue_at_ms": {
+            "type": "number"
+          },
+          "max_posts": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "run_time": {
+            "type": "string"
+          },
+          "schedule_task_id": {
+            "type": "string"
+          },
+          "sort_order": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "weekday": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "cadence",
+          "enabled",
+          "payload",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {},
+  "files": {
+    "V4-HANDLERS.md": "a78f461d17bdf548193faaa368d19c6b32f71594381fb4e623658b5903ad2f9a",
+    "V4-PORT.md": "3c0793b892907d3adfbb2651fd080e4a2dfc0225b95884102b28d6d673bd3658",
+    "assets/icon.jpg": "10a8e2d20a59ac3dd5b6e139b5a234b1dcf82a12e8b96b4cfd536357dc71c850",
+    "assets/icon@512.jpg": "19206727d17c85a3b39c2032c30c9fb319cedd2a97be7480568479a112b393ed",
+    "collections.schema.json": "159e77f0d25893d299d554e9deeb23f738f174c1ef5f79fd58269030e411949b",
+    "core/news-model.mjs": "350d31fbf225cddcb06da10c5e3ab0fbaaa9d683da6313eb41200cd9fa4af4cd",
+    "handlers/_lib/news.js": "dbbb22dabca1c6bbb1208853847274b498e0e37a665a0a99983fdfe9ffbb173c",
+    "handlers/_lib/sha256.js": "f13057673d66921033a6baf0bc77df33448aac828b02ac5768d52521d7205f60",
+    "handlers/news.issue.complete.js": "c02a0374d453cecb272ac6ce7c9a1e1338aca0e3d8363adad3005490958383f7",
+    "handlers/news.issue.failed.js": "5f4cc47ed2de85e266f7125c3e76e72acd157dd283ff0c46756fe79893f787e8",
+    "handlers/news.issue.generate.js": "a1c134e9eb2aff52610072eac8af6a03ad5d07333460d82a4a8628f1a7badc9f",
+    "handlers/news.source.adapter.complete.js": "ac766e827a919a6e9b6fbe15cd522204788ea7bb7c7cda0042ddb62b970a6258",
+    "handlers/news.source.adapter.failed.js": "5ed5aa34f1dd88cdac4baf4ac60457312f62eceb66202d223687e143e5d3b4f6",
+    "handlers/news.source.adapter.js": "eef353a6478c53d6c809544956ad5fad3c6a11f1d9d64988e0b3c6395eae97a6",
+    "handlers/news.source.auth_assist.js": "e2bfefd2fc7bdad8b014f525aeb6a06fdfd81f9e0762f318fa77ae7a7ac48e17",
+    "handlers/news.topic.schedule.js": "2ff533f78503af13ce932f8073161fe49115ac97b119c407e897495bc7cdbbfa",
+    "icon.svg": "5e2c1836ab96f4cdb3e0ef8f0faa64f195287081f72501776b13d97c08123616",
+    "index.css": "76c852e324cdabcf973afc7217f100a6493dcb669a37b279b4a6710eba1da180",
+    "index.html": "546f59678e00bb529360175c6042117818764747c25ed7d4ba7a48b33088f2ab",
+    "index.js": "2507b15412a5610ed7d0dfd30b9a2de3f046c262f5961fc5ee3848f1813715fa",
+    "locales/de.json": "90dd73b1b3b10b8ee89353bff8c4433afbf3022425ab5b2d6771a8c836ded17d",
+    "locales/en.json": "cbe8f4632128f29c170f8c09c6297634ba765496ab03be0cff500d32e27d5910",
+    "module.json": "d65f0a486331d2ac046d3bc19892e639032f9f263b08da8abfcfcbe174ef74d8",
+    "prompts/issue.md": "3240fa35ca2f8c473191486514448e9dc5a8280fdcb29316a90876bae847b1fe",
+    "prompts/source-adapter.md": "ff04c2ed0a47b7427426a57047ab054f4f4018b10881808465d714d6e3f5a3df",
+    "prompts/source-connect.md": "83f9c12869b3630140f645963a09be4d6ee534c22400a6abf9d207adc0e48445",
+    "skills/news-aggregation/SKILL.md": "1125f983580e360097275dc29afbfd72b6048d7a189cccf5130e61a83df81255",
+    "v4-manifest.json": "8d9043e859d3d58ed3312b2d56f9329fd53713c0b5435ff912afdc5fb09dcc37"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    }
+  },
+  "handlers": {
+    "news.issue.complete": "handlers/news.issue.complete.js",
+    "news.issue.failed": "handlers/news.issue.failed.js",
+    "news.issue.generate": "handlers/news.issue.generate.js",
+    "news.source.adapter": "handlers/news.source.adapter.js",
+    "news.source.adapter.complete": "handlers/news.source.adapter.complete.js",
+    "news.source.adapter.failed": "handlers/news.source.adapter.failed.js"
+  },
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/news-2.jpg (shared/operator-icon-selection.js, sha256 415e717a9036…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Knowledge",
+    "drawers": {
+      "right": "topic configuration: cadence, sources and accounts, editorial rules"
+    },
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-news\"><defs><linearGradient id=\"grad-news\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0e7490\" /><stop offset=\"100%\" stop-color=\"#4f46e5\" /></linearGradient></defs><rect x=\"6\" y=\"4\" width=\"14\" height=\"17\" rx=\"2.5\" fill=\"url(#grad-news)\" fill-opacity=\"0.08\" stroke=\"url(#grad-news)\" stroke-width=\"1.5\" stroke-linejoin=\"round\"></rect><rect x=\"4\" y=\"3\" width=\"14\" height=\"17\" rx=\"2.5\" fill=\"url(#grad-news)\" fill-opacity=\"0.12\" stroke=\"url(#grad-news)\" stroke-width=\"2\" stroke-linejoin=\"round\"></rect><path d=\"M7 7h8\" stroke=\"url(#grad-news)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M7 10h5\" stroke=\"#f97316\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M7 13.5h8M7 16.5h5\" stroke=\"url(#grad-news)\" stroke-width=\"1.6\" stroke-linecap=\"round\"></path></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 800,
+        "width": 1240
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "prompts": [
+    {
+      "name": "issue",
+      "path": "prompts/issue.md"
+    },
+    {
+      "name": "source-adapter",
+      "path": "prompts/source-adapter.md"
+    },
+    {
+      "name": "source-connect",
+      "path": "prompts/source-connect.md"
+    }
+  ],
+  "provenance": {
+    "base_hash": "bf1362ca519a27d95aa7f0cd81e8c55e58ac8ff04c2b29b17ee45a9a5cbcea77",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "skills": [
+    {
+      "name": "news-aggregation",
+      "path": "skills/news-aggregation/SKILL.md"
+    }
+  ],
+  "styles": [
+    "index.css"
+  ],
+  "title": "News",
+  "triggers": [],
+  "version": "0.1.4"
+}

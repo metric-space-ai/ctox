@@ -1,0 +1,43 @@
+{
+  "_basis": {
+    "commands_in": "Gegenstück zu mail commands_out (modules/mail/index.js „An Support übergeben“, module:support); §16.40",
+    "foreign_collections": "modules/support/V4-HANDLERS.md W5",
+    "multi_instance": "v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "triggers": "modules/support/V4-HANDLERS.md W3 (Manifest-Auslöser on communication_messages); §16.20 ersetzt project_communication_intake"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "commands_in": [
+    {
+      "from": [
+        "mail"
+      ],
+      "type": "support.conversation.open_from_thread"
+    }
+  ],
+  "foreign_collections": {
+    "communication_messages": [
+      "read"
+    ],
+    "communication_threads": [
+      "read"
+    ]
+  },
+  "multi_instance": false,
+  "triggers": [
+    {
+      "handler": "handlers/support.intake.project.js",
+      "on": {
+        "collection": "communication_messages",
+        "op": "insert"
+      }
+    },
+    {
+      "handler": "handlers/support.intake.project.js",
+      "on": {
+        "collection": "communication_messages",
+        "op": "update"
+      }
+    }
+  ]
+}

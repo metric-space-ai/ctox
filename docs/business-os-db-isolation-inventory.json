@@ -751,6 +751,25 @@
       ],
       "notes": "Scoped system exception: Tickets resolves ticket projection collections and business_commands through the scoped system facade. Browser/Rust dynamic-app smoke denies the registered foreign business_module_catalog collection through collection(), property, raw and collections access and checks the permission/capability facade contract."
     },
+    "workjet": {
+      "title": "Workjet",
+      "manifest_path": "src/apps/business-os/modules/workjet/module.json",
+      "source_path": "src/apps/business-os/modules/workjet",
+      "install_scope": "internal",
+      "distribution": "internal-module",
+      "default_installed": false,
+      "classification": "internal-handler-module",
+      "isolation_status": "app-api-handler-only",
+      "owner": "business-os-platform",
+      "review_by": "2026-11-16",
+      "db_access": {
+        "uses_raw_db": false,
+        "uses_collection_property_access": false,
+        "uses_collections_proxy": false,
+        "uses_cached_db_handle": false
+      },
+      "notes": "E54.3b: handler-only instance module without window (entry null, instance_visible false). The handler workjet.worker.dispatch reaches data only through the v4 handler context (own five collections, declared foreign reads of ctox/threads collections); no Shell DB facade, no raw DB."
+    },
     "creator": {
       "title": "App Creator",
       "manifest_path": "src/apps/business-os/modules/creator/module.json",

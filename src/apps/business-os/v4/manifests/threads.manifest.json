@@ -1,0 +1,1257 @@
+{
+  "_capability_evidence": {
+    "audit.event": [
+      "handlers/_lib.js"
+    ],
+    "directory.user": [
+      "handlers/_lib.js"
+    ],
+    "policy.module_decision": [
+      "handlers/_lib.js"
+    ]
+  },
+  "_declaration": "modules/threads/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/threads/index.html",
+  "_proposed_triggers": {
+    "basis": "modules/threads/V4-HANDLERS.md §4 W-4 (Projektions-Handler, Vorschlag; Vertrag kennt nur triggers §16.20)",
+    "proposals": [
+      {
+        "handler": "handlers/_projection.ctox_relevance.js",
+        "sources": [
+          "business_commands",
+          "ctox_queue_tasks"
+        ]
+      },
+      {
+        "handler": "handlers/_projection.app_relevance.js",
+        "sources": "14 App-Collections (kundenpipeline, tickets ×4, support ×3, outbound ×2, research ×2, documents, notes)"
+      }
+    ]
+  },
+  "_rust_basis": "`rs:threads.rs` 8 146 Z. (Core→RxDB-Projektionen, Approval-Logik; 301 Fundstellen), Routing `rs:command_plane.rs:2355`.",
+  "_source_dir": "src/apps/business-os/modules/threads",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "command_rights threads.ctox_approval.approve: kein passender Handler.",
+    "command_rights threads.ctox_approval.reject: kein passender Handler.",
+    "Projektions-Auslöser (W-4) noch nicht im Vertrag: siehe _proposed_triggers.",
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "threads",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "audit.event",
+    "directory.user",
+    "policy.module_decision"
+  ],
+  "collections": {
+    "ctox_task_approval_requests": {
+      "_class_proposal": "heute demand-only (shared/sync.js:3845 isDemandOnlyPullCollection)",
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/threads.collections.schema.json",
+      "byte_budget": null,
+      "class": "window",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "status",
+          "requester_user_id",
+          "reviewer_user_id",
+          "thread_id",
+          [
+            "reviewer_user_id",
+            "status",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "approval_request_id": {
+            "type": "string"
+          },
+          "approved_command_id": {
+            "type": "string"
+          },
+          "approved_task_id": {
+            "type": "string"
+          },
+          "client_context": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "decided_at_ms": {
+            "type": "number"
+          },
+          "decision_by_id": {
+            "type": "string"
+          },
+          "decision_note": {
+            "type": "string"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "instruction": {
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "requested_at_ms": {
+            "type": "number"
+          },
+          "requester_display_name": {
+            "type": "string"
+          },
+          "requester_user_id": {
+            "type": "string"
+          },
+          "reviewer_display_name": {
+            "type": "string"
+          },
+          "reviewer_user_id": {
+            "type": "string"
+          },
+          "source_context": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "source_deep_link": {
+            "type": "string"
+          },
+          "source_label": {
+            "type": "string"
+          },
+          "source_module": {
+            "type": "string"
+          },
+          "source_record_id": {
+            "type": "string"
+          },
+          "source_record_type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target_command_type": {
+            "type": "string"
+          },
+          "target_module": {
+            "type": "string"
+          },
+          "target_payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "target_record_id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "thread_id",
+          "status",
+          "requester_user_id",
+          "reviewer_user_id",
+          "prompt"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "user_notifications": {
+      "_class_proposal": "heute demand-only (shared/sync.js:3844 isDemandOnlyPullCollection)",
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/threads.collections.schema.json",
+      "byte_budget": null,
+      "class": "window",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "user_id",
+          "status",
+          "thread_id",
+          [
+            "user_id",
+            "status",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "approval_request_id": {
+            "type": "string"
+          },
+          "body_preview": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "notification_id": {
+            "type": "string"
+          },
+          "notification_type": {
+            "type": "string"
+          },
+          "source_module": {
+            "type": "string"
+          },
+          "source_record_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "user_id",
+          "thread_id",
+          "notification_type",
+          "status"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "user_thread_links": {
+      "_class_proposal": "heute demand-only (shared/sync.js:3843 isDemandOnlyPullCollection)",
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/threads.collections.schema.json",
+      "byte_budget": null,
+      "class": "window",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "thread_id",
+          "source_module",
+          "source_record_id"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "context": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deep_link": {
+            "type": "string"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string"
+          },
+          "link_role": {
+            "type": "string"
+          },
+          "link_type": {
+            "type": "string"
+          },
+          "source_label": {
+            "type": "string"
+          },
+          "source_module": {
+            "type": "string"
+          },
+          "source_record_id": {
+            "type": "string"
+          },
+          "source_record_type": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "thread_id"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "user_thread_messages": {
+      "_class_proposal": "heute demand-only (shared/sync.js:3842 isDemandOnlyPullCollection)",
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/threads.collections.schema.json",
+      "byte_budget": null,
+      "class": "window",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "thread_id",
+          "author_user_id",
+          "approval_request_id",
+          [
+            "thread_id",
+            "created_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "actor_id": {
+            "type": "string"
+          },
+          "actor_type": {
+            "type": "string"
+          },
+          "approval_request_id": {
+            "type": "string"
+          },
+          "author_display_name": {
+            "type": "string"
+          },
+          "author_user_id": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "event_type": {
+            "type": "string"
+          },
+          "evidence_refs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "execution_status": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "parent_event_id": {
+            "type": "string"
+          },
+          "source_deep_link": {
+            "type": "string"
+          },
+          "source_label": {
+            "type": "string"
+          },
+          "source_module": {
+            "type": "string"
+          },
+          "source_record_id": {
+            "type": "string"
+          },
+          "source_record_type": {
+            "type": "string"
+          },
+          "target_user_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "thread_id",
+          "kind",
+          "body"
+        ],
+        "type": "object",
+        "version": 1
+      }
+    },
+    "user_thread_states": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/threads.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "thread_id",
+          "user_id",
+          "attention_score",
+          [
+            "user_id",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "attention_reasons": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "attention_score": {
+            "type": "number"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "follow_up_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "last_seen_at_ms": {
+            "type": "number"
+          },
+          "notification_preferences": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "priority": {
+            "type": "string"
+          },
+          "snoozed_until_ms": {
+            "type": "number"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "unread_count": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "user_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "thread_id",
+          "user_id"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "user_threads": {
+      "_class_proposal": "heute demand-only (shared/sync.js:3841 isDemandOnlyPullCollection)",
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/threads.collections.schema.json",
+      "byte_budget": null,
+      "class": "window",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "is_deleted",
+            "updated_at_ms"
+          ],
+          "status",
+          "owner_user_id",
+          "assigned_user_id",
+          "watcher_user_ids",
+          "source_module",
+          "source_record_id",
+          [
+            "status",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "ai_state": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "archived_at_ms": {
+            "type": "number"
+          },
+          "assigned_user_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "created_by_id": {
+            "type": "string"
+          },
+          "deleted_at_ms": {
+            "type": "number"
+          },
+          "due_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_message_at_ms": {
+            "type": "number"
+          },
+          "last_message_id": {
+            "type": "string"
+          },
+          "last_seen_by_user": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "next_step": {
+            "type": "string"
+          },
+          "owner_user_id": {
+            "type": "string"
+          },
+          "participant_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "pending_approval_count": {
+            "type": "number"
+          },
+          "snoozed_until_ms": {
+            "type": "number"
+          },
+          "source_deep_link": {
+            "type": "string"
+          },
+          "source_label": {
+            "type": "string"
+          },
+          "source_module": {
+            "type": "string"
+          },
+          "source_record_id": {
+            "type": "string"
+          },
+          "source_record_type": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "team_id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "watcher_user_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms",
+          "title",
+          "status",
+          "participant_ids"
+        ],
+        "type": "object",
+        "version": 1
+      }
+    }
+  },
+  "command_rights": {
+    "threads.*": {
+      "_basis": "v4-manifest.json; modules/threads/V4-HANDLERS.md „Zulassung vor dem Handler“ (command_plane.rs:1428-1546, :1224)",
+      "_note": "nur authentifizierte Sitzung (alle Rollen aus policy.rs parse_role)",
+      "assigned_users": false,
+      "roles": [
+        "admin",
+        "chef",
+        "founder",
+        "user"
+      ]
+    }
+  },
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "ctox_task_approval_requests": [
+      "read"
+    ]
+  },
+  "files": {
+    "HUB-CONTRACT.md": "e3bc15d90241dc1b0d1711f22559c09ad292b3b5b175e149bb02a48b17c7b830",
+    "V4-HANDLERS.md": "dfaecda8997907c1d5e276847f9d151ac8ab5baa91983dad4352e6cf66772393",
+    "V4-PORT.md": "b3c12588f9a44dd7901fd29698c8535be6441256eece139960cefff1a2600c17",
+    "assets/icon.jpg": "43940a5c2dcb7a195b257b631093c26c8fa2ff3bb378c6349f56de8d59070401",
+    "assets/icon@512.jpg": "d6bb043e90e98976eee91bcd6ed2c236b54efe1a07e0f2f957441157b4293f13",
+    "collections.schema.json": "2bdb112c72ab049b0262b27f081b5beb22d6758e8958fe6289151b6068d64684",
+    "commands.js": "1bfecac6f35ac3975cf94003cb08e45523eff71681993e46eadfed61248a359c",
+    "handlers/_agent.js": "46ca6f6977aa8a64e1bc8690347f5834decdd1a2cc69c30000c6bac5828ab399",
+    "handlers/_approval_targets.js": "dd9892899cd3e68efa1638e42f10088360f37401725f30c803d0a3aca44a3ed2",
+    "handlers/_chat_access.js": "de86d13d7a4a39190f24d27f21062ec141e0e8a7e9bf61b7449eadb24abef1d5",
+    "handlers/_lib.js": "b44b49e8d0bd0ecb591ad0a6fb0671db66c22d9d02cf09fe6197aea7b1037cda",
+    "handlers/_projection.app_relevance.js": "f853edd3b07d1050d15d64d1ec5a598edb1843f241ee243e0b113f1b4a571edf",
+    "handlers/_projection.ctox_relevance.js": "ac82a9ee830a4d3bb1d60c4cd6b5c5e34e47c89ece969d36e6dc2619f6c522a5",
+    "handlers/_visibility.js": "35f84322a1ec2b425243164e2f4736a726ba17f7f50567acb23158043e46b7fa",
+    "handlers/threads.ai.complete.js": "da0c940be7de271f2e2d51c358170d1297853d77ad4330c451c39de6343daa3b",
+    "handlers/threads.ai.failed.js": "d7dab9e1a3a9140284ae7e11dba1b98a66bfa10e43661f16a025bc58938795e8",
+    "handlers/threads.ai.request.js": "ea11c0d8f659a74d2825c6a3c8e20388a31478c302e3f547ff6e1483ec333d79",
+    "handlers/threads.ctox_approval.approve.js": "78bd132c3487b438b81e5dd0dd98bcc9e31e0c748fa5123c4820c09d9d07695e",
+    "handlers/threads.ctox_approval.cancel.js": "a2733158fad66778f193c05381634467744dc8903e6e77b2c705a0d7cd813ee3",
+    "handlers/threads.ctox_approval.complete.js": "bb042adcdc8696579ff69ac5c21cc4d4d9b551963e7db8976146101bb958c3fa",
+    "handlers/threads.ctox_approval.edit.js": "f13459e43c9ed30e044e37fe00787885f1eebb1f3366cdf3944febfc406cbac6",
+    "handlers/threads.ctox_approval.failed.js": "8f10b8be8f23885a6c111aded74107d58fa412c4b7fc91d41ba1a2ef45b667d9",
+    "handlers/threads.ctox_approval.reject.js": "1a548af0ef494e23c07002f99009cf22fe8470ae663be5c44225f70389cd48f5",
+    "handlers/threads.ctox_approval.request.js": "672bda4df451db8eedf8b2a2bc8f05d65d7e318718bd8ea5044fb72135029580",
+    "handlers/threads.handoff.create.js": "8848cabfd8581ae8ea9f876b096876238627f951b8f676686b43c59b5e1da39e",
+    "handlers/threads.link.create.js": "9b36e9cdce6f83f077ed864c7d48430a5861cb3a04e9f80a7e79d612337014ec",
+    "handlers/threads.link.remove.js": "74052b554cf1c6041c03ecc33e697169831307940efd959137e1c5092c048be0",
+    "handlers/threads.message.create.js": "e17372fe2d98fdde0c0ce70920e9d563b79ebef5f9faba3ae5c8bec8c9916dea",
+    "handlers/threads.note.create.js": "97918dde2a1713336e3c8536cc84b95739f4fae6ab5b3775bddd62abb3c73368",
+    "handlers/threads.note.delete.js": "6a5607d926afc2b1163d1b15a676dbe93daad93165c2a79ba05b2ce97d493a3e",
+    "handlers/threads.note.update.js": "d9f260e869e6d9c8440177c498ec9bde2568543682ff86287b6d94d6465c7108",
+    "handlers/threads.notification.dismiss.js": "a8bdacf0875de13cf685dc1c8327b01cd0c33ace6523d2df0b6d39f7c13e8d68",
+    "handlers/threads.notification.mark_read.js": "1c92c24eac6b227823c4d0d8743bb3e9473623b6b8c5fcf97980549765af0e4e",
+    "handlers/threads.notification.preferences.update.js": "1932d352a2f102eef49c20c8a79504e4df5ea57a3e87f1bcdb4613a986bee3d0",
+    "handlers/threads.thread.archive.js": "28f33b9675ea666c7df974b6afc0f19403b78890b7db2e37c7d1391fb29ef855",
+    "handlers/threads.thread.assign.js": "74993e236e8328677a0125c1d0ac5296a7fb6fcdb49a2476cfc68f647d732ab2",
+    "handlers/threads.thread.claim.js": "f9663243fa3e0e468178f627d5b6e949be215151faa5af77db5c1eca43033e62",
+    "handlers/threads.thread.snooze.js": "38f04e2e2d0cdddf49c12274a194ccda7a1300499b7192e67389ab1fc579e391",
+    "handlers/threads.thread.state.update.js": "dd008de00d51b6cc41b6535134cc87f92dad537ecaf7d4aad1c24a1e8d4866e4",
+    "handlers/threads.thread.unwatch.js": "f35508f9ac480b90a26a3b229bbb236485eb1b0797e6722c7c2c9377cd78ea9c",
+    "handlers/threads.thread.watch.js": "fa009979c0e9be64b5e3b5cd342cd2d130b390bb7df1d2dced36946a46ca477e",
+    "icon.svg": "95ecb93feb4ff290216e4dc1e4a1e8d9f5beff5ed7a7333d136d321b8e0d7c79",
+    "index.css": "cc6c5ea46991713acb622e0c9c602f072d2536128cd6a7e79b630cced3120470",
+    "index.html": "e9403c29e33a3507baaa18f5ea24a00efaf3e8d33efe4de2a0ff9776978977e2",
+    "index.js": "0858c0df0f994e805c7f6c6043283d5d81f597f06bb4bc64c421d8837f798024",
+    "links.js": "f85a00cab723c3fa4e974b558d62af7856a601ae18c2c2f480cfac5a030e33a8",
+    "locales/de.json": "ee883f393ac1cab073f1e7fa2d2d113ddf864413c8b3168ecf75ab07590eef5f",
+    "locales/en.json": "5f1250080d6832729c7d5c43a334b61cf7b5b9e5663e3907e2dcc84b0a261122",
+    "module.json": "057ff00316fe1960f68f15b09da8a58a010251cfc8b24b80ff8c424ec796a7eb",
+    "naming.js": "8b94648d1d283dd1e529d59f060af775ba3d052f9301185f1df546007789d3e4",
+    "paging.js": "f299b06f11f2c5f1dfb58b0ad269ab9bf3199306826786149330ada6d70b4611",
+    "prompts/chat-task.md": "13a198e671ea062bab1f3e01dcbddc650fac8b00100ab09178e74214a4ff3245",
+    "v4-manifest.json": "552937911279492e19e8e35cdbc07dcc9c6abe6b5147aeef4a10463111daa001"
+  },
+  "foreign_collections": {
+    "business_apps": {
+      "_evidence": {
+        "code_read": [
+          "index.js:182",
+          "naming.js:10"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "commands.js:8",
+          "handlers/_chat_access.js:7",
+          "handlers/_chat_access.js:13"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "business_users": {
+      "_evidence": {
+        "code_read": [
+          "index.js:176"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "ctox_queue_tasks": {
+      "_evidence": {
+        "code_read": [
+          "commands.js:9",
+          "handlers/_projection.ctox_relevance.js:1",
+          "handlers/_projection.ctox_relevance.js:6"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "ctox_ticket_approvals": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:14",
+          "handlers/_projection.app_relevance.js:29"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "tickets"
+    },
+    "ctox_ticket_clarification_requests": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:15",
+          "handlers/_projection.app_relevance.js:29"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "tickets"
+    },
+    "ctox_ticket_self_work_items": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:16",
+          "handlers/_projection.app_relevance.js:29"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "tickets"
+    },
+    "ctox_ticket_self_work_notes": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:17",
+          "handlers/_projection.app_relevance.js:29"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "tickets"
+    },
+    "documents": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:25",
+          "links.js:60"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "documents"
+    },
+    "kundenpipeline_entscheidungen": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:13",
+          "handlers/_projection.app_relevance.js:98"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "kundenpipeline"
+    },
+    "notes": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:26"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "notes"
+    },
+    "outbound_approvals": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:21",
+          "handlers/_projection.app_relevance.js:35",
+          "handlers/_projection.app_relevance.js:44"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "outbound"
+    },
+    "outbound_research_runs": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:22"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "outbound"
+    },
+    "research_runs": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:24",
+          "handlers/_projection.app_relevance.js:36",
+          "handlers/_projection.app_relevance.js:45"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "research"
+    },
+    "research_tasks": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:23"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "research"
+    },
+    "support_agent_requests": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:19",
+          "handlers/_projection.app_relevance.js:34",
+          "handlers/_projection.app_relevance.js:43"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "support"
+    },
+    "support_conversations": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:18",
+          "handlers/_projection.app_relevance.js:34"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "support"
+    },
+    "support_notes": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_projection.app_relevance.js:20",
+          "handlers/_projection.app_relevance.js:34",
+          "handlers/_projection.app_relevance.js:43"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "support"
+    },
+    "workjet_project_chats": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_chat_access.js:6",
+          "handlers/_chat_access.js:10"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "workjet_projects": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_chat_access.js:7",
+          "handlers/_chat_access.js:12",
+          "index.js:184"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/threads/V4-PORT.md OFFEN 2",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "workjet_worker_profile_bindings": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_chat_access.js:6",
+          "handlers/_chat_access.js:11"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    }
+  },
+  "handlers": {
+    "threads.ai.complete": "handlers/threads.ai.complete.js",
+    "threads.ai.failed": "handlers/threads.ai.failed.js",
+    "threads.ctox_approval.complete": "handlers/threads.ctox_approval.complete.js",
+    "threads.ctox_approval.failed": "handlers/threads.ctox_approval.failed.js"
+  },
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/threads.jpg (shared/operator-icon-selection.js, sha256 b4cf784881d8…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; modules/threads/V4-PORT.md OFFEN 7; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "System",
+    "default_height": 760,
+    "default_width": 1120,
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-threads\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-threads\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#7c3aed\" /></linearGradient></defs><path d=\"M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v7A2.5 2.5 0 0 1 17.5 15H10l-5 4v-4.2A2.5 2.5 0 0 1 4 12.5z\" fill=\"url(#grad-threads)\" fill-opacity=\"0.12\" stroke=\"url(#grad-threads)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M8 8h8M8 11h5\" stroke=\"url(#grad-threads)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><circle cx=\"18\" cy=\"18\" r=\"3\" fill=\"#fff\" stroke=\"url(#grad-threads)\" stroke-width=\"1.5\"></circle><path d=\"M18 16.6v1.7l1.2.8\" stroke=\"url(#grad-threads)\" stroke-width=\"1.4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
+    "min_height": 480,
+    "min_width": 640,
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 760,
+        "width": 1120
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#7c3aed",
+        "category": "System",
+        "iconAssetId": "workjet.business-os.threads",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "list-detail",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Threads"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {
+    "user_thread_messages": {
+      "_source": "v4/schemas/threads.collections.schema.json migration_strategies",
+      "from_ver": 0,
+      "migrate_fn": null,
+      "steps": [
+        {
+          "operations": [],
+          "to_ver": 1
+        }
+      ]
+    },
+    "user_threads": {
+      "_source": "v4/schemas/threads.collections.schema.json migration_strategies",
+      "from_ver": 0,
+      "migrate_fn": null,
+      "steps": [
+        {
+          "operations": [],
+          "to_ver": 1
+        }
+      ]
+    }
+  },
+  "min_app_api": "4.0",
+  "prompts": [
+    {
+      "name": "chat-task",
+      "path": "prompts/chat-task.md"
+    }
+  ],
+  "provenance": {
+    "base_hash": "d2005e950304c0ef5aee628d789f58f6fd9f6b70af31b8ac8b205c21791d506a",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Threads",
+  "triggers": [],
+  "version": "0.2.4"
+}

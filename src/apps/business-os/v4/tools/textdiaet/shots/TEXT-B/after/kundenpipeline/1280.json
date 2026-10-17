@@ -1,0 +1,88 @@
+{
+ "app": "kundenpipeline",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Decision Hub",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "nav:Offen 2",
+    "nav:Alle 6",
+    "button:KUNDENTERMIN OFFEN +49 821 461",
+    "button:LIEFERANTENBEWERTUNG OFFEN +49",
+    "button:Linke Spaltenbreite anpassen",
+    "button:Aktionen einblenden",
+    "button:Rechte Spaltenbreite anpassen",
+    "button:Entscheidung übernehmen und Fo",
+    "button:Entscheidung ohne Folgeaktion "
+   ],
+   "shot": "kundenpipeline/1280-01-open.png"
+  },
+  {
+   "step": "nav Offen 2",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "kundenpipeline/1280-02-nav_Offen_2.png"
+  },
+  {
+   "step": "nav Alle 6",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "kundenpipeline/1280-03-nav_Alle_6.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 467,
+   "shot": "kundenpipeline/1280-04-suche_ohne_Treffer.png",
+   "textAfter": 138
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "kundenpipeline/1280-05-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "kundenpipeline",
+  "Decision Hub"
+ ]
+}

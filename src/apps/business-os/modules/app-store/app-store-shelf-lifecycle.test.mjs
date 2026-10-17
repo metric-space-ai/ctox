@@ -1,13 +1,23 @@
+// v4-Fassung: Regal-Lebenszyklus über mount(root, api) statt mount(ctx). Regel unverändert: Schließen räumt den
+// Renderer ab, Wiederöffnen malt denselben Katalog neu, ein spät fertiger oder fehlgeschlagener Import einer
+// abgelösten Montage darf die neue weder überschreiben noch als „Regal nicht verfügbar“ markieren.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
 const source = readFileSync(process.env.CTOX_APP_STORE_MOUNT_SOURCE || new URL('./index.js', import.meta.url), 'utf8');
-const mount = source.slice(source.indexOf('export async function mount(ctx) {'), source.indexOf('\nfunction ensureStylesheet()')).replace(/^export /, '');
-const shelf = source.slice(source.indexOf('async function ensureShelf() {'), source.indexOf('\nfunction renderCatalogBody('))
-  .replace(/import\(['"]\.\.\/\.\.\/vendor\/store-shelf\/store-shelf\.mjs(?:\?[^'"]+)?['"]\)/, 'loadShelfModule()');
-const code = (mount + '\n' + shelf).replaceAll('import.meta.url', "'https://fixture.invalid/modules/app-store/index.js'");
+const slice = (from, to) => {
+  const start = source.indexOf(from);
+  const end = source.indexOf(to, start);
+  assert.ok(start >= 0 && end > start, `${from} … ${to}`);
+  return source.slice(start, end);
+};
+const mount = slice('export async function mount(root, api', '\nfunction restoreGrammarControls(').replace(/^export /, '');
+const retire = slice('function retireShelf() {', '\nasync function loadModuleMarkup(');
+const shelf = slice('async function ensureShelf() {', '\nfunction renderCatalogBody(')
+  .replace(/import\(['"]\.\/vendor\/store-shelf\/store-shelf\.mjs(?:\?[^'"]+)?['"]\)/, 'loadShelfModule()');
+const code = [mount, retire, shelf].join('\n').replaceAll('import.meta.url', "'https://fixture.invalid/modules/app-store/index.js'");
 
 function deferred() {
   let resolve, reject;
@@ -16,8 +26,8 @@ function deferred() {
 }
 
 function fixture(loadShelfModule) {
-  const instances = [], subscriptions = [], renders = [], pending = [];
-  const state = { ctx: null, catalog: null, shelf: null, shelfSignature: '', shelfUnavailable: false };
+  const instances = [], subscriptions = [], pending = [];
+  const state = { zone: new Set(), t: (key, fallback) => fallback ?? key, shelf: null, shelfSignature: '', shelfUnavailable: false, drawerOpen: false, selectedId: '' };
   const els = {};
   const factory = {
     createStoreShelf(canvas, options) {
@@ -31,47 +41,49 @@ function fixture(loadShelfModule) {
       return instance;
     },
   };
-  const catalog = { modules: [{ id: 'mail', title: 'Mail', kind: 'installed', category: 'Business' }] };
+  let apps = [{ id: 'mail', title: 'Mail', kind: 'installed', category: 'Business' }];
   let context;
   context = vm.createContext({
     state, els, Promise, URL, setTimeout, clearTimeout, console: { warn() {}, error() {} },
     loadShelfModule: () => loadShelfModule(factory),
-    loadModuleMessages: async () => ({}), loadModuleMarkup: async () => '<div>Store</div>',
-    applyTranslations() {}, ensureStylesheet() {}, applyHeaderActionIcons() {}, wireEvents() {},
-    bindElements(host) { Object.assign(els, host.elements); },
-    async loadCatalog() { state.catalog = catalog; },
-    applyCatalogMarketplaceState() {}, mergeShellModulesIntoCatalog: value => value,
-    normalizeMarketplace: value => value,
-    isInstalledCatalogItem: () => true, previewUrlFor: () => '',
-    render() { renders.push(state.ctx.host); if (!state.shelfUnavailable) pending.push(context.syncShelf(state.catalog.modules)); },
+    applyLocale() {}, readLocale: () => 'de', applyRestored() {},
+    loadModuleMarkup: async () => '<div>Store</div>', applyTranslations() {}, applyHeaderActionIcons() {}, wireEvents() {},
+    autoWirePaneGrammar() {}, restoreGrammarControls() {}, reportStatus() {}, scheduleRender() {},
+    bindElements(root) { for (const key of Object.keys(els)) delete els[key]; Object.assign(els, root.elements); },
+    rebuildCatalog() {}, isInstalledCatalogItem: () => true, previewUrlFor: () => '',
+    render() { if (!state.shelfUnavailable) pending.push(context.syncShelf(apps)); },
   });
   vm.runInContext(code + '\nglobalThis.actualMount = mount;', context);
+  const api = {
+    actor: { id: 'u1', role: 'admin', permissions: { subscribe: () => () => {} } },
+    shell: { setTitle() {}, locale: { subscribe: () => () => {} } },
+    status: { report() {}, clear() {} },
+    query(name) {
+      return { subscribe(callback) {
+        const subscription = { name, callback, disposed: false };
+        subscriptions.push(subscription);
+        callback([]);
+        return () => { subscription.disposed = true; };
+      } };
+    },
+  };
   function host(id) {
-    return { id, innerHTML: '', elements: {
+    return { id, dataset: {}, innerHTML: '', replaceChildren() {}, elements: {
       shelfCanvas: { id, apps: [] }, shelfStage: {}, shelfScroll: { clientHeight: 600 },
       shelfTrack: { style: {} }, shelfHint: { hidden: false },
     } };
   }
-  function ctx(host) {
-    return { host, locale: 'de', sync: { startCollection: () => new Promise(() => {}) },
-      db: { collection: () => ({ findOne: () => ({ $: {
-        subscribe(callback) {
-          const subscription = { callback, disposed: false, unsubscribe() { this.disposed = true; } };
-          subscriptions.push(subscription); return subscription;
-        },
-      } }) }) },
-    };
-  }
-  return { state, instances, subscriptions, renders, host, mount: host => context.actualMount(ctx(host)),
-    flush: () => Promise.all(pending), ids: host => Array.from(host.elements.shelfCanvas.apps, app => app.id) };
+  return { state, instances, subscriptions, host, setApps: (next) => { apps = next; },
+    mount: (root) => context.actualMount(root, api, {}),
+    flush: () => Promise.all(pending), ids: (root) => Array.from(root.elements.shelfCanvas.apps, (app) => app.id) };
 }
 
 test('closing retires the renderer and reopening paints the same cached catalogue on the new canvas', async () => {
-  const f = fixture(factory => Promise.resolve(factory));
+  const f = fixture((factory) => Promise.resolve(factory));
   const first = f.host('first');
   const closeFirst = await f.mount(first); await f.flush();
   assert.deepEqual(f.ids(first), ['mail']);
-  closeFirst();
+  closeFirst.unmount();
   assert.equal(f.instances[0].destroyed, true);
   assert.deepEqual(f.ids(first), []);
   const second = f.host('second');
@@ -79,20 +91,18 @@ test('closing retires the renderer and reopening paints the same cached catalogu
   assert.deepEqual(f.ids(second), ['mail'], 'unchanged catalogue must populate a fresh renderer');
   assert.equal(f.instances.length, 2);
   assert.equal(f.instances[1].canvas, second.elements.shelfCanvas);
-  closeFirst();
+  closeFirst.unmount();
   assert.equal(f.instances[1].destroyed, false, 'old cleanup cannot retire the reopened window');
-  f.subscriptions[0].callback({ toJSON: () => ({ modules: [] }) });
-  assert.deepEqual(f.ids(second), ['mail']);
-  closeSecond();
+  closeSecond.unmount();
   assert.equal(f.instances[1].destroyed, true);
-  assert.ok(f.subscriptions.every(subscription => subscription.disposed));
+  assert.ok(f.subscriptions.every((subscription) => subscription.disposed));
 });
 
 test('an import finishing after close cannot create a renderer or overwrite a newer mount', async () => {
   const late = deferred(); let loads = 0, factory;
-  const f = fixture(value => { factory = value; return ++loads === 1 ? late.promise : Promise.resolve(value); });
+  const f = fixture((value) => { factory = value; return ++loads === 1 ? late.promise : Promise.resolve(value); });
   const first = f.host('retired');
-  const closeFirst = await f.mount(first); closeFirst();
+  const closeFirst = await f.mount(first); closeFirst.unmount();
   const second = f.host('current');
   const closeSecond = await f.mount(second);
   late.resolve(factory); await f.flush();
@@ -100,17 +110,17 @@ test('an import finishing after close cannot create a renderer or overwrite a ne
   assert.equal(f.instances[0].canvas, second.elements.shelfCanvas);
   assert.deepEqual(f.ids(first), []);
   assert.deepEqual(f.ids(second), ['mail']);
-  closeSecond();
+  closeSecond.unmount();
 });
 
-test('a retired import rejection cannot mark the reopened shelf unavailable', async () => {
+test('a retired import rejection cannot switch the reopened shelf to DOM cards', async () => {
   const late = deferred(); let loads = 0;
-  const f = fixture(factory => ++loads === 1 ? late.promise : Promise.resolve(factory));
-  const closeFirst = await f.mount(f.host('retired')); closeFirst();
+  const f = fixture((factory) => (++loads === 1 ? late.promise : Promise.resolve(factory)));
+  const closeFirst = await f.mount(f.host('retired')); closeFirst.unmount();
   const second = f.host('current');
   const closeSecond = await f.mount(second);
   late.reject(new Error('retired import failed')); await f.flush();
   assert.equal(f.state.shelfUnavailable, false);
   assert.deepEqual(f.ids(second), ['mail']);
-  closeSecond();
+  closeSecond.unmount();
 });

@@ -1,0 +1,430 @@
+{
+  "schema": "shell-v4-ratchet-v1",
+  "guard": {
+    "total": 1842,
+    "byRule": {
+      "vocab:de-warten": 12,
+      "english-raw-term": 372,
+      "vocab:de-veraltet-offline": 12,
+      "vocab:de-schreibgeschuetzt": 17,
+      "collectionReadiness": 26,
+      "recoveryWarning": 28,
+      "commandBus": 243,
+      "advancedStatus": 120,
+      "dataPlaneReady": 40,
+      "syncDiagnostics": 27,
+      "activeModuleSyncLease": 6,
+      "ctoxHealthTimer": 6,
+      "waitForDataPlaneReady": 3,
+      "startCollection": 68,
+      "restartCollection": 15,
+      "startMaintenanceMonitor": 2,
+      "wireShellV2ModuleTitle": 2,
+      "readCollectionNativeDocument": 7,
+      "leaseModule": 3,
+      "readNativeCollectionDocument": 1,
+      "data-guard": 34,
+      "requestNative": 28,
+      "leaseCollection": 19,
+      "stopCollection": 11,
+      "OFFLINE_FALLBACK_CATALOG": 2,
+      "requireRevision": 12,
+      "until-accepted-terminal": 35,
+      "location-reload": 2,
+      "cache-buster": 125,
+      "ref-legacy-catalog-file": 49,
+      "vocab:de-vorbereitet": 10,
+      "vocab:de-nicht-bereit": 11,
+      "vocab:en-pending-waiting": 60,
+      "vocab:de-geladen": 17,
+      "vocab:de-synchronisier": 26,
+      "vocab:de-abgleich": 5,
+      "vocab:both-replikation-recovery": 44,
+      "vocab:de-nicht-verfuegbar": 17,
+      "vocab:both-update-status": 9,
+      "vocab:de-fortschritt-wird": 42,
+      "vocab:de-laeuft": 21,
+      "vocab:de-verbindung": 23,
+      "vocab:en-loading": 10,
+      "vocab:en-sync": 14,
+      "vocab:en-progress-verb": 18,
+      "vocab:en-connecting": 9,
+      "vocab:en-unavailable": 77,
+      "vocab:en-not-ready": 20,
+      "vocab:de-unbestaetigt": 12,
+      "vocab:de-verzoegert": 11,
+      "vocab:de-nicht-rechtzeitig": 2,
+      "file-mobile-apps-json": 1,
+      "file-schema-js": 3,
+      "file-registry-json": 1,
+      "vocab:en-unconfirmed": 9,
+      "vocab:de-ausstehend": 2,
+      "file-system-apps-json": 1,
+      "vocab:de-laedt": 40
+    },
+    "byGroup": {
+      "app-starter": {
+        "vocab:de-warten": 2,
+        "english-raw-term": 7,
+        "vocab:de-veraltet-offline": 3,
+        "vocab:de-schreibgeschuetzt": 2
+      },
+      "shell/app.js": {
+        "collectionReadiness": 8,
+        "recoveryWarning": 27,
+        "commandBus": 90,
+        "advancedStatus": 112,
+        "dataPlaneReady": 37,
+        "syncDiagnostics": 27,
+        "activeModuleSyncLease": 6,
+        "ctoxHealthTimer": 6,
+        "waitForDataPlaneReady": 3,
+        "startCollection": 27,
+        "restartCollection": 7,
+        "startMaintenanceMonitor": 2,
+        "wireShellV2ModuleTitle": 2,
+        "readCollectionNativeDocument": 6,
+        "leaseModule": 2,
+        "readNativeCollectionDocument": 1,
+        "data-guard": 34,
+        "requestNative": 6,
+        "leaseCollection": 2,
+        "stopCollection": 2,
+        "OFFLINE_FALLBACK_CATALOG": 2,
+        "requireRevision": 2,
+        "until-accepted-terminal": 26,
+        "location-reload": 1,
+        "cache-buster": 75,
+        "ref-legacy-catalog-file": 6,
+        "vocab:de-vorbereitet": 6,
+        "vocab:de-nicht-bereit": 6,
+        "vocab:en-pending-waiting": 7,
+        "vocab:de-geladen": 11,
+        "vocab:de-synchronisier": 11,
+        "vocab:de-abgleich": 1,
+        "vocab:both-replikation-recovery": 7,
+        "vocab:de-nicht-verfuegbar": 10,
+        "vocab:both-update-status": 3,
+        "vocab:de-fortschritt-wird": 22,
+        "vocab:de-laeuft": 5,
+        "vocab:de-verbindung": 10,
+        "english-raw-term": 37,
+        "vocab:en-loading": 5,
+        "vocab:en-sync": 6,
+        "vocab:en-progress-verb": 17,
+        "vocab:en-connecting": 3,
+        "vocab:en-unavailable": 18,
+        "vocab:en-not-ready": 8,
+        "vocab:de-schreibgeschuetzt": 3,
+        "vocab:de-unbestaetigt": 1,
+        "vocab:de-warten": 1,
+        "vocab:de-verzoegert": 1,
+        "vocab:de-nicht-rechtzeitig": 2,
+        "vocab:de-veraltet-offline": 1
+      },
+      "customer-modules/outbound-lead-generation": {
+        "english-raw-term": 1
+      },
+      "shell/design-lab.html": {
+        "vocab:de-laeuft": 1
+      },
+      "shell/design-lab.js": {
+        "vocab:de-laeuft": 1,
+        "english-raw-term": 5,
+        "vocab:en-sync": 1
+      },
+      "shell/index.html": {
+        "cache-buster": 10,
+        "vocab:en-progress-verb": 1,
+        "vocab:both-replikation-recovery": 2,
+        "vocab:de-laeuft": 3,
+        "vocab:de-fortschritt-wird": 2,
+        "vocab:de-synchronisier": 1,
+        "vocab:de-verbindung": 1
+      },
+      "shell/mobile-apps.json": {
+        "file-mobile-apps-json": 1
+      },
+      "shell/mobile-host.js": {
+        "ref-legacy-catalog-file": 1,
+        "vocab:en-unavailable": 1
+      },
+      "modules/app-store": {
+        "english-raw-term": 2
+      },
+      "modules/appsec-pentest": {
+        "english-raw-term": 27
+      },
+      "modules/calendar": {
+        "english-raw-term": 1
+      },
+      "modules/consent": {
+        "english-raw-term": 1
+      },
+      "modules/conversations": {
+        "english-raw-term": 4,
+        "file-schema-js": 1
+      },
+      "modules/creator": {
+        "english-raw-term": 8
+      },
+      "modules/credentials": {
+        "english-raw-term": 3
+      },
+      "modules/ctox": {
+        "english-raw-term": 49,
+        "file-schema-js": 1,
+        "ref-legacy-catalog-file": 1
+      },
+      "modules/customers": {
+        "english-raw-term": 13
+      },
+      "modules/cv-print-builder": {
+        "english-raw-term": 10
+      },
+      "modules/desktop": {
+        "english-raw-term": 2
+      },
+      "modules/documents": {
+        "english-raw-term": 14
+      },
+      "modules/esign": {
+        "english-raw-term": 1
+      },
+      "modules/explorer": {
+        "english-raw-term": 1
+      },
+      "modules/importer": {
+        "english-raw-term": 9
+      },
+      "modules/intake": {
+        "english-raw-term": 5
+      },
+      "modules/interviews": {
+        "english-raw-term": 5
+      },
+      "modules/invoices": {
+        "english-raw-term": 2
+      },
+      "modules/iot": {
+        "english-raw-term": 20
+      },
+      "modules/knowledge": {
+        "english-raw-term": 15
+      },
+      "modules/kundenpipeline": {
+        "english-raw-term": 2
+      },
+      "modules/mail": {
+        "english-raw-term": 9
+      },
+      "modules/matching": {
+        "english-raw-term": 5
+      },
+      "modules/news": {
+        "english-raw-term": 4
+      },
+      "modules/notes": {
+        "english-raw-term": 9
+      },
+      "modules/outbound": {
+        "english-raw-term": 2,
+        "file-schema-js": 1
+      },
+      "modules/registry.json": {
+        "file-registry-json": 1,
+        "vocab:de-schreibgeschuetzt": 3,
+        "vocab:en-sync": 2
+      },
+      "modules/reports": {
+        "english-raw-term": 3
+      },
+      "modules/research": {
+        "english-raw-term": 15
+      },
+      "modules/shiftflow": {
+        "english-raw-term": 1
+      },
+      "modules/spreadsheets": {
+        "english-raw-term": 13
+      },
+      "modules/submissions": {
+        "english-raw-term": 1
+      },
+      "modules/support": {
+        "english-raw-term": 3
+      },
+      "modules/threads": {
+        "english-raw-term": 11
+      },
+      "modules/tickets": {
+        "english-raw-term": 14
+      },
+      "office-engine": {
+        "startCollection": 7,
+        "commandBus": 12,
+        "leaseCollection": 5,
+        "vocab:de-schreibgeschuetzt": 6,
+        "vocab:en-pending-waiting": 11,
+        "vocab:en-loading": 1,
+        "vocab:en-unavailable": 25,
+        "vocab:en-not-ready": 6,
+        "vocab:de-veraltet-offline": 1,
+        "vocab:both-replikation-recovery": 1,
+        "english-raw-term": 8,
+        "cache-buster": 4,
+        "vocab:de-warten": 2,
+        "vocab:de-fortschritt-wird": 1,
+        "restartCollection": 2,
+        "until-accepted-terminal": 3,
+        "vocab:de-nicht-verfuegbar": 1
+      },
+      "output": {
+        "collectionReadiness": 3,
+        "recoveryWarning": 1,
+        "dataPlaneReady": 2
+      },
+      "public": {
+        "vocab:de-geladen": 1,
+        "vocab:de-nicht-verfuegbar": 2,
+        "vocab:en-loading": 1,
+        "vocab:en-unavailable": 1,
+        "vocab:en-pending-waiting": 2
+      },
+      "qa": {
+        "vocab:en-sync": 1,
+        "english-raw-term": 12,
+        "vocab:en-pending-waiting": 2
+      },
+      "scripts": {
+        "ref-legacy-catalog-file": 30,
+        "vocab:de-veraltet-offline": 1,
+        "english-raw-term": 7,
+        "commandBus": 4,
+        "vocab:de-laeuft": 4,
+        "vocab:de-synchronisier": 6,
+        "vocab:en-unavailable": 7,
+        "vocab:en-pending-waiting": 18,
+        "vocab:de-unbestaetigt": 2,
+        "vocab:en-unconfirmed": 2,
+        "cache-buster": 11,
+        "vocab:de-schreibgeschuetzt": 2,
+        "advancedStatus": 8,
+        "vocab:both-replikation-recovery": 15,
+        "vocab:en-loading": 3,
+        "vocab:de-verzoegert": 1,
+        "vocab:en-connecting": 1,
+        "vocab:en-not-ready": 3,
+        "collectionReadiness": 2,
+        "vocab:both-update-status": 1
+      },
+      "shared": {
+        "commandBus": 137,
+        "vocab:en-not-ready": 3,
+        "vocab:en-unavailable": 25,
+        "vocab:both-update-status": 5,
+        "collectionReadiness": 13,
+        "startCollection": 34,
+        "leaseCollection": 12,
+        "cache-buster": 25,
+        "english-raw-term": 11,
+        "vocab:en-pending-waiting": 20,
+        "vocab:de-verzoegert": 9,
+        "vocab:de-warten": 7,
+        "vocab:de-laeuft": 7,
+        "vocab:de-nicht-verfuegbar": 3,
+        "vocab:de-unbestaetigt": 9,
+        "vocab:de-verbindung": 12,
+        "vocab:en-connecting": 5,
+        "vocab:de-ausstehend": 2,
+        "vocab:de-nicht-bereit": 5,
+        "vocab:de-veraltet-offline": 5,
+        "vocab:de-fortschritt-wird": 17,
+        "vocab:de-abgleich": 4,
+        "vocab:en-sync": 4,
+        "vocab:en-unconfirmed": 7,
+        "requireRevision": 10,
+        "until-accepted-terminal": 6,
+        "vocab:both-replikation-recovery": 17,
+        "requestNative": 22,
+        "vocab:de-synchronisier": 8,
+        "location-reload": 1,
+        "vocab:de-vorbereitet": 4,
+        "vocab:de-geladen": 5,
+        "dataPlaneReady": 1,
+        "restartCollection": 6,
+        "leaseModule": 1,
+        "stopCollection": 9,
+        "readCollectionNativeDocument": 1,
+        "vocab:de-schreibgeschuetzt": 1
+      },
+      "shell/system-apps.json": {
+        "file-system-apps-json": 1
+      },
+      "ui-contract": {
+        "vocab:both-replikation-recovery": 2
+      },
+      "v4": {
+        "vocab:de-veraltet-offline": 1,
+        "vocab:de-laedt": 40,
+        "ref-legacy-catalog-file": 11,
+        "vocab:de-nicht-verfuegbar": 1
+      }
+    }
+  },
+  "scan": {
+    "total": 3,
+    "byApp": {
+      "modules/app-store": {},
+      "modules/appsec-pentest": {},
+      "modules/browser": {},
+      "modules/buchhaltung": {},
+      "modules/calendar": {},
+      "modules/coding-agents": {},
+      "modules/consent": {},
+      "modules/conversations": {
+        "R17-schema": 1
+      },
+      "modules/creator": {},
+      "modules/credentials": {},
+      "modules/ctox": {
+        "R17-schema": 1
+      },
+      "modules/customers": {},
+      "modules/cv-print-builder": {},
+      "modules/desktop": {},
+      "modules/documents": {},
+      "modules/esign": {},
+      "modules/explorer": {},
+      "modules/file-viewer": {},
+      "modules/importer": {},
+      "modules/intake": {},
+      "modules/interviews": {},
+      "modules/invoices": {},
+      "modules/iot": {},
+      "modules/knowledge": {},
+      "modules/kundenpipeline": {},
+      "modules/mail": {},
+      "modules/matching": {},
+      "modules/nachweise": {},
+      "modules/news": {},
+      "modules/notes": {},
+      "modules/outbound": {
+        "R17-schema": 1
+      },
+      "modules/placements": {},
+      "modules/reports": {},
+      "modules/research": {},
+      "modules/shiftflow": {},
+      "modules/spreadsheets": {},
+      "modules/submissions": {},
+      "modules/support": {},
+      "modules/threads": {},
+      "modules/tickets": {},
+      "modules/workjet": {},
+      "customer-modules/outbound-lead-generation": {},
+      "desktop-apps/code-editor": {}
+    }
+  },
+  "measuredAt": "2026-10-17T10:26:24.439Z"
+}

@@ -82,7 +82,9 @@ fn handle_command(root: &Path, command: &BusinessCommand, owner: &str) -> anyhow
 // fresh-root bootstrap evidence; native task admission must not need the
 // worker/computer/private-chat records added by the richer fixture below.
 fn project_fixture() -> anyhow::Result<TempDir> {
-    let root = tempdir()?;
+    project_fixture_with_root(tempdir()?)
+}
+fn project_fixture_with_root(root: TempDir) -> anyhow::Result<TempDir> {
     super::super::store_workjet_projects::tests::create_workjet_rxdb_projection_tables(
         root.path(),
     )?;

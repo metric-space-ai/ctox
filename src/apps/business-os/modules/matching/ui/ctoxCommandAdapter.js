@@ -1,3 +1,5 @@
+import { sendMatchingCommand } from './v4Runtime.js';
+
 export function tool(definition = {}) {
   return definition;
 }
@@ -97,58 +99,28 @@ export async function llmChat(request = {}, options = {}) {
       action: 'match',
       agent: request?.agent || options.agent || 'matcher',
       ...(options.businessContext || {})
-    },
-    timeoutMs: options.timeoutMs || 12000
+    }
   });
 
-  const text =
-    result.text ||
-    result.content ||
-    result.response ||
-    result.output_text ||
-    result.payload?.text ||
-    result.payload?.content ||
-    '';
-
-  if (typeof text === 'string' && text.trim()) return text;
-
+  // App-API 4.0: nie auf das Ergebnis warten. Der Handler schreibt matching_results; die UI
+  // übernimmt es über das Live-Abo (wie vorher der Queue-Weg).
   throw new CtoxQueuedCommandError(
-    'CTOX queued matching task; waiting for harness result.',
+    'CTOX queued matching task; result arrives in matching_results.',
     result
   );
 }
 
-let commandBus = null;
-
-export function setCtoxCommandBus(nextCommandBus) {
-  commandBus = nextCommandBus?.dispatch ? nextCommandBus : null;
-}
-
-async function queueCommand({ commandType, recordId, payload, clientContext, timeoutMs = 12000 }) {
-  const command = {
-    id: recordId,
-    module: 'matching',
-    command_type: commandType,
+// Befehl über api.command (PORTING R5): liefert sofort {command_id, status:'queued'}.
+// Fehlschlag meldet v4Runtime in die Zustandszone; lokal ungültig → Ausnahme an die UI.
+async function queueCommand({ commandType, recordId, payload, clientContext }) {
+  const handle = sendMatchingCommand(commandType, {
+    ...payload,
     record_id: recordId,
-    payload,
     client_context: clientContext
-  };
-
-  const response = await dispatchCtoxCommand(command, { timeoutMs });
-  if (response?.ok && response.result) return response.result;
-  if (response?.status === 'timeout') {
-    throw new Error(`CTOX command bus timeout: ${commandType}`);
-  }
-  throw new Error(response?.error || `CTOX command failed: ${commandType}`);
-}
-
-function dispatchCtoxCommand(command, { timeoutMs = 12000 } = {}) {
-  if (!commandBus?.dispatch) return Promise.resolve({ ok: false, status: 'unavailable', error: 'CTOX command bus is unavailable' });
-  return commandBus.dispatch(command, { timeoutMs });
-}
-
-function isTrustedShellMessageSource(event) {
-  return event.source === window || event.source === parent;
+  });
+  if (!handle) throw new Error(`CTOX command failed: ${commandType}`);
+  await handle.local;
+  return { ok: true, command_id: handle.id, id: handle.id, record_id: recordId, status: 'queued' };
 }
 
 function stableRecordId(prefix) {

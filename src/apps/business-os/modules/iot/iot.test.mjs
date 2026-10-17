@@ -10,29 +10,59 @@ import { readFileSync } from 'node:fs';
 import { Buffer } from 'node:buffer';
 import { fileURLToPath } from 'node:url';
 
-import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join as joinPath } from 'node:path';
+// Lader (OLDTEST/FIX5): esbuild aus dem Klon, sonst ESBUILD_MODULE, sonst aus dem Haupt-Checkout
+// ~/Documents/ctox/src/apps/business-os/node_modules (wie PLAYWRIGHT_MODULE in den v4-api-Tests). Nicht installieren.
+const requireDev = createRequire(import.meta.url);
+function loadDev(name, envVar) {
+  try { return requireDev(name); } catch {
+    return requireDev(process.env[envVar] || joinPath(homedir(), 'Documents/ctox/src/apps/business-os/node_modules', name));
+  }
+}
+const { build } = loadDev('esbuild', 'ESBUILD_MODULE');
 
 // Pure helpers exported for tests (no DOM, no RxDB). Importing index.js only
 // loads the shared context-menu/dialogs modules, which touch the DOM lazily.
-import {
+// v4: index.js importiert 'ctox:shared/…' (nur über den Service Worker auflösbar) und die Locales als
+// JSON-Module → esbuild-Bündel mit demselben Umschreiben wie der SW (§16.15).
+const ctoxSharedPlugin = {
+  name: 'ctox-shared',
+  setup(b) {
+    b.onResolve({ filter: /^ctox:shared\// }, (args) => ({ path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)) }));
+  },
+};
+const bundled = await build({
+  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  write: false,
+  logLevel: 'silent',
+  plugins: [ctoxSharedPlugin],
+});
+const [{ text: bundledSource }] = bundled.outputFiles;
+const bundledModule = await import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
+const {
   assetMatchesBand,
   filterAssetRows,
   countsForAssets,
   resolveMainState,
   widgetsForSelection,
-} from './index.js';
+} = bundledModule;
 
 const readModuleFile = (rel) => readFileSync(new URL(rel, import.meta.url), 'utf8');
 const indexHtml = readModuleFile('./index.html');
 const indexJs = readModuleFile('./index.js');
 const indexCss = readModuleFile('./index.css');
 
-const schemaUrl = new URL('./schema.js', import.meta.url);
-const schemaSource = await readFile(schemaUrl, 'utf8');
-const schemaModule = await import(`data:text/javascript;base64,${Buffer.from(schemaSource).toString('base64')}`);
-const { collections, migrationStrategies } = schemaModule;
+// v4 (§16.13): collections.schema.json ist die einzige Schemaquelle (schema.js gelöscht, inhaltsgleich).
+const schemaDoc = JSON.parse(await readFile(new URL('./collections.schema.json', import.meta.url), 'utf8'));
+const { collections } = schemaDoc;
+const migrationStrategies = schemaDoc.migration_strategies || {};
 
-// schema.js owns all iot_* collections; assert against it, do not redefine.
+// collections.schema.json owns all iot_* collections; assert against it, do not redefine.
 const expectedCollections = [
   'iot_agent_status',
   'iot_agents',
@@ -59,7 +89,8 @@ for (const [name, schema] of Object.entries(collections)) {
   assert.ok(schema.properties.id, `${name} has id`);
   assert.ok(schema.properties.updated_at_ms, `${name} has updated_at_ms`);
   assert.ok(Array.isArray(schema.required) && schema.required.includes('id'), `${name} requires id`);
-  assert.ok(migrationStrategies[name], `${name} has a migration strategy`);
+  // Alle Versionen 0 → keine Migration nötig (schema.js hatte je Collection eine leere Strategie).
+  assert.ok(schema.version === 0 || migrationStrategies[name], `${name} is version 0 or has a migration strategy`);
 }
 
 // RFC 0011 — the two new collections carry the automation-widget fields.
@@ -106,21 +137,8 @@ assert.deepEqual(registryEntry.collections, moduleJson.collections, 'registry co
 assert.equal(registryEntry.entry, moduleJson.entry);
 assert.equal(registryEntry.category, 'Operations');
 
-// index.js bundles cleanly (no missing imports / syntax errors). The shared BOS
-// components it imports are real files; esbuild resolves them.
-const bundled = await build({
-  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
-  bundle: true,
-  format: 'esm',
-  platform: 'browser',
-  write: false,
-  logLevel: 'silent',
-});
-const [{ text: bundledSource }] = bundled.outputFiles;
+// index.js bundles cleanly (bundle built above with the ctox:shared rewrite).
 assert.ok(bundledSource.length > 0, 'index.js bundles to non-empty output');
-// Import the bundle and check the real export (works for self-contained
-// bundles and for the offline shim's re-export facade alike).
-const bundledModule = await import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
 assert.equal(typeof bundledModule.mount, 'function', 'bundle exposes mount');
 
 console.log('iot module contract OK:', expectedCollections.length, 'collections, module.json/registry consistent, index.js bundles');
@@ -147,9 +165,12 @@ test('iot: IA-Karte — left selector + main dashboard, no third column', () => 
 
 test('iot: widget editor overlay is bounded to the shell window', () => {
   assert.match(indexJs, /host\.className = 'ctox-modal iot-modal-overlay'/);
-  assert.match(indexJs, /const mountTarget = state\.ctx\?\.host/);
+  assert.match(indexJs, /const mountTarget = rootEl\(\) \|\| state\.root/);
   assert.match(indexJs, /if \(mountTarget\) mountTarget\.appendChild\(host\)/);
-  assert.match(indexCss, /\.shell-window\[data-shell-contract="v2"\] \.iot-modal-overlay\s*\{[\s\S]*position:\s*absolute[\s\S]*inset:\s*0/);
+  // v4: Shell-Vorfahr durch den App-Scope ersetzt (scope-css.mjs); Kontextmenü über api.shell.menu.
+  assert.match(indexCss, /\[data-app="iot"\] \.iot-modal-overlay\s*\{[\s\S]*position:\s*absolute[\s\S]*inset:\s*0/);
+  assert.match(indexJs, /state\.api\?\.shell\.menu\(/);
+  assert.doesNotMatch(indexJs, /createContextMenu|document\.body/);
 });
 
 test('iot: left column carries the canonical grammar markup pins', () => {
@@ -239,20 +260,12 @@ test('iot: main dashboard is revealed by selection (auto-reveal analog)', () => 
   assert.equal(resolveMainState(true), 'dashboard', 'selection → dashboard');
 });
 
-test('iot: data-driven empties gate on canonical collection readiness', () => {
-  // Subscribes to the shell readiness API for the two backing collections and
-  // unsubscribes in the mount teardown.
-  assert.match(indexJs, /subscribeCollectionReadiness/, 'uses the canonical readiness subscription');
-  assert.match(indexJs, /READINESS_COLLECTIONS = \['iot_assets', 'iot_widgets'\]/, 'readiness tracks the backing collections');
-  assert.match(indexJs, /readinessSubs\.forEach\(\(unsubscribe\)/, 'teardown unsubscribes readiness');
-  // Empty + ready === false → .ctox-syncing shell (role/aria per kit contract);
-  // empty + ready → the existing .ctox-empty branches stay.
-  assert.match(indexJs, /class="ctox-syncing" role="status" aria-live="polite"/, 'syncing shell markup');
-  assert.match(indexJs, /snapshot\.ready === false/, 'sync state keyed on ready === false');
-  assert.match(indexJs, /collectionSyncing\('iot_assets'\)/, 'tree/main empties gate on iot_assets');
-  assert.match(indexJs, /collectionSyncing\('iot_widgets'\)/, 'widget empties gate on iot_widgets');
-  // Filter- and selection-empties stay ungated.
-  assert.doesNotMatch(indexJs, /tree\.noMatch[\s\S]{0,200}ctox-syncing/, 'filter empty is not gated');
+test('iot: v4 — empty data renders no state text; no readiness/sync API, commands never wait', () => {
+  assert.doesNotMatch(indexJs, /subscribeCollectionReadiness|collectionReadiness|startCollection|commandBus/);
+  assert.doesNotMatch(indexJs, /ctox-syncing|ctox-empty|role="status"/);
+  assert.doesNotMatch(indexJs, /await dispatch\(/);
+  assert.match(indexJs, /api\.query\(name, \{\}\)\.subscribe/);
+  assert.match(indexJs, /api\.status\.report\(\{ level: 'error', code/);
 });
 
 test('iot: widgets are scoped by the selected asset (rollup) or signal (exact)', () => {

@@ -130,6 +130,18 @@ fn read(
     state.snapshot.validate()?;
     Ok((state.generation == *generation.host_digest()).then_some(state.snapshot))
 }
+/// Domain errors raised inside an owner phase travel through `anyhow` so the
+/// owner rolls the phase back; owner/admission failures map to `fallback`.
+fn owner_error(
+    fallback: AccountQuotaStoreError,
+) -> impl FnOnce(anyhow::Error) -> AccountQuotaStoreError {
+    move |error| {
+        error
+            .downcast_ref::<AccountQuotaStoreError>()
+            .copied()
+            .unwrap_or(fallback)
+    }
+}
 /// Called by the existing proof-bearing account-removal recovery while it owns
 /// both the lifecycle guard and the Runtime topology write transaction.
 /// This is idempotent and scoped to the exact removed provider/local account.
@@ -140,12 +152,12 @@ pub(super) fn remove_under_lifecycle(
     _guard: &MutexGuard<'_, ()>,
 ) -> Result<(), AccountQuotaStoreError> {
     let key = key(provider, auth_id)?;
-    let conn = crate::persistence::open_sqlite(root).map_err(|_| AccountQuotaStoreError::Write)?;
-    let tx = crate::persistence::SqliteWriteTransaction::begin(&conn, "cliproxyapi.quota.remove")
-        .map_err(|_| AccountQuotaStoreError::Write)?;
-    tx.execute("DELETE FROM ctox_payload_store WHERE payload_key=?1", [key])
-        .map_err(|_| AccountQuotaStoreError::Write)?;
-    tx.commit().map_err(|_| AccountQuotaStoreError::Write)
+    // Core owner phase `cliproxyapi.quota.remove`: one atomic owner write.
+    crate::lcm::with_lcm_write(&crate::paths::core_db(root), move |conn| {
+        conn.execute("DELETE FROM ctox_payload_store WHERE payload_key=?1", [key])?;
+        Ok(())
+    })
+    .map_err(|_| AccountQuotaStoreError::Write)
 }
 /// All IO completes before the Policy callback opens its read snapshot. The
 /// lifecycle guard and Runtime fence prevent a replacement credential being
@@ -162,20 +174,47 @@ pub(super) fn with_public_snapshots<T>(
     let _guard = crate::secrets::credential_lifecycle_guard();
     let mut runtime = super::open_instance_proxy_config_db(root)?;
     let _runtime_fence = runtime.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let core = crate::persistence::open_sqlite(root)?;
-    let mut snapshots = BTreeMap::new();
+    // Bindings and generations read Runtime/Secret owners; resolve them before
+    // the single Core snapshot read so no owner job nests inside another.
+    let mut wanted = Vec::with_capacity(accounts.len());
     for (id, binding) in accounts {
-        let observed = (|| -> Result<Option<ReportedQuotaSnapshot>, AccountQuotaStoreError> {
-            let current = crate::execution::cliproxyapi_claude_catalog::account_binding(root, id)
-                .map_err(|_| AccountQuotaStoreError::Read)?;
-            if current.as_deref() != Some(*binding) {
-                return Ok(None);
-            }
-            let Some(current) = generation(root, "claude", id)? else {
-                return Ok(None);
-            };
-            read(&core, &key("claude", id)?, &current)
-        })();
+        let resolved =
+            (|| -> Result<Option<(String, AccountQuotaGeneration)>, AccountQuotaStoreError> {
+                let current =
+                    crate::execution::cliproxyapi_claude_catalog::account_binding(root, id)
+                        .map_err(|_| AccountQuotaStoreError::Read)?;
+                if current.as_deref() != Some(*binding) {
+                    return Ok(None);
+                }
+                let Some(current) = generation(root, "claude", id)? else {
+                    return Ok(None);
+                };
+                Ok(Some((key("claude", id)?, current)))
+            })();
+        wanted.push(((*id).to_owned(), resolved));
+    }
+    let ids: Vec<String> = wanted.iter().map(|(id, _)| id.clone()).collect();
+    let observed = crate::lcm::with_lcm_read(&crate::paths::core_db(root), move |conn| {
+        Ok(wanted
+            .into_iter()
+            .map(|(id, resolved)| {
+                let observed = match resolved {
+                    Ok(Some((key, current))) => read(conn, &key, &current),
+                    Ok(None) => Ok(None),
+                    Err(error) => Err(error),
+                };
+                (id, observed)
+            })
+            .collect::<Vec<_>>())
+    })
+    // A failed Core snapshot read leaves every account unavailable, never unknown.
+    .unwrap_or_else(|_| {
+        ids.into_iter()
+            .map(|id| (id, Err(AccountQuotaStoreError::Read)))
+            .collect()
+    });
+    let mut snapshots = BTreeMap::new();
+    for (id, observed) in observed {
         let value = match observed {
             Ok(Some(snapshot))
                 if snapshot.observed_at_ms <= chrono::Utc::now().timestamp_millis() =>
@@ -190,7 +229,7 @@ pub(super) fn with_public_snapshots<T>(
             Ok(_) => serde_json::json!({"state":"unknown"}),
             Err(_) => serde_json::json!({"state":"unavailable","errorClass":"quota_read_failed"}),
         };
-        snapshots.insert((*id).to_owned(), value);
+        snapshots.insert(id, value);
     }
     // Never serialize the map itself: its keys are private local selectors.
     publish(&snapshots)
@@ -203,18 +242,25 @@ impl AccountQuotaStore for CtoxAccountQuotaStore {
         auth_ids: &[String],
     ) -> Result<BTreeMap<String, ReportedQuotaSnapshot>, AccountQuotaStoreError> {
         let _guard = crate::secrets::credential_lifecycle_guard();
-        let conn = crate::persistence::open_sqlite(&self.root)
-            .map_err(|_| AccountQuotaStoreError::Read)?;
-        let mut values = BTreeMap::new();
+        // Generations read Runtime/Secret owners; resolve them before the
+        // single Core snapshot read so no owner job nests inside another.
+        let mut wanted = Vec::new();
         for id in auth_ids {
             let Some(current) = generation(&self.root, provider, id)? else {
                 continue;
             };
-            if let Some(state) = read(&conn, &key(provider, id)?, &current)? {
-                values.insert(id.clone(), state);
-            }
+            wanted.push((id.clone(), key(provider, id)?, current));
         }
-        Ok(values)
+        crate::lcm::with_lcm_read(&crate::paths::core_db(&self.root), move |conn| {
+            let mut values = BTreeMap::new();
+            for (id, key, current) in wanted {
+                if let Some(state) = read(conn, &key, &current)? {
+                    values.insert(id, state);
+                }
+            }
+            Ok(values)
+        })
+        .map_err(owner_error(AccountQuotaStoreError::Read))
     }
     fn capture_generation(
         &self,
@@ -247,7 +293,8 @@ impl AccountQuotaStore for CtoxAccountQuotaStore {
         };
         let _guard = crate::secrets::credential_lifecycle_guard();
         // Exclude topology writes by other processes as well as this process.
-        // Runtime -> Core lock order matches proof-bearing removal recovery.
+        // Runtime -> Core lock order matches proof-bearing removal recovery,
+        // which holds the same legacy Runtime fence (account_controls::finish).
         let mut runtime = super::open_instance_proxy_config_db(&self.root)
             .map_err(|_| AccountQuotaStoreError::Write)?;
         let _runtime_tx = runtime
@@ -256,42 +303,46 @@ impl AccountQuotaStore for CtoxAccountQuotaStore {
         if generation(&self.root, provider, auth_id)?.as_ref() != Some(captured) {
             return Ok(());
         }
-        let conn = crate::persistence::open_sqlite(&self.root)
-            .map_err(|_| AccountQuotaStoreError::Write)?;
-        let tx =
-            crate::persistence::SqliteWriteTransaction::begin(&conn, "cliproxyapi.quota.observe")
-                .map_err(|_| AccountQuotaStoreError::Write)?;
-        let previous = read(&tx, &key, captured)?;
-        if previous
-            .as_ref()
-            .is_some_and(|prior| prior.observed_at_ms > state.observed_at_ms)
-        {
-            return Ok(());
-        }
-        let exists: bool = tx
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM ctox_payload_store WHERE payload_key=?1)",
-                [&key],
-                |row| row.get(0),
-            )
-            .map_err(|_| AccountQuotaStoreError::Read)?;
-        if !exists {
-            let count: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM ctox_payload_store WHERE payload_key LIKE 'cliproxyapi.auth.reported-quota.v1:%'", [], |row| row.get(0)
-            ).map_err(|_| AccountQuotaStoreError::Read)?;
-            if count >= MAX_ACCOUNTS {
-                return Err(AccountQuotaStoreError::Capacity);
-            }
-        }
-        let stored = StoredObservation {
-            generation: *captured.host_digest(),
+        let digest = *captured.host_digest();
+        let observed_at_ms = state.observed_at_ms;
+        let stored = serde_json::to_string(&StoredObservation {
+            generation: digest,
             snapshot: state.clone(),
-        };
-        tx.execute(
-            "INSERT INTO ctox_payload_store(payload_key,payload_json,updated_at) VALUES (?1,?2,unixepoch()) ON CONFLICT(payload_key) DO UPDATE SET payload_json=excluded.payload_json,updated_at=excluded.updated_at",
-            params![key, serde_json::to_string(&stored).map_err(|_| AccountQuotaStoreError::InvalidRecord)?]
-        ).map_err(|_| AccountQuotaStoreError::Write)?;
-        tx.commit().map_err(|_| AccountQuotaStoreError::Write)
+        })
+        .map_err(|_| AccountQuotaStoreError::InvalidRecord)?;
+        // Core owner phase `cliproxyapi.quota.observe`: the read, capacity check
+        // and upsert commit together or roll back together.
+        crate::lcm::with_lcm_write(&crate::paths::core_db(&self.root), move |conn| {
+            let captured = AccountQuotaGeneration::from_host_digest(digest);
+            let previous = read(conn, &key, &captured)?;
+            if previous
+                .as_ref()
+                .is_some_and(|prior| prior.observed_at_ms > observed_at_ms)
+            {
+                return Ok(());
+            }
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM ctox_payload_store WHERE payload_key=?1)",
+                    [&key],
+                    |row| row.get(0),
+                )
+                .map_err(|_| AccountQuotaStoreError::Read)?;
+            if !exists {
+                let count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM ctox_payload_store WHERE payload_key LIKE 'cliproxyapi.auth.reported-quota.v1:%'", [], |row| row.get(0)
+                ).map_err(|_| AccountQuotaStoreError::Read)?;
+                if count >= MAX_ACCOUNTS {
+                    return Err(AccountQuotaStoreError::Capacity.into());
+                }
+            }
+            conn.execute(
+                "INSERT INTO ctox_payload_store(payload_key,payload_json,updated_at) VALUES (?1,?2,unixepoch()) ON CONFLICT(payload_key) DO UPDATE SET payload_json=excluded.payload_json,updated_at=excluded.updated_at",
+                params![key, stored]
+            ).map_err(|_| AccountQuotaStoreError::Write)?;
+            Ok(())
+        })
+        .map_err(owner_error(AccountQuotaStoreError::Write))
     }
 }
 
@@ -302,6 +353,17 @@ mod tests {
     use ctox_cliproxyapi::sdk::cliproxy::auth::{
         QuotaWindowKind, ReportedQuotaStatus, ReportedQuotaWindow,
     };
+    /// Same fixture as the host tests: the CLI composition registers Core,
+    /// Runtime and Secret owners for an isolated root and drains them after.
+    fn with_owned_test_root(operation: impl FnOnce(&Path) + Send + 'static) {
+        let root = std::sync::Arc::new(tempfile::tempdir().unwrap());
+        let work = std::sync::Arc::clone(&root);
+        crate::persistence::run_cli_owned(root.path(), move || {
+            operation(work.path());
+            Ok(())
+        })
+        .unwrap();
+    }
     fn install(root: &Path, id: &str, token: &str) {
         let credentials = ClaudeStoredCredentials::new(
             SecretString::new(token).unwrap(),
@@ -322,98 +384,107 @@ mod tests {
     }
     #[test]
     fn provider_quota_store_survives_restart_and_scopes_account_and_provider() {
-        let root = tempfile::tempdir().unwrap();
-        install(root.path(), "account-a", "quota-access-a");
-        install(root.path(), "account-b", "quota-access-b");
-        let store = CtoxAccountQuotaStore::new(root.path());
-        store
-            .save("claude", "account-a", &snapshot(1_000, 5_000))
-            .unwrap();
-        drop(store);
-        let store = CtoxAccountQuotaStore::new(root.path());
-        let ids = ["account-a".into(), "account-b".into()];
-        assert_eq!(
-            store.load("CLAUDE", &ids).unwrap(),
-            BTreeMap::from([("account-a".into(), snapshot(1_000, 5_000))])
-        );
-        assert!(store.load("codex", &ids).unwrap().is_empty());
+        with_owned_test_root(|root| {
+            install(root, "account-a", "quota-access-a");
+            install(root, "account-b", "quota-access-b");
+            let store = CtoxAccountQuotaStore::new(root);
+            store
+                .save("claude", "account-a", &snapshot(1_000, 5_000))
+                .unwrap();
+            drop(store);
+            let store = CtoxAccountQuotaStore::new(root);
+            let ids = ["account-a".into(), "account-b".into()];
+            assert_eq!(
+                store.load("CLAUDE", &ids).unwrap(),
+                BTreeMap::from([("account-a".into(), snapshot(1_000, 5_000))])
+            );
+            assert!(store.load("codex", &ids).unwrap().is_empty());
+        });
     }
     #[test]
     fn provider_quota_store_older_response_cannot_replace_newer_observation() {
-        let root = tempfile::tempdir().unwrap();
-        install(root.path(), "account-a", "quota-access-a");
-        let store = CtoxAccountQuotaStore::new(root.path());
-        store
-            .save("claude", "account-a", &snapshot(2_000, 5_000))
-            .unwrap();
-        store
-            .save("claude", "account-a", &snapshot(1_000, 8_000))
-            .unwrap();
-        assert_eq!(
-            store.load("claude", &["account-a".into()]).unwrap()["account-a"].observed_at_ms,
-            2_000
-        );
+        with_owned_test_root(|root| {
+            install(root, "account-a", "quota-access-a");
+            let store = CtoxAccountQuotaStore::new(root);
+            store
+                .save("claude", "account-a", &snapshot(2_000, 5_000))
+                .unwrap();
+            store
+                .save("claude", "account-a", &snapshot(1_000, 8_000))
+                .unwrap();
+            assert_eq!(
+                store.load("claude", &["account-a".into()]).unwrap()["account-a"].observed_at_ms,
+                2_000
+            );
+        });
     }
     #[test]
     fn provider_quota_store_rejects_invalid_or_duplicate_windows_without_overwriting() {
-        let root = tempfile::tempdir().unwrap();
-        install(root.path(), "account-a", "quota-access-a");
-        let store = CtoxAccountQuotaStore::new(root.path());
-        let valid = snapshot(1_000, 5_000);
-        store.save("claude", "account-a", &valid).unwrap();
-        let mut invalid = valid.clone();
-        invalid.windows.push(valid.windows[0].clone());
-        assert_eq!(
-            store.save("claude", "account-a", &invalid),
-            Err(AccountQuotaStoreError::InvalidRecord)
-        );
-        assert_eq!(
-            store.load("claude", &["account-a".into()]).unwrap()["account-a"],
-            valid
-        );
+        with_owned_test_root(|root| {
+            install(root, "account-a", "quota-access-a");
+            let store = CtoxAccountQuotaStore::new(root);
+            let valid = snapshot(1_000, 5_000);
+            store.save("claude", "account-a", &valid).unwrap();
+            let mut invalid = valid.clone();
+            invalid.windows.push(valid.windows[0].clone());
+            assert_eq!(
+                store.save("claude", "account-a", &invalid),
+                Err(AccountQuotaStoreError::InvalidRecord)
+            );
+            assert_eq!(
+                store.load("claude", &["account-a".into()]).unwrap()["account-a"],
+                valid
+            );
+        });
     }
     #[test]
     fn provider_quota_store_old_credential_response_cannot_overwrite_relogin() {
-        let root = tempfile::tempdir().unwrap();
-        install(root.path(), "account-a", "old-quota-access");
-        let store = CtoxAccountQuotaStore::new(root.path());
-        let old = store.capture_generation("claude", "account-a").unwrap();
-        store
-            .save("claude", "account-a", &snapshot(1_000, 5_000))
-            .unwrap();
-        install(root.path(), "account-a", "new-quota-access");
-        assert!(store
-            .load("claude", &["account-a".into()])
-            .unwrap()
-            .is_empty());
-        let fresh = snapshot(2_000, 6_000);
-        store.save("claude", "account-a", &fresh).unwrap();
-        store
-            .save_if_generation("claude", "account-a", &snapshot(3_000, 9_000), old.as_ref())
-            .unwrap();
-        assert_eq!(
-            store.load("claude", &["account-a".into()]).unwrap()["account-a"],
-            fresh
-        );
+        with_owned_test_root(|root| {
+            install(root, "account-a", "old-quota-access");
+            let store = CtoxAccountQuotaStore::new(root);
+            let old = store.capture_generation("claude", "account-a").unwrap();
+            store
+                .save("claude", "account-a", &snapshot(1_000, 5_000))
+                .unwrap();
+            install(root, "account-a", "new-quota-access");
+            assert!(store
+                .load("claude", &["account-a".into()])
+                .unwrap()
+                .is_empty());
+            let fresh = snapshot(2_000, 6_000);
+            store.save("claude", "account-a", &fresh).unwrap();
+            store
+                .save_if_generation("claude", "account-a", &snapshot(3_000, 9_000), old.as_ref())
+                .unwrap();
+            assert_eq!(
+                store.load("claude", &["account-a".into()]).unwrap()["account-a"],
+                fresh
+            );
+        });
     }
     #[test]
     fn provider_quota_store_unbound_legacy_data_is_unknown_until_real_observation() {
-        let root = tempfile::tempdir().unwrap();
-        install(root.path(), "account-a", "quota-access-a");
-        let conn = crate::persistence::open_sqlite(root.path()).unwrap();
-        conn.execute("INSERT INTO ctox_payload_store(payload_key,payload_json,updated_at) VALUES (?1,?2,unixepoch())", params![key("claude", "account-a").unwrap(), serde_json::to_string(&snapshot(1_000, 5_000)).unwrap()]).unwrap();
-        drop(conn);
-        let store = CtoxAccountQuotaStore::new(root.path());
-        assert!(store
-            .load("claude", &["account-a".into()])
-            .unwrap()
-            .is_empty());
-        store
-            .save("claude", "account-a", &snapshot(2_000, 6_000))
+        with_owned_test_root(|root| {
+            install(root, "account-a", "quota-access-a");
+            let legacy_key = key("claude", "account-a").unwrap();
+            let legacy = serde_json::to_string(&snapshot(1_000, 5_000)).unwrap();
+            crate::lcm::with_lcm_write(&crate::paths::core_db(root), move |conn| {
+                conn.execute("INSERT INTO ctox_payload_store(payload_key,payload_json,updated_at) VALUES (?1,?2,unixepoch())", params![legacy_key, legacy])?;
+                Ok(())
+            })
             .unwrap();
-        assert_eq!(
-            store.load("claude", &["account-a".into()]).unwrap()["account-a"],
-            snapshot(2_000, 6_000)
-        );
+            let store = CtoxAccountQuotaStore::new(root);
+            assert!(store
+                .load("claude", &["account-a".into()])
+                .unwrap()
+                .is_empty());
+            store
+                .save("claude", "account-a", &snapshot(2_000, 6_000))
+                .unwrap();
+            assert_eq!(
+                store.load("claude", &["account-a".into()]).unwrap()["account-a"],
+                snapshot(2_000, 6_000)
+            );
+        });
     }
 }

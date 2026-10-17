@@ -1,0 +1,408 @@
+{
+ "app": "notes",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Notizen",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Zurück zur Liste",
+    "button:Vertrieb",
+    "button:Tags verwalten",
+    "button:Favorit umschalten",
+    "button:Weitere Aktionen",
+    "button:Formatvorlage",
+    "button:Fett",
+    "button:Kursiv",
+    "button:Unterstreichen",
+    "button:Durchgestrichen",
+    "button:Inline Code",
+    "button:Textmarker (Highlight)",
+    "button:Linksbündig",
+    "button:Zentriert",
+    "button:Checkliste",
+    "button:Aufzählungsliste",
+    "button:Tabelle einfügen",
+    "button:Code-Block einfügen",
+    "button:Callout-Block einfügen",
+    "button:Trennlinie",
+    "button:Zeitstempel"
+   ],
+   "shot": "notes/420-01-open.png"
+  },
+  {
+   "step": "button Zurück zur Liste",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-02-button_Zur_ck_zur_Liste.png"
+  },
+  {
+   "step": "nav Notizen (6)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Favoriten (2)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "notes/420-03-nav_Favoriten_2_.png"
+  },
+  {
+   "step": "nav Papierkorb (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "notes/420-04-nav_Papierkorb_0_.png"
+  },
+  {
+   "step": "button Neue Notiz",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-05-button_Neue_Notiz.png"
+  },
+  {
+   "step": "nav Notizen (7)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "notes/420-06-nav_Notizen_7_.png"
+  },
+  {
+   "step": "row Neue Notiz",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "notes/420-07-row_Neue_Notiz.png"
+  },
+  {
+   "step": "button Kein Notizbuch",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-08-button_Kein_Notizbuch.png"
+  },
+  {
+   "step": "button 📁 Einkauf",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-09-button_Einkauf.png"
+  },
+  {
+   "step": "button Einkauf",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-10-button_Einkauf.png"
+  },
+  {
+   "step": "button 📁 Intern",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-11-button_Intern.png"
+  },
+  {
+   "step": "button Intern",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-12-button_Intern.png"
+  },
+  {
+   "step": "button 📁 Projekte",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-13-button_Projekte.png"
+  },
+  {
+   "step": "button Projekte",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-14-button_Projekte.png"
+  },
+  {
+   "step": "button 📁 Vertrieb",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-15-button_Vertrieb.png"
+  },
+  {
+   "step": "button Vertrieb",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-16-button_Vertrieb.png"
+  },
+  {
+   "step": "button Tags verwalten",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-17-button_Tags_verwalten.png"
+  },
+  {
+   "step": "row 🏷️ Intern",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "notes/420-18-row_Intern.png"
+  },
+  {
+   "step": "button Weitere Aktionen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-19-button_Weitere_Aktionen.png"
+  },
+  {
+   "step": "Overlay geschlossen (Escape/Schließen) vor Speichern"
+  },
+  {
+   "step": "button Speichern",
+   "changed": true,
+   "ops": [
+    "put notes/08913694-4b89-4374-ae90-2ef4c0dbe0df local=ok result=accepted {\"id\":\"08913694-4b89-4374-ae90-2ef4c0dbe0df\",\"title\":\"Neue Notiz\",\"content\":\"<h1>Neue Notiz</h1><p><br></p>\",\"folder\":\"Notes\",\"notebook\":\"Ve"
+   ],
+   "zone": [
+    "{\"level\":\"info\",\"code\":\"notes.notice\",\"text\":\"Entwurf gespeichert\"}",
+    "clear notes.write.invalid"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-20-button_Speichern.png"
+  },
+  {
+   "step": "button Favorit umschalten",
+   "changed": true,
+   "ops": [
+    "patch notes/08913694-4b89-4374-ae90-2ef4c0dbe0df local=ok result=accepted {\"title\":\"Neue Notiz\",\"notebook\":\"Vertrieb\",\"tags\":\"Intern\",\"is_favorite\":true,\"is_trashed\":false,\"is_locked\":false,\"lock_passcode\":\"\",\"cont"
+   ],
+   "zone": [
+    "{\"level\":\"info\",\"code\":\"notes.notice\",\"text\":\"Als Favorit markiert.\"}",
+    "clear notes.write.invalid"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-21-button_Favorit_umschalten.png"
+  },
+  {
+   "step": "button Formatvorlage",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-22-button_Formatvorlage.png"
+  },
+  {
+   "step": "button Titel (H1): verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Fett",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Kursiv",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Unterstreichen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Durchgestrichen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Inline Code",
+   "changed": true,
+   "ops": [
+    "patch notes/08913694-4b89-4374-ae90-2ef4c0dbe0df local=ok result=accepted {\"title\":\"Code\",\"notebook\":\"Vertrieb\",\"tags\":\"Intern\",\"is_favorite\":true,\"is_trashed\":false,\"is_locked\":false,\"lock_passcode\":\"\",\"content\":\""
+   ],
+   "zone": [
+    "clear notes.write.invalid"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-23-button_Inline_Code.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "notes",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "notes",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "notes",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "notes",
+  "Notizen"
+ ]
+}

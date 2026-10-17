@@ -908,9 +908,9 @@ impl CodexSubscriptionAccountPool {
             retry_delay_ms,
             observed_at_ms: self.clock.now_ms(),
         };
-        tokio::task::spawn_blocking(move || conductor.record(result))
+        conductor
+            .record_async(result)
             .await
-            .map_err(|_| CodexAccountPoolError::OutcomePersistence)?
             .map_err(|_| CodexAccountPoolError::OutcomePersistence)?;
         Ok(())
     }
@@ -997,7 +997,7 @@ impl CodexTrackedResponsesStreamResponse {
             retry_delay_ms: None,
             observed_at_ms: self.clock.now_ms(),
         };
-        let _ = tokio::task::spawn_blocking(move || conductor.record(result)).await;
+        let _ = conductor.record_async(result).await;
     }
 }
 

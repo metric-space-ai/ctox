@@ -1,59 +1,34 @@
-export function createCtoxLauncher({ modules, apps, currentModuleId, openApp }) {
-  const appIds = new Set(
-    (apps || [])
-      .map((app) => app?.id)
-      .filter(Boolean)
-  );
+// Launcher-Verzeichnis des Desktops (App-API 4.0): Einträge aus `business_apps` (Plattform), Öffnen über
+// api.shell.navigate. Kein location.hash, keine Desktop-Apps-Liste (DESKTOP_APPS = []).
+export function createCtoxLauncher({ modules, currentModuleId, navigate }) {
   const moduleDirectory = new Map(
     (modules || [])
-      .filter((mod) => mod && mod.id && mod.id !== currentModuleId && !appIds.has(mod.id))
+      .filter((mod) => mod && mod.id && mod.id !== currentModuleId)
       .map((mod) => [mod.id, mod])
-  );
-  const appDirectory = new Map(
-    (apps || [])
-      .filter((app) => app && app.id)
-      .map((app) => [app.id, app])
   );
 
   function knows(targetId) {
-    return moduleDirectory.has(targetId) || appDirectory.has(targetId);
+    return moduleDirectory.has(targetId);
   }
 
   function entries() {
-    return [
-      ...Array.from(moduleDirectory.values()).map((mod) => ({ ...mod, kind: 'module' })),
-      ...Array.from(appDirectory.values()).map((app) => ({ ...app, kind: 'app' })),
-    ];
+    return Array.from(moduleDirectory.values()).map((mod) => ({ ...mod, kind: 'module' }));
   }
 
   function kindOf(targetId) {
-    if (appDirectory.has(targetId)) return 'app';
-    if (moduleDirectory.has(targetId)) return 'module';
-    return null;
+    return moduleDirectory.has(targetId) ? 'module' : null;
   }
 
+  /** `false` bei unbekanntem Ziel; die Shell meldet unbekannte Ziele selbst in die Zone. */
   function open(targetId, { recordId } = {}) {
-    if (!targetId) return false;
-    if (appDirectory.has(targetId)) {
-      if (typeof openApp !== 'function') return false;
-      return Promise.resolve(openApp(targetId)).then((windowId) => Boolean(windowId));
-    }
-    if (!moduleDirectory.has(targetId)) return false;
-    const hash = recordId
-      ? `#${encodeURIComponent(targetId)}?record=${encodeURIComponent(recordId)}`
-      : `#${encodeURIComponent(targetId)}`;
-    if (location.hash === hash) {
-      window.dispatchEvent(new HashChangeEvent('hashchange'));
-    } else {
-      location.hash = hash;
-    }
-    return true;
+    if (!targetId || typeof navigate !== 'function') return false;
+    return Boolean(navigate(targetId, recordId ? { record: recordId } : {}));
   }
 
   function glyphFor(targetId) {
-    const app = appDirectory.get(targetId);
+    const mod = moduleDirectory.get(targetId);
     const fallback = MODULE_GLYPHS[targetId] || '◻︎';
-    return safeGlyph(app?.glyph, fallback);
+    return safeGlyph(mod?.glyph, fallback);
   }
 
   return { knows, entries, kindOf, open, glyphFor };

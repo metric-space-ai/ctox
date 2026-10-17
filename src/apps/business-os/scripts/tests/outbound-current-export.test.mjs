@@ -41,15 +41,25 @@ test('missing decisions remain untested; clone or resolver errors are not silent
 test('Spreadsheet receives the exact downloaded bytes, click metadata and hash; no invented record URLs', async () => {
   const blob = new Blob(['current XLSX bytes'], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const snapshot = captureResearchExport([{ id: 'a', contacts: [] }, { id: 'a' }], () => null, 123);
-  let received;
-  await openResearchSnapshot({ openApp: (app, value) => { received = { app, value }; } }, blob, 'Recherche.xlsx', snapshot, webcrypto);
+  let stored, received;
+  // App-API 4.0: Datei über api.files (ablegen → ref), Übergabe in der Routenform der Spreadsheet-App.
+  const actions = {
+    ablegen: async (file) => { stored = file; return 'ref_abc'; },
+    navigate: (app, value) => { received = { app, value }; return true; },
+  };
+  assert.equal(await openResearchSnapshot(actions, blob, 'Recherche.xlsx', snapshot, webcrypto), true);
   assert.equal(received.app, 'spreadsheets');
-  const file = received.value.openFile;
-  assert.equal(file.file.name, 'Recherche.xlsx'); assert.equal(await file.file.text(), await blob.text());
-  assert.equal(file.source_kind, 'research_generated'); assert.equal(file.open_purpose, 'snapshot_report');
-  assert.equal(file.report_snapshot.captured_at_ms, 123); assert.deepEqual(file.report_snapshot.source_record_ids, ['a']);
+  assert.equal(stored.name, 'Recherche.xlsx'); assert.equal(await stored.text(), await blob.text());
+  const params = received.value;
+  assert.equal(params.openFile, undefined, 'no File object in route params');
+  assert.equal(params.file_ref, 'ref_abc'); assert.equal(params.name, 'Recherche.xlsx'); assert.equal(params.mime, blob.type);
+  assert.equal(params.source_kind, 'research_generated'); assert.equal(params.open_purpose, 'snapshot_report');
+  assert.equal(params.report_snapshot.captured_at_ms, 123); assert.deepEqual(params.report_snapshot.source_record_ids, ['a']);
   const digest = Buffer.from(await webcrypto.subtle.digest('SHA-256', await blob.arrayBuffer())).toString('hex');
-  assert.equal(file.report_snapshot.file_sha256, digest);
+  assert.equal(params.report_snapshot.file_sha256, digest);
+  assert.deepEqual(structuredClone(params), params, 'route params are plain data');
   await assert.rejects(openResearchSnapshot({}, blob, 'a', snapshot, webcrypto), /nicht geöffnet/);
-  await assert.rejects(openResearchSnapshot({ openApp() {} }, blob, 'a', { sourceRecordIds: [] }, webcrypto), /Lead-IDs/);
+  await assert.rejects(openResearchSnapshot({ navigate() {} }, blob, 'a', snapshot, webcrypto), /nicht geöffnet/);
+  await assert.rejects(openResearchSnapshot(actions, blob, 'a', { sourceRecordIds: [] }, webcrypto), /Lead-IDs/);
+  await assert.rejects(openResearchSnapshot({ ...actions, ablegen: async () => '' }, blob, 'a', snapshot, webcrypto), /nicht abgelegt/);
 });

@@ -11,7 +11,9 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new() -> Result<Self> {
-        let root = tempfile::tempdir()?;
+        Self::with_root(tempfile::tempdir()?)
+    }
+    pub(super) fn with_root(root: tempfile::TempDir) -> Result<Self> {
         store::issue_business_os_capability_token_for_managed_user(
             root.path(),
             "owner",

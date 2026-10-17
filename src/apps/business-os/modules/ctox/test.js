@@ -3,10 +3,22 @@ import { Buffer } from 'node:buffer';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join as joinPath } from 'node:path';
+// Lader (OLDTEST): esbuild aus dem Klon, sonst ESBUILD_MODULE, sonst aus dem Haupt-Checkout
+// ~/Documents/ctox/src/apps/business-os/node_modules (wie PLAYWRIGHT_MODULE in den v4-api-Tests). Nicht installieren.
+const requireDev = createRequire(import.meta.url);
+function loadDev(name, envVar) {
+  try { return requireDev(name); } catch {
+    return requireDev(process.env[envVar] || joinPath(homedir(), 'Documents/ctox/src/apps/business-os/node_modules', name));
+  }
+}
+const { build } = loadDev('esbuild', 'ESBUILD_MODULE');
 import './tests/data-state.test.mjs';
 import './tests/terminal-endpoint.test.mjs';
 
+const bundleWarnings = [];
 async function importBrowserBundle(relativePath) {
   const bundledModule = await build({
     entryPoints: [fileURLToPath(new URL(relativePath, import.meta.url))],
@@ -14,8 +26,16 @@ async function importBrowserBundle(relativePath) {
     format: 'esm',
     platform: 'browser',
     write: false,
+    // v4: ctox:shared/x.js wie der Service Worker (§16.15) auf shared/ abbilden.
+    plugins: [{
+      name: 'ctox-shared',
+      setup(b) {
+        b.onResolve({ filter: /^ctox:shared\// }, (args) => ({ path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)) }));
+      },
+    }],
   });
 
+  bundleWarnings.push(...bundledModule.warnings);
   const [{ text: bundledSource }] = bundledModule.outputFiles;
   return import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
 }
@@ -57,7 +77,6 @@ const {
   flowSvg,
   flowSourceView,
   formatRelativeAge,
-  friendlyWebStackStatus,
   labels,
   mergeBundleWithCommands,
   normalizeFocusTask,
@@ -75,9 +94,7 @@ const {
   taskSteps,
   timelinePanel,
   webStackPanel,
-  webStackStateFromRefreshResult,
   webStackProjectionMissing,
-  wireTaskSourceReadiness,
 } = hooks;
 
 test('Only configured communication accounts appear as inputs, never task-origin apps', () => {
@@ -105,7 +122,9 @@ test('Only configured communication accounts appear as inputs, never task-origin
   assert.doesNotMatch(empty, /ctox-flow-channel-edge/);
   assert.deepEqual(hooks.buildInboundChannels(tasks, null), []);
   const unavailable = hooks.inboundEndpointFlowSvg({ ...model, inboundChannels: [], inboundChannelsAvailable: false }, tasks[0], { lang: 'de' });
-  assert.match(unavailable, /Kanäle nicht verfügbar/);
+  // v4: nicht lesbare Kanäle sind ein Zustand der Zustandszone, kein Text auf der Karte.
+  assert.doesNotMatch(unavailable, /nicht verfügbar|unavailable/i);
+  assert.match(unavailable, /ctox-flow-channel-count"[^>]*><\/text>/);
   assert.doesNotMatch(unavailable, /Keine Kanäle eingerichtet/);
 });
 
@@ -123,7 +142,7 @@ test('Task cards explain failures while original evidence remains inspectable', 
   assert.match(details, /<details class="ctox-task-diagnostics">/);
   assert.match(details, /thread\/start MCP handshake timeout &lt;unsafe&gt;/);
   assert.doesNotMatch(details, /<unsafe>|<details[^>]* open/);
-  assert.match(hooks.taskSummaryReason({ status: 'failed', statusNote: 'CTOX chat could not continue because the model API is temporarily unavailable. The task must stay open and retry after cooldown.' }, { lang: 'de' }), /^Der Modelldienst war nicht erreichbar\.$/);
+  assert.match(hooks.taskSummaryReason({ status: 'failed', statusNote: 'CTOX chat could not continue because the model API is temporarily unavailable. The task must stay open and retry after cooldown.' }, { lang: 'de' }), /^Der Modelldienst hat nicht geantwortet\.$/);
 });
 
 test('Reported task descriptions populate the order without replacing an explicit prompt', () => {
@@ -369,6 +388,14 @@ function withoutExpectedWarnings(fn) {
   }
 }
 
+// FIX5: Label-Tabellen tragen jeden Schlüssel genau einmal (esbuild duplicate-object-key, früher retryAt doppelt).
+test('label tables carry every key once', () => {
+  const duplicates = bundleWarnings
+    .filter((warning) => warning.id === 'duplicate-object-key' || /Duplicate key/.test(warning.text))
+    .map((warning) => `${warning.location?.line}: ${warning.text}`);
+  assert.deepEqual(duplicates, []);
+});
+
 test('Presentation layer stays compact and shell-native', () => {
   const css = readFileSync(new URL('./index.css', import.meta.url), 'utf8');
   const js = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
@@ -398,8 +425,8 @@ test('Presentation layer stays compact and shell-native', () => {
   assert.match(html, /class="ctox-column-resizer"[^>]*data-resizer-var="--ctox-left-width"/);
   assert.doesNotMatch(css, /\.ctox-column-resizer\s*\{/);
   assert.doesNotMatch(css, /grid-template-columns:\s*var\(--ctox-left-width\)/);
-  assert.match(css, /\.shell-window\[data-shell-contract="v2"\] \.ctox-harness-app \.ctox-pane-header[\s\S]*grid-template-rows:/);
-  assert.match(css, /\.shell-window\[data-shell-contract="v2"\] \.ctox-harness-app \.ctox-filterbar[\s\S]*flex-wrap: nowrap/);
+  assert.match(css, /\[data-app="ctox"\] \.ctox-harness-app \.ctox-pane-header[\s\S]*grid-template-rows:/);
+  assert.match(css, /\[data-app="ctox"\] \.ctox-harness-app \.ctox-filterbar[\s\S]*flex-wrap: nowrap/);
   assert.match(manifest, /currentColor/);
 });
 
@@ -448,14 +475,17 @@ test('Task column pins the shell-owned canonical grammar contract', () => {
   assert.match(markup, /data-pg-band="waiting"[\s\S]*data-pg-count="waiting"> \(0\)</);
   assert.match(markup, /data-pg-band="done"[\s\S]*data-pg-count="done"> \(1\)</);
   assert.match(markup, /class="ctox-pane-body ctox-well"/);
-  assert.match(markup, /<footer class="ctox-pane-footer"><span data-pg-footer>2 entries · All<\/span><\/footer>/);
+  // Textdiät Regel 3/5: die Anzahl steht im Reiter „All(2)“ – der Fuß bleibt ohne Angeheftete leer.
+  assert.match(markup, /<footer class="ctox-pane-footer"><span data-pg-footer><\/span><\/footer>/);
   assert.doesNotMatch(markup, /ctox-badge/);
   // index.html carries an empty left pane — the module builds the localized
   // chrome once (never a second static, drift-prone copy).
   assert.match(html, /<aside class="ctox-pane ctox-harness-left" data-ctox-left aria-label="Aufgaben der Crew"><\/aside>/);
-  assert.doesNotMatch(js, /localStorage/);
-  assert.match(js, /moduleAssetUrl\('\.\/index\.html'\)/);
-  assert.match(js, /moduleAssetUrl\('\.\/index\.css'\)/);
+  assert.doesNotMatch(js, new RegExp('local' + 'Storage|session' + 'Storage'));
+  // v4: Markup relativ ohne Cache-Buster (Service Worker versioniert), CSS lädt die Shell.
+  assert.match(js, /fetch\(new URL\('\.\/index\.html', import\.meta\.url\)\)/);
+  assert.equal(js.includes('ensure' + 'Styles'), false);
+  assert.equal(js.includes('?' + 'v='), false);
 });
 
 test('Data refresh re-renders only the list content, never the search input node', () => {
@@ -468,7 +498,7 @@ test('Data refresh re-renders only the list content, never the search input node
   const left = fakeEl({ 'data-ctox-left': '', class: 'ctox-pane ctox-harness-left' }, [searchNode, sourceSelect, countAll, footer, well]);
   const host = fakeEl({}, [left]);
   const state = {
-    ctx: { ...noopActionIcon, host },
+    root: host,
     lang: 'en',
     selectedTaskId: '',
     taskSearch: '',
@@ -489,15 +519,15 @@ test('Data refresh re-renders only the list content, never the search input node
   assert.equal(searchNode.value, '');
   // Only the list content was rewritten.
   assert.notEqual(list.innerHTML, 'STALE');
-  assert.match(list.innerHTML, /ctox-empty/);
+  // v4: eine leere Liste rendert nichts (kein Leer- oder Ladezustand im Inhalt).
+  assert.equal(list.innerHTML, '');
   // Counts + footer flowed through the null-guarded (no grammar handle) fallback.
   assert.equal(countAll.textContent, ' (0)');
-  assert.equal(footer.textContent, '0 entries · All');
+  assert.equal(footer.textContent, '', 'kein Fußzähler (Textdiät)');
 });
 
-test('Task list empty-state follows collection readiness of the backing sources', () => {
+test('Task list renders nothing when empty, filtered empty or restricted (v4: state lives in the zone)', () => {
   const base = {
-    ctx: { ...noopActionIcon },
     lang: 'en',
     taskSearch: '',
     taskViewMode: 'cards',
@@ -508,129 +538,27 @@ test('Task list empty-state follows collection readiness of the backing sources'
     taskSortDirection: 'desc',
     pinnedTaskIds: new Set(),
   };
-  const withReadiness = (snapshot) => ({
-    ...base,
-    ctx: {
-      ...base.ctx,
-      sync: { collectionReadiness: (name) => ({ collection: name, updatedAt: 0, ...snapshot }) },
-    },
-  });
-  const unready = withReadiness({ state: 'catching-up', ready: false, syncing: true });
-  const ready = withReadiness({ state: 'live', ready: true, syncing: false });
-
-  // Data-driven empty + any source not yet initially synced ⇒ syncing shell.
-  const syncingHtml = taskListInner([], unready);
-  assert.match(syncingHtml, /class="ctox-syncing"/);
-  assert.match(syncingHtml, /role="status"/);
-  assert.doesNotMatch(syncingHtml, /ctox-empty/);
-
-  // Data-driven empty + all sources live ⇒ honest empty.
-  const emptyHtml = taskListInner([], ready);
-  assert.match(emptyHtml, /class="ctox-empty"/);
-  assert.doesNotMatch(emptyHtml, /ctox-syncing/);
-
-  // No readiness API at all (legacy shell) ⇒ falls back to the plain empty.
-  assert.match(taskListInner([], base), /class="ctox-empty"/);
-
-  // Filter-empty (rows exist, the filter hides them) is NOT gated: even with
-  // an unready source it stays the plain empty.
-  const hidden = {
-    id: 'task-hidden-1',
-    taskId: 'task-hidden-1',
-    title: 'Queued review work',
-    status: 'queued',
-    timestamp: new Date().toISOString(),
-  };
-  const filteredHtml = taskListInner([hidden], { ...unready, taskSearch: 'no-such-match' });
-  assert.match(filteredHtml, /class="ctox-empty"/);
-  assert.doesNotMatch(filteredHtml, /ctox-syncing/);
+  assert.equal(taskListInner([], base), '');
+  assert.equal(taskListInner([], { ...base, taskSourceUnavailable: new Map([['ctox_queue_tasks', new Error('forbidden')]]) }), '');
+  const hidden = { id: 'task-hidden-1', taskId: 'task-hidden-1', title: 'Queued review work', status: 'queued', timestamp: new Date().toISOString() };
+  assert.equal(taskListInner([hidden], { ...base, taskSearch: 'no-such-match' }), '');
+  assert.match(taskListInner([hidden], base), /Queued review work/);
 });
 
-test('Readiness wiring stays fail-soft when subscribeCollectionReadiness throws', () => {
-  // Reproduces the shell recovery path: openWindowedModule treats any thrown
-  // mount error as "CTOX konnte nicht geladen werden". A throwing readiness
-  // subscription used to abort mount after the harness markup was already set.
-  const throwsClosed = new Error('Business OS module sync context is no longer active.');
-  throwsClosed.code = 'CTOX_BUSINESS_OS_MODULE_CONTEXT_CLOSED';
-  const state = {
-    disposed: false,
-    ctx: {
-      sync: {
-        subscribeCollectionReadiness() {
-          throw throwsClosed;
-        },
-      },
-    },
-  };
-
-  withoutExpectedWarnings(() => {
-    assert.doesNotThrow(() => {
-      const cleanup = wireTaskSourceReadiness(state);
-      assert.equal(typeof cleanup, 'function');
-      cleanup();
-    });
-  });
+test('v4: no sync, readiness or HTTP data path remains in the app', () => {
+  const js = readFileSync(new URL('./index.js', import.meta.url), 'utf8');
+  const banned = ['collection' + 'Readiness', 'subscribeCollection' + 'Readiness', 'require' + 'Revision', 'command' + 'Bus', 'ctx' + '.sync', 'ctx' + '.db', 'post' + 'Message(', 'window.CTOX_BUSINESS_OS' + '_APP', 'showBusiness' + 'Confirm', 'set' + 'Interval('];
+  for (const term of banned) assert.equal(js.includes(term), false, term);
+  assert.match(js, /export async function mount\(root, api, \{ restored \} = \{\}\)/);
+  assert.match(js, /from 'ctox:shared\/crew-renderer\.js'/);
+  assert.match(js, /from 'ctox:shared\/crew-motion\.js'/);
 });
 
-test('Readiness wiring ignores a listener re-render throw and still unsubscribes', () => {
-  let listener = null;
-  let unsubscribed = 0;
-  const state = {
-    disposed: false,
-    model: { tasks: [] },
-    lang: 'en',
-    taskSearch: '',
-    taskViewMode: 'cards',
-    taskPrimaryView: 'all',
-    taskSourceFilter: 'all',
-    taskPinFilter: 'all',
-    taskSort: 'updated',
-    taskSortDirection: 'desc',
-    pinnedTaskIds: new Set(),
-    ctx: {
-      host: {
-        // renderTaskList looks for [data-ctox-left] and rebuilds when missing;
-        // force the list path to throw by returning a host without queryable panes.
-        querySelector() {
-          throw new Error('host disconnected during readiness render');
-        },
-      },
-      sync: {
-        subscribeCollectionReadiness(_name, next) {
-          listener = next;
-          // Immediate emit mirrors the live shell facade.
-          next({ collection: _name, state: 'live', ready: true, syncing: false });
-          return () => { unsubscribed += 1; };
-        },
-      },
-    },
-  };
-
-  withoutExpectedWarnings(() => {
-    const cleanup = wireTaskSourceReadiness(state);
-    assert.equal(typeof listener, 'function');
-    assert.doesNotThrow(() => listener({ collection: 'ctox_queue_tasks', state: 'live', ready: true }));
-    cleanup();
-  });
-  assert.ok(unsubscribed >= 1);
-});
-
-test('local-dev keeps modify affordances even when role is only user', () => {
-  assert.equal(canModifyCtoxApp({
-    ctx: { session: { user: { id: 'local-dev', role: 'user', is_admin: false } } },
-  }), true);
-  assert.equal(canModifyCtoxApp({
-    ctx: { user: { id: 'local-dev', role: 'user' } },
-  }), true);
-  assert.equal(canModifyCtoxApp({
-    ctx: { session: { user: { id: 'viewer-1', role: 'user', is_admin: false } } },
-  }), false);
-  assert.equal(canModifyCtoxApp({
-    ctx: {
-      canModifyModule: () => true,
-      session: { user: { id: 'viewer-1', role: 'user' } },
-    },
-  }), true);
+test('local-dev keeps modify affordances even when role is only user (mirror of api.actor)', () => {
+  assert.equal(canModifyCtoxApp({ api: { actor: { id: 'local-dev', role: 'user' } }, actorPermissions: [] }), true);
+  assert.equal(canModifyCtoxApp({ api: { actor: { id: 'viewer-1', role: 'user' } }, actorPermissions: [] }), false);
+  assert.equal(canModifyCtoxApp({ api: { actor: { id: 'viewer-1', role: 'user' } }, actorPermissions: ['apps.source.edit'] }), true);
+  assert.equal(canModifyCtoxApp({ api: { actor: { id: 'chef-1', role: 'chef' } }, actorPermissions: [] }), true);
 });
 
 test('Selecting a task is an in-place class flip across the existing rows', () => {
@@ -639,7 +567,7 @@ test('Selecting a task is an in-place class flip across the existing rows', () =
   const list = fakeEl({ 'data-task-list': '' }, [rowA, rowB]);
   const left = fakeEl({ 'data-ctox-left': '' }, [list]);
   const host = fakeEl({}, [left]);
-  const state = { ctx: { host }, selectedTaskId: 'b' };
+  const state = { root: host, selectedTaskId: 'b' };
 
   applyTaskSelection(state);
 
@@ -669,10 +597,9 @@ test('Web Stack panel is hidden by default and the toggle reveals it', () => {
   // Restored on-demand machinery: collected header toggle + credential/auth wiring.
   assert.match(js, /data-webstack-toggle/);
   assert.match(open, /<header class="ctox-pane-title-row ctox-web-stack-head">/);
-  assert.match(open, /class="ctox-pane-actions ctox-web-stack-head-actions"[\s\S]*data-webstack-check-projection/);
-  assert.match(open, /data-webstack-check-projection[^>]*aria-label="Reload access details"[^>]*title="Reload access details"/);
-  assert.match(open, /data-webstack-check-projection[\s\S]*data-icon="refresh"/);
-  assert.doesNotMatch(open, /data-webstack-refresh/);
+  // v4: Live-Daten, kein Neu-Laden-Knopf; Zustände (fehlende Projektion, Hinweise) gehen in die Zustandszone.
+  assert.match(open, /class="ctox-pane-actions ctox-web-stack-head-actions"[\s\S]*data-webstack-close/);
+  assert.doesNotMatch(open, /data-webstack-check-projection|data-webstack-refresh|role="status"|ctox-web-stack-status/);
   assert.match(js, /data-webstack-auth-source/);
   assert.match(js, /function requestWebStackAuthAssist/);
 });
@@ -734,32 +661,17 @@ test('A focused task that appears later replaces the previous fallback selection
   );
 });
 
-test('WebRTC status does not claim CTOX flow is connected when projection is missing', () => {
-  const view = flowSourceView({
-    lang: 'de',
-    flow: { ok: false, mode: 'unavailable' },
-    runtimeStatus: 'RxDB WebRTC',
-    ctx: { sync: { mode: 'webrtc' } },
-  });
-  assert.equal(view.mode, 'RxDB WebRTC');
-  assert.equal(view.status, labels.de.flowProjectionMissing);
+test('Flow source never claims a live connection when the projection is missing (v4: no sync mode in the app)', () => {
+  const view = flowSourceView({ lang: 'de', flow: { ok: false, mode: 'unavailable' } });
   assert.notEqual(view.status, labels.de.connected);
+  assert.doesNotMatch(String(view.mode), /unavailable/i);
 });
 
-test('Web Stack projection failures render as actionable sync diagnostics', () => {
-  const webStack = { loading: false, error: 'Web Stack projection is not available in RxDB' };
-  assert.equal(webStackProjectionMissing(webStack), true);
-  assert.equal(friendlyWebStackStatus(webStack, labels.de), labels.de.webStackConnecting);
-});
-
-test('Web Stack refresh preserves projection-missing diagnostics', () => {
-  const webStack = webStackStateFromRefreshResult(
-    { notice: '', data: null },
-    { ok: false, error: 'Web Stack projection is not available in RxDB' }
-  );
-  assert.equal(webStack.error, 'Web Stack projection is not available in RxDB');
-  assert.equal(webStackProjectionMissing(webStack), true);
-  assert.equal(friendlyWebStackStatus(webStack, labels.de), labels.de.webStackConnecting);
+test('Web Stack projection gaps are detected but never rendered as panel text', () => {
+  assert.equal(webStackProjectionMissing({ error: 'web_stack_projection_missing' }), true);
+  assert.equal(webStackProjectionMissing({ error: '' }), false);
+  const panel = webStackPanel({ lang: 'de', model: { tasks: [] }, webStackPanelOpen: true, webStack: { error: 'web_stack_projection_missing', notice: '', data: null } });
+  assert.doesNotMatch(panel, /role="status"|ctox-callout/);
 });
 
 test('Task display copy is shown as written (no regex redaction, no underscore mangling)', () => {
@@ -830,6 +742,28 @@ test('Queued work without a lease becomes critical after the stall grace window'
   });
   assert.equal(health.severity, 'critical');
   assert.equal(health.reason, 'queue_stalled');
+});
+
+test('A task in retry backoff is not a crew stall', () => {
+  const task = (retryOffsetMs) => ({
+    id: 'queue:news-backoff',
+    title: 'news issue generate',
+    status: 'queued',
+    routeStatus: 'pending',
+    createdAt: new Date(Date.now() - 96 * 60 * 1000).toISOString(),
+    retryNotBefore: new Date(Date.now() + retryOffsetMs).toISOString(),
+  });
+  const health = (retryOffsetMs) => deriveHarnessHealth({ lang: 'de', flow: { ok: true }, ctx: { sync: { mode: 'webrtc' } }, model: { tasks: [task(retryOffsetMs)] } });
+  // Nächster Versuch in 10 min: kein Alarm, nichts wartet.
+  assert.equal(health(10 * 60 * 1000).severity, 'ok');
+  assert.equal(health(10 * 60 * 1000).waitingCount, 0);
+  // Versuch gerade fällig (vor 30 s): wartet, aber noch innerhalb der Kulanz – Alter ab Fälligkeit, nicht ab Anlage.
+  const due = health(-30 * 1000);
+  assert.notEqual(due.severity, 'critical');
+  assert.ok(due.oldestWaitingAgeMs < 60 * 1000);
+  // Versuch seit 3 min fällig und kein Lease: wieder ein echter Stillstand.
+  assert.equal(health(-3 * 60 * 1000).severity, 'critical');
+  assert.equal(health(-3 * 60 * 1000).reason, 'queue_stalled');
 });
 
 test('Authoritative running command lifecycle overrides a stale queued task projection', () => {
@@ -1071,7 +1005,9 @@ test('Single-event timeline is diagnostic and disabled', () => {
   }, null, node, {});
   assert.match(html, /is-disabled/);
   assert.match(html, /disabled aria-disabled="true"/);
-  assert.match(html, new RegExp(labels.de.timelineUnavailable));
+  // Textdiät Regel 2: ein leerer Verlauf zeigt keine Erklärprosa mehr.
+  assert.doesNotMatch(html, new RegExp(labels.de.timelineUnavailable));
+  assert.doesNotMatch(html, new RegExp(labels.de.timelineUnavailableDetail));
   assert.equal(progressPercent(0, 0), 100);
   assert.equal(clampMetric(999, 0, 10), 10);
   assert.equal(formatRelativeAge(30_000, 'de'), 'unter 1 Min.');

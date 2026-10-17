@@ -1,13 +1,8 @@
-import { loadModuleMessages } from '../../shared/i18n.js';
-import {
-  decodeBase64Utf8,
-  extractCompanyRowsFromText,
-  openUniversalImporter,
-} from '../../shared/universal-importer.js';
+// customers – App-API 4.0 (Shell v4, Strang UD6). Port-Protokoll: V4-PORT.md.
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
 
-const BUILD = '20260727-sync-readiness-1';
+const BUILD = '20261015-shell-v4-app-api-4';
 const CUSTOMERS_COLLECTIONS = Object.freeze([
-  'business_commands',
   'customer_accounts',
   'customer_contacts',
   'customer_opportunities',
@@ -19,17 +14,6 @@ const CUSTOMERS_COLLECTIONS = Object.freeze([
   'customer_view_filters',
   'customer_view_sorts',
   'customer_import_batches',
-  'customer_dedupe_candidates',
-]);
-// Collections whose replication readiness gates a data-driven empty state:
-// while one of these has not finished its initial sync (ready === false), an
-// empty unfiltered source renders the kit syncing shell instead of a false
-// "no data" empty. Filter/selection empties stay untouched.
-const READINESS_GATED_COLLECTIONS = Object.freeze([
-  'customer_accounts',
-  'customer_contacts',
-  'customer_opportunities',
-  'outbound_companies',
   'customer_dedupe_candidates',
 ]);
 const OUTBOUND_HANDOFF_COLLECTIONS = Object.freeze([
@@ -76,37 +60,37 @@ const ACCOUNT_STATUS_LABELS = Object.freeze({
 });
 
 const STAGE_LABELS = Object.freeze({
-  prospect: 'Prospect',
+  prospect: 'Interessent',
   onboarding: 'Onboarding',
   active: 'Aktiv',
-  renewal: 'Renewal',
-  expansion: 'Expansion',
+  renewal: 'Verlängerung',
+  expansion: 'Ausbau',
   at_risk: 'Gefährdet',
-  churned: 'Churned',
+  churned: 'Abgewandert',
   archived: 'Archiviert',
 });
 
 const HEALTH_LABELS = Object.freeze({
   unknown: 'Unbekannt',
-  healthy: 'Healthy',
+  healthy: 'Gesund',
   neutral: 'Neutral',
-  at_risk: 'At Risk',
+  at_risk: 'Gefährdet',
   critical: 'Kritisch',
 });
 
 const OPPORTUNITY_STAGE_LABELS = Object.freeze({
-  qualification: 'Qualification',
-  proposal: 'Proposal',
-  negotiation: 'Negotiation',
-  committed: 'Committed',
-  closed_won: 'Closed Won',
-  closed_lost: 'Closed Lost',
+  qualification: 'Qualifizierung',
+  proposal: 'Angebot',
+  negotiation: 'Verhandlung',
+  committed: 'Zugesagt',
+  closed_won: 'Gewonnen',
+  closed_lost: 'Verloren',
 });
 
 const OPPORTUNITY_TYPE_LABELS = Object.freeze({
-  new_business: 'New Business',
-  expansion: 'Expansion',
-  renewal: 'Renewal',
+  new_business: 'Neugeschäft',
+  expansion: 'Ausbau',
+  renewal: 'Verlängerung',
 });
 
 const TASK_STATUS_LABELS = Object.freeze({
@@ -118,9 +102,12 @@ const TASK_STATUS_LABELS = Object.freeze({
 
 const labels = {
   de: {
+    customerList: 'Kunden',
+    entries: 'Einträge',
+    invalidImport: 'Die JSON-Datei ist ungültig.',
+    emptyImport: 'Die JSON-Datei enthält keine Kundenkonten.',
+    importComplete: '{0} Kundenkonten importiert.',
     title: 'Kunden',
-    presenceEditing: '{0} bearbeitet gerade',
-    presenceViewing: '{0} sieht sich das gerade an',
     scope: 'Segmente',
     sync: 'Abgleich',
     savedViews: 'Ansichten',
@@ -131,8 +118,8 @@ const labels = {
     showInspector: 'Inspector einblenden',
     allAccounts: 'Alle Kunden',
     activeCustomers: 'Aktive Kunden',
-    renewal: 'Renewal',
-    expansion: 'Expansion',
+    renewal: 'Verlängerung',
+    expansion: 'Ausbau',
     atRisk: 'Gefährdet',
     clearFilters: 'Filter zurücksetzen',
     filters: 'Filter',
@@ -142,7 +129,7 @@ const labels = {
     actionKicker: 'Aktion',
     search: 'Kunden suchen',
     searchContacts: 'Kontakte suchen',
-    searchOpportunities: 'Opportunities suchen',
+    searchOpportunities: 'Verkaufschancen suchen',
     searchOutbound: 'Outbound suchen',
     searchDedupe: 'Dubletten suchen',
     newCustomer: 'Kunde anlegen',
@@ -151,34 +138,35 @@ const labels = {
     newContact: 'Kontakt anlegen',
     editContact: 'Kontakt bearbeiten',
     archiveContact: 'Kontakt archivieren',
-    newOpportunity: 'Opportunity anlegen',
-    editOpportunity: 'Opportunity bearbeiten',
-    closeWon: 'Won',
-    closeLost: 'Lost',
+    newOpportunity: 'Verkaufschance anlegen',
+    editOpportunity: 'Verkaufschance bearbeiten',
+    closeWon: 'Gewonnen',
+    closeLost: 'Verloren',
     board: 'Board',
     table: 'Tabelle',
     refresh: 'Aktualisieren',
     linkedDataLimited: 'Verknuepfte Daten eingeschraenkt',
     accounts: 'Kunden',
     contacts: 'Kontakte',
-    opportunities: 'Opportunities',
+    opportunities: 'Verkaufschancen',
     handoff: 'Übergabe',
     dedupe: 'Dubletten',
     importFromOutbound: 'Übernehmen',
     importCustomers: 'Importieren',
     exportCustomers: 'Exportieren',
     imported: 'Importiert',
-    needsReview: 'Review',
+    needsReview: 'Prüfen',
+    commandCompletedStatus: 'Erledigt',
     resolveDedupe: 'Entscheiden',
     keepExisting: 'Bestehend behalten',
     createNew: 'Neu anlegen',
     merge: 'Zusammenführen',
     skip: 'Überspringen',
-    matchType: 'Match',
-    confidence: 'Confidence',
+    matchType: 'Abgleich',
+    confidence: 'Sicherheit',
     source: 'Quelle',
     existingRecord: 'Bestehend',
-    importBatch: 'Import Batch',
+    importBatch: 'Importlauf',
     tasks: 'Aufgaben',
     activities: 'Aktivitäten',
     overview: 'Übersicht',
@@ -195,8 +183,9 @@ const labels = {
     outbound: 'Outbound',
     available: 'Verfügbar',
     linkedRecords: 'Verknüpfungen',
-    noAppLinks: 'Keine App-Verknüpfungen',
-    noAppLinksBody: 'Verknüpfte Kommunikation, Termine, Dokumente, Notizen und Tabellen erscheinen hier, sobald die Ziel-App Daten mit Kundenbezug bereitstellt.',
+    linkedRecordOne: 'Verknüpfung',
+    contactOne: 'Kontakt',
+    opportunityOne: 'Verkaufschance',
     newTask: 'Aufgabe anlegen',
     editTask: 'Aufgabe bearbeiten',
     completeTask: 'Erledigen',
@@ -210,31 +199,21 @@ const labels = {
     noNotes: 'Keine Notizen',
     noFiles: 'Keine Dateien',
     noTimeline: 'Keine Timeline-Einträge',
-    noCustomers: 'Noch keine Kunden',
-    noCustomersBody: 'Lege einen Kunden an oder importiere qualifizierte Firmen aus Outbound.',
     noContacts: 'Noch keine Kontakte',
-    noContactsBody: 'Lege Kontakte am ausgewählten Kunden an oder übernimm sie aus Outbound.',
-    noOpportunities: 'Noch keine Opportunities',
-    noOpportunitiesBody: 'Lege eine Opportunity am ausgewählten Kunden an oder importiere Renewals aus Bestandssignalen.',
-    noOutbound: 'Keine Outbound-Übergaben',
-    noOutboundBody: 'Qualifizierte Outbound-Firmen erscheinen hier, sobald Outbound-Daten lokal synchronisiert sind.',
-    noDedupe: 'Keine offenen Dubletten',
-    noDedupeBody: 'Domain- oder E-Mail-Treffer aus Imports landen hier zur Entscheidung.',
-    inspectorEmpty: 'Kein Kunde ausgewählt',
-    inspectorEmptyBody: 'Wähle einen Kunden in der Liste, um Kontakte, Opportunities und Aktivitäten zu sehen.',
+    noOpportunities: 'Noch keine Verkaufschancen',
     accountName: 'Name',
     domain: 'Domain',
     industry: 'Branche',
     status: 'Status',
-    stage: 'Stage',
+    stage: 'Phase',
     health: 'Gesundheit',
     owner: 'Betreuung',
-    arr: 'ARR',
+    arr: 'Jahresumsatz',
     nextAction: 'Nächste Aktion',
     lastActivity: 'Letzte Aktivität',
     openTasks: 'Offene Aufgaben',
     primary: 'Primär',
-    opportunityName: 'Opportunity',
+    opportunityName: 'Verkaufschance',
     type: 'Typ',
     amount: 'Betrag',
     closeDate: 'Abschluss',
@@ -254,29 +233,19 @@ const labels = {
     requiredName: 'Name ist erforderlich.',
     requiredContact: 'Kontaktname oder E-Mail ist erforderlich.',
     requiredAccount: 'Kunde ist erforderlich.',
-    requiredOpportunity: 'Opportunity-Name ist erforderlich.',
+    requiredOpportunity: 'Name der Verkaufschance ist erforderlich.',
     requiredTask: 'Aufgabentitel ist erforderlich.',
     requiredNote: 'Notiztitel oder Text ist erforderlich.',
-    commandPending: 'Änderung gespeichert: {0}',
-    commandAudit: 'Letzte Änderungen',
-    commandAuditEmpty: 'Noch keine Änderungen',
-    commandAuditBody: 'Neue Aktionen erscheinen hier, sobald sie lokal gespeichert sind.',
-    commandPendingStatus: 'Ausstehend',
-    commandCompletedStatus: 'Abgeschlossen',
-    commandFailedStatus: 'Fehlgeschlagen',
     commandFailed: 'Änderung konnte nicht gespeichert werden: {0}',
-    commandUnavailable: 'Änderungen sind gerade nicht verfügbar.',
-    loadingStatus: 'Aktualisiert...',
-    syncingData: 'Daten werden synchronisiert.',
     permissionReadOnly: 'Nur Lesen',
     permissionReadOnlyBody: 'Deine Rolle darf Kundendaten ansehen, aber nicht bearbeiten.',
     permissionDenied: 'Keine Berechtigung für Kunden-Änderungen.',
     workbench: 'Arbeitsbereich',
-    opportunityView: 'Opportunity Ansicht',
+    opportunityView: 'Verkaufschancen-Ansicht',
     recordDetails: 'Record Details',
     selectAccount: 'Kunde auswählen: {0}',
     selectContact: 'Kontakt auswählen: {0}',
-    selectOpportunity: 'Opportunity auswählen: {0}',
+    selectOpportunity: 'Verkaufschance auswählen: {0}',
     selectOutbound: 'Outbound-Übergabe auswählen: {0}',
     selectDedupe: 'Dublette auswählen: {0}',
     sortBy: 'Sortieren nach {0}',
@@ -284,9 +253,12 @@ const labels = {
     sortDescending: 'Absteigend sortiert',
   },
   en: {
+    customerList: 'Customers',
+    entries: 'entries',
+    invalidImport: 'The JSON file is invalid.',
+    emptyImport: 'The JSON file contains no customer accounts.',
+    importComplete: 'Imported {0} customer accounts.',
     title: 'Customers',
-    presenceEditing: '{0} is editing right now',
-    presenceViewing: '{0} is viewing this',
     scope: 'Scope',
     sync: 'Sync',
     savedViews: 'Views',
@@ -335,6 +307,7 @@ const labels = {
     exportCustomers: 'Export',
     imported: 'Imported',
     needsReview: 'Review',
+    commandCompletedStatus: 'Resolved', // v4-allow: en
     resolveDedupe: 'Resolve',
     keepExisting: 'Keep existing',
     createNew: 'Create new',
@@ -361,8 +334,9 @@ const labels = {
     outbound: 'Outbound',
     available: 'Available',
     linkedRecords: 'Links',
-    noAppLinks: 'No app links',
-    noAppLinksBody: 'Linked communication, meetings, documents, notes and spreadsheets appear here once target apps provide customer context.',
+    linkedRecordOne: 'Link',
+    contactOne: 'Contact',
+    opportunityOne: 'Opportunity',
     newTask: 'New task',
     editTask: 'Edit task',
     completeTask: 'Complete',
@@ -376,18 +350,8 @@ const labels = {
     noNotes: 'No notes',
     noFiles: 'No files',
     noTimeline: 'No timeline entries',
-    noCustomers: 'No customers yet',
-    noCustomersBody: 'Create a customer or import qualified companies from Outbound.',
     noContacts: 'No contacts yet',
-    noContactsBody: 'Create contacts on the selected account or import them from Outbound.',
     noOpportunities: 'No opportunities yet',
-    noOpportunitiesBody: 'Create an opportunity on the selected account or import renewals from customer signals.',
-    noOutbound: 'No outbound handoffs',
-    noOutboundBody: 'Qualified outbound companies appear here once outbound data is synced locally.',
-    noDedupe: 'No open dedupe cases',
-    noDedupeBody: 'Domain or email matches from imports land here for review.',
-    inspectorEmpty: 'No customer selected',
-    inspectorEmptyBody: 'Select an account to inspect contacts, opportunities and activity.',
     accountName: 'Name',
     domain: 'Domain',
     industry: 'Industry',
@@ -423,16 +387,7 @@ const labels = {
     requiredOpportunity: 'Opportunity name is required.',
     requiredTask: 'Task title is required.',
     requiredNote: 'Note title or body is required.',
-    commandPending: 'Command recorded: {0}',
-    commandAudit: 'Command log',
-    commandAuditEmpty: 'No customer commands yet',
-    commandAuditBody: 'New actions appear here once business_commands is synced locally.',
-    commandPendingStatus: 'Pending',
-    commandCompletedStatus: 'Completed',
-    commandFailedStatus: 'Failed',
     commandFailed: 'Command could not be recorded: {0}',
-    commandUnavailable: 'Command bus unavailable.',
-    syncingData: 'Syncing data.',
     permissionReadOnly: 'Read-only',
     permissionReadOnlyBody: 'Your role can inspect customer data, but cannot modify it.',
     permissionDenied: 'No permission for customer changes.',
@@ -451,7 +406,8 @@ const labels = {
 };
 
 const state = {
-  ctx: null,
+  root: null,
+  api: null,
   t: translateFallback('de'),
   lang: 'de',
   search: '',
@@ -479,93 +435,172 @@ const state = {
   contactSort: { field: 'name', direction: 'asc' },
   opportunitySort: { field: 'close_date_ms', direction: 'asc' },
   collections: emptyCollections(),
-  diagnostics: {
-    loading: false,
-    error: '',
-    lastLoadedAt: 0,
-    commandState: '',
-    optionalDeniedCollections: [],
-  },
+  deniedLinkCollections: [],
+  permissions: [],
+  zone: new Set(),
   cleanup: [],
   renderTimer: 0,
   workbenchCollapsed: false,
+  restorePending: false,
+  formDraft: null,
 };
 
-export async function mount(ctx) {
-  resetState(ctx);
-  await ensureStyles();
-  const messages = await loadModuleMessages(import.meta.url, ctx.locale || 'de', labels);
-  state.t = (key, fallback, ...args) => {
-    let value = messages[key] ?? fallback ?? key;
-    args.forEach((arg, index) => {
-      value = String(value).replace(`{${index}}`, arg);
-    });
-    return value;
-  };
-  state.lang = ctx.locale === 'en' ? 'en' : 'de';
-  ctx.host.innerHTML = await loadModuleMarkup();
-  ctx.left.replaceChildren();
-  ctx.right.replaceChildren();
+// Fensterzustand für Live-Remount (PORTING.md §2): nur structured-clone-fähige Werte.
+const SNAPSHOT_VIEW_KEYS = Object.freeze([
+  'search', 'contactSearch', 'opportunitySearch', 'outboundSearch', 'dedupeSearch',
+  'opportunityPreset', 'dedupeStatus', 'stage', 'health', 'accountBand', 'accountView', 'centerView',
+  'opportunityMode', 'detailTab', 'formMode', 'formRecordId', 'selectedAccountId', 'selectedContactId',
+  'selectedOpportunityId', 'selectedOutboundCompanyId', 'selectedDedupeCandidateId', 'workbenchCollapsed',
+]);
+const SNAPSHOT_SORT_KEYS = Object.freeze(['accountSort', 'contactSort', 'opportunitySort']);
+const LIVE_SORT = Object.freeze([{ updated_at_ms: 'desc' }]);
 
-  const root = ctx.host.querySelector('[data-customers-root]');
-  applyCustomersStaticLabels(root);
-  applyInspectorVisibility(root);
-  wireUi(root);
-  state.cleanup.push(setupResizers(root));
-  let disposed = false;
-  // Presence (advisory UX): show who else is on the selected record, and
-  // publish what this user is looking at / editing. Cleared on unmount so a
-  // closed module leaves no stale hints on other peers.
-  if (ctx.presence?.subscribe) {
-    state.cleanup.push(ctx.presence.subscribe((entries) => {
-      state.presenceRemote = Array.isArray(entries) ? entries : [];
-      render();
-    }));
-    state.cleanup.push(() => { try { ctx.presence.clear(); } catch {} });
-  }
-  // Collection readiness (shell-owned sync contract): re-render when a gated
-  // collection flips its replication state so empty lists swap between the
-  // syncing shell and the real empty state without waiting for data changes.
-  if (typeof ctx.sync?.subscribeCollectionReadiness === 'function') {
-    const unsubscribers = READINESS_GATED_COLLECTIONS
-      .map((name) => {
-        try {
-          return ctx.sync.subscribeCollectionReadiness(name, () => render());
-        } catch {
-          return null;
-        }
-      })
-      .filter((unsubscribe) => typeof unsubscribe === 'function');
-    state.cleanup.push(() => unsubscribers.forEach((unsubscribe) => {
-      try { unsubscribe(); } catch {}
-    }));
-  }
-  state.diagnostics.loading = true;
+export async function mount(root, api, { restored } = {}) {
+  resetState(root, api);
+  // Abos je Montage lokal (PORTING.md §4 Falle 1): eine zweite Montage ersetzt state.cleanup,
+  // diese Montage meldet trotzdem genau ihre eigenen Abos ab.
+  const cleanup = state.cleanup;
+  const isCurrent = () => state.api === api;
+  if (!root.dataset.app) root.dataset.app = 'customers';
+  applyLocale(readLocale(api));
+  root.innerHTML = await loadModuleMarkup();
+  const appRoot = root.querySelector('[data-customers-root]');
+  applyRestored(restored);
+  applyCustomersStaticLabels(appRoot);
+  applyInspectorVisibility(appRoot);
+  wireUi(appRoot);
+  autoWirePaneGrammar(root);
+  syncGrammarControlsFromState();
+  api.shell.setTitle(state.t('title', labels.de.title));
+
+  const offLocale = api.shell.locale?.subscribe?.((value) => {
+    if (!isCurrent()) return;
+    const lang = value === 'en' ? 'en' : 'de';
+    if (lang === state.lang) return;
+    applyLocale(lang);
+    applyCustomersStaticLabels(state.root?.querySelector('[data-customers-root]'));
+    api.shell.setTitle(state.t('title', labels.de.title));
+    render();
+  });
+  if (typeof offLocale === 'function') cleanup.push(offLocale);
+  const offPermissions = api.actor?.permissions?.subscribe?.((list) => {
+    if (!isCurrent()) return;
+    state.permissions = Array.isArray(list) ? [...list] : [];
+    scheduleRender();
+  });
+  if (typeof offPermissions === 'function') cleanup.push(offPermissions);
+
+  wireLiveData(api, cleanup, isCurrent);
+  syncSelection();
   render();
-  refreshData()
-    .then(() => {
-      if (disposed || state.ctx !== ctx) return;
-      state.cleanup.push(wireRealtime());
-      render();
-    })
-    .catch((error) => {
-      if (disposed || state.ctx !== ctx) return;
-      reportRefreshError(error);
-    });
+  const listScrollTop = Number(restored?.listScrollTop) || 0;
+  if (listScrollTop) {
+    const list = root.querySelector('[data-customers-account-list]');
+    if (list) list.scrollTop = listScrollTop;
+  }
 
-  return () => {
-    disposed = true;
-    for (const cleanup of state.cleanup.splice(0)) {
-      try { cleanup?.(); } catch {}
-    }
-    if (state.renderTimer) window.clearTimeout(state.renderTimer);
+  return {
+    unmount() {
+      for (const off of cleanup.splice(0)) {
+        try { off?.(); } catch {}
+      }
+      if (isCurrent()) {
+        if (state.renderTimer) window.clearTimeout(state.renderTimer);
+        state.renderTimer = 0;
+        for (const code of state.zone) {
+          try { api.status.clear(code); } catch {}
+        }
+        state.zone.clear();
+        state.api = null;
+        state.root = null;
+      }
+      root.replaceChildren();
+    },
+    snapshot() {
+      return isCurrent() ? snapshot() : { v: 1 };
+    },
   };
 }
 
-function resetState(ctx) {
-  state.ctx = ctx;
-  state.t = translateFallback(ctx?.locale === 'en' ? 'en' : 'de');
-  state.lang = ctx?.locale === 'en' ? 'en' : 'de';
+function snapshot() {
+  const snap = { v: 1 };
+  for (const key of SNAPSHOT_VIEW_KEYS) snap[key] = state[key];
+  for (const key of SNAPSHOT_SORT_KEYS) snap[key] = { field: state[key].field, direction: state[key].direction };
+  const draft = captureFormDraft();
+  if (draft) snap.formDraft = draft;
+  snap.listScrollTop = state.root?.querySelector('[data-customers-account-list]')?.scrollTop || 0;
+  return snap;
+}
+
+// Typ jedes Feldes gegen den Anfangszustand prüfen; fremde/alte Fassungen tolerieren.
+function applyRestored(restored) {
+  if (!restored || typeof restored !== 'object' || restored.v !== 1) return;
+  for (const key of SNAPSHOT_VIEW_KEYS) {
+    if (key in restored && typeof restored[key] === typeof state[key]) state[key] = restored[key];
+  }
+  for (const key of SNAPSHOT_SORT_KEYS) {
+    const sort = restored[key];
+    if (sort && typeof sort.field === 'string' && (sort.direction === 'asc' || sort.direction === 'desc')) {
+      state[key] = { field: sort.field, direction: sort.direction };
+    }
+  }
+  if (state.formMode && restored.formDraft && typeof restored.formDraft === 'object') {
+    state.formDraft = { kind: String(restored.formDraft.kind || ''), values: { ...(restored.formDraft.values || {}) } };
+  }
+  state.restorePending = Boolean(state.selectedAccountId);
+}
+
+function captureFormDraft() {
+  const form = state.root?.querySelector('[data-customers-form]');
+  if (!form || !state.formMode) return null;
+  const values = {};
+  for (const [key, value] of new FormData(form).entries()) {
+    if (typeof value === 'string') values[key] = value;
+  }
+  return { kind: form.getAttribute('data-form-kind') || state.formMode, values };
+}
+
+function applyFormDraft(draft) {
+  const form = state.root?.querySelector('[data-customers-form]');
+  if (!form || !draft) return;
+  if ((form.getAttribute('data-form-kind') || state.formMode) !== draft.kind) return;
+  for (const [key, value] of Object.entries(draft.values || {})) {
+    const field = form.elements.namedItem(key);
+    if (field && 'value' in field && field.type !== 'hidden') field.value = value;
+  }
+}
+
+function wireLiveData(api, cleanup, isCurrent) {
+  const names = [...CUSTOMERS_COLLECTIONS, ...OUTBOUND_HANDOFF_COLLECTIONS, ...OPTIONAL_LINK_COLLECTIONS];
+  let wiring = true;
+  for (const name of names) {
+    const linked = !CUSTOMERS_COLLECTIONS.includes(name);
+    try {
+      const live = api.query(name, { sort: LIVE_SORT });
+      cleanup.push(live.subscribe((rows) => {
+        if (!isCurrent()) return;
+        state.collections[name] = rows.filter((doc) => doc && doc.is_deleted !== true);
+        if (!wiring) scheduleRender();
+      }));
+    } catch (error) {
+      if (linked && error?.code === 'forbidden') {
+        state.deniedLinkCollections.push(name);
+        continue;
+      }
+      reportStatus('error', `customers.data.${name}`, error?.message || String(error));
+    }
+  }
+  wiring = false;
+  if (state.deniedLinkCollections.length) {
+    reportStatus('warn', 'customers.linked.limited', state.t('linkedDataLimited', labels.de.linkedDataLimited));
+  }
+}
+
+function resetState(root, api) {
+  state.root = root;
+  state.api = api;
+  state.t = translateFallback('de');
+  state.lang = 'de';
   state.search = '';
   state.contactSearch = '';
   state.opportunitySearch = '';
@@ -591,11 +626,70 @@ function resetState(ctx) {
   state.contactSort = { field: 'name', direction: 'asc' };
   state.opportunitySort = { field: 'close_date_ms', direction: 'asc' };
   state.collections = emptyCollections();
-  state.diagnostics = { loading: false, error: '', lastLoadedAt: 0, commandState: '' };
+  state.deniedLinkCollections = [];
+  state.permissions = [];
+  state.zone = new Set();
   state.cleanup = [];
   state.renderTimer = 0;
-  state.presenceRemote = [];
   state.workbenchCollapsed = readInspectorHidden();
+  state.restorePending = false;
+  state.formDraft = null;
+}
+
+function readLocale(api) {
+  try {
+    return api?.shell?.locale?.get?.() === 'en' ? 'en' : 'de';
+  } catch {
+    return 'de';
+  }
+}
+
+// Sprache: api.shell.t('customers.<key>') übersteuert, eingebettete Texte bleiben Rückfall (OFFEN-B).
+function applyLocale(lang) {
+  state.lang = lang === 'en' ? 'en' : 'de';
+  const fallback = translateFallback(state.lang);
+  const api = state.api;
+  state.t = (key, fallbackText, ...args) => {
+    const shellKey = `customers.${key}`;
+    let fromShell = '';
+    try { fromShell = api?.shell?.t ? api.shell.t(shellKey) : ''; } catch {}
+    if (typeof fromShell === 'string' && fromShell && fromShell !== shellKey) {
+      let value = fromShell;
+      args.forEach((arg, index) => { value = String(value).replace(`{${index}}`, arg); });
+      return value;
+    }
+    return fallback(key, fallbackText, ...args);
+  };
+}
+
+// Zustand nur in der Zustandszone der Shell (R11); stabile Codes, damit clear greift.
+function reportStatus(level, code, text, ref) {
+  const api = state.api;
+  if (!api?.status) return;
+  const item = { level, code, text: String(text || code) };
+  if (ref) item.ref = ref;
+  api.status.report(item);
+  state.zone.add(code);
+}
+
+function clearStatus(code) {
+  const api = state.api;
+  if (!api?.status || !state.zone.has(code)) return;
+  api.status.clear(code);
+  state.zone.delete(code);
+}
+
+function scheduleRender() {
+  if (state.renderTimer) return;
+  state.renderTimer = window.setTimeout(() => {
+    state.renderTimer = 0;
+    refreshView();
+  }, 16);
+}
+
+function refreshView() {
+  syncSelection();
+  render();
 }
 
 function translateFallback(lang) {
@@ -609,17 +703,8 @@ function translateFallback(lang) {
   };
 }
 
-async function ensureStyles() {
-  if (document.querySelector('link[data-module-styles="customers"]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = new URL(`./index.css?v=${BUILD}`, import.meta.url).href;
-  link.dataset.moduleStyles = 'customers';
-  document.head.append(link);
-}
-
 async function loadModuleMarkup() {
-  const html = await fetch(new URL(`./index.html?v=${BUILD}`, import.meta.url)).then((res) => res.text());
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
@@ -628,7 +713,7 @@ async function loadModuleMarkup() {
 function applyCustomersStaticLabels(root) {
   if (!root) return;
   const title = root.querySelector('[data-customers-list-title]');
-  if (title) title.textContent = state.t('customerList', 'Kundenkonten');
+  if (title) title.textContent = state.t('customerList', 'Kunden');
   const search = root.querySelector('[data-pg-search]');
   if (search) {
     const label = state.t('search', labels.de.search);
@@ -684,7 +769,7 @@ function inspectorHasContent() {
 }
 
 function applyInspectorVisibility(root) {
-  const el = root || state.ctx?.host?.querySelector('[data-customers-root]');
+  const el = root || state.root?.querySelector('[data-customers-root]');
   if (!el) return;
   const visible = state.formMode || accountWorkbenchVisible(inspectorHasContent(), state.workbenchCollapsed);
   el.classList.toggle('is-workbench-empty', !visible);
@@ -698,10 +783,7 @@ function wireUi(root) {
   });
   root.querySelector('[data-customers-import-input]')?.addEventListener('change', (event) => {
     importCustomersJsonFile(event.target?.files?.[0]).catch((error) => {
-      state.ctx?.notifications?.notify?.({
-        title: state.t('importCustomers', labels.de.importCustomers),
-        body: error?.message || String(error),
-      });
+      reportStatus('error', 'customers.import.json', `${state.t('importCustomers', labels.de.importCustomers)}: ${error?.message || String(error)}`);
     }).finally(() => { if (event.target) event.target.value = ''; });
   });
   root.addEventListener('click', (event) => {
@@ -710,8 +792,7 @@ function wireUi(root) {
     const action = actionEl?.getAttribute('data-customers-action');
     if (action) {
       handleAction(action, actionEl).catch((error) => {
-        state.diagnostics.commandState = state.t('commandFailed', labels.de.commandFailed, error?.message || String(error));
-        renderRight();
+        reportStatus('error', 'customers.action.failed', state.t('commandFailed', labels.de.commandFailed, error?.message || String(error)));
       });
       return;
     }
@@ -767,6 +848,7 @@ function wireUi(root) {
     }
     const appLink = target?.closest('[data-customers-app-link]');
     if (appLink) {
+      event.preventDefault();
       openLinkedApp(appLink.getAttribute('data-customers-app-link'), appLink.getAttribute('href'));
       return;
     }
@@ -869,8 +951,7 @@ function wireUi(root) {
         return null;
       },
     }).catch((error) => {
-      state.diagnostics.commandState = state.t('commandFailed', labels.de.commandFailed, error?.message || String(error));
-      renderRight();
+      reportStatus('error', 'customers.action.failed', state.t('commandFailed', labels.de.commandFailed, error?.message || String(error)));
     });
   });
   root.addEventListener('submit', (event) => {
@@ -878,8 +959,7 @@ function wireUi(root) {
     if (!form?.matches('[data-customers-form]')) return;
     event.preventDefault();
     submitForm(form).catch((error) => {
-      state.diagnostics.commandState = state.t('commandFailed', labels.de.commandFailed, error?.message || String(error));
-      renderRight();
+      reportStatus('error', 'customers.action.failed', state.t('commandFailed', labels.de.commandFailed, error?.message || String(error)));
     });
   });
 }
@@ -907,7 +987,7 @@ async function handleAction(action, element) {
   } else if (!guardMutableAction(action)) {
     return;
   } else if (action === 'import-customers') {
-    state.ctx?.host?.querySelector('[data-customers-import-input]')?.click();
+    state.root?.querySelector('[data-customers-import-input]')?.click();
   } else if (action === 'center-accounts') {
     state.centerView = 'accounts';
     renderCenter();
@@ -937,7 +1017,7 @@ async function handleAction(action, element) {
     await dispatchCommand(buildAccountArchiveCommand(element.getAttribute('data-account-id') || state.selectedAccountId));
     state.formMode = '';
     state.selectedAccountId = '';
-    await refreshData();
+    refreshView();
   } else if (action === 'create-contact') {
     openForm('contact-create', state.selectedAccountId);
   } else if (action === 'edit-contact') {
@@ -946,7 +1026,7 @@ async function handleAction(action, element) {
     await dispatchCommand(buildContactArchiveCommand(element.getAttribute('data-contact-id') || state.selectedContactId));
     state.formMode = '';
     state.selectedContactId = '';
-    await refreshData();
+    refreshView();
   } else if (action === 'create-opportunity') {
     openForm('opportunity-create', state.selectedAccountId);
   } else if (action === 'edit-opportunity') {
@@ -956,17 +1036,17 @@ async function handleAction(action, element) {
     const stage = element.getAttribute('data-stage') || '';
     await dispatchCommand(buildOpportunityMoveStageCommand(opportunityId, stage));
     state.selectedOpportunityId = opportunityId;
-    await refreshData();
+    refreshView();
   } else if (action === 'close-won') {
     const opportunityId = element.getAttribute('data-opportunity-id') || state.selectedOpportunityId;
     await dispatchCommand(buildOpportunityCloseCommand(opportunityId, 'won'));
     state.selectedOpportunityId = opportunityId;
-    await refreshData();
+    refreshView();
   } else if (action === 'close-lost') {
     const opportunityId = element.getAttribute('data-opportunity-id') || state.selectedOpportunityId;
     await dispatchCommand(buildOpportunityCloseCommand(opportunityId, 'lost'));
     state.selectedOpportunityId = opportunityId;
-    await refreshData();
+    refreshView();
   } else if (action === 'create-task') {
     openForm('task-create', activeRecordContext()?.id || state.selectedAccountId);
   } else if (action === 'edit-task') {
@@ -974,7 +1054,7 @@ async function handleAction(action, element) {
   } else if (action === 'complete-task') {
     const taskId = element.getAttribute('data-task-id') || '';
     await dispatchCommand(buildTaskCompleteCommand(taskId));
-    await refreshData();
+    refreshView();
   } else if (action === 'create-note') {
     openForm('note-create', activeRecordContext()?.id || state.selectedAccountId);
   } else if (action === 'edit-note') {
@@ -984,7 +1064,7 @@ async function handleAction(action, element) {
     const row = outboundHandoffRowByCompanyId(companyId);
     await dispatchCommand(buildImportFromOutboundCommand(row));
     state.selectedOutboundCompanyId = companyId;
-    await refreshData();
+    refreshView();
   } else if (action === 'dedupe-merge' || action === 'dedupe-keep-existing' || action === 'dedupe-create-new' || action === 'dedupe-skip') {
     const candidateId = element.getAttribute('data-dedupe-candidate-id') || state.selectedDedupeCandidateId;
     const decision = ({
@@ -995,7 +1075,7 @@ async function handleAction(action, element) {
     })[action];
     await dispatchCommand(buildDedupeResolveCommand(candidateId, decision));
     state.selectedDedupeCandidateId = candidateId;
-    await refreshData();
+    refreshView();
   } else if (action === 'open-linked-app') {
     openLinkedApp(element.getAttribute('data-link-module'), element.getAttribute('data-link-href'));
   } else if (action === 'cancel-form') {
@@ -1009,15 +1089,14 @@ async function handleAction(action, element) {
       search: state.search,
       sort: state.accountSort,
     }));
-    await refreshData();
+    refreshView();
   }
 }
 
 function guardMutableAction(action) {
   if (!MUTATING_ACTIONS.has(action)) return true;
   if (canMutateCustomers()) return true;
-  state.diagnostics.commandState = state.t('permissionDenied', labels.de.permissionDenied);
-  renderRight();
+  reportStatus('warn', 'customers.permission.denied', state.t('permissionDenied', labels.de.permissionDenied));
   return false;
 }
 
@@ -1099,7 +1178,7 @@ function moveDetailTab(delta) {
   state.detailTab = next;
   renderRight();
   requestAnimationFrame(() => {
-    state.ctx?.host
+    state.root
       ?.querySelector(`[data-customers-detail-tab="${cssEscape(next)}"]`)
       ?.focus?.();
   });
@@ -1113,15 +1192,21 @@ function nextDetailTab(current, delta) {
 }
 
 function canMutateCustomers() {
-  return canMutateCustomersContext(state.ctx);
+  return canMutateCustomersContext(actorContext());
 }
 
-function canMutateCustomersContext(ctx = {}) {
-  if (ctx?.readonly === true || ctx?.permissions?.readonly === true) return false;
-  if (typeof ctx?.canModifyModule === 'function' && ctx.canModifyModule()) return true;
-  const user = ctx?.session?.user || {};
-  if (user.is_admin === true || user.is_owner === true) return true;
-  const role = String(user.role || '').trim().toLowerCase().replace(/^business_os_/, '');
+// v4: Rolle und Rechte nur als Spiegel aus api.actor (R9); die Entscheidung trifft der Core.
+// Das Recht `apps.source.edit` ersetzt das frühere Modul-Änderungsrecht der v3-Shell.
+function actorContext() {
+  return {
+    role: state.api?.actor?.role || '',
+    permissions: state.permissions,
+  };
+}
+
+function canMutateCustomersContext(actor = {}) {
+  if (Array.isArray(actor?.permissions) && actor.permissions.includes('apps.source.edit')) return true;
+  const role = String(actor?.role || '').trim().toLowerCase().replace(/^business_os_/, '');
   if (!role) return true;
   return ['admin', 'chef', 'owner', 'founder', 'sales', 'sales_admin', 'account_manager'].includes(role);
 }
@@ -1155,13 +1240,12 @@ function selectableAttrs(type, id, selected, label) {
 
 function openForm(mode, recordId = '') {
   if (!canMutateCustomers()) {
-    state.diagnostics.commandState = state.t('permissionDenied', labels.de.permissionDenied);
-    renderRight();
+    reportStatus('warn', 'customers.permission.denied', state.t('permissionDenied', labels.de.permissionDenied));
     return;
   }
   state.formMode = mode;
   state.formRecordId = recordId;
-  state.diagnostics.commandState = '';
+  clearStatus('customers.form.invalid');
   renderRight();
 }
 
@@ -1203,7 +1287,7 @@ function onAccountGrammarChange(event) {
 }
 
 function customersLeftPane() {
-  return state.ctx?.host?.querySelector('.customers-left') || null;
+  return state.root?.querySelector('.customers-left') || null;
 }
 
 // One control, two states. The icon always shows the view the click LEADS TO,
@@ -1261,218 +1345,42 @@ function syncGrammarControlsFromState() {
   pane.__ctoxPaneGrammar?.refreshDot?.();
 }
 
-function wireRealtime() {
-  const subscriptions = [...CUSTOMERS_COLLECTIONS, ...OUTBOUND_HANDOFF_COLLECTIONS, ...OPTIONAL_LINK_COLLECTIONS]
-    .map((name) => resolveCollection(name)?.$?.subscribe?.(() => scheduleRefresh()))
-    .filter(Boolean);
-  return () => subscriptions.forEach((sub) => {
-    try { sub.unsubscribe?.(); } catch {}
-  });
-}
-
-function scheduleRefresh() {
-  if (state.renderTimer) return;
-  state.renderTimer = window.setTimeout(() => {
-    state.renderTimer = 0;
-    refreshData().catch(reportRefreshError);
-  }, 80);
-}
-
-async function refreshData(options = {}) {
-  if (options.renderLoading) {
-    state.diagnostics.loading = true;
-    render();
-  }
-  try {
-    const entries = [];
-    for (const name of CUSTOMERS_COLLECTIONS) {
-      entries.push([name, await readCollection(name)]);
-    }
-    const optionalDeniedCollections = [];
-    for (const name of OUTBOUND_HANDOFF_COLLECTIONS.concat(OPTIONAL_LINK_COLLECTIONS)) {
-      try {
-        entries.push([name, await readCollection(name)]);
-      } catch (error) {
-        if (!isBusinessOsPermissionDenied(error)) throw error;
-        optionalDeniedCollections.push(name);
-        entries.push([name, []]);
-      }
-    }
-    state.collections = { ...emptyCollections(), ...Object.fromEntries(entries) };
-    state.diagnostics.error = '';
-    state.diagnostics.optionalDeniedCollections = optionalDeniedCollections;
-    state.diagnostics.lastLoadedAt = Date.now();
-    syncSelection();
-  } catch (error) {
-    state.diagnostics.error = error?.message || String(error);
-  } finally {
-    state.diagnostics.loading = false;
-    render();
-  }
-}
-
-function reportRefreshError(error) {
-  state.diagnostics.error = error?.message || String(error);
-  state.diagnostics.loading = false;
-  render();
-}
-
-function isBusinessOsPermissionDenied(error) {
-  return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
-    || error?.name === 'BusinessOsPermissionError';
-}
-
-async function readCollection(name) {
-  const collection = resolveCollection(name);
-  const docs = collection?.find ? await collection.find().exec() : [];
-  return docs
-    .map((doc) => doc?.toJSON?.() || doc)
-    .filter((doc) => doc && doc._deleted !== true && doc.is_deleted !== true)
-    .sort((a, b) => Number(b.updated_at_ms || 0) - Number(a.updated_at_ms || 0));
-}
-
-function resolveCollection(name) {
-  return state.ctx?.db?.collection?.(name) || null;
-}
-
-// Sync readiness is a render hint, never a mount blocker: when the shell
-// exposes no readiness API (older shells, tests) collections count as ready
-// and the previous empty-state behaviour is preserved.
-function collectionSyncReadiness(name) {
-  const sync = state.ctx?.sync;
-  if (typeof sync?.collectionReadiness !== 'function') return null;
-  try {
-    return sync.collectionReadiness(name) || null;
-  } catch {
-    return null;
-  }
-}
-
-// Pure gate: only an empty unfiltered source (no rows at all) on a collection
-// whose initial replication has not finished (ready === false) may show the
-// syncing shell. Rows always win; filter/selection empties keep their copy.
-function dataEmptyShowsSyncing(sourceEmpty, readiness) {
-  return Boolean(sourceEmpty) && readiness?.ready === false;
-}
-
-function renderSyncingState() {
-  return `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(state.t('syncingData', labels.de.syncingData))}</div>`;
-}
-
-// Data-driven empty branch: rendered only when the visible list is empty. If
-// the backing collection itself holds no rows and is still syncing, show the
-// kit syncing shell; otherwise the existing empty copy. `gate: false` skips
-// the readiness check (e.g. permission-denied optional collections, which can
-// never become ready for this user).
-function renderDataEmptyState(collectionName, titleKey, bodyKey, { gate = true } = {}) {
-  const sourceEmpty = (state.collections[collectionName] || []).length === 0;
-  if (gate && dataEmptyShowsSyncing(sourceEmpty, collectionSyncReadiness(collectionName))) {
-    return renderSyncingState();
-  }
-  return `
-    <div class="ctox-empty">
-      <strong>${escapeHtml(state.t(titleKey, labels.de[titleKey]))}</strong>
-      <span>${escapeHtml(state.t(bodyKey, labels.de[bodyKey]))}</span>
-    </div>
-  `;
-}
-
-function canWriteCustomerCollection(name) {
-  const permissionCheck = state.ctx?.permissions?.canWriteCollection;
-  return typeof permissionCheck === 'function' ? permissionCheck(name) : true;
-}
-
-function requireCustomerImportCollections() {
-  const names = [
-    'customer_accounts',
-    'customer_dedupe_candidates',
-    'customer_import_batches',
-  ];
-  const denied = names.filter((name) => !canWriteCustomerCollection(name));
-  if (denied.length) {
-    const error = new Error(`Keine Schreibberechtigung fuer Kundendaten: ${denied.join(', ')}`);
-    error.name = 'BusinessOsPermissionError';
-    error.code = 'CTOX_BUSINESS_OS_PERMISSION_DENIED';
-    throw error;
-  }
-  return Object.fromEntries(names.map((name) => [name, resolveCollection(name)]));
-}
-
 function syncSelection() {
   const accounts = visibleAccountsForState();
   if (state.selectedAccountId && accounts.some((account) => account.id === state.selectedAccountId)) {
+    state.restorePending = false;
     return;
   }
+  // Remount: die wiederhergestellte Auswahl bleibt stehen, bis Kundendaten da sind (erste Emission kann leer sein).
+  if (state.restorePending && !(state.collections.customer_accounts || []).length) return;
+  state.restorePending = false;
   state.selectedAccountId = accounts[0]?.id || '';
   state.selectedContactId = '';
 }
 
 function render() {
-  const root = state.ctx?.host?.querySelector('[data-customers-root]');
+  const root = state.root?.querySelector('[data-customers-root]');
   if (!root) return;
-  syncPresence();
+  syncPermissionZone();
   syncViewToggle();
   renderAccountList();
   renderMain();
   applyInspectorVisibility(root);
 }
 
-// Publish this user's current focus as a presence entry. Derived from the
-// selection/form state on every render — the presence registry dedups
-// unchanged sets, so this is idempotent and cheap. One entry, the most
-// specific selected record.
-function syncPresence() {
-  const presence = state.ctx?.presence;
-  if (!presence?.set) return;
-  const focus = presenceFocus();
-  presence.set(focus ? [focus] : []);
+// Lese-Hinweis nur in der Zustandszone (R11), nicht als Kasten im Inhalt.
+function syncPermissionZone() {
+  if (canMutateCustomers()) {
+    clearStatus('customers.permission.readonly');
+    return;
+  }
+  if (state.zone.has('customers.permission.readonly')) return;
+  reportStatus('info', 'customers.permission.readonly', `${state.t('permissionReadOnly', labels.de.permissionReadOnly)}: ${state.t('permissionReadOnlyBody', labels.de.permissionReadOnlyBody)}`);
 }
 
-function presenceFocus() {
-  if (state.selectedContactId) {
-    return {
-      collection: 'customer_contacts',
-      recordId: state.selectedContactId,
-      mode: state.formMode === 'contact-edit' && state.formRecordId === state.selectedContactId
-        ? 'editing' : 'viewing',
-    };
-  }
-  if (state.selectedOpportunityId) {
-    return {
-      collection: 'customer_opportunities',
-      recordId: state.selectedOpportunityId,
-      mode: state.formMode === 'opportunity-edit' && state.formRecordId === state.selectedOpportunityId
-        ? 'editing' : 'viewing',
-    };
-  }
-  if (state.selectedAccountId) {
-    return {
-      collection: 'customer_accounts',
-      recordId: state.selectedAccountId,
-      mode: state.formMode === 'account-edit' && state.formRecordId === state.selectedAccountId
-        ? 'editing' : 'viewing',
-    };
-  }
-  return null;
-}
-
-// Remote presence hint for one record: other users (not this actor) who are
-// viewing/editing it right now. Editing outranks viewing.
-function presenceChip(collection, recordId) {
-  if (!recordId || !Array.isArray(state.presenceRemote) || !state.presenceRemote.length) return '';
-  const ownActorId = state.ctx?.actor?.id || '';
-  const matches = state.presenceRemote.filter((entry) => entry
-    && entry.collection === collection
-    && entry.recordId === recordId
-    && entry.actorId
-    && entry.actorId !== ownActorId);
-  if (!matches.length) return '';
-  const editing = matches.filter((entry) => entry.mode === 'editing');
-  const shown = editing.length ? editing : matches;
-  const key = editing.length ? 'presenceEditing' : 'presenceViewing';
-  const names = [...new Set(shown.map((entry) => entry.actorName || entry.actorId))].join(', ');
-  const label = state.t(key, labels.de[key], names);
-  return `<span class="ctox-badge ${editing.length ? 'is-danger' : 'is-info'}" title="${escapeAttribute(label)}">${escapeHtml(label)}</span>`;
+// Presence hat in App-API 4.0 keine Schnittstelle (V4-PORT.md OFFEN): keine Hinweise.
+function presenceChip() {
+  return '';
 }
 
 function accountLifecycleBand(account) {
@@ -1537,8 +1445,8 @@ function accountShardMarkup(account, view = 'cards') {
     account.domain,
   ].filter(Boolean).join(' · ');
   const secondary = [
-    `${related.contacts.length} ${state.t('contacts', labels.de.contacts)}`,
-    `${related.opportunities.length} ${state.t('opportunities', labels.de.opportunities)}`,
+    countLabel(related.contacts.length, 'contactOne', 'contacts'),
+    countLabel(related.opportunities.length, 'opportunityOne', 'opportunities'),
     formatDate(account.last_activity_at_ms, state.lang),
   ].filter(Boolean).join(' · ');
   return `
@@ -1575,7 +1483,7 @@ function writeAccountGrammarFooter(text) {
 }
 
 function syncSavedViewOptions() {
-  const select = state.ctx?.host?.querySelector('[data-customers-saved-view]');
+  const select = state.root?.querySelector('[data-customers-saved-view]');
   if (!select) return;
   const selected = select.value;
   const views = (state.collections.customer_views || []).filter((view) => view.object_type === 'account');
@@ -1587,7 +1495,7 @@ function syncSavedViewOptions() {
 }
 
 function markSelectedAccountRows(accountId = state.selectedAccountId) {
-  const list = state.ctx?.host?.querySelector('[data-customers-account-list]');
+  const list = state.root?.querySelector('[data-customers-account-list]');
   for (const row of list?.querySelectorAll('[data-customers-account-id]') || []) {
     const selected = row.dataset.customersAccountId === accountId;
     row.classList.toggle('is-selected', selected);
@@ -1603,7 +1511,7 @@ function markSelectedRowsInPlace(type, id) {
     dedupe: 'data-customers-dedupe-candidate-id',
   }[type];
   if (!attribute) return;
-  const main = state.ctx?.host?.querySelector('[data-customers-main]');
+  const main = state.root?.querySelector('[data-customers-main]');
   for (const row of main?.querySelectorAll(`[${attribute}]`) || []) {
     const selected = row.getAttribute(attribute) === id;
     row.classList.toggle('is-selected', selected);
@@ -1623,13 +1531,8 @@ function renderAccountList() {
     sort: state.accountSort,
   });
   writeAccountGrammarCounts(counts);
-  const bandLabel = {
-    active: state.t('activeCustomers', labels.de.activeCustomers),
-    renewal: state.t('renewal', labels.de.renewal),
-    risk: state.t('atRisk', labels.de.atRisk),
-    all: state.t('allAccounts', labels.de.allAccounts),
-  }[state.accountBand] || state.t('allAccounts', labels.de.allAccounts);
-  writeAccountGrammarFooter(`${accounts.length} ${state.t('entries', 'Einträge')} · ${bandLabel}`);
+  // Textdiät R2: der Fuß wiederholte nur den Reiterzähler („6 Einträge · Alle Kunden“).
+  writeAccountGrammarFooter('');
   syncSavedViewOptions();
   const view = state.accountView === 'list' ? 'list' : 'cards';
   list.classList.toggle('is-list-view', view === 'list');
@@ -1639,18 +1542,6 @@ function renderAccountList() {
     // Explicit arrow: Array#map would pass the index as the `view` argument.
     list.innerHTML = accounts.map((account) => accountShardMarkup(account, view)).join('');
   }
-  const empty = pane.querySelector('[data-customers-account-empty]');
-  const syncingNode = pane.querySelector('[data-customers-account-syncing]');
-  // Data-driven empty only: the account list is filtered, so the syncing
-  // shell shows solely when the customer_accounts source itself is empty.
-  const sourceEmpty = (state.collections.customer_accounts || []).length === 0;
-  const syncing = accounts.length === 0
-    && dataEmptyShowsSyncing(sourceEmpty, collectionSyncReadiness('customer_accounts'));
-  if (syncingNode) {
-    syncingNode.hidden = !syncing;
-    if (syncing) syncingNode.textContent = state.t('syncingData', labels.de.syncingData);
-  }
-  if (empty) empty.hidden = syncing || accounts.length > 0;
   markSelectedAccountRows();
 }
 
@@ -1685,10 +1576,15 @@ function renderMainHeaderActions(account) {
 }
 
 function renderMain() {
-  const target = state.ctx?.host?.querySelector('[data-customers-main]');
+  const target = state.root?.querySelector('[data-customers-main]');
   if (!target) return;
   target.classList.toggle('is-form', Boolean(state.formMode));
-  if (state.formMode) {    target.innerHTML = renderForm();
+  if (state.formMode) {
+    // Live-Änderungen rendern das Formular neu: offene Eingaben bleiben erhalten (auch nach Remount).
+    const draft = captureFormDraft() || state.formDraft;
+    state.formDraft = null;
+    target.innerHTML = renderForm();
+    applyFormDraft(draft);
     return;
   }
   const account = selectedAccount();
@@ -1700,7 +1596,6 @@ function renderMain() {
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">${escapeHtml(state.t('workbench', labels.de.workbench))}</span>
           <h2 class="ctox-pane-title">${escapeHtml(title)}</h2>
           ${subtitle ? `<p class="customers-detail-subtitle">${escapeHtml(subtitle)}</p>` : ''}
         </div>
@@ -1722,24 +1617,11 @@ function renderMain() {
       </nav>
     </header>
     <div class="ctox-pane-scroll customers-workbench-scroll">
-      ${renderPermissionNotice()}
-      ${visible ? `<div data-customers-record-inspector>${renderActiveRecordInspectorMarkup()}</div>${renderWorkbenchTabContent()}` : `
-        <div class="ctox-empty">
-          <strong>${escapeHtml(state.t('inspectorEmpty', labels.de.inspectorEmpty))}</strong>
-          <span>${escapeHtml(state.t('inspectorEmptyBody', labels.de.inspectorEmptyBody))}</span>
-        </div>
-      `}
+      ${visible ? `<div data-customers-record-inspector>${renderActiveRecordInspectorMarkup()}</div>${renderWorkbenchTabContent()}` : ''}
     </div>
-    <footer class="ctox-pane-footer customers-workbench-footer">${escapeHtml(workbenchFooterText())}</footer>
   `;
 }
 
-function workbenchFooterText() {
-  if (state.detailTab === 'handoff') return `${visibleOutboundHandoffRowsForState().length} ${state.t('entries', 'Einträge')} · ${state.t('handoff', labels.de.handoff)}`;
-  if (state.detailTab === 'dedupe') return `${visibleDedupeCandidatesForState().length} ${state.t('entries', 'Einträge')} · ${state.t('dedupe', labels.de.dedupe)}`;
-  const account = selectedAccount();
-  return account ? [account.name, labelFor(STAGE_LABELS, account.customer_stage), labelFor(HEALTH_LABELS, account.health_status)].filter(Boolean).join(' · ') : '';
-}
 
 function renderWorkbenchTabContent() {
   const account = selectedAccount();
@@ -1824,10 +1706,10 @@ function renderWorkbenchDedupe() {
 }
 
 function renderActiveRecordInspector() {
-  const node = state.ctx?.host?.querySelector('[data-customers-record-inspector]');
+  const node = state.root?.querySelector('[data-customers-record-inspector]');
   if (node) node.innerHTML = renderActiveRecordInspectorMarkup();
   const account = selectedAccount();
-  const title = state.ctx?.host?.querySelector('[data-customers-main] .ctox-pane-title');
+  const title = state.root?.querySelector('[data-customers-main] .ctox-pane-title');
   if (title) title.textContent = account?.name || state.t('workbench', labels.de.workbench);
 }
 
@@ -1877,7 +1759,7 @@ function renderRight() {
 }
 
 function renderLegacyLeft() {
-  const target = state.ctx.host.querySelector('[data-customers-left]');
+  const target = state.root?.querySelector('[data-customers-left]');
   if (!target) return;
   const scrollTop = target.querySelector('.customers-left-scroll')?.scrollTop || 0;
   const summary = summarizeCustomersData(state.collections);
@@ -1888,14 +1770,12 @@ function renderLegacyLeft() {
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">CRM</span>
           <h2 class="ctox-pane-title">${escapeHtml(state.t('title', labels.de.title))}</h2>
         </div>
         <div class="ctox-pane-actions"></div>
       </div>
     </header>
     <div class="ctox-pane-scroll customers-left-scroll">
-      ${renderPermissionNotice()}
       <section class="customers-nav-section">
         <h3 class="ctox-field-label customers-section-heading">${escapeHtml(state.t('scope', labels.de.scope))}</h3>
         ${scopeButton('all', state.t('allAccounts', labels.de.allAccounts), summary.accounts)}
@@ -1977,7 +1857,7 @@ function dedupeStatusButton(status, label, count) {
 }
 
 function renderLegacyCenter() {
-  const target = state.ctx.host.querySelector('[data-customers-center]');
+  const target = state.root?.querySelector('[data-customers-center]');
   if (!target) return;
   const accounts = visibleAccountsForState();
   const contacts = visibleContactsForState();
@@ -2032,9 +1912,6 @@ function renderLegacyCenter() {
         ? `<button class="ctox-button ctox-button--sm" type="button" data-customers-action="clear-filters">${escapeHtml(state.t('clearFilters', labels.de.clearFilters))}</button>`
         : ''}
       <span class="ctox-badge">${escapeHtml(state.t('visibleCount', labels.de.visibleCount, visibleCenterCount({ accounts, contacts, opportunities, handoffRows, dedupeRows })))}</span>
-      ${state.diagnostics.loading ? `<span class="ctox-badge">${escapeHtml(state.t('loadingStatus', labels.de.loadingStatus))}</span>` : ''}
-      ${state.diagnostics.error ? `<span class="ctox-badge is-danger">${escapeHtml(state.diagnostics.error)}</span>` : ''}
-      ${state.diagnostics.optionalDeniedCollections?.length ? `<span class="ctox-badge is-warning">${escapeHtml(state.t('linkedDataLimited', labels.de.linkedDataLimited))}</span>` : ''}
     </div>
     <div class="ctox-pane-scroll customers-center-scroll">
       ${state.centerView === 'contacts'
@@ -2100,7 +1977,7 @@ function renderCenterSearchInput() {
 
 function renderAccountTable(accounts) {
   if (!accounts.length) {
-    return renderDataEmptyState('customer_accounts', 'noCustomers', 'noCustomersBody');
+    return renderDataEmptyState();
   }
   return `
     <table class="ctox-table customers-table" aria-label="${escapeAttribute(state.t('accounts', labels.de.accounts))}">
@@ -2121,7 +1998,7 @@ function renderAccountTable(accounts) {
 
 function renderContactTable(contacts) {
   if (!contacts.length) {
-    return renderDataEmptyState('customer_contacts', 'noContacts', 'noContactsBody');
+    return renderDataEmptyState();
   }
   return `
     <table class="ctox-table customers-table customers-contact-table" aria-label="${escapeAttribute(state.t('contacts', labels.de.contacts))}">
@@ -2142,7 +2019,7 @@ function renderContactTable(contacts) {
 
 function renderOpportunityWorkbench(opportunities) {
   if (!opportunities.length) {
-    return renderDataEmptyState('customer_opportunities', 'noOpportunities', 'noOpportunitiesBody');
+    return renderDataEmptyState();
   }
   if (state.opportunityMode === 'table') return renderOpportunityTable(opportunities);
   return renderOpportunityBoard(opportunities);
@@ -2152,8 +2029,7 @@ function renderOutboundHandoffTable(rows) {
   if (!rows.length) {
     // Outbound collections are optional: a permission-denied read can never
     // become ready, so the readiness gate stays off for that case.
-    const denied = (state.diagnostics.optionalDeniedCollections || []).includes('outbound_companies');
-    return renderDataEmptyState('outbound_companies', 'noOutbound', 'noOutboundBody', { gate: !denied });
+    return renderDataEmptyState();
   }
   return `
     <table class="ctox-table customers-table customers-handoff-table" aria-label="${escapeAttribute(state.t('handoff', labels.de.handoff))}">
@@ -2174,7 +2050,7 @@ function renderOutboundHandoffTable(rows) {
 
 function renderDedupeTable(rows) {
   if (!rows.length) {
-    return renderDataEmptyState('customer_dedupe_candidates', 'noDedupe', 'noDedupeBody');
+    return renderDataEmptyState();
   }
   return `
     <table class="ctox-table customers-table customers-dedupe-table" aria-label="${escapeAttribute(state.t('dedupe', labels.de.dedupe))}">
@@ -2408,7 +2284,7 @@ function contactTableRow(contact) {
 }
 
 function renderLegacyRight() {
-  const target = state.ctx.host.querySelector('[data-customers-right]');
+  const target = state.root?.querySelector('[data-customers-right]');
   if (!target) return;
   if (state.formMode) {
     target.innerHTML = renderForm();
@@ -2435,7 +2311,7 @@ function renderLegacyRight() {
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">${escapeHtml(context?.typeLabel || 'Inspector')}</span>
+          ${context?.typeLabel ? `<span class="ctox-pane-kicker">${escapeHtml(context.typeLabel)}</span>` : ''}
           <h2 class="ctox-pane-title">${escapeHtml(title)}</h2>
           ${subtitle ? `<p class="customers-detail-subtitle">${escapeHtml(subtitle)}</p>` : ''}
         </div>
@@ -2444,7 +2320,6 @@ function renderLegacyRight() {
       ${chips ? `<div class="customers-chip-row customers-pane-chips">${chips}</div>` : ''}
     </header>
     <div class="ctox-pane-scroll customers-right-scroll">
-      ${renderPermissionNotice()}
       <section class="customers-detail-tabs">
         <div class="ctox-pane-tabs" role="tablist" aria-label="${escapeAttribute(state.t('recordDetails', labels.de.recordDetails))}">
         ${detailTabButton('overview', state.t('overview', labels.de.overview))}
@@ -2483,7 +2358,6 @@ function renderOutboundInspector() {
       </div>
     </header>
     <div class="ctox-pane-scroll customers-right-scroll">
-      ${renderPermissionNotice()}
       <section class="customers-detail-block">
         <dl class="ctox-fields">
           ${metric('Fit', Number(row.company.fit_score || 0) ? `${Number(row.company.fit_score)}%` : '—')}
@@ -2524,7 +2398,6 @@ function renderDedupeInspector() {
       </div>
     </header>
     <div class="ctox-pane-scroll customers-right-scroll">
-      ${renderPermissionNotice()}
       <section class="customers-detail-block">
         <dl class="ctox-fields">
           ${metric(state.t('source', labels.de.source), outboundCompany.name || candidate.source_record_id || '—')}
@@ -2554,15 +2427,10 @@ function renderInspectorEmpty() {
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker">Inspector</span>
           <h2 class="ctox-pane-title">${escapeHtml(state.t('title', labels.de.title))}</h2>
         </div>
       </div>
     </header>
-    <div class="ctox-empty">
-      <strong>${escapeHtml(state.t('inspectorEmpty', labels.de.inspectorEmpty))}</strong>
-      <span>${escapeHtml(state.t('inspectorEmptyBody', labels.de.inspectorEmptyBody))}</span>
-    </div>
   `;
 }
 
@@ -2765,12 +2633,7 @@ function renderAppsTab(context) {
     <section class="customers-detail-block">
       <h3 class="ctox-field-label customers-section-heading">${escapeHtml(state.t('linkedApps', labels.de.linkedApps))}</h3>
       <div class="customers-link-list">
-        ${links.map(linkedAppRow).join('') || `
-          <div class="ctox-empty">
-            <strong>${escapeHtml(state.t('noAppLinks', labels.de.noAppLinks))}</strong>
-            <span>${escapeHtml(state.t('noAppLinksBody', labels.de.noAppLinksBody))}</span>
-          </div>
-        `}
+        ${links.map(linkedAppRow).join('')}
       </div>
     </section>
   `;
@@ -3002,7 +2865,6 @@ function formActions(primaryLabel) {
       <button class="ctox-button" type="button" data-customers-action="cancel-form">${escapeHtml(state.t('cancel', labels.de.cancel))}</button>
       <button class="ctox-button is-primary" type="submit"${mutableDisabledAttr()}>${escapeHtml(primaryLabel)}</button>
     </div>
-    ${state.diagnostics.commandState ? `<div class="customers-command-state">${escapeHtml(state.diagnostics.commandState)}</div>` : ''}
   `;
 }
 
@@ -3054,152 +2916,72 @@ async function submitForm(form) {
     if (!validation.valid) return showFormError(validation.error);
     command = buildNoteUpdateCommand(state.formRecordId, draft);
   }
-  await dispatchCommand(command);
+  clearStatus('customers.form.invalid');
+  dispatchCommand(command);
   state.formMode = '';
   state.formRecordId = '';
-  await refreshData();
+  refreshView();
 }
 
 function showFormError(error) {
-  state.diagnostics.commandState = error;
-  renderRight();
+  reportStatus('warn', 'customers.form.invalid', error);
 }
 
-async function dispatchCommand(command) {
+// R5: api.command ohne Warten; Status nur in die Zustandszone (failed → report, done → clear).
+// Die Builder behalten ihre v3-Form; `module`/`command_type`/`client_context` gehören nicht ins Befehlsdokument.
+// record_id geht als Befehlsoption (§16.19 Nr. 8, Stub `api.command(type, payload, {record_id})`), die Ziel-IDs
+// stehen zusätzlich im payload (V4-HANDLERS.md U1).
+function dispatchCommand(command) {
   if (!canMutateCustomers()) {
     throw new Error(state.t('permissionDenied', labels.de.permissionDenied));
   }
-  if (!state.ctx?.commandBus?.dispatch) {
-    throw new Error(state.t('commandUnavailable', labels.de.commandUnavailable));
+  const api = state.api;
+  const type = command?.command_type;
+  if (!api || !type) return null;
+  const code = `customers.command.${type}`;
+  const failedText = (reason) => state.t('commandFailed', labels.de.commandFailed, reason || type);
+  let handle;
+  try {
+    handle = command.record_id
+      ? api.command(type, { ...command.payload }, { record_id: command.record_id })
+      : api.command(type, { ...command.payload });
+  } catch (error) {
+    reportStatus('error', code, failedText(error?.message || String(error)));
+    return null;
   }
-  await state.ctx.sync?.startCollection?.('business_commands');
-  const result = await state.ctx.commandBus.dispatch(command);
-  state.diagnostics.commandState = state.t(
-    'commandPending',
-    labels.de.commandPending,
-    result?.command_id || command.id || command.type
-  );
-  return result;
-}
-
-async function openCustomerImporter() {
-  await openUniversalImporter(state.ctx, {
-    side: 'left',
-    moduleId: 'customers',
-    entityType: 'customer_account',
-    commandType: 'customers.import.file',
-    title: state.t('importCustomers', labels.de.importCustomers),
-    kicker: 'Kunden Import',
-    defaultTitle: `Kunden Import ${new Date().toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE')}`,
-    helperText: 'CSV, Excel oder Text mit Firmenname, Domain, Ort und Branche importieren. Dubletten werden als Review markiert.',
-    submitLabel: state.t('importCustomers', labels.de.importCustomers),
-    submittingLabel: 'Import wird vorbereitet...',
-    doneLabel: 'Import abgeschlossen.',
-    closeOnSubmit: true,
-    dispatch: false,
-    definition: {
-      target_collection: 'customer_accounts',
-      duplicate_policy: 'domain_or_name_review',
-      accepted_columns: ['name', 'company', 'firma', 'domain', 'website', 'industry', 'branche', 'city', 'stadt', 'country', 'land'],
-    },
-    onImport: async ({ payload }) => {
-      const result = await importCustomerRowsFromPayload(payload);
-      await refreshData();
-      return result;
-    },
-  });
-}
-
-async function importCustomerRowsFromPayload(payload = {}) {
-  const importCollections = requireCustomerImportCollections();
-  const textParts = [];
-  if (payload.source?.text) textParts.push(payload.source.text);
-  for (const file of payload.source?.files || []) {
-    const text = file.text || decodeBase64Utf8(file.base64);
-    if (text) textParts.push(text);
-  }
-  const rows = textParts.flatMap((text) => extractCompanyRowsFromText(text));
-  const now = Date.now();
-  const batchId = `customer_import_${now}_${crypto.randomUUID()}`;
-  const existingByDomain = new Map((state.collections.customer_accounts || [])
-    .filter((account) => account.domain)
-    .map((account) => [normalizeDomain(account.domain), account]));
-  let imported = 0;
-  let dedupe = 0;
-  let skipped = 0;
-  for (const row of rows) {
-    const domain = normalizeDomain(row.domain || row.website || '');
-    if (!row.name && !domain) {
-      skipped += 1;
-      continue;
+  const cleanup = state.cleanup;
+  let off = null;
+  let finished = false;
+  const stop = () => {
+    finished = true;
+    if (off) {
+      const index = cleanup.indexOf(off);
+      if (index >= 0) cleanup.splice(index, 1);
+      off();
+      off = null;
     }
-    const existing = domain ? existingByDomain.get(domain) : null;
-    const accountId = `customer_import_${slugId(domain || row.name)}_${row.row_index || imported}_${now}`;
-    if (existing) {
-      dedupe += 1;
-      await upsertLocalDoc(importCollections.customer_dedupe_candidates, `customer_dedupe_${batchId}_${existing.id}_${row.row_index || dedupe}`, {
-        id: `customer_dedupe_${batchId}_${existing.id}_${row.row_index || dedupe}`,
-        object_type: 'account',
-        match_key: domain || row.name,
-        match_type: domain ? 'domain' : 'name',
-        source_record_id: accountId,
-        existing_record_id: existing.id,
-        import_batch_id: batchId,
-        status: 'open',
-        confidence: domain ? 0.98 : 0.72,
-        payload: { imported_row: row, seed: false },
-        is_deleted: false,
-        created_at_ms: now,
-        updated_at_ms: now,
-      });
-      continue;
-    }
-    const account = {
-      id: accountId,
-      name: row.name || domain,
-      domain,
-      website_url: row.website || (domain ? `https://${domain}` : ''),
-      industry: row.raw?.industry || row.raw?.branche || '',
-      city: row.city || '',
-      country: row.country || '',
-      account_status: 'active',
-      customer_stage: 'prospect',
-      health_status: 'neutral',
-      currency: 'EUR',
-      annual_recurring_revenue_cents: 0,
-      search_text: [row.name, domain, row.city, row.country].filter(Boolean).join(' ').toLowerCase(),
-      source: 'customers_import',
-      payload: { import_batch_id: batchId, imported_row: row },
-      is_deleted: false,
-      created_at_ms: now,
-      updated_at_ms: now,
-      last_activity_at_ms: now,
-    };
-    await upsertLocalDoc(importCollections.customer_accounts, account.id, account);
-    if (domain) existingByDomain.set(domain, account);
-    imported += 1;
-  }
-  await upsertLocalDoc(importCollections.customer_import_batches, batchId, {
-    id: batchId,
-    source: payload.source_type || 'importer',
-    source_record_id: payload.record_id || '',
-    source_filename: payload.source?.files?.map((file) => file.name).filter(Boolean).join(', ') || '',
-    status: 'completed',
-    object_type: 'account',
-    imported_count: imported,
-    skipped_count: skipped,
-    failed_count: 0,
-    dedupe_count: dedupe,
-    payload,
-    is_deleted: false,
-    created_at_ms: now,
-    updated_at_ms: now,
-  });
-  return {
-    status: 'completed',
-    message: `${imported} Kunden importiert${dedupe ? `, ${dedupe} Dubletten im Review` : ''}.`,
-    dispatch: false,
   };
+  off = handle.status.subscribe((value) => {
+    if (state.api !== api) return;
+    if (value?.status === 'failed') {
+      reportStatus('error', code, failedText(value.error), handle.id);
+      stop();
+    } else if (value?.status === 'done') {
+      clearStatus(code);
+      stop();
+    }
+  });
+  if (finished) {
+    off?.();
+    off = null;
+  } else {
+    cleanup.push(off);
+  }
+  handle.local?.catch?.((error) => {
+    if (state.api !== api) return;
+    reportStatus('error', code, failedText(error?.message || String(error)), handle.id);
+  });
+  return handle;
 }
 
 function buildCustomerExport(accounts = [], exportedAtMs = Date.now()) {
@@ -3227,11 +3009,7 @@ function exportCustomerSnapshot() {
 
 async function importCustomersJsonFile(file) {
   if (!file) return { imported: 0 };
-  if (!canWriteCustomerCollection('customer_accounts')) {
-    throw new Error(state.t('permissionDenied', labels.de.permissionDenied));
-  }
-  const collection = resolveCollection('customer_accounts');
-  if (!collection?.findOne) throw new Error(state.t('commandUnavailable', labels.de.commandUnavailable));
+  if (!state.api) return { imported: 0 };
   let payload;
   try {
     payload = JSON.parse(await file.text());
@@ -3242,7 +3020,7 @@ async function importCustomersJsonFile(file) {
   if (!accounts.length) throw new Error(state.t('emptyImport', 'Die JSON-Datei enthält keine Kundenkonten.'));
   const now = Date.now();
   for (const account of accounts) {
-    await upsertLocalDoc(collection, account.id, {
+    await upsertLocalDoc('customer_accounts', account.id, {
       ...account,
       id: String(account.id),
       name: String(account.name),
@@ -3251,11 +3029,8 @@ async function importCustomersJsonFile(file) {
       created_at_ms: Number(account.created_at_ms || now),
     });
   }
-  await refreshData();
-  state.ctx?.notifications?.notify?.({
-    title: state.t('importCustomers', labels.de.importCustomers),
-    body: state.t('importComplete', '{0} Kundenkonten importiert.', accounts.length),
-  });
+  refreshView();
+  reportStatus('info', 'customers.import.json', `${state.t('importCustomers', labels.de.importCustomers)}: ${state.t('importComplete', '{0} Kundenkonten importiert.', accounts.length)}`);
   return { imported: accounts.length };
 }
 
@@ -3293,14 +3068,15 @@ function exportCurrentView() {
   downloadTextFile(`${fileBase}.csv`, rowsToCsv(rows), 'text/csv;charset=utf-8');
 }
 
+// Lokaler Write (R3): vorhandenes Dokument patchen (created_at_ms bleibt), sonst anlegen.
 async function upsertLocalDoc(collection, id, doc) {
-  if (!collection?.findOne) throw new Error('Kundendaten sind gerade nicht verfügbar.');
-  const existing = await collection.findOne(id).exec();
-  if (existing) {
-    await existing.incrementalPatch({ ...doc, created_at_ms: existing.created_at_ms || doc.created_at_ms });
-    return;
-  }
-  await collection.insert(doc);
+  const api = state.api;
+  if (!api) return;
+  const existing = api.get(collection, id).get();
+  const handle = existing
+    ? api.patch(collection, id, { ...doc, created_at_ms: existing.created_at_ms || doc.created_at_ms })
+    : api.put(collection, doc);
+  await handle.local;
 }
 
 function buildCreateAccountCommand(draft) {
@@ -3462,6 +3238,9 @@ function buildImportFromOutboundCommand(row) {
       outbound_company_id: company.id,
       pipeline_id: row?.pipeline?.id,
       source: 'business-os-customers-ui',
+      // v4 (V4-HANDLERS.md U1): Rust leitete Konto- und Batch-ID aus record_id = Firmen-ID ab.
+      account_id: company.id,
+      import_batch_id: company.id,
     }),
     client_context: { build: BUILD, surface: 'customers.import.from_outbound' },
   };
@@ -3477,15 +3256,14 @@ function buildDedupeResolveCommand(candidateId, decision) {
   };
 }
 
+// R13: App-Sprung über api.shell.navigate statt location.hash/Tab-Klick.
 function openLinkedApp(moduleId, href) {
-  const hash = href || buildCrossAppHref(moduleId, {});
-  const normalized = String(hash || '').startsWith('#') ? String(hash) : `#${String(hash || moduleId || '')}`;
-  const tab = document.querySelector(`[data-module="${cssEscape(moduleId)}"]`);
-  if (tab && !normalized.includes('?')) {
-    tab.click();
-    return;
-  }
-  location.hash = normalized.slice(1);
+  const hash = String(href || buildCrossAppHref(moduleId, {}) || '').replace(/^#/, '');
+  const [path, query = ''] = hash.split('?');
+  const target = moduleId || path;
+  if (!target || !state.api) return false;
+  const params = Object.fromEntries(new URLSearchParams(query).entries());
+  return state.api.shell.navigate(target, params);
 }
 
 function buildSaveViewCommand({ stage, health, search, sort }) {
@@ -4069,7 +3847,7 @@ function linkedAppSummary(moduleId, label, records, params, preview = '') {
     moduleId,
     label,
     count,
-    countLabel: `${count} ${count === 1 ? state.t('linkedRecords', labels.de.linkedRecords) : state.t('linkedRecords', labels.de.linkedRecords)}`,
+    countLabel: countLabel(count, 'linkedRecordOne', 'linkedRecords'),
     status: count ? state.t('available', labels.de.available) : '',
     preview,
     href: buildCrossAppHref(moduleId, params),
@@ -4276,83 +4054,9 @@ function countBy(items, field) {
   }, {});
 }
 
-function buildSyncRows(diagnostics) {
-  const collectionDiagnostics = diagnostics?.collections || {};
-  return CUSTOMERS_COLLECTIONS
-    .filter((name) => name.startsWith('customer_'))
-    .slice(0, 6)
-    .map((name) => {
-      const status = collectionDiagnostics[name]?.connectionStatus
-        || collectionDiagnostics[name]?.status
-        || (resolveCollection(name) ? 'local' : 'pending');
-      return {
-        label: name.replace(/^customer_/, '').replaceAll('_', ' '),
-        status,
-        tone: collectionDiagnostics[name]?.lastError ? 'error' : (status === 'connected' || status === 'local' ? 'ok' : 'warn'),
-      };
-    });
-}
-
-function renderPermissionNotice() {
-  if (canMutateCustomers()) return '';
-  return `
-    <section class="ctox-callout is-warning customers-permission-notice">
-      <strong>${escapeHtml(state.t('permissionReadOnly', labels.de.permissionReadOnly))}</strong>
-      <span>${escapeHtml(state.t('permissionReadOnlyBody', labels.de.permissionReadOnlyBody))}</span>
-    </section>
-  `;
-}
-
-function renderCommandAuditPanel(context) {
-  const commands = filterCustomerCommands(state.collections.business_commands || [], context);
-  const summary = summarizeCustomerCommands(commands);
-  return `
-    <section class="customers-detail-block">
-      <div class="customers-section-head">
-        <h3 class="ctox-field-label customers-section-heading">${escapeHtml(state.t('commandAudit', labels.de.commandAudit))}</h3>
-        <div class="customers-chip-row" aria-label="${escapeAttribute(state.t('commandAudit', labels.de.commandAudit))}">
-          <span class="ctox-badge is-warning">${summary.pending}</span>
-          <span class="ctox-badge is-success">${summary.completed}</span>
-          <span class="ctox-badge is-danger">${summary.failed}</span>
-        </div>
-      </div>
-      ${commands.length ? `
-        <div class="customers-command-list">
-          ${commands.slice(0, 5).map(commandAuditRow).join('')}
-        </div>
-      ` : `
-        <div class="ctox-empty">
-          <strong>${escapeHtml(state.t('commandAuditEmpty', labels.de.commandAuditEmpty))}</strong>
-          <span>${escapeHtml(state.t('commandAuditBody', labels.de.commandAuditBody))}</span>
-        </div>
-      `}
-    </section>
-  `;
-}
-
-function renderOperationalAuditPanel(context) {
-  if (!isCustomersDebugMode()) return '';
-  return renderCommandAuditPanel(context);
-}
-
-function isCustomersDebugMode() {
-  const user = state.ctx?.session?.user || {};
-  return Boolean(state.ctx?.debug === true && (user.is_admin === true || user.is_owner === true));
-}
-
-function commandAuditRow(command) {
-  const tone = commandStatusTone(command.status);
-  const statusLabel = commandStatusLabel(command.status);
-  const error = command?.error || command?.result?.error || command?.payload?.error || '';
-  return `
-    <article class="customers-command-row ${escapeAttribute(tone)}">
-      <div>
-        <strong>${escapeHtml(command.command_type || command.type || command.id || 'customers.command')}</strong>
-        <span>${escapeHtml([statusLabel, formatDate(command.updated_at_ms || command.created_at_ms, state.lang)].filter(Boolean).join(' · '))}</span>
-        ${error ? `<p>${escapeHtml(error)}</p>` : ''}
-      </div>
-    </article>
-  `;
+// Befehlsprotokoll (früher nur im Debug-Modus sichtbar) entfällt: Befehlsstatus steht in der Zustandszone.
+function renderOperationalAuditPanel() {
+  return '';
 }
 
 function summarizeCustomerCommands(commands = []) {
@@ -4404,13 +4108,6 @@ function commandStatusTone(status) {
   if (['failed', 'error', 'rejected'].includes(normalized)) return 'failed';
   if (['completed', 'complete', 'succeeded', 'success', 'applied', 'synced'].includes(normalized)) return 'completed';
   return 'pending';
-}
-
-function commandStatusLabel(status) {
-  const tone = commandStatusTone(status);
-  if (tone === 'failed') return state.t('commandFailedStatus', labels.de.commandFailedStatus);
-  if (tone === 'completed') return state.t('commandCompletedStatus', labels.de.commandCompletedStatus);
-  return state.t('commandPendingStatus', labels.de.commandPendingStatus);
 }
 
 function metric(label, value) {
@@ -4504,13 +4201,26 @@ function activityRow(activity) {
   `;
 }
 
-function emptyMiniRow(label) {
-  return `<div class="customers-mini-row"><span>${escapeHtml(label)}</span><span></span></div>`;
+// R11: leere Teil-Listen rendern nichts.
+function emptyMiniRow() {
+  return '';
+}
+
+function renderDataEmptyState() {
+  return '';
+}
+
+// Textdiät R2: „1 Kontakt“ statt „1 Kontakte“ – Singular-Schlüssel je Wort, Rückfall auf labels.<lang>.
+function countLabel(count, oneKey, manyKey) {
+  const n = Number(count) || 0;
+  const key = n === 1 ? oneKey : manyKey;
+  return `${n} ${state.t(key, labels.de[key])}`;
 }
 
 function labelFor(labelsByKey, key) {
-  if (!key) return labelsByKey.unknown || 'Unknown';
-  return labelsByKey[key] || key;
+  if (!key) return labelsByKey.unknown || '';
+  // Textdiät: unbekannte Rohwerte (z. B. „ready“, „needs_review“) nie in die Oberfläche.
+  return labelsByKey[key] || '';
 }
 
 function formatMoney(cents, currency = 'EUR') {
@@ -4622,7 +4332,7 @@ function downloadTextFile(filename, content, mimeType) {
   link.style.display = 'none';
   // Transiente Anker gehoeren in den App-Host, nie auf document.body - dort
   // liegen sie ausserhalb des Modulfensters auf dem Desktop.
-  (state.ctx?.host || document.documentElement).append(link);
+  (state.root || document.documentElement).append(link);
   link.click();
   link.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
@@ -4671,11 +4381,8 @@ function escapeAttribute(value) {
   return escapeHtml(value);
 }
 
-// Kit action icons: monochrome stroke glyphs delivered by the shell
-// (shared/icons.js actionIconPaths) via the module context.
+// Kit action icons: app-lokale Glyphen (App-API 4.0 hat keine Icon-API, OFFEN-D).
 function actionIcon(name) {
-  const fromShell = state.ctx?.getActionIcon?.(name);
-  if (fromShell) return fromShell;
   const paths = {
     add: 'M12 5v14M5 12h14',
     edit: 'M4 17.5V20h2.5L18.8 7.7l-2.5-2.5L4 17.5ZM14.8 6.2l3 3',
@@ -4727,7 +4434,6 @@ export const __customersTestHooks = {
   buildNoteCreateCommand,
   buildNoteUpdateCommand,
   buildSaveViewCommand,
-  buildSyncRows,
   buildCrossAppHref,
   buildLinkedAppRows,
   buildTaskCompleteCommand,
@@ -4738,7 +4444,6 @@ export const __customersTestHooks = {
   canMutateCustomersContext,
   commandMatchesContext,
   commandStatusTone,
-  dataEmptyShowsSyncing,
   recordLinkParams,
   filterAndSortAccounts,
   filterAndSortContacts,
@@ -4754,7 +4459,6 @@ export const __customersTestHooks = {
   groupOpportunitiesByStage,
   isClosedOpportunity,
   isActivationKey,
-  isBusinessOsPermissionDenied,
   moneyToCents,
   nextDetailTab,
   normalizeDomain,

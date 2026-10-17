@@ -24,7 +24,6 @@ use crate::mission::channels::{
     create_queue_task, update_queue_task, QueueTaskCreateRequest, QueueTaskUpdateRequest,
 };
 use crate::paths;
-use crate::persistence;
 
 /// View of a queued report-run task as the daemon would see it. Only the
 /// fields the worker pool needs to dispatch the run.
@@ -93,49 +92,50 @@ pub fn enqueue_run(root: &Path, run_id: &str, priority: i64) -> Result<String> {
 /// The daemon-side worker is the proper consumer; this helper exists so
 /// CLI / tests can introspect the queue.
 pub fn dequeue_oldest(root: &Path) -> Result<Option<QueuedReportTask>> {
-    let conn = open_consolidated_db(root)?;
-    let row = conn
-        .query_row(
-            "SELECT m.message_key, m.thread_key, m.metadata_json, m.external_created_at
+    crate::lcm::with_lcm_read(&paths::core_db(root), |conn: &rusqlite::Connection| {
+        let row = conn
+            .query_row(
+                "SELECT m.message_key, m.thread_key, m.metadata_json, m.external_created_at
              FROM communication_messages m
              WHERE m.channel = 'queue'
                AND m.thread_key LIKE 'report:%'
              ORDER BY m.external_created_at ASC
              LIMIT 1",
-            [],
-            |row| {
-                let message_key: String = row.get(0)?;
-                let thread_key: String = row.get(1)?;
-                let metadata_json: Option<String> = row.get(2)?;
-                let created_at: String = row.get(3)?;
-                Ok((message_key, thread_key, metadata_json, created_at))
-            },
-        )
-        .optional()
-        .context("failed to dequeue report run from queue")?;
-    let Some((message_key, thread_key, metadata_json, created_at)) = row else {
-        return Ok(None);
-    };
-    let run_id = thread_key
-        .strip_prefix("report:")
-        .unwrap_or(&thread_key)
-        .to_string();
-    let priority = metadata_json
-        .as_deref()
-        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-        .and_then(|v| {
-            v.get("priority")
-                .and_then(|p| p.as_str())
-                .map(|s| priority_rank(s))
-        })
-        .unwrap_or(2);
-    Ok(Some(QueuedReportTask {
-        message_key,
-        run_id,
-        thread_key,
-        priority,
-        created_at,
-    }))
+                [],
+                |row| {
+                    let message_key: String = row.get(0)?;
+                    let thread_key: String = row.get(1)?;
+                    let metadata_json: Option<String> = row.get(2)?;
+                    let created_at: String = row.get(3)?;
+                    Ok((message_key, thread_key, metadata_json, created_at))
+                },
+            )
+            .optional()
+            .context("failed to dequeue report run from queue")?;
+        let Some((message_key, thread_key, metadata_json, created_at)) = row else {
+            return Ok(None);
+        };
+        let run_id = thread_key
+            .strip_prefix("report:")
+            .unwrap_or(&thread_key)
+            .to_string();
+        let priority = metadata_json
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .and_then(|v| {
+                v.get("priority")
+                    .and_then(|p| p.as_str())
+                    .map(|s| priority_rank(s))
+            })
+            .unwrap_or(2);
+        Ok(Some(QueuedReportTask {
+            message_key,
+            run_id,
+            thread_key,
+            priority,
+            created_at,
+        }))
+    })
 }
 
 /// Mark a queued report-run task complete. Writes `route_status =
@@ -154,13 +154,4 @@ pub fn complete_task(root: &Path, message_key: &str, outcome: &str) -> Result<()
     )
     .with_context(|| format!("failed to complete queue task {message_key}"))?;
     Ok(())
-}
-
-fn open_consolidated_db(root: &Path) -> Result<rusqlite::Connection> {
-    let path = paths::core_db(root);
-    let conn = rusqlite::Connection::open(&path)
-        .with_context(|| format!("failed to open consolidated DB at {}", path.display()))?;
-    conn.busy_timeout(persistence::sqlite_busy_timeout_duration())
-        .context("failed to set SQLite busy_timeout")?;
-    Ok(conn)
 }

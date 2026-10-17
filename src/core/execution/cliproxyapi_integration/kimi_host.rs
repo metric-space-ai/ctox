@@ -128,42 +128,63 @@ pub(in crate::execution) fn open_config_db(root: &Path) -> anyhow::Result<Connec
     Ok(conn)
 }
 
-fn open_config_db_read_only(root: &Path) -> anyhow::Result<Option<Connection>> {
+fn with_provider_integration_write<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce(&Connection) -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    crate::lcm::with_lcm_write(
+        &crate::inference::runtime_env::runtime_config_path(root),
+        move |conn| {
+            conn.execute_batch(&format!(
+                "CREATE TABLE IF NOT EXISTS {INTEGRATION_CONFIG_TABLE} (\
+         config_id INTEGER PRIMARY KEY CHECK(config_id = 1), revision INTEGER NOT NULL, \
+         config_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)"
+            ))?;
+            operation(conn)
+        },
+    )
+}
+
+fn with_provider_integration_read<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce(&Connection) -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<Option<T>> {
     let path = crate::inference::runtime_env::runtime_config_path(root);
     if !path.exists() {
         return Ok(None);
     }
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    conn.busy_timeout(Duration::from_secs(5))?;
-    let exists = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
-            [INTEGRATION_CONFIG_TABLE],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-    Ok(exists.then_some(conn))
+    crate::lcm::with_lcm_read(&path, move |conn| {
+        let exists = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [INTEGRATION_CONFIG_TABLE],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !exists {
+            return Ok(None);
+        }
+        operation(conn).map(Some)
+    })
 }
 
 pub fn load_provider_integration_config(
     root: &Path,
 ) -> anyhow::Result<StoredProviderIntegrationConfig> {
-    let Some(conn) = open_config_db_read_only(root)? else {
-        return Ok(StoredProviderIntegrationConfig {
-            revision: 0,
-            config: ProviderIntegrationConfig::default(),
-        });
-    };
-    let row = conn
-        .query_row(
-            &format!(
+    let row = with_provider_integration_read(root, |conn| {
+        let row = conn
+            .query_row(
+                &format!(
                 "SELECT revision, config_json FROM {INTEGRATION_CONFIG_TABLE} WHERE config_id = 1"
             ),
-            [],
-            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
-        )
-        .optional()?;
+                [],
+                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+            )
+            .optional()?;
+        Ok(row)
+    })?
+    .flatten();
     let Some((revision, config_json)) = row else {
         return Ok(StoredProviderIntegrationConfig {
             revision: 0,
@@ -180,6 +201,68 @@ pub fn load_provider_integration_config(
     Ok(StoredProviderIntegrationConfig { revision, config })
 }
 
+fn save_provider_integration_config_row(
+    root: &Path,
+    expected_revision: u64,
+    serialized: String,
+    api_account_ids: Vec<String>,
+) -> anyhow::Result<u64> {
+    with_provider_integration_write(root, move |tx| {
+        let current = tx
+            .query_row(
+                &format!("SELECT revision FROM {INTEGRATION_CONFIG_TABLE} WHERE config_id = 1"),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("provider integration revision is invalid"))?
+            .unwrap_or(0);
+        if current != expected_revision {
+            return Err(anyhow::Error::new(ProviderIntegrationRevisionConflict));
+        }
+        // A committed removal retires this private identity. Late creation retries
+        // cannot resurrect it; a new add operation receives a new native identity.
+        let effects_exist: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='cliproxyapi_account_control_effects')",
+            [],
+            |r| r.get(0),
+        )?;
+        if effects_exist {
+            for id in &api_account_ids {
+                let retired: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM cliproxyapi_account_control_effects WHERE json_extract(effect_json,'$.api_key')=1 AND json_extract(effect_json,'$.local_id')=?1 AND json_extract(effect_json,'$.enabled') IS NULL)",
+                    [id],
+                    |r| r.get(0),
+                )?;
+                anyhow::ensure!(
+                    !retired,
+                    "API account was explicitly removed; use a new creation operation"
+                );
+            }
+        }
+        let revision = current
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("provider integration revision overflow"))?;
+        let updated_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let updated_at_ms = i64::try_from(updated_at_ms).unwrap_or(i64::MAX);
+        tx.execute(
+            &format!(
+                "INSERT INTO {INTEGRATION_CONFIG_TABLE} \
+             (config_id, revision, config_json, updated_at_ms) VALUES (1, ?1, ?2, ?3) \
+             ON CONFLICT(config_id) DO UPDATE SET revision=excluded.revision, \
+             config_json=excluded.config_json, updated_at_ms=excluded.updated_at_ms"
+            ),
+            params![revision, serialized, updated_at_ms],
+        )?;
+        Ok(revision)
+    })
+}
+
 pub(crate) fn save_provider_integration_config(
     root: &Path,
     expected_revision: u64,
@@ -189,52 +272,13 @@ pub(crate) fn save_provider_integration_config(
         .validate()
         .map_err(|_| anyhow::anyhow!("provider integration config is invalid"))?;
     let serialized = serde_json::to_string(config)?;
-    let mut conn = open_config_db(root)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let current = tx
-        .query_row(
-            &format!("SELECT revision FROM {INTEGRATION_CONFIG_TABLE} WHERE config_id = 1"),
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?
-        .map(u64::try_from)
-        .transpose()
-        .map_err(|_| anyhow::anyhow!("provider integration revision is invalid"))?
-        .unwrap_or(0);
-    if current != expected_revision {
-        return Err(anyhow::Error::new(ProviderIntegrationRevisionConflict));
-    }
-    // A committed removal retires this private identity. Late creation retries
-    // cannot resurrect it; a new add operation receives a new native identity.
-    let effects_exist: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='cliproxyapi_account_control_effects')",[],|r|r.get(0))?;
-    if effects_exist {
-        for account in &config.api_key_accounts {
-            let retired:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM cliproxyapi_account_control_effects WHERE json_extract(effect_json,'$.api_key')=1 AND json_extract(effect_json,'$.local_id')=?1 AND json_extract(effect_json,'$.enabled') IS NULL)",[&account.id],|r|r.get(0))?;
-            anyhow::ensure!(
-                !retired,
-                "API account was explicitly removed; use a new creation operation"
-            );
-        }
-    }
-    let revision = current
-        .checked_add(1)
-        .ok_or_else(|| anyhow::anyhow!("provider integration revision overflow"))?;
-    let updated_at_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let updated_at_ms = i64::try_from(updated_at_ms).unwrap_or(i64::MAX);
-    tx.execute(
-        &format!(
-            "INSERT INTO {INTEGRATION_CONFIG_TABLE} \
-             (config_id, revision, config_json, updated_at_ms) VALUES (1, ?1, ?2, ?3) \
-             ON CONFLICT(config_id) DO UPDATE SET revision=excluded.revision, \
-             config_json=excluded.config_json, updated_at_ms=excluded.updated_at_ms"
-        ),
-        params![revision, serialized, updated_at_ms],
-    )?;
-    tx.commit()?;
+    let api_account_ids = config
+        .api_key_accounts
+        .iter()
+        .map(|account| account.id.clone())
+        .collect();
+    let revision =
+        save_provider_integration_config_row(root, expected_revision, serialized, api_account_ids)?;
     Ok(revision)
 }
 
@@ -1315,4 +1359,58 @@ data: [DONE]
         );
         assert_eq!(requests[0].headers["Accept"], ["text/event-stream"]);
     }
+}
+
+#[cfg(test)]
+#[tokio::test]
+async fn runtime_owner_kimi_config_cas_preserves_the_typed_conflict() -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = crate::inference::runtime_env::runtime_config_path(root.path());
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let (writer, readers) = ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&path)?)
+        .await?
+        .into_parts();
+    let adapter =
+        crate::lcm::owner_adapter::OwnerAdapter::attach(&path, writer.clone(), readers.clone())
+            .await?;
+    let work = root.path().to_owned();
+    crate::persistence::run_core_sync(move || {
+        assert_eq!(
+            save_provider_integration_config_row(&work, 0, "{}".into(), Vec::new())?,
+            1
+        );
+        let error =
+            save_provider_integration_config_row(&work, 0, "stale".into(), Vec::new()).unwrap_err();
+        assert!(
+            error
+                .downcast_ref::<ProviderIntegrationRevisionConflict>()
+                .is_some(),
+            "Kimi CAS lost its typed conflict"
+        );
+        let state = with_provider_integration_read(&work, |conn| {
+            assert!(!conn.is_autocommit());
+            assert_eq!(
+                conn.query_row("PRAGMA query_only", [], |r| r.get::<_, i64>(0))?,
+                1
+            );
+            Ok(conn.query_row(
+                &format!("SELECT revision,config_json FROM {INTEGRATION_CONFIG_TABLE}"),
+                [],
+                |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)),
+            )?)
+        })?
+        .unwrap();
+        assert_eq!(
+            state,
+            (1, "{}".into()),
+            "stale Kimi configuration overwrote the committed value"
+        );
+        assert!(!crate::paths::core_db(&work).exists());
+        Ok(())
+    })
+    .await?;
+    drop(adapter);
+    readers.shutdown().await?;
+    writer.shutdown().await?;
+    Ok(())
 }

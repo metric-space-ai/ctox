@@ -1,260 +1,315 @@
-import {
-  FILE_CHUNK_ERROR_CODES,
-  readStoredFileFromDemandChunks,
-} from '../../shared/file-integrity.js?v=20260816-browser-sync-guards-v141';
+// Datei-Viewer – App-API 4.0 (Shell v4, Strang UC4). Port-Protokoll: V4-PORT.md.
+//
+// Eingang: Route-Parameter (api.shell.onRoute / openFile der Shell) oder `restored`.
+//   { ref?, file_id?|id?|fileId?, name?, mime?|mimeType?, size?|sizeBytes?, path?, content_state?|contentState? }
+// Inhalt nur über api.files.get(ref) (§10.2a Nr. 4), Metadaten aus der Plattform-Collection `files`.
+// Keine Chunk-Collections, kein Demand-Loader, keine Warteschleifen; Fehler gehen in die Zustandszone.
 
+const APP_ID = 'file-viewer';
 const TEXT_PREVIEW_RANGE_BYTES = 256 * 1024;
+const TEXT_MIME_EXTRA = ['application/json', 'application/xml'];
+const PICKER_LIMIT = 200;
 
+// Eingebettetes Rückfall-Wörterbuch (Name `labels` wie in den anderen Apps, damit check-i18n-keys es findet).
+const labels = {
+  de: {
+    title: 'Datei-Viewer',
+    file: 'Datei',
+    download: 'Herunterladen',
+    openFailed: 'Datei konnte nicht geöffnet werden',
+    noPreview: 'Keine Vorschau verfügbar – bitte herunterladen.',
+    materializeFailed: 'Materialisieren fehlgeschlagen',
+    noFileOpen: 'Keine Datei geöffnet',
+    openFile: 'Datei öffnen…',
+    pickerTitle: 'Datei öffnen',
+    search: 'Suchen',
+    cancel: 'Abbrechen',
+  },
+  en: {
+    title: 'File Viewer',
+    file: 'File',
+    download: 'Download',
+    openFailed: 'File could not be opened',
+    noPreview: 'No preview available – please download.',
+    materializeFailed: 'Materialization failed',
+    noFileOpen: 'No file open',
+    openFile: 'Open file…',
+    pickerTitle: 'Open file',
+    search: 'Search',
+    cancel: 'Cancel', // v4-allow: en
+  },
+};
 
-export async function mount(ctx) {
-  const container = ctx.host;
-  ensureModuleStyles();
-  const args = ctx.args || {};
-  const fileId = args.fileId || '';
-  const name = args.name || 'Datei';
-  const mimeType = args.mimeType || 'application/octet-stream';
-  const sizeBytes = Number(args.sizeBytes || args.size_bytes || 0);
-  const previewRange = textPreviewRangeFor(mimeType, sizeBytes);
+export async function mount(root, api, { restored } = {}) {
+  if (!root.dataset.app) root.dataset.app = APP_ID;
+  const offs = [];
+  let disposed = false;
   let objectUrl = '';
+  let current = null; // { ref, fileId, name, mime, size, path, contentState }
+  let loadToken = 0;
+  let metaOff = null;
+  let commandOff = null;
 
-  container.innerHTML = await loadModuleMarkup();
-  const title = container.querySelector('[data-file-title]');
-  const metadata = container.querySelector('[data-file-metadata]');
-  if (title) title.textContent = name;
-  if (metadata) metadata.textContent = `${mimeType} · ${formatBytes(sizeBytes)}`;
-
-  const content = container.querySelector('[data-file-content]');
-  const download = container.querySelector('[data-file-download]');
-
-  try {
-    const blob = await readStoredOrMaterializeFile(ctx, {
-      fileId,
-      path: args.path || '',
-      name,
-      mimeType,
-      contentState: args.contentState || '',
-      contentHash: args.contentHash || args.content_hash || '',
-      contentHashScheme: args.contentHashScheme || args.content_hash_scheme || '',
-      contentGenerationId: args.contentGenerationId || args.content_generation_id || '',
-    }, { range: previewRange });
-    objectUrl = URL.createObjectURL(blob);
-    renderBlob(content, objectUrl, blob, name, mimeType);
-    download.addEventListener('click', () => downloadStoredFile(ctx, {
-      fileId,
-      name,
-      mimeType,
-      contentGenerationId: args.contentGenerationId || args.content_generation_id || '',
-      contentHash: args.contentHash || args.content_hash || '',
-      contentHashScheme: args.contentHashScheme || args.content_hash_scheme || '',
-    }, objectUrl, previewRange));
-    ctx.setTitle?.(name);
-  } catch (error) {
-    ctx.reportFileIntegrityError?.(error, fileIntegrityDetails(args, fileId, mimeType));
-    content.innerHTML = `<p class="is-error">Datei konnte nicht geöffnet werden: ${escapeHtml(error?.message || error)}</p>`;
-  }
-
-  return () => {
-    if (objectUrl) URL.revokeObjectURL(objectUrl);
-    container.replaceChildren();
+  const lang = () => (String(api.shell.locale.get() || 'de').startsWith('en') ? 'en' : 'de');
+  const t = (key) => {
+    const full = `${APP_ID}.${key}`;
+    const v = api.shell.t(full);
+    return v && v !== full ? v : (labels[lang()][key] ?? labels.de[key] ?? key);
   };
-}
 
-async function readStoredOrMaterializeFile(ctx, file, options = {}) {
-  if (file.contentState === 'lazy' || file.contentState === 'missing') {
-    const commandId = await materializeStoredFile(ctx, file);
-    return waitForStoredFile(ctx, file.fileId, file.mimeType, commandId, options);
+  root.innerHTML = await loadModuleMarkup();
+  const els = {
+    title: root.querySelector('[data-file-title]'),
+    metadata: root.querySelector('[data-file-metadata]'),
+    content: root.querySelector('[data-file-content]'),
+    download: root.querySelector('[data-file-download]'),
+    start: root.querySelector('[data-file-start]'),
+    empty: root.querySelector('[data-file-empty]'),
+    emptyText: root.querySelector('[data-file-empty-text]'),
+    openPicker: root.querySelector('[data-file-open-picker]'),
+    picker: root.querySelector('[data-file-picker]'),
+    pickerTitle: root.querySelector('[data-file-picker-title]'),
+    pickerCancel: root.querySelector('[data-file-picker-cancel]'),
+    pickerSearch: root.querySelector('[data-file-picker-search]'),
+    pickerList: root.querySelector('[data-file-picker-list]'),
+  };
+  let pickerOff = null;
+  let pickerRows = [];
+
+  function applyStaticLabels() {
+    els.download?.setAttribute('aria-label', t('download'));
+    els.download?.setAttribute('title', t('download'));
+    if (els.emptyText) els.emptyText.textContent = t('noFileOpen');
+    if (els.openPicker) els.openPicker.textContent = t('openFile');
+    if (els.pickerTitle) els.pickerTitle.textContent = t('pickerTitle');
+    if (els.pickerCancel) els.pickerCancel.textContent = t('cancel');
+    els.pickerSearch?.setAttribute('placeholder', t('search'));
+    els.pickerSearch?.setAttribute('aria-label', t('search'));
   }
-  try {
-    return await readStoredFile(ctx, file.fileId, file.mimeType, {
-      contentGenerationId: file.contentGenerationId,
-      contentHash: file.contentHash,
-      contentHashScheme: file.contentHashScheme,
-      range: options.range || null,
+  applyStaticLabels();
+
+  function report(code, text, level = 'error', ref) {
+    api.status.report({ level, code: `${APP_ID}.${code}`, text, ...(ref ? { ref } : {}) });
+  }
+  function clear(code) { api.status.clear(`${APP_ID}.${code}`); }
+
+  function renderHeader() {
+    const name = current?.name || t('file');
+    if (els.title) els.title.textContent = name;
+    if (els.metadata) els.metadata.textContent = current ? `${current.mime} · ${formatBytes(current.size)}` : '';
+    api.shell.setTitle(current?.name || t('title'));
+    // Ohne geöffnete Datei hat „Herunterladen“ nichts zu tun: gesperrt statt wirkungslos (Rundgang RUND1).
+    if (els.download) els.download.disabled = !current;
+    // FIX8: ohne Datei (Launcher/Startmenü) Leerzustand „Keine Datei geöffnet“ + „Datei öffnen…“ statt Fehler.
+    if (els.start) els.start.hidden = Boolean(current);
+    if (current) closePicker();
+  }
+
+  // ---- Dateiauswahl (nur erlaubte Collection `files`, lesend; Abo nur solange die Auswahl offen ist) ----
+  function renderPicker() {
+    if (!els.pickerList) return;
+    const q = String(els.pickerSearch?.value || '').trim().toLowerCase();
+    const rows = pickerRows
+      .filter((f) => f && (f.ref || f.id) && (!q || `${f.name || ''} ${f.mime || ''}`.toLowerCase().includes(q)));
+    els.pickerList.replaceChildren(...rows.map((f) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'file-viewer-picker-item';
+      b.setAttribute('role', 'option');
+      b.dataset.fileId = String(f.id || '');
+      const name = document.createElement('span');
+      name.textContent = f.name || t('file');
+      const meta = document.createElement('small');
+      meta.textContent = `${f.mime || ''} · ${formatBytes(f.size)}`;
+      b.append(name, meta);
+      b.addEventListener('click', () => pick(f));
+      return b;
+    }));
+  }
+  function openPicker() {
+    if (!els.picker) return;
+    els.empty.hidden = true;
+    els.picker.hidden = false;
+    pickerOff?.();
+    pickerOff = api.query('files', { sort: [{ name: 'asc' }], limit: PICKER_LIMIT }).subscribe((rows) => {
+      if (disposed) return;
+      pickerRows = Array.isArray(rows) ? rows : [];
+      renderPicker();
     });
-  } catch (error) {
-    if (!isMissingContentError(error) || !file.path) throw error;
+    els.pickerSearch?.focus();
   }
-  const commandId = await materializeStoredFile(ctx, file);
-  return waitForStoredFile(ctx, file.fileId, file.mimeType, commandId, options);
-}
+  function closePicker() {
+    pickerOff?.(); pickerOff = null;
+    pickerRows = [];
+    if (els.picker) els.picker.hidden = true;
+    if (els.empty) els.empty.hidden = false;
+    if (els.pickerSearch) els.pickerSearch.value = '';
+    els.pickerList?.replaceChildren();
+  }
+  function pick(f) {
+    closePicker();
+    open({ ref: f.ref || '', file_id: f.id || '', name: f.name || '', mime: f.mime || '', size: f.size });
+  }
+  const onPickerKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); closePicker(); els.openPicker?.focus(); } };
+  els.openPicker?.addEventListener('click', openPicker);
+  els.pickerCancel?.addEventListener('click', closePicker);
+  els.pickerSearch?.addEventListener('input', renderPicker);
+  els.picker?.addEventListener('keydown', onPickerKey);
 
-function isMissingContentError(error) {
-  return String(error?.message || error || '').includes('Dateiinhalt fehlt');
-}
+  function resetContent() {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = '';
+    els.content?.replaceChildren();
+  }
 
-function isRetryableMaterializationReadError(error) {
-  return isMissingContentError(error) || error?.code === FILE_CHUNK_ERROR_CODES.GENERATION_MISMATCH;
-}
+  function stopWatchers() {
+    metaOff?.(); metaOff = null;
+    commandOff?.(); commandOff = null;
+  }
 
-function fileIntegrityDetails(args, fileId, mimeType) {
+  async function showBlob(blob) {
+    const token = loadToken;
+    const preview = previewBlobFor(blob, current.mime, current.size);
+    resetContent();
+    objectUrl = URL.createObjectURL(preview);
+    await renderBlob(els.content, objectUrl, preview, current.name, current.mime, () => report('preview.unsupported', t('noPreview'), 'info'));
+    if (token !== loadToken || disposed) return;
+    current.blob = blob;
+  }
+
+  async function loadRef(ref) {
+    const token = ++loadToken;
+    try {
+      const blob = await api.files.get(ref);
+      if (token !== loadToken || disposed) return;
+      clear('open');
+      await showBlob(blob);
+    } catch (error) {
+      if (token !== loadToken || disposed) return;
+      report('open', `${t('openFailed')}: ${error?.code || error?.message || error}`);
+    }
+  }
+
+  function materialize() {
+    const h = api.command('ctox.file.materialize', {
+      record_id: current.fileId,
+      file_id: current.fileId,
+      path: current.path,
+      title: `Load ${current.name}`,
+      client_context: { source: 'business-os-file-viewer' },
+    });
+    h.local.catch((error) => report('command.ctox.file.materialize', `${t('materializeFailed')}: ${error?.message || error}`, 'error', h.id));
+    commandOff = h.status.subscribe((s) => {
+      if (s?.status === 'failed') report('command.ctox.file.materialize', `${t('materializeFailed')}: ${s.error || 'failed'}`, 'error', h.id);
+      if (s?.status === 'done') {
+        clear('command.ctox.file.materialize');
+        const ref = typeof s.result?.ref === 'string' ? s.result.ref : '';
+        if (ref && !current.ref) { current.ref = ref; loadRef(ref); }
+      }
+    });
+  }
+
+  function open(params = {}) {
+    const next = normalizeTarget(params);
+    if (!next.ref && !next.fileId) return;
+    stopWatchers();
+    resetContent();
+    clear('open'); clear('preview.unsupported');
+    current = next;
+    renderHeader();
+    if (current.ref) { loadRef(current.ref); return; }
+    // Nur eine Datei-ID: Metadaten live aus `files` (Plattform); sobald `ref` da ist, laden.
+    let requested = false;
+    metaOff = api.get('files', current.fileId).subscribe((meta) => {
+      if (disposed) return;
+      if (meta?.ref) {
+        current = { ...current, ref: meta.ref, name: current.name || meta.name, mime: meta.mime || current.mime, size: Number(meta.size ?? current.size) };
+        renderHeader();
+        metaOff?.(); metaOff = null;
+        loadRef(meta.ref);
+        return;
+      }
+      if (!requested && current.path && ['lazy', 'missing', ''].includes(current.contentState)) {
+        requested = true;
+        materialize();
+      }
+    });
+  }
+
+  function onDownload() {
+    if (!current) return;
+    const run = async () => {
+      const blob = current.blob || (current.ref ? await api.files.get(current.ref) : null);
+      if (!blob) return;
+      const url = URL.createObjectURL(blob);
+      try { triggerDownload(url, current.name); } finally { setTimeout(() => URL.revokeObjectURL(url), 0); }
+    };
+    run().catch((error) => report('download', `${t('openFailed')}: ${error?.code || error?.message || error}`));
+  }
+  els.download?.addEventListener('click', onDownload);
+
+  offs.push(api.shell.onRoute((ev) => open(ev?.params || {})));
+  offs.push(api.shell.locale.subscribe(() => { applyStaticLabels(); renderHeader(); }));
+
+  const restoredTarget = isPlainObject(restored) && isPlainObject(restored.target) ? restored.target : null;
+  if (restoredTarget) open(restoredTarget);
+  else renderHeader();
+
   return {
-    fileId,
-    mimeType,
-    contentState: args.contentState || '',
-    contentGenerationId: args.contentGenerationId || args.content_generation_id || '',
-    contentHashScheme: args.contentHashScheme || args.content_hash_scheme || '',
+    unmount() {
+      disposed = true;
+      loadToken += 1;
+      stopWatchers();
+      closePicker();
+      for (const off of offs.splice(0)) off();
+      els.download?.removeEventListener('click', onDownload);
+      resetContent();
+      root.replaceChildren();
+    },
+    snapshot() {
+      if (!current) return { v: 1 };
+      const { ref, fileId, name, mime, size, path, contentState } = current;
+      return { v: 1, target: { ref, file_id: fileId, name, mime, size, path, content_state: contentState } };
+    },
   };
 }
 
-async function materializeStoredFile(ctx, file) {
-  if (!ctx.commandBus?.dispatch) {
-    throw new Error('business_commands collection is required for file materialization');
-  }
-  const [commandBridge] = await Promise.all([
-    ctx.sync?.startCollection?.('business_commands'),
-    ctx.sync?.startCollection?.('desktop_files'),
-  ]);
-  await waitForReplicationBridge(commandBridge, 'business_commands');
-  const commandId = `cmd_${crypto.randomUUID()}`;
-  await ctx.commandBus.dispatch({
-    id: commandId,
-    module: 'desktop',
-    command_type: 'ctox.file.materialize',
-    record_id: file.fileId,
-    inbound_channel: 'desktop',
-    payload: {
-      file_id: file.fileId,
-      path: file.path,
-      title: `Load ${file.name}`,
-    },
-    client_context: {
-      source: 'business-os-file-viewer',
-      actor: actorContext(ctx.session),
-    },
-  });
-  await waitForReplicationBridge(commandBridge, 'business_commands');
-  await waitForCommandReplication(ctx, commandId);
-  await waitForMaterializedFileProjection(ctx, file.fileId);
-  return commandId;
+function normalizeTarget(params = {}) {
+  const str = (...keys) => { for (const k of keys) if (typeof params[k] === 'string' && params[k]) return params[k]; return ''; };
+  const size = Number(params.size ?? params.sizeBytes ?? params.size_bytes ?? 0);
+  return {
+    ref: str('ref', 'content_ref'),
+    fileId: str('file_id', 'fileId', 'id'),
+    name: str('name'),
+    mime: str('mime', 'mimeType', 'mime_type') || 'application/octet-stream',
+    size: Number.isFinite(size) ? size : 0,
+    path: str('path', 'local_path'),
+    contentState: str('content_state', 'contentState'),
+  };
 }
 
-async function waitForReplicationBridge(bridge, collection, timeoutMs = 20000) {
-  const state = bridge?.state;
-  const wait = typeof state?.awaitInSync === 'function'
-    ? state.awaitInSync.bind(state)
-    : typeof state?.awaitInitialReplication === 'function'
-      ? state.awaitInitialReplication.bind(state)
-      : null;
-  if (!wait) return;
-  let timeoutId;
-  try {
-    await Promise.race([
-      wait(),
-      new Promise((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error(`${collection} data did not become ready in time`)), timeoutMs);
-      }),
-    ]);
-  } catch (error) {
-    throw new Error(`Daten für ${collection} konnten nicht synchronisiert werden: ${error?.message || error}`);
-  } finally {
-    clearTimeout(timeoutId);
-  }
+function isPlainObject(v) { return Boolean(v) && typeof v === 'object' && !Array.isArray(v); }
+
+function isTextPreviewMimeType(mimeType = '') {
+  const normalized = String(mimeType || '').toLowerCase();
+  return normalized.startsWith('text/') || TEXT_MIME_EXTRA.includes(normalized);
 }
 
-async function readCommandProjection(db, commandId) {
-  const collection = db?.collection?.('business_commands');
-  const doc = await collection?.findOne(commandId).exec();
-  return doc?.toJSON?.() || null;
+export function textPreviewRangeFor(mimeType = '', sizeBytes = 0) {
+  const size = Number(sizeBytes || 0);
+  if (!Number.isFinite(size) || size <= TEXT_PREVIEW_RANGE_BYTES) return null;
+  if (!isTextPreviewMimeType(mimeType)) return null;
+  return { offset: 0, length: TEXT_PREVIEW_RANGE_BYTES };
 }
 
-async function waitForCommandReplication(ctx, commandId, timeoutMs = 30000) {
-  const deadline = Date.now() + timeoutMs;
-  let nextRestartAt = Date.now() + 5000;
-  let lastCommand = null;
-  while (Date.now() < deadline) {
-    lastCommand = await readCommandProjection(ctx.db, commandId);
-    const status = lastCommand?.status || '';
-    if (status && status !== 'pending_sync') return lastCommand;
-    if (Date.now() >= nextRestartAt) {
-      nextRestartAt = Date.now() + 5000;
-      const bridge = shouldRestartSyncCollection(ctx, 'business_commands')
-        && typeof ctx.sync?.restartCollection === 'function'
-        ? await ctx.sync.restartCollection('business_commands')
-        : await ctx.sync?.startCollection?.('business_commands');
-      await touchCommandDocument(ctx.db, commandId);
-      await waitForReplicationBridge(bridge, 'business_commands');
-    }
-    await delay(300);
-  }
-  throw new Error(`Der Materialize-Befehl wurde nicht an CTOX übertragen: ${lastCommand?.status || 'missing'}`);
+/** Große Textdateien: Vorschau auf die ersten 256 KiB begrenzen (wie vorher über den Bereichs-Abruf). */
+function previewBlobFor(blob, mimeType, sizeBytes) {
+  const range = textPreviewRangeFor(mimeType, Math.max(Number(sizeBytes || 0), blob.size));
+  return range ? blob.slice(range.offset, range.offset + range.length, blob.type) : blob;
 }
 
-function shouldRestartSyncCollection(ctx, collection) {
-  const diagnostics = ctx?.sync?.diagnostics || ctx?.syncDiagnostics || {};
-  const entry = diagnostics?.collections?.[collection] || {};
-  const status = entry.connectionStatus || entry.status || '';
-  return ['failed', 'error', 'stopped', 'reconnecting'].includes(status);
-}
-
-async function touchCommandDocument(db, commandId) {
-  const doc = await db?.collection?.('business_commands')?.findOne(commandId).exec();
-  if (!doc?.incrementalPatch) return;
-  await doc.incrementalPatch({ updated_at_ms: Date.now() });
-}
-
-async function waitForMaterializedFileProjection(ctx, fileId, timeoutMs = 90000) {
-  const deadline = Date.now() + timeoutMs;
-  let restarted = false;
-  let lastFileState = '';
-  let lastGenerationId = '';
-  let lastSyncNudgeAt = 0;
-  while (Date.now() < deadline) {
-    const file = await ctx.db?.collection?.('desktop_files')?.findOne(fileId).exec();
-    const fileData = file?.toJSON?.();
-    lastFileState = fileData?.content_state || '';
-    lastGenerationId = fileData?.content_generation_id || '';
-    if (lastFileState === 'available' && lastGenerationId) return;
-    if (Date.now() - lastSyncNudgeAt > 1000) {
-      lastSyncNudgeAt = Date.now();
-      await nudgeFileProjectionSync(ctx);
-    }
-    if (!restarted && Date.now() > deadline - timeoutMs + 5000) {
-      restarted = true;
-      const bridge = typeof ctx.sync?.restartCollection === 'function'
-        ? await ctx.sync.restartCollection('desktop_files')
-        : await ctx.sync?.startCollection?.('desktop_files');
-      await waitForReplicationBridge(bridge, 'desktop_files');
-    }
-    await delay(300);
-  }
-  throw new Error(`Die materialisierte Datei wurde nicht im Browser bereitgestellt: state=${lastFileState || 'missing'}, generation=${lastGenerationId || 'missing'}`);
-}
-
-async function nudgeFileProjectionSync(ctx) {
-  if (!ctx.sync?.startCollection) return;
-  const bridge = await ctx.sync.startCollection('desktop_files').catch(() => null);
-  if (bridge) await waitForReplicationBridge(bridge, 'desktop_files').catch(() => {});
-}
-
-async function waitForStoredFile(ctx, fileId, mimeType, commandId = '', options = {}, timeoutMs = 90000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const file = await ctx.db?.collection?.('desktop_files')?.findOne(fileId).exec();
-      const fileData = file?.toJSON?.();
-      const fileAvailable = fileData?.content_state === 'available';
-      return await readStoredFile(ctx, fileId, mimeType, {
-        contentGenerationId: fileAvailable ? fileData?.content_generation_id || '' : '',
-        contentHash: fileAvailable ? fileData?.content_hash || '' : '',
-        contentHashScheme: fileAvailable ? fileData?.content_hash_scheme || '' : '',
-        range: options.range || null,
-      });
-    } catch (error) {
-      if (!isRetryableMaterializationReadError(error)) throw error;
-      if (commandId) {
-        const command = await readCommandProjection(ctx.db, commandId);
-        if (command?.status === 'failed') {
-          const message = command?.result?.error || command?.error || 'Datei konnte nicht materialisiert werden.';
-          throw new Error(message);
-        }
-      }
-      await delay(300);
-    }
-  }
-  throw new Error('Dateiinhalt konnte nicht geladen werden.');
-}
-
-async function renderBlob(container, objectUrl, blob, name, mimeType) {
+async function renderBlob(container, objectUrl, blob, name, mimeType, onUnsupported) {
+  if (!container) return;
   if (mimeType.startsWith('image/')) {
     container.innerHTML = `<img class="file-viewer-image" src="${objectUrl}" alt="">`;
     return;
@@ -271,72 +326,14 @@ async function renderBlob(container, objectUrl, blob, name, mimeType) {
     container.innerHTML = `<audio class="file-viewer-audio" src="${objectUrl}" controls></audio>`;
     return;
   }
-  if (mimeType.startsWith('text/') || ['application/json', 'application/xml'].includes(mimeType)) {
+  if (isTextPreviewMimeType(mimeType)) {
     const text = await blob.text();
     container.innerHTML = '<pre class="file-viewer-text" data-file-text></pre>';
     container.querySelector('[data-file-text]').textContent = text;
     return;
   }
-  container.innerHTML = `
-    <div class="file-viewer-unsupported">
-      <strong>Keine Vorschau verfügbar</strong>
-      <span>Diese Datei kann gespeichert oder in einer passenden App geöffnet werden, sobald ein Viewer registriert ist.</span>
-    </div>
-  `;
-}
-
-async function readStoredFile(ctx, fileId, mimeType = 'application/octet-stream', options = {}) {
-  const loader = await fileDemandLoaderFor(ctx).catch(() => null);
-  if (loader?.fetchFile) {
-    const range = normalizeRange(options.range);
-    const chunks = await loader.fetchFile(fileId, range ? { range } : undefined);
-    return readStoredFileFromDemandChunks(chunks, mimeType, integrityOptionsForRead(options, range));
-  }
-  throw new Error('Dateiinhalt ist noch nicht über den Sync-Demand-Pfad verfügbar.');
-}
-
-function textPreviewRangeFor(mimeType = '', sizeBytes = 0) {
-  const size = Number(sizeBytes || 0);
-  if (!Number.isFinite(size) || size <= TEXT_PREVIEW_RANGE_BYTES) return null;
-  if (!isTextPreviewMimeType(mimeType)) return null;
-  return { offset: 0, length: TEXT_PREVIEW_RANGE_BYTES };
-}
-
-function isTextPreviewMimeType(mimeType = '') {
-  const normalized = String(mimeType || '').toLowerCase();
-  return normalized.startsWith('text/')
-    || ['application/json', 'application/xml'].includes(normalized);
-}
-
-function normalizeRange(range) {
-  if (!range || typeof range !== 'object') return null;
-  const offset = Math.max(0, Number(range.offset || 0));
-  const length = Math.max(0, Number(range.length || range.limit || 0));
-  if (!Number.isFinite(offset) || !Number.isFinite(length) || length <= 0) return null;
-  return { offset, length };
-}
-
-function integrityOptionsForRead(options = {}, range = null) {
-  if (range) return {};
-  return options;
-}
-
-async function downloadStoredFile(ctx, file, currentObjectUrl, previewRange = null) {
-  if (!previewRange && currentObjectUrl) {
-    triggerDownload(currentObjectUrl, file.name);
-    return;
-  }
-  const blob = await readStoredFile(ctx, file.fileId, file.mimeType, {
-    contentGenerationId: file.contentGenerationId,
-    contentHash: file.contentHash,
-    contentHashScheme: file.contentHashScheme,
-  });
-  const url = URL.createObjectURL(blob);
-  try {
-    triggerDownload(url, file.name);
-  } finally {
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-  }
+  container.replaceChildren();
+  onUnsupported?.();
 }
 
 function triggerDownload(url, name) {
@@ -346,32 +343,11 @@ function triggerDownload(url, name) {
   anchor.click();
 }
 
-async function fileDemandLoaderFor(ctx) {
-  if (!ctx?.sync?.startCollection) return null;
-  const bridge = await ctx.sync.startCollection('desktop_files');
-  await waitForReplicationBridge(bridge, 'desktop_files');
-  return bridge?.state?.demandFileLoader || null;
-}
-
 async function loadModuleMarkup() {
-  const markupVersion = String(import.meta.url).split('?v=')[1] || '';
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-  const html = await fetch(markupHref).then((response) => response.text());
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((response) => response.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
-}
-
-function ensureModuleStyles() {
-  const styleId = 'file-viewer-module-styles';
-  if (document.getElementById(styleId)) return;
-  const cssVersion = String(import.meta.url).split('?v=')[1] || '';
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  const link = document.createElement('link');
-  link.id = styleId;
-  link.rel = 'stylesheet';
-  link.href = cssHref;
-  document.head.append(link);
 }
 
 function formatBytes(value) {
@@ -381,30 +357,10 @@ function formatBytes(value) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-function actorContext(session) {
-  const user = session?.user || {};
-  return {
-    id: user.id || 'business-os',
-    display_name: user.display_name || user.name || user.email || 'Business OS',
-    role: user.role || 'user',
-  };
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;',
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
   }[char]));
 }
 
-export const __fileViewerTestHooks = Object.freeze({
-  readStoredFile,
-  textPreviewRangeFor,
-});
+export const __fileViewerTestHooks = Object.freeze({ textPreviewRangeFor, previewBlobFor, normalizeTarget });

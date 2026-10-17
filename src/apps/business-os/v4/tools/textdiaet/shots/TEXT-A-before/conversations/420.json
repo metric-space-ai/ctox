@@ -1,0 +1,91 @@
+{
+ "app": "conversations",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Conversations",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Importieren",
+    "button:Exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "row:? 52 14.10. 3× Angebot Wartung",
+    "button:Kontext ausblenden",
+    "nav:Alle Channels 52",
+    "nav:Alle Channels 10",
+    "nav:E-Mail 36",
+    "nav:physical_letter 6",
+    "button:📎",
+    "button:Task: 2026-01045 · fehlgeschla",
+    "button:Work: ticket-self-work-003 · f",
+    "button:DETAILS",
+    "button:HTML anzeigen",
+    "button:Work: ticket-self-work-002 · f",
+    "button:Task: 2026-01043 · fehlgeschla",
+    "button:Work: ticket-self-work-001 · f",
+    "button:Work: ticket-self-work-003 · f",
+    "button:Task: 2026-01041 · fehlgeschla",
+    "button:Work: ticket-self-work-002 · f",
+    "button:Work: ticket-self-work-001 · f"
+   ],
+   "shot": "conversations/420-01-open.png"
+  },
+  {
+   "step": "nav Alle Channels 52",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "conversations/420-02-nav_Alle_Channels_52.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 2454,
+   "shot": "conversations/420-03-suche_ohne_Treffer.png",
+   "textAfter": 89
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear conversations.data.communication_messages"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "conversations/420-04-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "conversations",
+  "Conversations"
+ ]
+}

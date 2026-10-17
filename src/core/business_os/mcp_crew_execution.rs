@@ -1,7 +1,7 @@
 //! Bounded external execution under the native worker's existing lease.
 use super::*;
 
-fn open(root: &Path) -> anyhow::Result<rusqlite::Connection> {
+pub(super) fn open(root: &Path) -> anyhow::Result<rusqlite::Connection> {
     let conn = rusqlite::Connection::open(crate::paths::core_db(root))?;
     conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
     conn.execute_batch(
@@ -190,7 +190,7 @@ fn poll_receipt(
     Ok(ReceiptPoll::Waiting)
 }
 
-fn authorize_owner(
+pub(super) fn authorize_owner(
     root: &Path,
     context: &McpChannelRequestContext,
     command_id: &str,
@@ -296,6 +296,24 @@ pub(super) fn claim(
     context: &McpChannelRequestContext,
     arguments: &Value,
 ) -> anyhow::Result<Value> {
+    claim_inner(root, context, arguments, false)
+}
+
+/// V4 claims consume the offer once; legacy MCP reconnects retain their replay contract.
+pub(super) fn claim_once(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+) -> anyhow::Result<Value> {
+    claim_inner(root, context, arguments, true)
+}
+
+fn claim_inner(
+    root: &Path,
+    context: &McpChannelRequestContext,
+    arguments: &Value,
+    once: bool,
+) -> anyhow::Result<Value> {
     let command_id = required_arg(arguments, "command_id")?;
     let executor_id = required_arg(arguments, "executor_id")?;
     let requested_attempt = required_arg(arguments, "attempt_id")?;
@@ -304,8 +322,8 @@ pub(super) fn claim(
     let row: Option<(String, String, String, String, i64)> = conn.query_row(
         "SELECT attempt_id,claims_json,prompt,harness,deadline_ms FROM workjet_external_crew_attempts
          WHERE command_id=?1 AND executor_id=?2 AND state IN ('offered','claimed') AND deadline_ms>?3
-         AND attempt_id=?4",
-        params![command_id, executor_id, now_ms(), requested_attempt], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)),
+         AND attempt_id=?4 AND (?5=0 OR state='offered')",
+        params![command_id, executor_id, now_ms(), requested_attempt, once], |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?)),
     ).optional()?;
     let (attempt_id, claims, prompt, harness, deadline) =
         row.context("no live external Crew offer")?;
@@ -325,7 +343,7 @@ pub(super) fn claim(
         claims.crew_binding.as_ref() == Some(&current),
         "external Crew offer lease changed"
     );
-    let changed = tx.execute("UPDATE workjet_external_crew_attempts SET state='claimed' WHERE attempt_id=?1 AND state IN ('offered','claimed') AND deadline_ms>?2", params![attempt_id,now_ms()])?;
+    let changed = tx.execute("UPDATE workjet_external_crew_attempts SET state='claimed' WHERE attempt_id=?1 AND state IN ('offered','claimed') AND deadline_ms>?2 AND (?3=0 OR state='offered')", params![attempt_id,now_ms(),once])?;
     anyhow::ensure!(changed == 1, "external Crew offer closed before claim");
     tx.commit()?;
     Ok(

@@ -1,0 +1,422 @@
+{
+ "app": "matching",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [
+    "put matching_results/matches_c6b3fb51-f0a0-412f-892f-ce489245a3d3 local=ok result=accepted {\"id\":\"matches_c6b3fb51-f0a0-412f-892f-ce489245a3d3\",\"kind\":\"match\",\"title\":\"match matches_c6b3fb51-f0a0-412f-892f-ce489",
+    "put matching_results/matches_3e8503e4-1fa4-4a4b-9144-364cde77f6a4 local=ok result=accepted {\"id\":\"matches_3e8503e4-1fa4-4a4b-9144-364cde77f6a4\",\"kind\":\"match\",\"title\":\"match matches_3e8503e4-1fa4-4a4b-9144-364cd",
+    "put matching_results/matches_40372940-d3a9-423a-ab4a-2507c1b3df44 local=ok result=accepted {\"id\":\"matches_40372940-d3a9-423a-ab4a-2507c1b3df44\",\"kind\":\"match\",\"title\":\"match matches_40372940-d3a9-423a-ab4a-2507c",
+    "put matching_results/matches_90281c08-a3b0-476b-827c-bc9dca11fe82 local=ok result=accepted {\"id\":\"matches_90281c08-a3b0-476b-827c-bc9dca11fe82\",\"kind\":\"match\",\"title\":\"match matches_90281c08-a3b0-476b-827c-bc9dc",
+    "put matching_results/matches_c18e4eab-ac16-4335-97f9-5319c871b59a local=ok result=accepted {\"id\":\"matches_c18e4eab-ac16-4335-97f9-5319c871b59a\",\"kind\":\"match\",\"title\":\"match matches_c18e4eab-ac16-4335-97f9-5319c",
+    "put matching_results/matches_d70b1363-a075-418f-967e-de8951fdf2a2 local=ok result=accepted {\"id\":\"matches_d70b1363-a075-418f-967e-de8951fdf2a2\",\"kind\":\"match\",\"title\":\"match matches_d70b1363-a075-418f-967e-de895"
+   ],
+   "title": "Matching",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Anforderung anlegen",
+    "button:Anforderungen importieren",
+    "button:Anforderungen exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Offen (6)",
+    "nav:Mit Matches (0)",
+    "row:Anforderung Matching-Anforderu",
+    "button:Anforderung löschen",
+    "button:Match-Filter",
+    "nav:Rangliste (0)",
+    "nav:Matrix (0)",
+    "button:Schließen",
+    "button:Details schließen"
+   ],
+   "shot": "matching/420-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "matching/420-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Offen (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "matching/420-03-nav_Offen_6_.png"
+  },
+  {
+   "step": "nav Mit Matches (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "matching/420-04-nav_Mit_Matches_0_.png"
+  },
+  {
+   "step": "nav Rangliste (0)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Matrix (0)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "zurück zu Reiter Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "matching/420-05-zur_ck_zu_Reiter_Alle_6_.png"
+  },
+  {
+   "step": "row Anforderung Matching-Anforderungen · Remote · 0 Matches",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row"
+  },
+  {
+   "step": "button Anforderung anlegen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "matching/420-06-button_Anforderung_anlegen.png"
+  },
+  {
+   "step": "formular 3 Felder → Anlegen",
+   "changed": true,
+   "ops": [
+    "put matching_requirements/manualsrc_1792087655427_c4cd3a local=ok result=accepted {\"id\":\"manualsrc_1792087655427_c4cd3a\",\"kind\":\"source\",\"title\":\"Rundgang Test\",\"source_type\":\"requirement\",\"source_ref\":\"manualsrc_179208765",
+    "put matching_requirements/manualreq_1792087655427_abb0e4 local=ok result=accepted {\"id\":\"manualreq_1792087655427_abb0e4\",\"kind\":\"requirement\",\"title\":\"Rundgang Test\",\"source_type\":\"requirement\",\"source_ref\":\"manualreq_1792"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "matching/420-07-formular_3_Felder_Anlegen.png"
+  },
+  {
+   "step": "nav Alle (7)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Offen (7)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "matching/420-08-nav_Offen_7_.png"
+  },
+  {
+   "step": "row Rundgang Test Rundgang Test · Remote · 0 Matches",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "matching/420-09-row_Rundgang_Test_Rundgang_Test_Remote_0.png"
+  },
+  {
+   "step": "button Anforderungen importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Anforderungen exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "matching/420-10-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "matching/420-11-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "matching/420-12-button_Filter.png"
+  },
+  {
+   "step": "button Matching berechnen",
+   "changed": 1,
+   "ops": [],
+   "zone": [],
+   "dialogs": [
+    "dialog: {\"kind\":\"alert\",\"title\":\"Matching\",\"text\":\"Das Modell hat keine passenden Objekte für diese Anforderung gefunden.\",\"conf"
+   ],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "matching/420-13-button_Matching_berechnen.png"
+  },
+  {
+   "step": "button Match-Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "matching/420-14-button_Match-Filter.png"
+  },
+  {
+   "step": "button Schließen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Details schließen: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "auswahl Aktivität → active",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "matching/420-15-auswahl_Aktivit_t_active.png"
+  },
+  {
+   "step": "auswahl Sortierung → title",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true
+  },
+  {
+   "step": "auswahl Mindestscore → 80",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "matching/420-16-auswahl_Mindestscore_80.png"
+  },
+  {
+   "step": "auswahl Prozessstatus → active",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true
+  },
+  {
+   "step": "button Filter zurücksetzen: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Anforderung löschen: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "suche: Feld nicht klickbar (verdeckt?)",
+   "errors": [
+    "locator.click: Timeout 3000ms exceeded. Call log:   - waiting for locator('.v4-app-root input[type=search], .v4-app-root input[placeholder*=\"uch\" i]').first()"
+   ],
+   "shot": "matching/420-17-suche-verdeckt.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 767,
+   "shot": "matching/420-18-suche_ohne_Treffer.png",
+   "textAfter": 382
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "matching/420-19-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "matching_results",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "matching_results",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "matching_results",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "matching_results",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "matching_results",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "matching_results",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "matching_requirements",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "put",
+   "coll": "matching_requirements",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "matching",
+  "Matching"
+ ]
+}

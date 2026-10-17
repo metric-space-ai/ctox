@@ -1,98 +1,39 @@
+// Regel (vor dem Port: „ältere Detail-Antworten dürfen nicht gewinnen“): Nach einem Auswahlwechsel zeigt die
+// Zeitleiste nur Daten des neuen Threads; Änderungen am vorher gewählten Thread erreichen sie nicht mehr, und die
+// alten Detail-Abos sind abgemeldet. In App-API 4.0 gibt es keine Anfragen im Flug mehr – die Abos werden je Auswahl
+// gewechselt (index.js syncDetailSubscription).
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node --test src/apps/business-os/modules/threads/tests/detail-generation.test.mjs
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import vm from 'node:vm';
+import { startHarness, mountMain } from './_v4-harness.mjs';
 
-const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-const pending = () => {
-  let resolve;
-  const promise = new Promise((done) => { resolve = done; });
-  return { promise, resolve };
-};
-const context = vm.createContext({ console });
-vm.runInContext(source.replace(/^import[\s\S]*?;\n/gm, '').replace(/^export /gm, '')
-  .replaceAll('import.meta.url', '"file:///threads/index.js"') + `
-  currentUserId = () => 'alice';
-  render = () => {};
-  linkedCommandIds = () => ['command'];
-  linkedTaskIds = () => ['task'];
-  globalThis.api = {
-    state, hydrateSelectedThread,
-    pages(fn) { loadPersonalPages = fn; },
-    records(fn) { loadRecordsByIds = fn; },
-  };
-`, context);
-const api = context.api;
-const { state, hydrateSelectedThread } = api;
-const reset = () => {
-  Object.assign(state, {
-    ctx: {}, selectedId: 'thread', searchScanGeneration: 0,
-    detailCompleteThreadId: '', data: {
-      threads: [{ id: 'thread' }], messages: [], links: [], approvals: [],
-      notifications: [], commands: [], queue: [],
-    },
-  });
-  api.pages(async (name) => name === 'user_thread_messages' ? [{ id: 'new-message' }] : []);
-  api.records(async (name) => [{ id: name === 'business_commands' ? 'new-command' : 'new-task' }]);
-};
+let h, page;
+before(async () => { h = await startHarness(); page = h.page; await mountMain(page); await h.settle(); });
+after(async () => { await h?.close(); });
 
-// Two refreshes can hydrate the same ID; the older response must not win.
-reset();
-const oldPages = pending();
-api.pages(() => oldPages.promise);
-const oldDetail = hydrateSelectedThread('thread');
-api.pages(async (name) => name === 'user_thread_messages' ? [{ id: 'new-message' }] : []);
-await hydrateSelectedThread('thread');
-oldPages.resolve([{ id: 'old-message' }]);
-await oldDetail;
-assert.equal(state.data.messages[0].id, 'new-message');
-assert.equal(state.data.commands[0].id, 'new-command');
+const timeline = () => page.$eval('[data-thread-timeline]', (el) => el.innerText);
 
-// Removal/reselection of the same ID invalidates the former collection generation.
-reset();
-const revokedPages = pending();
-api.pages(() => revokedPages.promise);
-const revokedDetail = hydrateSelectedThread('thread');
-state.searchScanGeneration += 1;
-revokedPages.resolve([{ id: 'revoked-message' }]);
-await revokedDetail;
-assert.equal(state.data.messages.length, 0);
-assert.equal(state.detailCompleteThreadId, '');
-
-// A stale command response must not start another task lookup or overwrite newer detail.
-reset();
-const oldCommands = pending();
-const commandStarted = pending();
-let oldQueueLookups = 0;
-api.records((name) => {
-  if (name === 'business_commands') { commandStarted.resolve(); return oldCommands.promise; }
-  oldQueueLookups += 1;
-  return Promise.resolve([{ id: 'old-task' }]);
+test('Auswahlwechsel: späte Änderung am alten Thread erreicht die neue Zeitleiste nicht', async () => {
+  const { t1, t5 } = await page.evaluate(() => window.__fx.ids);
+  assert.match(await timeline(), /CTOX Arbeit blockiert/);
+  await page.click(`[data-thread-id="${t5}"]`);
+  await h.settle();
+  await page.evaluate((id) => window.__k.sim.push('user_thread_messages', { id: 'msg_late_old', thread_id: id, kind: 'note', body: 'Späte Nachricht des alten Threads', author_user_id: 'anna', created_at_ms: Date.now(), updated_at_ms: Date.now() }), t1);
+  await h.settle();
+  const text = await timeline();
+  assert.doesNotMatch(text, /Späte Nachricht des alten Threads|CTOX Arbeit blockiert/);
+  assert.match(text, /bitte das Angebot vor Freitag freigeben/);
+  assert.equal(await page.evaluate(() => window.__c.subscribers('user_thread_messages')), 1, 'nur das Abo des neuen Threads');
+  assert.equal(await page.evaluate(() => window.__c.subscribers('user_thread_links')), 1);
 });
-const commandDetail = hydrateSelectedThread('thread');
-await commandStarted.promise;
-api.records(async (name) => [{ id: name === 'business_commands' ? 'new-command' : 'new-task' }]);
-await hydrateSelectedThread('thread');
-oldCommands.resolve([{ id: 'old-command' }]);
-await commandDetail;
-assert.equal(oldQueueLookups, 0);
-assert.equal(state.data.commands[0].id, 'new-command');
-assert.equal(state.data.queue[0].id, 'new-task');
 
-// Invalidation during the final task lookup cannot mark stale detail complete.
-reset();
-const oldQueue = pending();
-const queueStarted = pending();
-api.records((name) => {
-  if (name === 'business_commands') return Promise.resolve([{ id: 'old-command' }]);
-  queueStarted.resolve();
-  return oldQueue.promise;
+test('Gelöschter und neu angelegter Thread mit derselben ID zeigt nur frische Detaildaten', async () => {
+  const { t5 } = await page.evaluate(() => window.__fx.ids);
+  await page.evaluate((id) => window.__k.sim.push('user_thread_messages', { id: `msg_${id}_1`, _deleted: true }), t5);
+  await h.settle();
+  assert.doesNotMatch(await timeline(), /bitte das Angebot/);
+  await page.evaluate((id) => window.__k.sim.push('user_thread_messages', { id: 'msg_fresh', thread_id: id, kind: 'note', body: 'Frische Nachricht', author_user_id: 'anna', created_at_ms: Date.now(), updated_at_ms: Date.now() }), t5);
+  await h.settle();
+  assert.match(await timeline(), /Frische Nachricht/);
+  assert.deepEqual(page.__errors, []);
 });
-const queueDetail = hydrateSelectedThread('thread');
-await queueStarted.promise;
-state.searchScanGeneration += 1;
-oldQueue.resolve([{ id: 'revoked-task' }]);
-await queueDetail;
-assert.equal(state.data.commands.length, 0);
-assert.equal(state.data.queue.length, 0);
-assert.equal(state.detailCompleteThreadId, '');
-console.log('threads detail generation regression passed');

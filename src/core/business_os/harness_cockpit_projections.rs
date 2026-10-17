@@ -737,8 +737,9 @@ fn refresh_measured_with(
     timing: &mut ProjectionTiming<'_>,
 ) -> Result<()> {
     if flags & CHAT != 0 {
-        timing.phase("project_plan_failure", || {
-            super::super::project_chats::plan_state::project_threads(root, conn)
+        timing.phase("project_plans", || {
+            super::super::project_chats::plan_state::project_threads(root, conn)?;
+            super::super::project_chats::plan_state::project_steps(root, conn)
         })?;
     }
     if !has_table(conn, "communication_routing_state")? {
@@ -1910,4 +1911,14 @@ mod pump_root_and_core_cache_tests {
         );
         let _ = std::fs::remove_dir_all(&root);
     }
+}
+
+#[cfg(test)]
+pub(crate) fn refresh_plan_projection_for_test(root: &Path) -> Result<()> {
+    refresh_selected(
+        root,
+        &WorkerSnapshot::default(),
+        &mut BusinessProjectionWriter::open(root)?,
+        CHAT,
+    )
 }

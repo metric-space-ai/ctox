@@ -1,0 +1,391 @@
+{
+  "accounting_dunning_letters": {
+    "1": {
+      "operations": []
+    }
+  },
+  "accounting_dunning_runs": {
+    "1": {
+      "operations": [
+        {
+          "op": "v4_function",
+          "collection": "accounting_dunning_runs",
+          "source_sha256": "4ff0d08a5b93536c03d7a6f284d36bb35070fb0eee843fd51f1a660b012f7eee"
+        }
+      ]
+    }
+  },
+  "accounting_payment_allocations": {
+    "1": {
+      "operations": []
+    }
+  },
+  "browser_frames": {
+    "1": {
+      "operations": []
+    }
+  },
+  "browser_input_events": {
+    "1": {
+      "operations": []
+    }
+  },
+  "browser_sessions": {
+    "1": {
+      "operations": []
+    }
+  },
+  "browser_tabs": {
+    "1": {
+      "operations": []
+    }
+  },
+  "business_commands": {
+    "1": {
+      "operations": [
+        {
+          "default": "",
+          "field": "inbound_channel",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "inbound_channel",
+            "module"
+          ]
+        }
+      ]
+    },
+    "2": {
+      "operations": []
+    }
+  },
+  "communication_accounts": {
+    "1": {
+      "operations": [
+        {
+          "op": "v4_function",
+          "collection": "communication_accounts",
+          "source_sha256": "8937ce91c473b38b3e45b44aef2289195f15162a60b0f714b9f5b190b7cdfd96"
+        }
+      ]
+    }
+  },
+  "communication_messages": {
+    "1": {
+      "operations": [
+        {
+          "op": "v4_function",
+          "collection": "communication_messages",
+          "source_sha256": "b96d2bcd2317ef7006c7d5c16d0b63f2a79cd2d723d06c46097aa552c266eb54"
+        }
+      ]
+    }
+  },
+  "communication_threads": {
+    "1": {
+      "operations": [
+        {
+          "op": "v4_function",
+          "collection": "communication_threads",
+          "source_sha256": "bbf8e3af294c8e2e4040a948a3266d95621d58f462e0123525399d06fc47c2c0"
+        }
+      ]
+    }
+  },
+  "ctox_crew_learnings": {
+    "1": {
+      "operations": [
+        {
+          "op": "v4_function",
+          "collection": "ctox_crew_learnings",
+          "source_sha256": "325d1acc7666a20e49693944414ae60f1c02973d308c9d4bfb69f5f9ee06de55"
+        }
+      ]
+    }
+  },
+  "ctox_queue_tasks": {
+    "1": {
+      "operations": []
+    },
+    "2": {
+      "operations": []
+    },
+    "3": {
+      "operations": []
+    }
+  },
+  "ctox_runs": {
+    "1": {
+      "operations": []
+    }
+  },
+  "kundenpipeline_vorgaenge": {
+    "1": {
+      "operations": []
+    }
+  },
+  "matching_objects": {
+    "1": {
+      "operations": []
+    },
+    "2": {
+      "operations": []
+    }
+  },
+  "matching_requirements": {
+    "1": {
+      "operations": []
+    },
+    "2": {
+      "operations": []
+    }
+  },
+  "matching_results": {
+    "1": {
+      "operations": []
+    },
+    "2": {
+      "operations": []
+    }
+  },
+  "notes": {
+    "1": {
+      "operations": [
+        {
+          "default": "",
+          "field": "notebook",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "notebook"
+          ]
+        },
+        {
+          "default": "",
+          "field": "tags",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "tags"
+          ]
+        },
+        {
+          "field": "is_favorite",
+          "op": "set_boolean",
+          "path": "is_favorite"
+        },
+        {
+          "field": "is_trashed",
+          "op": "set_boolean",
+          "path": "is_trashed"
+        },
+        {
+          "field": "is_locked",
+          "op": "set_boolean",
+          "path": "is_locked"
+        },
+        {
+          "default": "",
+          "field": "lock_passcode",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "lock_passcode"
+          ]
+        }
+      ]
+    }
+  },
+  "outbound_lead_generation_adapters": {
+    "1": {
+      "operations": [
+        {
+          "default": "",
+          "field": "last_task_id",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "last_task_id"
+          ]
+        }
+      ]
+    },
+    "2": {
+      "operations": [
+        {
+          "default": "",
+          "field": "last_task_id",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "last_task_id"
+          ]
+        }
+      ]
+    }
+  },
+  "outbound_lead_generation_leads": {
+    "1": {
+      "operations": []
+    }
+  },
+  "outbound_messages": {
+    "1": {
+      "operations": [
+        {
+          "default": "email",
+          "field": "channel",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "channel",
+            "payload.channel",
+            "payload.default_channel"
+          ]
+        },
+        {
+          "default": "",
+          "field": "recipient_address_text",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "recipient_address_text",
+            "payload.recipient_address_text"
+          ]
+        },
+        {
+          "default": "",
+          "field": "document_id",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "document_id"
+          ]
+        },
+        {
+          "default": "",
+          "field": "document_version_id",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "document_version_id"
+          ]
+        },
+        {
+          "default": "",
+          "field": "document_pdf_url",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "document_pdf_url"
+          ]
+        },
+        {
+          "default": 0,
+          "field": "physical_sent_at_ms",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "physical_sent_at_ms"
+          ]
+        }
+      ]
+    }
+  },
+  "outbound_sender_assignments": {
+    "1": {
+      "operations": []
+    }
+  },
+  "outbound_suppression_entries": {
+    "1": {
+      "operations": []
+    }
+  },
+  "support_view_filters": {
+    "1": {
+      "operations": []
+    }
+  },
+  "user_thread_messages": {
+    "1": {
+      "operations": []
+    }
+  },
+  "user_threads": {
+    "1": {
+      "operations": []
+    }
+  },
+  "workjet_computers": {
+    "1": {
+      "operations": [
+        {
+          "default": "",
+          "field": "device_binding_id",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "device_binding_id"
+          ]
+        },
+        {
+          "default": 0,
+          "field": "actor_epoch",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "actor_epoch"
+          ]
+        },
+        {
+          "default": 0,
+          "field": "last_seen_at_ms",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "last_seen_at_ms"
+          ]
+        },
+        {
+          "default": false,
+          "field": "replication_up",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "replication_up"
+          ]
+        },
+        {
+          "default": false,
+          "field": "is_deleted",
+          "op": "set_from_first_truthy",
+          "paths": [
+            "is_deleted"
+          ]
+        }
+      ]
+    }
+  },
+  "workjet_jour_fixe_meetings": {
+    "1": {
+      "operations": []
+    }
+  },
+  "workjet_projects": {
+    "1": {
+      "operations": []
+    },
+    "2": {
+      "operations": []
+    },
+    "3": {
+      "operations": []
+    },
+    "4": {
+      "operations": []
+    },
+    "5": {
+      "operations": []
+    }
+  },
+  "workjet_provider_registry": {
+    "1": {
+      "operations": []
+    }
+  },
+  "workjet_session_transfers": {
+    "1": {
+      "operations": []
+    }
+  },
+  "workjet_sessions": {
+    "1": {
+      "operations": []
+    }
+  }
+}

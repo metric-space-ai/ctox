@@ -39,6 +39,9 @@ async function makeFixture() {
     await mkdir(join(sourceRoot, tree), { recursive: true });
     await writeFile(join(sourceRoot, tree, 'runtime.txt'), `${tree}\n`);
   }
+  // E38: v4 im Slot verlangt den Einstieg (v4/index.html + v4/boot.js).
+  await writeFile(join(sourceRoot, 'v4', 'index.html'), '<!doctype html><html><head><title>CTOX</title></head><body></body></html>\n');
+  await writeFile(join(sourceRoot, 'v4', 'boot.js'), 'export {};\n');
   await mkdir(join(sourceRoot, 'ui-contract', 'v1'), { recursive: true });
   await writeFile(join(sourceRoot, 'ui-contract', 'v1', 'workjet-ui-contract.css'), ':root {}\n');
   await writeFile(join(sourceRoot, 'ui-contract', 'v1', 'workjet-ui-contract.json'), '{"schema":"workjet.ui.contract.v1"}\n');
@@ -379,4 +382,53 @@ test('atomic no-clobber publication rolls back owned finals and preserves compet
   } finally {
     await cleanup(fixtureRoot);
   }
+});
+
+test('Shell v4 im Slot: jede Datei aus v4/manifests/shell.manifest.json liegt im Laufzeitinhalt, nichts aus Labor, Werkzeugen oder Doku', async () => {
+  const { collectRuntimePayload: collect } = await import('./build-shell-artifact.mjs');
+  const root = new URL('..', import.meta.url).pathname;
+  const { files } = await collect(root);
+  const paths = new Set(files.map((f) => f.path));
+  const shell = JSON.parse(await readFile(join(root, 'v4/manifests/shell.manifest.json'), 'utf8'));
+  const missing = Object.keys(shell.files).filter((p) => !paths.has(p));
+  assert.deepEqual(missing, [], 'Shell-Manifest verweist auf Dateien, die nicht im Slot liegen');
+  // E31.3: App-Manifeste, ihre Dateien, Schemas, Eigentumszuordnung und (falls vorhanden) der v4-Loader liegen im Slot.
+  const { readdir: rd, stat } = await import('node:fs/promises');
+  const appMissing = [];
+  for (const name of (await rd(join(root, 'v4/manifests'))).filter((n) => n.endsWith('.manifest.json'))) {
+    const m = JSON.parse(await readFile(join(root, 'v4/manifests', name), 'utf8'));
+    if (!String(m._source_dir || '').includes('customer-modules/') && !paths.has(`v4/manifests/${name}`)) appMissing.push(`v4/manifests/${name}`);
+    if (name === 'shell.manifest.json' || !m._source_dir) continue;
+    const base = String(m._source_dir).replace(/^src\/apps\/business-os\/?/, '');
+    // Kunden-Apps gehören nicht in den globalen Slot – auch ihr Manifest nicht.
+    if (base.startsWith('customer-modules/')) { assert.ok(!paths.has(`v4/manifests/${name}`), `Kunden-Manifest ${name} im globalen Slot`); continue; }
+    for (const f of Array.isArray(m.files) ? m.files : Object.keys(m.files || {})) {
+      const rel = base ? `${base}/${f}` : f;
+      if (!paths.has(rel) && !/\.md$/i.test(rel)) appMissing.push(rel);
+    }
+  }
+  assert.deepEqual(appMissing, [], 'App-Manifeste verweisen auf Dateien, die nicht im Slot liegen');
+  assert.ok(paths.has('v4/tools/manifest/out/ownership.json'), 'ownership.json (load_base_release) fehlt');
+  for (const name of (await rd(join(root, 'v4/schemas'))).filter((n) => n.endsWith('.collections.schema.json'))) {
+    assert.ok(paths.has(`v4/schemas/${name}`), `v4/schemas/${name} fehlt`);
+  }
+  if (await stat(join(root, 'v4/boot/index.html')).then(() => true, () => false)) assert.ok(paths.has('v4/boot/index.html'), 'v4-Loader fehlt');
+  const v4 = [...paths].filter((p) => p.startsWith('v4/'));
+  assert.ok(v4.includes('v4/frame/index.js') && v4.includes('v4/shell/workjet/index.js') && v4.includes('v4/sw.js'), 'v4-Shell fehlt im Slot');
+  const unwanted = v4.filter((p) => p !== 'v4/tools/manifest/out/ownership.json' && (/^v4\/(frame\/lab|lab|tools|debt|k24|os-primitives)\//.test(p) || /\.md$/i.test(p) || /\.test\.m?js$/.test(p)));
+  assert.deepEqual(unwanted, [], 'Labor, Werkzeuge, Doku oder Tests im Slot');
+});
+
+test('E38: Kern-Bootstrap im Slot ohne Tests, Testkit, Fake-Core und Doku; v4-Einstieg Pflicht', async () => {
+  const { isExcludedRuntimePath, V4_ENTRY_FILES, RUNTIME_TREES } = await import('./build-shell-artifact.mjs');
+  assert.ok(RUNTIME_TREES.includes('kernel'));
+  for (const path of ['kernel/boot.mjs', 'kernel/loader.mjs', 'kernel/kernel.mjs', 'kernel/transport-webrtc.mjs', 'kernel/index.d.ts']) {
+    assert.equal(isExcludedRuntimePath(path), false, path);
+  }
+  for (const path of ['kernel/tests/kernel.test.mjs', 'kernel/testkit/app-host.mjs', 'kernel/fake-core.mjs', 'kernel/fake-core-runtime.mjs', 'kernel/README.md']) {
+    assert.equal(isExcludedRuntimePath(path), true, path);
+  }
+  assert.equal(isExcludedRuntimePath('kernel/tests', { directory: true }), true);
+  assert.deepEqual([...V4_ENTRY_FILES], ['v4/index.html', 'v4/boot.js']);
+  for (const path of V4_ENTRY_FILES) assert.equal(isExcludedRuntimePath(path), false, path);
 });

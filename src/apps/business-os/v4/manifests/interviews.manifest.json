@@ -1,0 +1,448 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/interviews/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/interviews/index.html",
+  "_rust_basis": "keine dedizierte Datei. `rs:store_ats_commands.rs:1151` `ats.interview.transcribe` (~90 Z.) und `rs:store_ats_commands.rs:314–315` (Collection-Allowlist) – von der App nicht aufgerufen.",
+  "_source_dir": "src/apps/business-os/modules/interviews",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "command_rights ats.*: kein passender Handler.",
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "interviews",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {
+    "interview_meetings": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/interviews.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "attended": {
+            "type": "boolean"
+          },
+          "candidate_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "end": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "location_mode": {
+            "type": "string"
+          },
+          "parties": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "start": {
+            "type": "number"
+          },
+          "state": {
+            "type": "string"
+          },
+          "transcript_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "vacancy_id": {
+            "type": "string"
+          },
+          "video_link": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "interview_scorecards": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/interviews.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "candidate_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "criteria": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "interviewer": {
+            "type": "string"
+          },
+          "overall": {
+            "type": "number"
+          },
+          "ratings": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "role_template": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "vacancy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "interview_meetings": [
+      "read",
+      "write"
+    ],
+    "interview_scorecards": [
+      "read",
+      "write"
+    ]
+  },
+  "files": {
+    "README.md": "fa48602c3c33126dd3201d27062b5d7ba43614931dd946a51530a1efc065bbb9",
+    "V4-HANDLERS.md": "b322c0fbe2e469d909c4f37fbd457cb6be1a7dbc6997d5df312a2edb5b023e42",
+    "V4-PORT.md": "990b74adced3c82df6146359744dfd3f060beed833a342bbf3c0d31ec65ab31c",
+    "assets/icon.jpg": "a3bcce31c951c74914b74d9b77dc94d89f89051ff568f5aa24ccca2aa2a66c51",
+    "assets/icon@512.jpg": "5e42f85dae1e1d167dc01291626c1ffda55ec465775d9122c7434873ffcbdfe2",
+    "collections.schema.json": "20474da8b366081cd9a8498dc1975ac02f69be94e97e6878fa8b0e7daf8eff52",
+    "core/scheduling.js": "8723f48039479aaa26b86b947107b788eafff3d8518d640147357f9711d433d1",
+    "core/scorecard.js": "1e426c60fed1a54dc811e1f01215c1cd82fbd3c9ccf8f49e69963db399e22a80",
+    "handlers/_ats.js": "106c6da0358fb3fad8885549b272cd91b6f6113ad1db0416a61c8791c3229988",
+    "handlers/ats.interview.transcribe.js": "93abb692d07018adac8430ecd0476d83314d451a2e571e63f592d6c2fe169dab",
+    "icon.svg": "1df8cdafb7fedf6d27b036a70cd78f5f5bd38637ff864da43d9f85efb4e2a4fe",
+    "index.css": "ab805699115a3be43d9e47449ae7dae9d695219962133da0a44928c7e4cbe156",
+    "index.html": "ddb09a541f0120260697c6b91f03a3415c6833f4b54e591039a7f70012057b15",
+    "index.js": "6ef75480ca688b8a58ce2efa4e9df5374895af58ff6e313f1ebaf2abcf90d6dc",
+    "locales/de.json": "d5b48d83a96f380e0e491289e5978f2a5860b1d0ce9d6dacc8ffb887500301ec",
+    "locales/en.json": "912e05a46f89804bc6bd36534cde85b510182786167224b20370ca83c9e3499b",
+    "module.json": "22bc0aa5ce2d803084e4d07a3d954003577af271e98c3c0280526326b8998545",
+    "v4-manifest.json": "42d436fc102ba5386b3788bcc1e6ee3482f0542c1b4aff80260f31e7d15ac0d5"
+  },
+  "foreign_collections": {
+    "accounting_invoices": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:264"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "invoices"
+    },
+    "applications": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/interviews/V4-HANDLERS.md „Manifest-Wunsch“; TEXT-C Runde 2 (15.10.): Namen statt IDs – Kandidat aus applications (intake), Kunde aus customer_accounts (customers), nur lesen",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "intake"
+    },
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:233"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "business_consents": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "consent"
+    },
+    "business_credentials": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "nachweise"
+    },
+    "customer_accounts": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "declaration_basis": "modules/interviews/V4-HANDLERS.md „Manifest-Wunsch“; TEXT-C Runde 2 (15.10.): Namen statt IDs – Kandidat aus applications (intake), Kunde aus customer_accounts (customers), nur lesen",
+        "sources": [
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "customers"
+    },
+    "desktop_files": {
+      "_evidence": {
+        "code_read": [
+          "handlers/ats.interview.transcribe.js:8",
+          "handlers/ats.interview.transcribe.js:40"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/interviews/V4-HANDLERS.md „Manifest-Wunsch“; TEXT-C Runde 2 (15.10.): Namen statt IDs – Kandidat aus applications (intake), Kunde aus customer_accounts (customers), nur lesen",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "desktop"
+    },
+    "files": {
+      "_evidence": {
+        "code_read": [
+          "handlers/ats.interview.transcribe.js:25",
+          "handlers/ats.interview.transcribe.js:26"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "offers": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "placements"
+    },
+    "placements": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "placements"
+    },
+    "planning_time_records": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:198"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "shiftflow"
+    },
+    "signature_requests": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:198"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "esign"
+    },
+    "submissions": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "submissions"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/interviews.jpg (shared/operator-icon-selection.js, sha256 642cda9e3cb5…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "category": "Recruiting",
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 680,
+        "width": 960
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#db2777",
+        "category": "People",
+        "iconAssetId": "workjet.business-os.interviews",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "list-detail",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Interviews"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "145251ba82af150b9221044e2191cb202cc8a238130e227c39e1a89729712308",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Interviews",
+  "triggers": [],
+  "version": "0.2.1"
+}

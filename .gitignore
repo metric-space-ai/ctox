@@ -9,6 +9,8 @@ archive/
 /bin/ctox-real
 .venv/
 node_modules/
+# Auch als Symlink (Datei, nicht Verzeichnis) – 849401eba hatte einen lokalen node_modules-Link eingecheckt.
+node_modules
 
 # Generated sidecar outputs may be symlinks to the disposable build volume.
 /src/core/coding_agents/pi-sidecar/node_modules
@@ -124,3 +126,9 @@ tmp/*/profile/
 # duerfen nicht in gemeinsame Builds gelangen (sonst liefert jedes
 # `ctox upgrade --dev` sie an fremde Instanzen aus).
 src/apps/business-os/installed-modules/
+
+# Business OS v4: Abnahme-Screenshots und Messbilder sind Belege der Labore, kein Quellcode.
+/src/apps/business-os/**/shots/**/*.png
+/src/apps/business-os/**/shots/**/*.jpg
+/src/apps/business-os/v4/tools/**/out/**/*.png
+/src/apps/business-os/v4/tools/**/out/**/*.jpg

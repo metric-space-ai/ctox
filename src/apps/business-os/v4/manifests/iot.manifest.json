@@ -1,0 +1,1044 @@
+{
+  "_capability_evidence": {
+    "agent.task.enqueue": [
+      "handlers/_iotcore.js",
+      "handlers/ctox.iot.signal.evaluate.js"
+    ],
+    "agent.task.get": [
+      "handlers/_agenttask.js"
+    ],
+    "knowledge.query": [
+      "handlers/_timeseries.js"
+    ],
+    "model": [
+      "handlers/_codegen.js"
+    ],
+    "net.ingest.webhook.register": [
+      "handlers/ctox.iot.webhook.register.js"
+    ]
+  },
+  "_declaration": "modules/iot/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/iot/index.html",
+  "_net_ingest": [
+    {
+      "_source": "handlers/ctox.iot.webhook.register.js:43",
+      "aliases": [
+        "/ctox/iot/webhook/"
+      ],
+      "command": "ctox.iot.webhook.ingest",
+      "path": "webhook"
+    }
+  ],
+  "_rust_basis": "`rs:iot_supervision.rs` 268 Z.; Logik in `crate::iot` (nicht im Snapshot), Routing `rs:command_plane.rs:2212`. `rs:store.rs:18215` `is_iot_active_command` kennt nur attribute/asset/alarm/ruleset/agent/datapoints – die Widget-/Dashboard-Befe",
+  "_source_dir": "src/apps/business-os/modules/iot",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "iot",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "agent.task.enqueue",
+    "agent.task.get",
+    "knowledge.query",
+    "model",
+    "net.ingest.webhook.register"
+  ],
+  "collections": {
+    "iot_agent_status": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/iot.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "realm",
+          "status_key",
+          "sort_key",
+          "updated_at_ms",
+          [
+            "agent_id",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "agent_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "error": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "index_text": {
+            "type": "string"
+          },
+          "last_event_ms": {
+            "type": "number"
+          },
+          "link_state": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "sort_key": {
+            "type": "string"
+          },
+          "status_key": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "realm",
+          "agent_id",
+          "link_state",
+          "data",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "iot_agents": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/iot.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "realm",
+          "status_key",
+          "sort_key",
+          "updated_at_ms",
+          [
+            "realm",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "index_text": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "sort_key": {
+            "type": "string"
+          },
+          "status_key": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "realm",
+          "name",
+          "kind",
+          "data",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "iot_alarms": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/iot.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "realm",
+          "status_key",
+          "severity",
+          "assignee_id",
+          "sort_key",
+          "updated_at_ms",
+          [
+            "realm",
+            "updated_at_ms"
+          ],
+          [
+            "status_key",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "assignee_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "created_ms": {
+            "type": "number"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "index_text": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string"
+          },
+          "sort_key": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "status_key": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "realm",
+          "title",
+          "severity",
+          "status",
+          "data",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "iot_asset_types": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/iot.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "sort_key",
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "asset_type": {
+            "type": "string"
+          },
+          "attribute_count": {
+            "type": "number"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "index_text": {
+            "type": "string"
+          },
+          "sort_key": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "asset_type",
+          "data",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "iot_assets": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/iot.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "realm",
+          "asset_type",
+          "parent_id",
+          "sort_key",
+          "updated_at_ms",
+          [
+            "realm",
+            "updated_at_ms"
+          ],
+          [
+            "asset_type",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "asset_type": {
+            "type": "string"
+          },
+          "attribute_summary": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "index_text": {
+            "type": "string"
+          },
+          "location": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "sort_key": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "realm",
+          "asset_type",
+          "name",
+          "data",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "iot_attributes": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/iot.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "asset_id",
+          "realm",
+          "status_key",
+          "sort_key",
+          "updated_at_ms",
+          [
+            "asset_id",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "asset_id": {
+            "type": "string"
+          },
+          "attribute_name": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 360,
+            "type": "string"
+          },
+          "index_text": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "sort_key": {
+            "type": "string"
+          },
+          "status_key": {
+            "type": "string"
+          },
+          "timestamp_ms": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "value_type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "realm",
+          "asset_id",
+          "attribute_name",
+          "data",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "iot_dashboards": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/iot.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "realm",
+          "sort_key",
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "index_text": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "scope_ref": {
+            "type": "string"
+          },
+          "sort_index": {
+            "type": "number"
+          },
+          "sort_key": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "view_mode": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "realm",
+          "name",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "iot_datapoints": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/iot.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "asset_id",
+          "status_key",
+          "sort_key",
+          "updated_at_ms",
+          [
+            "asset_id",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "asset_id": {
+            "type": "string"
+          },
+          "attribute_name": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "from_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 420,
+            "type": "string"
+          },
+          "index_text": {
+            "type": "string"
+          },
+          "point_count": {
+            "type": "number"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "shape": {
+            "type": "string"
+          },
+          "sort_key": {
+            "type": "string"
+          },
+          "status_key": {
+            "type": "string"
+          },
+          "to_ms": {
+            "type": "number"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "realm",
+          "asset_id",
+          "attribute_name",
+          "data",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "iot_realms": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/iot.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "sort_key",
+          "status_key",
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "index_text": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_realm": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "sort_key": {
+            "type": "string"
+          },
+          "status_key": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "data",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "iot_rulesets": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/iot.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "realm",
+          "status_key",
+          "sort_key",
+          "updated_at_ms",
+          [
+            "realm",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "index_text": {
+            "type": "string"
+          },
+          "last_fired_ms": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "sort_key": {
+            "type": "string"
+          },
+          "status_key": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "realm",
+          "name",
+          "data",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "iot_widgets": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/iot.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "realm",
+          "dashboard_id",
+          "sort_key",
+          "status_key",
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "action_prompt": {
+            "type": "string"
+          },
+          "cond_text": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "dashboard_id": {
+            "type": "string"
+          },
+          "h": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "index_text": {
+            "type": "string"
+          },
+          "realm": {
+            "type": "string"
+          },
+          "render_code": {
+            "type": "string"
+          },
+          "signal_ref": {
+            "type": "string"
+          },
+          "sort_index": {
+            "type": "number"
+          },
+          "sort_key": {
+            "type": "string"
+          },
+          "status_key": {
+            "type": "string"
+          },
+          "trigger_code": {
+            "type": "string"
+          },
+          "trigger_state": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "trigger_status": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "w": {
+            "type": "number"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "dashboard_id",
+          "realm",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {
+    "ctox.iot.webhook.ingest": {
+      "_basis": "§16.38/§16.39: Zustellung nur durch net.ingest (handlers/ctox.iot.webhook.register.js:43), kein UI-Aufruf",
+      "assigned_users": false,
+      "roles": []
+    }
+  },
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {},
+  "files": {
+    "V4-HANDLERS.md": "aa35830aa18e944f75fcc1c3c9a6b7c9ebe1ff1c19ef5fd54ae5f35a4a9d63f8",
+    "V4-PORT.md": "a134c02b8827820d49d5c1fae5285a67fe6baca7188153794b7c25a1a93d8285",
+    "assets/icon.jpg": "7657ac2e9873d8e52d983519c3a94abdb47288786804cc527e18cf170d951bbb",
+    "assets/icon@512.jpg": "605945c3392fa1c78cce7a0a98c46ca386a0307debff496aa24be74530bad31f",
+    "collections.schema.json": "a464cc1ddcf27bbe68305ce7a7e153dace9c4fa8207c58ca9609bb6784551696",
+    "handlers/_agenttask.js": "efb111ff57b900b22d776b76a6e8fef91199bc7c28a5f62462cdb10f3abfdbb0",
+    "handlers/_base.js": "9150293c4a852db693ac102df849ffdad84fcd36c6f1d93aa25a083706263d69",
+    "handlers/_codegen.js": "7231f8f692d2309e290199d51bdf5597e002dc2a2d0fcef8c7e652a1a8008fbd",
+    "handlers/_iotcore.js": "9824c5af56b9fb2981bc491f77a54d48cefe83162bf6fb40b7b720b5b338c91a",
+    "handlers/_timeseries.js": "eb02968e3727f8ba59a9e7ca8f083ad7f7c89567522f5d22fafe191177e612d3",
+    "handlers/_webhook.js": "9c70af683698cf9c177f41fddba9524cf9e842987d6ddfa19cdb0b5e48c18e9b",
+    "handlers/ctox.iot.agent.configure.js": "96f1b887fb29d07668b48cb091c3dae7b37ea7dc4f06157e0c89fb16c841d4c4",
+    "handlers/ctox.iot.alarm.update.js": "fc6c5f37d5027f437fbd4e688f334ff1f8aa5f2b52409d577d4e7878587aaee8",
+    "handlers/ctox.iot.asset.delete.js": "01531327e38c38f8810de00e12879c1fa038ce50f476c7571949a1599bab32d5",
+    "handlers/ctox.iot.asset.upsert.js": "be8fb09ba5c990a5d90fd6a19c26e25ed4a908a7446cfa79432385ce53bb14aa",
+    "handlers/ctox.iot.attribute.write.js": "a9185f53f4474e2b8da2d2f329f23144b67384b93b467df7c4b9c8bcfa14e4bf",
+    "handlers/ctox.iot.dashboard.delete.js": "ee17fd7c02d6d6e553eea40d8815e1e22ab05890166e2428d5a1403477888581",
+    "handlers/ctox.iot.dashboard.upsert.js": "56cafe09c98ef146cdf575db5b262cb729bdad3bce488c40a7b15a4c1524144b",
+    "handlers/ctox.iot.datapoints.query.js": "f9c30152f85fe749781f96aaa30258bbc0c8dae7267f49c2a38a77ffd953b13a",
+    "handlers/ctox.iot.rules.tick.js": "7c5c19254dde8290b8a51f95aac3f74ecdd8cc966f5f15d4407bb1798610a194",
+    "handlers/ctox.iot.ruleset.save.js": "f79262a2a9b99e965c2e5bb0d44753a0370f1c6826cd6fea503acebfdc185a82",
+    "handlers/ctox.iot.ruleset.toggle.js": "a6ad7c21daee4a824cbe4dd5196ab35f246ad4f828b8e1f04feac2f266d444d5",
+    "handlers/ctox.iot.signal.evaluate.js": "c0c4c4b0bf07c612d4daa4db29bae8672a0eccad1f7dc9f9be826a4cfc6f45b7",
+    "handlers/ctox.iot.task.complete.js": "0d74e5ab26093c1e5f3a1c0f74bf1abbc5888e0ecf4a8b296d37d3ee3a2a1aad",
+    "handlers/ctox.iot.task.failed.js": "6bd19b32e5d1161857343e363cb392f261c3c57fd4d3af7fd02b0ff51fc42046",
+    "handlers/ctox.iot.webhook.ingest.js": "96d93cd5f104d575fbfe40b0bfef74eba18ca83110cba6ed2197cfceb3b7124f",
+    "handlers/ctox.iot.webhook.register.js": "0608d442ae5abf991c1077b16589827e4b8f5a5e7e8525af5c18fc32efc9380b",
+    "handlers/ctox.iot.widget.arrange.js": "ae27b1b6c0c28adf270e78360e365a39eef29d2322e3419a434f978737209c74",
+    "handlers/ctox.iot.widget.compile_trigger.js": "b834cfd4d2a60b3d0de43a50af37e7ca25e5e430a406c2b54cfca451fdadc18f",
+    "handlers/ctox.iot.widget.delete.js": "11a975608ff8855c2e065f550de83add0994bd7f04ddf5a660e474d0a840f3c9",
+    "handlers/ctox.iot.widget.generate_render.js": "080fbe1ea3cddd368de7faa43a870beafb6c43e7ce8fd985ff469d109ccba195",
+    "handlers/ctox.iot.widget.pause.js": "767b3e117e4159a88d30ee3147f95db76cac407a80444e4d3944d4e7953017c6",
+    "handlers/ctox.iot.widget.upsert.js": "91f5142de9e2d4121bc5694a8f1ffeadd0f5b4adcd9914be407312c30a1cddb4",
+    "icon.svg": "03d06470cf66ed52fc302cddff34cfb318efe1a4fb34e7ee5edd38158a716562",
+    "index.css": "1702ef0f550f82da62fec239e14b183147ac28770b283a9ee5b70c4d479842c4",
+    "index.html": "c834cc84726633f158f4a7e4fd46172eaa62f2d8617d0229a65dd9204416671b",
+    "index.js": "21e210fe2e07eacdf11d4e06f1823a364ba80c0f95501f75a408db3fb82d1892",
+    "locales/de.json": "330fd0211cec86c4959af0e52a0695f2dbbc2645c779d3cbc588b48425606d62",
+    "locales/en.json": "3f22ee58ca6d27d1fafd91e6dc0e9f7b0ccfcbc5980073e40d4d965e73b840cc",
+    "module.json": "6f25c4c1126f525459c9b6b83c2da014f1a4ec6d8c7ae0ecb6c2254a8f40998c",
+    "skills/operations/SKILL.md": "7944a70394102426542a2701aa0629d59c49964532d0df4065d078d79995eba6",
+    "v4-manifest.json": "419e52d5de6f197c51c8d5e1c1ec8f586dcd878826463493f2a92b1f465aa141"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    }
+  },
+  "handlers": {
+    "ctox.iot.dashboard.delete": "handlers/ctox.iot.dashboard.delete.js",
+    "ctox.iot.dashboard.upsert": "handlers/ctox.iot.dashboard.upsert.js",
+    "ctox.iot.rules.tick": "handlers/ctox.iot.rules.tick.js",
+    "ctox.iot.signal.evaluate": "handlers/ctox.iot.signal.evaluate.js",
+    "ctox.iot.task.complete": "handlers/ctox.iot.task.complete.js",
+    "ctox.iot.task.failed": "handlers/ctox.iot.task.failed.js",
+    "ctox.iot.webhook.ingest": "handlers/ctox.iot.webhook.ingest.js",
+    "ctox.iot.webhook.register": "handlers/ctox.iot.webhook.register.js",
+    "ctox.iot.widget.arrange": "handlers/ctox.iot.widget.arrange.js",
+    "ctox.iot.widget.compile_trigger": "handlers/ctox.iot.widget.compile_trigger.js",
+    "ctox.iot.widget.delete": "handlers/ctox.iot.widget.delete.js",
+    "ctox.iot.widget.generate_render": "handlers/ctox.iot.widget.generate_render.js",
+    "ctox.iot.widget.pause": "handlers/ctox.iot.widget.pause.js",
+    "ctox.iot.widget.upsert": "handlers/ctox.iot.widget.upsert.js"
+  },
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/iot.jpg (shared/operator-icon-selection.js, sha256 47e1a59d94e3…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Operations",
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-iot\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-iot\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><circle cx=\"12\" cy=\"12\" r=\"3\" fill=\"url(#grad-iot)\" fill-opacity=\"0.18\" stroke=\"url(#grad-iot)\" stroke-width=\"2\"></circle><path d=\"M7.8 7.8a6 6 0 0 0 0 8.4M16.2 7.8a6 6 0 0 1 0 8.4\" stroke=\"url(#grad-iot)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M5 5a10 10 0 0 0 0 14M19 5a10 10 0 0 1 0 14\" stroke=\"url(#grad-iot)\" stroke-width=\"1.6\" stroke-linecap=\"round\" stroke-opacity=\"0.7\"></path></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 780,
+        "width": 1180
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#0d9488",
+        "category": "Operations",
+        "iconAssetId": "workjet.business-os.iot",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "feed",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "IoT"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "6cc885c7da50426ff20334f80688864098f65b668d31a0e47fa41995bb348526",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "skills": [
+    {
+      "name": "operations",
+      "path": "skills/operations/SKILL.md"
+    }
+  ],
+  "styles": [
+    "index.css"
+  ],
+  "title": "IoT",
+  "triggers": [
+    {
+      "every": "PT1M",
+      "handler": "handlers/ctox.iot.rules.tick.js"
+    },
+    {
+      "handler": "handlers/ctox.iot.signal.evaluate.js",
+      "on": {
+        "collection": "iot_attributes",
+        "op": "insert"
+      }
+    },
+    {
+      "handler": "handlers/ctox.iot.signal.evaluate.js",
+      "on": {
+        "collection": "iot_attributes",
+        "op": "update"
+      }
+    }
+  ],
+  "version": "1.0.2"
+}

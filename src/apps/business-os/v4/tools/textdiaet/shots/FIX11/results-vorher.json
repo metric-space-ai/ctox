@@ -1,0 +1,7528 @@
+{
+ "at": "2026-10-16T00:30:32.199Z",
+ "variant": "frame",
+ "stub": "/Users/michaelwelsch/.local/state/shell-v4/stub-pins/a8765b9",
+ "widths": [
+  420,
+  1280
+ ],
+ "ported": [
+  "app-store",
+  "appsec-pentest",
+  "browser",
+  "buchhaltung",
+  "calendar",
+  "coding-agents",
+  "consent",
+  "conversations",
+  "creator",
+  "credentials",
+  "ctox",
+  "customers",
+  "cv-print-builder",
+  "desktop",
+  "documents",
+  "esign",
+  "explorer",
+  "file-viewer",
+  "importer",
+  "intake",
+  "interviews",
+  "invoices",
+  "iot",
+  "knowledge",
+  "kundenpipeline",
+  "mail",
+  "matching",
+  "nachweise",
+  "news",
+  "notes",
+  "outbound",
+  "placements",
+  "reports",
+  "research",
+  "shiftflow",
+  "spreadsheets",
+  "submissions",
+  "support",
+  "threads",
+  "tickets"
+ ],
+ "skipped": [],
+ "results": [
+  {
+   "app": "app-store",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 134,
+    "visibleElements": 40,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 111,
+    "scrollTop": 0,
+    "title": "App Store",
+    "titleCalls": [
+     "App Store"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/app-store@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--app-store-local-accent×2",
+     "--app-accent×1",
+     "--app-accent-foreground×1",
+     "--app-store-local-ink×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.store-left"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 95,
+      "y": 148,
+      "text": "M Marketplace (0)"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 132,
+      "y": 68
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "app-store/420.png"
+  },
+  {
+   "app": "app-store",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 133,
+    "visibleElements": 81,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 147,
+    "scrollTop": 0,
+    "title": "App Store",
+    "titleCalls": [
+     "App Store"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      74,
+      74
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/app-store@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--app-store-local-accent×2",
+     "--app-accent×1",
+     "--app-accent-foreground×1",
+     "--app-store-local-ink×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "app-store/1280.png"
+  },
+  {
+   "app": "appsec-pentest",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 419,
+    "visibleElements": 64,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 499,
+    "scrollTop": 0,
+    "title": "Sicherheitstests",
+    "titleCalls": [
+     "Penetration Testing"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/appsec-pentest@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.appsec-sidebar"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 211,
+      "text": "Projektplan Projektplan Relaunch Kundenp"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 143,
+      "y": 82
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "appsec-pentest/420.png"
+  },
+  {
+   "app": "appsec-pentest",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 418,
+    "visibleElements": 96,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 652,
+    "scrollTop": 0,
+    "title": "Sicherheitstests",
+    "titleCalls": [
+     "Penetration Testing"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      75,
+      75
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/appsec-pentest@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "appsec-pentest/1280.png"
+  },
+  {
+   "app": "browser",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 220,
+    "visibleElements": 73,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 785,
+    "scrollTop": 0,
+    "title": "Browser",
+    "titleCalls": [
+     "Browser"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/browser@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.browser-sessions"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 291,
+      "text": "○ Lieferantenbewertung 2026 Ruhend · Per"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 144,
+      "y": 89
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "browser/420.png"
+  },
+  {
+   "app": "browser",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 220,
+    "visibleElements": 107,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 864,
+    "scrollTop": 0,
+    "title": "Browser",
+    "titleCalls": [
+     "Browser"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      38,
+      38
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/browser@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "browser/1280.png"
+  },
+  {
+   "app": "buchhaltung",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768,
+    520
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 885,
+    "visibleElements": 119,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 932,
+    "scrollTop": 0,
+    "title": "Buchhaltung",
+    "titleCalls": [
+     "Buchhaltung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/buchhaltung@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1",
+     "--fibu-info×1"
+    ],
+    "undefinedTokenCount": 3
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.fibu-module",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.fibu-left"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": 60,
+     "row": {
+      "x": 210,
+      "y": 202,
+      "text": "Protokoll_Kickoff.docx Beleg · Gebucht ·"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 136,
+      "y": 72
+     },
+     "scrollTop": 0,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": 60,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "buchhaltung/420.png"
+  },
+  {
+   "app": "buchhaltung",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768,
+    520
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 884,
+    "visibleElements": 610,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 3740,
+    "scrollTop": 0,
+    "title": "Buchhaltung",
+    "titleCalls": [
+     "Buchhaltung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      75,
+      75
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/buchhaltung@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1",
+     "--fibu-info×1"
+    ],
+    "undefinedTokenCount": 3
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "buchhaltung/1280.png"
+  },
+  {
+   "app": "calendar",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 381,
+    "visibleElements": 78,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 369,
+    "scrollTop": 0,
+    "title": "Kalender",
+    "titleCalls": [
+     "Kalender"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/calendar@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css",
+     "/~a/calendar@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/vendor/event-calendar/event-calendar.min.css",
+     "/~a/calendar@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/vendor/event-calendar/event-calendar.min.css"
+    ],
+    "undefinedTokens": [
+     "--ec-border-color×38",
+     "--ec-bg-color×20",
+     "--ec-day-bg-color×18",
+     "--ec-slot-height×12",
+     "--ec-slot-label-periodicity×12",
+     "--ec-direction×12",
+     "--ec-color-300×8",
+     "--ec-slot-width×8"
+    ],
+    "undefinedTokenCount": 35
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.calendar-app",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.calendar-left"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 188,
+      "text": "Budgetplanung Vertrieb Süd Budgetplanung"
+     },
+     "inner": {
+      "x": 27,
+      "y": 202
+     }
+    },
+    "secondTap": "Bedienelement der Zeile",
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 132,
+      "y": 68
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "calendar/420.png"
+  },
+  {
+   "app": "calendar",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 377,
+    "visibleElements": 281,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 654,
+    "scrollTop": 0,
+    "title": "Kalender",
+    "titleCalls": [
+     "Kalender"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      38,
+      38
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/calendar@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css",
+     "/~a/calendar@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/vendor/event-calendar/event-calendar.min.css",
+     "/~a/calendar@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/vendor/event-calendar/event-calendar.min.css"
+    ],
+    "undefinedTokens": [
+     "--ec-border-color×38",
+     "--ec-bg-color×20",
+     "--ec-day-bg-color×18",
+     "--ec-slot-height×12",
+     "--ec-slot-label-periodicity×12",
+     "--ec-direction×12",
+     "--ec-color-300×8",
+     "--ec-slot-width×8"
+    ],
+    "undefinedTokenCount": 35
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "calendar/1280.png"
+  },
+  {
+   "app": "coding-agents",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 11,
+    "visibleElements": 11,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 130,
+    "scrollTop": 0,
+    "title": "Coding-Agenten",
+    "titleCalls": [
+     "Coding-Agenten"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/coding-agents@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": []
+    },
+    "list": {
+     "kit": false
+    },
+    "note": "keine Liste/Detail-Teilung (eine Pane bzw. App-eigene Navigation)"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "coding-agents/420.png"
+  },
+  {
+   "app": "coding-agents",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 11,
+    "visibleElements": 11,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 130,
+    "scrollTop": 0,
+    "title": "Coding-Agenten",
+    "titleCalls": [
+     "Coding-Agenten"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/coding-agents@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "coding-agents/1280.png"
+  },
+  {
+   "app": "consent",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    260
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Einwilligungen“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 110,
+    "visibleElements": 59,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 398,
+    "scrollTop": 0,
+    "title": "Einwilligungen",
+    "titleCalls": [
+     "Einwilligungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/consent@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.consent-rail"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 193,
+      "text": "OnboardinggültigPerson: Unbekannt · Rech"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 144,
+      "y": 80
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "consent/420.png"
+  },
+  {
+   "app": "consent",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    260
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 110,
+    "visibleElements": 78,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 437,
+    "scrollTop": 0,
+    "title": "Einwilligungen",
+    "titleCalls": [
+     "Einwilligungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      37,
+      37
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/consent@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "consent/1280.png"
+  },
+  {
+   "app": "conversations",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "7 abgeschnittene Texte (7 in Listen): Liste h2.ctox-pane-title „Konversationen“; Liste span.conv-thread-name „anna.schmidt@mueller-maschinenbau.de, ho“; Liste span.conv-thread-name „florian.hartmann@schneider-logistik.de, “; Liste span.conv-thread-name „sophie.meyer@becker-soehne.de, martin.se“; Liste span.conv-thread-name „david.lange@hoffmann-medizintechnik.de, “"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 314,
+    "visibleElements": 115,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 998,
+    "scrollTop": 0,
+    "title": "Konversationen",
+    "titleCalls": [
+     "Konversationen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 7,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/conversations@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.conv-module",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.conv-pane"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 151,
+      "text": "AH anna.schmidt@mueller-maschinenbau.de,"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 146,
+      "y": 76
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "conversations/420.png"
+  },
+  {
+   "app": "conversations",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "10 abgeschnittene Texte (10 in Listen): Liste span.conv-thread-name „anna.schmidt@mueller-maschinenbau.de, ho“; Liste span.conv-thread-name „florian.hartmann@schneider-logistik.de, “; Liste span.conv-thread-name „sophie.meyer@becker-soehne.de, martin.se“; Liste span „Lieferverzug Ersatzteile – neue Lieferte“; Liste span.conv-thread-name „david.lange@hoffmann-medizintechnik.de, “"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 313,
+    "visibleElements": 198,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 1716,
+    "scrollTop": 0,
+    "title": "Konversationen",
+    "titleCalls": [
+     "Konversationen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 10,
+    "paneHeadRows": [
+     [
+      75,
+      75,
+      75
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/conversations@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "conversations/1280.png"
+  },
+  {
+   "app": "creator",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 144,
+    "visibleElements": 50,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 616,
+    "scrollTop": 0,
+    "title": "App Creator",
+    "titleCalls": [
+     "App Creator"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/creator@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--creator-pad×3"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "detail",
+       "visible": [
+        "section.ctox-pane.creator-main"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "detail",
+     "listEmpty": true,
+     "listShown": false,
+     "detailShown": true,
+     "scrolled": null,
+     "row": null,
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 137,
+      "y": 69
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "note": "Liste ohne Zeilen: Detail zuerst, Zurück zur leeren Liste"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "creator/420.png"
+  },
+  {
+   "app": "creator",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 143,
+    "visibleElements": 82,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 644,
+    "scrollTop": 0,
+    "title": "App Creator",
+    "titleCalls": [
+     "App Creator"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      75,
+      75
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/creator@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--creator-pad×3"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "creator/1280.png"
+  },
+  {
+   "app": "credentials",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text h1.ctox-pane-title „Neue Zugangsdaten“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 81,
+    "visibleElements": 18,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 52,
+    "scrollTop": 0,
+    "title": "Zugangsdaten",
+    "titleCalls": [
+     "Zugangsdaten"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/credentials@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "detail",
+       "visible": [
+        "section.ctox-pane.credentials-main"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "detail",
+     "listEmpty": true,
+     "listShown": false,
+     "detailShown": true,
+     "scrolled": null,
+     "row": null,
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 139,
+      "y": 74
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "note": "Liste ohne Zeilen: Detail zuerst, Zurück zur leeren Liste"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "credentials/420.png"
+  },
+  {
+   "app": "credentials",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 80,
+    "visibleElements": 57,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 87,
+    "scrollTop": 0,
+    "title": "Zugangsdaten",
+    "titleCalls": [
+     "Zugangsdaten"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      75,
+      75
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/credentials@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "credentials/1280.png"
+  },
+  {
+   "app": "ctox",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 799,
+    "visibleElements": 203,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 941,
+    "scrollTop": 0,
+    "title": "Crew",
+    "titleCalls": [
+     "Crew"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "(inline)",
+     "/~a/ctox@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--crew-color×16",
+     "--ctox-flow-edge×4",
+     "--ctox-flow-muted-fill×2",
+     "--ctox-flow-node-stroke×2",
+     "--ctox-canvas×1",
+     "--ctox-flow-lane-fill×1",
+     "--ctox-flow-lane-stroke×1",
+     "--ctox-flow-channel-fill×1"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.ctox-harness-left"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": 60,
+     "row": {
+      "x": 210,
+      "y": 189,
+      "text": "Angebot Wartungsvertrag Halle 4 ohne Cre"
+     },
+     "inner": {
+      "x": 210,
+      "y": 189
+     }
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 136,
+      "y": 72
+     },
+     "scrollTop": 0,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": 60,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "ctox/420.png"
+  },
+  {
+   "app": "ctox",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 798,
+    "visibleElements": 406,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 1635,
+    "scrollTop": 0,
+    "title": "Crew",
+    "titleCalls": [
+     "Crew"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      45,
+      45
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "(inline)",
+     "/~a/ctox@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--crew-color×16",
+     "--ctox-flow-edge×4",
+     "--ctox-flow-muted-fill×2",
+     "--ctox-flow-node-stroke×2",
+     "--ctox-canvas×1",
+     "--ctox-flow-lane-fill×1",
+     "--ctox-flow-lane-stroke×1",
+     "--ctox-flow-channel-fill×1"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "ctox/1280.png"
+  },
+  {
+   "app": "customers",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Kunden“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 193,
+    "visibleElements": 85,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1221,
+    "scrollTop": 0,
+    "title": "Kunden",
+    "titleCalls": [
+     "Kunden"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/customers@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.customers-left"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": 60,
+     "row": {
+      "x": 210,
+      "y": 201,
+      "text": "Schneider Logistik AG Verlängerung · sch"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 124,
+      "y": 82
+     },
+     "scrollTop": 0,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": 60,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "customers/420.png"
+  },
+  {
+   "app": "customers",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 193,
+    "visibleElements": 135,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 1549,
+    "scrollTop": 0,
+    "title": "Kunden",
+    "titleCalls": [
+     "Kunden"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      76,
+      76
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/customers@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "customers/1280.png"
+  },
+  {
+   "app": "cv-print-builder",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text span.ctox-pane-kicker „PDF geladen“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 145,
+    "visibleElements": 37,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 95,
+    "scrollTop": 0,
+    "title": "Lebenslauf-Druck",
+    "titleCalls": [
+     "CV Print Builder"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/cv-print-builder@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "detail",
+       "visible": [
+        "section.ctox-pane.cv-workbench"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "detail",
+     "listEmpty": true,
+     "listShown": false,
+     "detailShown": true,
+     "scrolled": null,
+     "row": null,
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 139,
+      "y": 69
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "note": "Liste ohne Zeilen: Detail zuerst, Zurück zur leeren Liste"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "cv-print-builder/420.png"
+  },
+  {
+   "app": "cv-print-builder",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 145,
+    "visibleElements": 112,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 393,
+    "scrollTop": 0,
+    "title": "Lebenslauf-Druck",
+    "titleCalls": [
+     "CV Print Builder"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      37,
+      37
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/cv-print-builder@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "cv-print-builder/1280.png"
+  },
+  {
+   "app": "desktop",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4",
+    "G8"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1320,
+    767
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text div.desktop-icon-label „lib:ctox-office@1“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [
+    "1 Bedienelemente in reservierten Zonen: div.desktop-icon unter Icon-Header"
+   ],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 27,
+    "visibleElements": 15,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 34,
+    "scrollTop": 0,
+    "title": "Desktop",
+    "titleCalls": [
+     "Desktop"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/desktop@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--shell-category-accent×5",
+     "--desktop-icon-padding×3",
+     "--surface-radius×1",
+     "--desktop-icon-cell-h×1",
+     "--shell-category-soft×1"
+    ],
+    "undefinedTokenCount": 5
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": []
+    },
+    "list": {
+     "kit": false
+    },
+    "note": "keine Liste/Detail-Teilung (eine Pane bzw. App-eigene Navigation)"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "desktop/420.png"
+  },
+  {
+   "app": "desktop",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G8"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1320,
+    767
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [
+    "1 Bedienelemente in reservierten Zonen: div.desktop-icon unter Icon-Header"
+   ],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 27,
+    "visibleElements": 15,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 34,
+    "scrollTop": 0,
+    "title": "Desktop",
+    "titleCalls": [
+     "Desktop"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/desktop@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--shell-category-accent×5",
+     "--desktop-icon-padding×3",
+     "--surface-radius×1",
+     "--desktop-icon-cell-h×1",
+     "--shell-category-soft×1"
+    ],
+    "undefinedTokenCount": 5
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "desktop/1280.png"
+  },
+  {
+   "app": "documents",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    620,
+    560,
+    360
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (0 in Listen): Text strong „Angebot Wartungsvertrag Halle 4“; Text span „Markdown“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 118,
+    "visibleElements": 16,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 68,
+    "scrollTop": 0,
+    "title": "Dokumente",
+    "titleCalls": [
+     "Dokumente"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/documents@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--documents-actions-width×5",
+     "--documents-library-width×3",
+     "--surface-radius×2",
+     "--spring-duration×2",
+     "--shell-col-left×1",
+     "--spring-snappy×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": []
+    },
+    "list": {
+     "kit": false
+    },
+    "note": "keine Liste/Detail-Teilung (eine Pane bzw. App-eigene Navigation)"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "documents/420.png"
+  },
+  {
+   "app": "documents",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    620,
+    560,
+    360
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 118,
+    "visibleElements": 78,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 447,
+    "scrollTop": 0,
+    "title": "Dokumente",
+    "titleCalls": [
+     "Dokumente"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      74,
+      74
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/documents@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--documents-actions-width×5",
+     "--documents-library-width×3",
+     "--surface-radius×2",
+     "--spring-duration×2",
+     "--shell-col-left×1",
+     "--spring-snappy×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "documents/1280.png"
+  },
+  {
+   "app": "esign",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 115,
+    "visibleElements": 58,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 332,
+    "scrollTop": 0,
+    "title": "E-Signatur",
+    "titleCalls": [
+     "E-Signatur"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/esign@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--border×2"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.esign-left"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 181,
+      "text": "Angebot Wartungsvertrag Halle 4Abgeschlo"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 124,
+      "y": 68
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "esign/420.png"
+  },
+  {
+   "app": "esign",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (2 in Listen): Liste strong „Angebot Wartungsvertrag Halle 4“; Liste strong „Angebot Wartungsvertrag Halle 4“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 114,
+    "visibleElements": 78,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 449,
+    "scrollTop": 0,
+    "title": "E-Signatur",
+    "titleCalls": [
+     "E-Signatur"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "paneHeadRows": [
+     [
+      37,
+      37
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/esign@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--border×2"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "esign/1280.png"
+  },
+  {
+   "app": "explorer",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Dateien“; Text b[data-explorer-path] „Dateien“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 120,
+    "visibleElements": 92,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 433,
+    "scrollTop": 0,
+    "title": "Explorer",
+    "titleCalls": [
+     "Explorer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/explorer@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": []
+    },
+    "list": {
+     "kit": false
+    },
+    "note": "keine Liste/Detail-Teilung (eine Pane bzw. App-eigene Navigation)"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "explorer/420.png"
+  },
+  {
+   "app": "explorer",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 120,
+    "visibleElements": 112,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 527,
+    "scrollTop": 0,
+    "title": "Explorer",
+    "titleCalls": [
+     "Explorer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/explorer@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "explorer/1280.png"
+  },
+  {
+   "app": "file-viewer",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 21,
+    "visibleElements": 14,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 40,
+    "scrollTop": 0,
+    "title": "Datei-Viewer",
+    "titleCalls": [
+     "Datei-Viewer",
+     "Datei-Viewer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/file-viewer@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": []
+    },
+    "list": {
+     "kit": false
+    },
+    "note": "keine Liste/Detail-Teilung (eine Pane bzw. App-eigene Navigation)"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "file-viewer/420.png"
+  },
+  {
+   "app": "file-viewer",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 21,
+    "visibleElements": 14,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 40,
+    "scrollTop": 0,
+    "title": "Datei-Viewer",
+    "titleCalls": [
+     "Datei-Viewer",
+     "Datei-Viewer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/file-viewer@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "file-viewer/1280.png"
+  },
+  {
+   "app": "importer",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 95,
+    "visibleElements": 48,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 229,
+    "scrollTop": 0,
+    "title": "App-Import",
+    "titleCalls": [
+     "App Importer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/importer@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--imp-accent×12",
+     "--border×11",
+     "--imp-accent-soft×5",
+     "--app-accent-foreground×4",
+     "--app-accent×3",
+     "--imp-accent-strong×3",
+     "--app-accent-soft×1",
+     "--text-muted×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": []
+    },
+    "list": {
+     "kit": false
+    },
+    "note": "keine Liste/Detail-Teilung (eine Pane bzw. App-eigene Navigation)"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "importer/420.png"
+  },
+  {
+   "app": "importer",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 95,
+    "visibleElements": 54,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 252,
+    "scrollTop": 0,
+    "title": "App-Import",
+    "titleCalls": [
+     "App Importer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/importer@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--imp-accent×12",
+     "--border×11",
+     "--imp-accent-soft×5",
+     "--app-accent-foreground×4",
+     "--app-accent×3",
+     "--imp-accent-strong×3",
+     "--app-accent-soft×1",
+     "--text-muted×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "importer/1280.png"
+  },
+  {
+   "app": "intake",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Bewerbungen“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 114,
+    "visibleElements": 56,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 270,
+    "scrollTop": 0,
+    "title": "Bewerbungseingang",
+    "titleCalls": [
+     "Bewerbungseingang"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/intake@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.intake-rail"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 193,
+      "text": "(ohne Namen)allKanal: E-Mail · Vakanz: U"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 150,
+      "y": 80
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "intake/420.png"
+  },
+  {
+   "app": "intake",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 113,
+    "visibleElements": 75,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 322,
+    "scrollTop": 0,
+    "title": "Bewerbungseingang",
+    "titleCalls": [
+     "Bewerbungseingang"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      37,
+      37
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/intake@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "intake/1280.png"
+  },
+  {
+   "app": "interviews",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 128,
+    "visibleElements": 54,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 235,
+    "scrollTop": 0,
+    "title": "Interviews",
+    "titleCalls": [
+     "Interviews"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/interviews@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ats-interviews",
+       "mode": null,
+       "visible": [
+        "aside.ctox-pane.ats-list-pane"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": false
+    },
+    "note": "keine Liste/Detail-Teilung (eine Pane bzw. App-eigene Navigation)"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "interviews/420.png"
+  },
+  {
+   "app": "interviews",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 128,
+    "visibleElements": 54,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 235,
+    "scrollTop": 0,
+    "title": "Interviews",
+    "titleCalls": [
+     "Interviews"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/interviews@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "interviews/1280.png"
+  },
+  {
+   "app": "invoices",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Rechnungen“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 149,
+    "visibleElements": 76,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 432,
+    "scrollTop": 0,
+    "title": "Rechnungen",
+    "titleCalls": [
+     "Rechnungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/invoices@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--invoices-v2-control-inset×2"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.invoices-rail"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 182,
+      "text": "RE-2026-1040GebuchtMüller Maschinenbau G"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 138,
+      "y": 68
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "invoices/420.png"
+  },
+  {
+   "app": "invoices",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 149,
+    "visibleElements": 126,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 805,
+    "scrollTop": 0,
+    "title": "Rechnungen",
+    "titleCalls": [
+     "Rechnungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      75,
+      76
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/invoices@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--invoices-v2-control-inset×2"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "invoices/1280.png"
+  },
+  {
+   "app": "iot",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    600
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 76,
+    "visibleElements": 15,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 35,
+    "scrollTop": 0,
+    "title": "IoT",
+    "titleCalls": [
+     "IoT"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/iot@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.iot-module",
+       "mode": "detail",
+       "visible": [
+        "section.ctox-pane.iot-pane"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "detail",
+     "listEmpty": true,
+     "listShown": false,
+     "detailShown": true,
+     "scrolled": null,
+     "row": null,
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 124,
+      "y": 68
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "note": "Liste ohne Zeilen: Detail zuerst, Zurück zur leeren Liste"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "iot/420.png"
+  },
+  {
+   "app": "iot",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    600
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Assets & Signale“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 75,
+    "visibleElements": 54,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 75,
+    "scrollTop": 0,
+    "title": "IoT",
+    "titleCalls": [
+     "IoT"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "paneHeadRows": [
+     [
+      75,
+      75
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/iot@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "iot/1280.png"
+  },
+  {
+   "app": "knowledge",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: select → select.header-select (außerhalb jedes [data-app])"
+   ],
+   "info": {
+    "elements": 181,
+    "visibleElements": 61,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 307,
+    "scrollTop": 0,
+    "title": "Wissen",
+    "titleCalls": [
+     "Knowledge"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/knowledge@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--knowledge-accent×24",
+     "--knowledge-surface×22",
+     "--knowledge-line×17",
+     "--knowledge-muted×16",
+     "--knowledge-control-radius×15",
+     "--knowledge-text×10",
+     "--knowledge-bg×4",
+     "--knowledge-surface-muted×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.knowledge-module",
+       "mode": null,
+       "visible": [
+        "section.ctox-pane.knowledge-pane"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": false
+    },
+    "note": "keine Liste/Detail-Teilung (eine Pane bzw. App-eigene Navigation)"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "knowledge/420.png"
+  },
+  {
+   "app": "knowledge",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: select → select.header-select (außerhalb jedes [data-app])"
+   ],
+   "info": {
+    "elements": 181,
+    "visibleElements": 88,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 473,
+    "scrollTop": 0,
+    "title": "Wissen",
+    "titleCalls": [
+     "Knowledge"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      37,
+      37
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/knowledge@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--knowledge-accent×24",
+     "--knowledge-surface×22",
+     "--knowledge-line×17",
+     "--knowledge-muted×16",
+     "--knowledge-control-radius×15",
+     "--knowledge-text×10",
+     "--knowledge-bg×4",
+     "--knowledge-surface-muted×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "knowledge/1280.png"
+  },
+  {
+   "app": "kundenpipeline",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1180,
+    768,
+    767
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 75,
+    "visibleElements": 30,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 144,
+    "scrollTop": 0,
+    "title": "Entscheidungen",
+    "titleCalls": [
+     "Decision Hub"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/kundenpipeline@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.kundenpipeline-module",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.kundenpipeline-rail"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 202,
+      "text": "KundenterminOffen +49 7461 4611-13 10.10"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 145,
+      "y": 93
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "kundenpipeline/420.png"
+  },
+  {
+   "app": "kundenpipeline",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1180,
+    768,
+    767
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 74,
+    "visibleElements": 71,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 268,
+    "scrollTop": 0,
+    "title": "Entscheidungen",
+    "titleCalls": [
+     "Decision Hub"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      88,
+      88,
+      88
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/kundenpipeline@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "kundenpipeline/1280.png"
+  },
+  {
+   "app": "mail",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    620
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 366,
+    "visibleElements": 49,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 93,
+    "scrollTop": 0,
+    "title": "Mail",
+    "titleCalls": [
+     "Mail"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/mail@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css",
+     "/~a/mail@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/editor/editor.css"
+    ],
+    "undefinedTokens": [
+     "--mail-left-width×3",
+     "--mail-right-width×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.mail-module",
+       "mode": null,
+       "visible": [
+        "section.ctox-pane.mail-list-pane"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": false
+    },
+    "note": "keine Liste/Detail-Teilung (eine Pane bzw. App-eigene Navigation)"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "mail/420.png"
+  },
+  {
+   "app": "mail",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    620
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 366,
+    "visibleElements": 94,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 248,
+    "scrollTop": 0,
+    "title": "Mail",
+    "titleCalls": [
+     "Mail"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      75,
+      75
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/mail@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css",
+     "/~a/mail@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/editor/editor.css"
+    ],
+    "undefinedTokens": [
+     "--mail-left-width×3",
+     "--mail-right-width×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "mail/1280.png"
+  },
+  {
+   "app": "matching",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste h2#workbenchTitle.ctox-pane-title.column-title „Anforderung auswählen“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 221,
+    "visibleElements": 43,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 77,
+    "scrollTop": 0,
+    "title": "Matching",
+    "titleCalls": [
+     "Matching"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/matching@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--matchColor×3"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.matching-app",
+       "mode": "detail",
+       "visible": [
+        "section.ctox-pane.matching-main"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "detail",
+     "listEmpty": true,
+     "listShown": false,
+     "detailShown": true,
+     "scrolled": null,
+     "row": null,
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 124,
+      "y": 74
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "note": "Liste ohne Zeilen: Detail zuerst, Zurück zur leeren Liste"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "matching/420.png"
+  },
+  {
+   "app": "matching",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 220,
+    "visibleElements": 77,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 117,
+    "scrollTop": 0,
+    "title": "Matching",
+    "titleCalls": [
+     "Matching"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      74,
+      74
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/matching@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--matchColor×3"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "matching/1280.png"
+  },
+  {
+   "app": "nachweise",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 152,
+    "visibleElements": 60,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 379,
+    "scrollTop": 0,
+    "title": "Nachweise",
+    "titleCalls": [
+     "Nachweise"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/nachweise@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.nachweise-rail"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 209,
+      "text": "emailnicht verifiziertPerson: Unbekannt "
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 139,
+      "y": 69
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "nachweise/420.png"
+  },
+  {
+   "app": "nachweise",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 151,
+    "visibleElements": 87,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 619,
+    "scrollTop": 0,
+    "title": "Nachweise",
+    "titleCalls": [
+     "Nachweise"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      37,
+      37
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/nachweise@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "nachweise/1280.png"
+  },
+  {
+   "app": "news",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 279,
+    "visibleElements": 71,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 332,
+    "scrollTop": 0,
+    "title": "Nachrichten",
+    "titleCalls": [
+     "News"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/news@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--news-line×16",
+     "--news-muted×16",
+     "--news-text×12",
+     "--news-row×9",
+     "--news-bg×5",
+     "--news-hover×5",
+     "--news-fill×5",
+     "--news-surface×5"
+    ],
+    "undefinedTokenCount": 10
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.news-module",
+       "mode": null,
+       "visible": [
+        "section.ctox-pane.news-pane"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": false
+    },
+    "note": "keine Liste/Detail-Teilung (eine Pane bzw. App-eigene Navigation)"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "news/420.png"
+  },
+  {
+   "app": "news",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 279,
+    "visibleElements": 138,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 483,
+    "scrollTop": 0,
+    "title": "Nachrichten",
+    "titleCalls": [
+     "News"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      74,
+      74,
+      74
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/news@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--news-line×16",
+     "--news-muted×16",
+     "--news-text×12",
+     "--news-row×9",
+     "--news-bg×5",
+     "--news-hover×5",
+     "--news-fill×5",
+     "--news-surface×5"
+    ],
+    "undefinedTokenCount": 10
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "news/1280.png"
+  },
+  {
+   "app": "notes",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 378,
+    "visibleElements": 100,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 190,
+    "scrollTop": 0,
+    "title": "Notizen",
+    "titleCalls": [
+     "Notizen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/notes@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--nn-shadow×2",
+     "--nn-paper-shadow×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.notes-module",
+       "mode": null,
+       "visible": [
+        "section.ctox-pane.notes-center"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": false
+    },
+    "note": "keine Liste/Detail-Teilung (eine Pane bzw. App-eigene Navigation)"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "notes/420.png"
+  },
+  {
+   "app": "notes",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 378,
+    "visibleElements": 214,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 1050,
+    "scrollTop": 0,
+    "title": "Notizen",
+    "titleCalls": [
+     "Notizen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      37,
+      37
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/notes@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--nn-shadow×2",
+     "--nn-paper-shadow×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "notes/1280.png"
+  },
+  {
+   "app": "outbound",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 380,
+    "visibleElements": 162,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 642,
+    "scrollTop": 0,
+    "title": "Outbound",
+    "titleCalls": [
+     "Outbound"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/outbound@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--outbound-info×4",
+     "--row-h×3",
+     "--outbound-info-ink×3",
+     "--outbound-indigo×3",
+     "--outbound-purple×2",
+     "--ctox-left-width×1",
+     "--outbound-purple-ink×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "list",
+       "visible": [
+        "section.ctox-pane.outbound-left"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 192,
+      "text": "Outbound Firmenqualifizierung Aktiv · Ke"
+     },
+     "inner": {
+      "x": 155,
+      "y": 201
+     }
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 138,
+      "y": 73
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "outbound/420.png"
+  },
+  {
+   "app": "outbound",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [
+    "G1 erlaubt: 1 Container mit [data-scroll-x] scrollen seitlich: div.outbound-table-scroll-unified 1382>872"
+   ],
+   "info": {
+    "elements": 378,
+    "visibleElements": 290,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 1487,
+    "scrollTop": 0,
+    "title": "Outbound",
+    "titleCalls": [
+     "Outbound"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      56,
+      56
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/outbound@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--outbound-info×4",
+     "--row-h×3",
+     "--outbound-info-ink×3",
+     "--outbound-indigo×3",
+     "--outbound-purple×2",
+     "--ctox-left-width×1",
+     "--outbound-purple-ink×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "outbound/1280.png"
+  },
+  {
+   "app": "placements",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Vermittlungen“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 118,
+    "visibleElements": 58,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 410,
+    "scrollTop": 0,
+    "title": "Vermittlungen",
+    "titleCalls": [
+     "Vermittlungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/placements@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.placements-left"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 182,
+      "text": "bestätigtUnbekannt → UnbekanntFestanstel"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 125,
+      "y": 74
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "placements/420.png"
+  },
+  {
+   "app": "placements",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 117,
+    "visibleElements": 63,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 410,
+    "scrollTop": 0,
+    "title": "Vermittlungen",
+    "titleCalls": [
+     "Vermittlungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      74,
+      74
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/placements@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "placements/1280.png"
+  },
+  {
+   "app": "reports",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 185,
+    "visibleElements": 113,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 951,
+    "scrollTop": 0,
+    "title": "Fehler & Wünsche",
+    "titleCalls": [
+     "Bugs & Features"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/reports@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--reports-feature×3",
+     "--app-accent×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.reports-module",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.reports-rail"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": 60,
+     "row": {
+      "x": 210,
+      "y": 211,
+      "text": "Projektplan Relaunch Kundenportal Bugs O"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 153,
+      "y": 90
+     },
+     "scrollTop": 0,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": 60,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "reports/420.png"
+  },
+  {
+   "app": "reports",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 184,
+    "visibleElements": 142,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 1150,
+    "scrollTop": 0,
+    "title": "Fehler & Wünsche",
+    "titleCalls": [
+     "Bugs & Features"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      37,
+      37
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/reports@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--reports-feature×3",
+     "--app-accent×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "reports/1280.png"
+  },
+  {
+   "app": "research",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1240,
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 157,
+    "visibleElements": 35,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 394,
+    "scrollTop": 0,
+    "title": "Webrecherche",
+    "titleCalls": [
+     "Web Research"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/research@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--research-line×39",
+     "--research-muted×38",
+     "--research-accent×31",
+     "--research-surface×17",
+     "--research-surface-2×15",
+     "--research-text×15",
+     "--research-warn×12",
+     "--research-good×9"
+    ],
+    "undefinedTokenCount": 16
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.research-module",
+       "mode": "list",
+       "visible": [
+        "section.ctox-pane.research-pane"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 143,
+      "text": "Rahmenvertrag über Wartung und Instandha"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 137,
+      "y": 73
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "research/420.png"
+  },
+  {
+   "app": "research",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1240,
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 156,
+    "visibleElements": 149,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 860,
+    "scrollTop": 0,
+    "title": "Webrecherche",
+    "titleCalls": [
+     "Web Research"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      37,
+      37,
+      37
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/research@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--research-line×39",
+     "--research-muted×38",
+     "--research-accent×31",
+     "--research-surface×17",
+     "--research-surface-2×15",
+     "--research-text×15",
+     "--research-warn×12",
+     "--research-good×9"
+    ],
+    "undefinedTokenCount": 16
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "research/1280.png"
+  },
+  {
+   "app": "shiftflow",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    760
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text h2#centerPaneTitle.ctox-pane-title „Einsatzplanung“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 287,
+    "visibleElements": 105,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 478,
+    "scrollTop": 0,
+    "title": "Einsatzplanung",
+    "titleCalls": [
+     "Einsatzplanung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/shiftflow@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--shiftflow-dept×3",
+     "--shiftflow-dept-strong×1",
+     "--shiftflow-icon-document×1",
+     "--ctox-left-width×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.shiftflow-app",
+       "mode": "detail",
+       "visible": [
+        "section.ctox-pane.shiftflow-center-pane"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "detail",
+     "listEmpty": true,
+     "listShown": false,
+     "detailShown": true,
+     "scrolled": null,
+     "row": null,
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 145,
+      "y": 79
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "note": "Liste ohne Zeilen: Detail zuerst, Zurück zur leeren Liste"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "shiftflow/420.png"
+  },
+  {
+   "app": "shiftflow",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    760
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 286,
+    "visibleElements": 149,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 597,
+    "scrollTop": 0,
+    "title": "Einsatzplanung",
+    "titleCalls": [
+     "Einsatzplanung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      37,
+      37
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/shiftflow@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--shiftflow-dept×3",
+     "--shiftflow-dept-strong×1",
+     "--shiftflow-icon-document×1",
+     "--ctox-left-width×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "shiftflow/1280.png"
+  },
+  {
+   "app": "spreadsheets",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Angebot Wartungsvertrag Halle 4“"
+   ],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 104,
+    "visibleElements": 10,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 31,
+    "scrollTop": 0,
+    "title": "Tabellen",
+    "titleCalls": [
+     "Tabellen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/spreadsheets@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--surface-radius×2",
+     "--shell-col-left×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "section.spreadsheets-module",
+       "mode": null,
+       "visible": [
+        "main.spreadsheets-editor"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": false
+    },
+    "note": "keine Liste/Detail-Teilung (eine Pane bzw. App-eigene Navigation)"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "spreadsheets/420.png"
+  },
+  {
+   "app": "spreadsheets",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 104,
+    "visibleElements": 70,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 381,
+    "scrollTop": 0,
+    "title": "Tabellen",
+    "titleCalls": [
+     "Tabellen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      74,
+      74
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/spreadsheets@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--surface-radius×2",
+     "--shell-col-left×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "spreadsheets/1280.png"
+  },
+  {
+   "app": "submissions",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 112,
+    "visibleElements": 58,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 310,
+    "scrollTop": 0,
+    "title": "Vorstellungen",
+    "titleCalls": [
+     "Vorstellungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/submissions@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.ctox-workspace--two-pane",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.subs-left"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 182,
+      "text": "stringUnbekanntUnbekannt · Vakanz: Unbek"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 125,
+      "y": 74
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "submissions/420.png"
+  },
+  {
+   "app": "submissions",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 111,
+    "visibleElements": 63,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 310,
+    "scrollTop": 0,
+    "title": "Vorstellungen",
+    "titleCalls": [
+     "Vorstellungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      74,
+      74
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/submissions@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "submissions/1280.png"
+  },
+  {
+   "app": "support",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 232,
+    "visibleElements": 60,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 517,
+    "scrollTop": 0,
+    "title": "Support",
+    "titleCalls": [
+     "Support"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/support@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.support-module",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.support-left"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 182,
+      "text": "Preisanpassung ab 01.01.2027 Offen Zuord"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": false
+    },
+    "note": "nach dem Tipp App-eigene Detailansicht (eine Pane), Kit zurückgetreten"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "support/420.png"
+  },
+  {
+   "app": "support",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 231,
+    "visibleElements": 95,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 1011,
+    "scrollTop": 0,
+    "title": "Support",
+    "titleCalls": [
+     "Support"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      74,
+      74
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/support@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "support/1280.png"
+  },
+  {
+   "app": "threads",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 208,
+    "visibleElements": 34,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 50,
+    "scrollTop": 0,
+    "title": "Threads",
+    "titleCalls": [
+     "Threads"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/threads@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.threads-module",
+       "mode": null,
+       "visible": [
+        "aside.ctox-pane.threads-left"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": false
+    },
+    "note": "keine Liste/Detail-Teilung (eine Pane bzw. App-eigene Navigation)"
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "threads/420.png"
+  },
+  {
+   "app": "threads",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 208,
+    "visibleElements": 64,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 57,
+    "scrollTop": 0,
+    "title": "Threads",
+    "titleCalls": [
+     "Threads"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      74,
+      74
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/threads@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "threads/1280.png"
+  },
+  {
+   "app": "tickets",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 348,
+    "visibleElements": 71,
+    "root": {
+     "w": 408,
+     "h": 800
+    },
+    "window": {
+     "w": 420,
+     "h": 812,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 162,
+    "scrollTop": 0,
+    "title": "Tickets",
+    "titleCalls": [
+     "Tickets"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/tickets@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--tickets-v2-control-inset×3"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "g11": {
+    "static": {
+     "workspaces": [
+      {
+       "ws": "main.ctox-workspace.tickets-module",
+       "mode": "list",
+       "visible": [
+        "aside.ctox-pane.tickets-pane"
+       ]
+      }
+     ]
+    },
+    "list": {
+     "kit": true,
+     "mode": "list",
+     "listEmpty": false,
+     "listShown": true,
+     "detailShown": false,
+     "scrolled": null,
+     "row": {
+      "x": 210,
+      "y": 182,
+      "text": "TicketOffenctox"
+     },
+     "inner": null
+    },
+    "detail": {
+     "kit": true,
+     "mode": "detail",
+     "listShown": false,
+     "detailShown": true,
+     "backShown": true,
+     "backInZone": false,
+     "backHit": "ok",
+     "back": {
+      "x": 138,
+      "y": 68
+     },
+     "scrollTop": null,
+     "zoneHits": []
+    },
+    "back": {
+     "kit": true,
+     "mode": "list",
+     "listShown": true,
+     "detailShown": false,
+     "backShown": false,
+     "backInZone": false,
+     "backHit": null,
+     "back": null,
+     "scrollTop": null,
+     "zoneHits": []
+    }
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "tickets/420.png"
+  },
+  {
+   "app": "tickets",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "G7": [],
+   "G8": [],
+   "G9": [],
+   "G11": [],
+   "notes": [],
+   "info": {
+    "elements": 348,
+    "visibleElements": 264,
+    "root": {
+     "w": 1268,
+     "h": 732
+    },
+    "window": {
+     "w": 1280,
+     "h": 744,
+     "mode": ""
+    },
+    "textChars": 563,
+    "scrollTop": 0,
+    "title": "Tickets",
+    "titleCalls": [
+     "Tickets"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "paneHeadRows": [
+     [
+      75,
+      76,
+      76
+     ]
+    ],
+    "reservedZones": {
+     "icon": [
+      82,
+      74
+     ],
+     "controls": [
+      98,
+      44
+     ]
+    },
+    "appSheets": [
+     "/~a/tickets@1.0.0~shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--tickets-v2-control-inset×3"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": null,
+   "g11": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "tickets/1280.png"
+  }
+ ],
+ "zoneCases": [
+  {
+   "app": "news",
+   "case": "ausgabe-fehlgeschlagen",
+   "width": 1280,
+   "expect": "news.issue.failed",
+   "ok": true,
+   "fails": [],
+   "zoneEntries": [
+    "app:news.issue.failed"
+   ],
+   "G3": [
+    "Zustandszone sichtbar: „1\nAusgabe fehlgeschlagen: Quelle nicht erreichbar“"
+   ],
+   "errors": [],
+   "shot": "news/zone-ausgabe-fehlgeschlagen-1280.png"
+  },
+  {
+   "app": "documents",
+   "case": "version-fehlt",
+   "width": 1280,
+   "expect": "documents.version.missing",
+   "ok": true,
+   "fails": [],
+   "zoneEntries": [
+    "app:documents.version.missing"
+   ],
+   "G3": [
+    "Zustandszone sichtbar: „1\nKeine gespeicherte Dokumentversion gefunden. Angebot Wartungsvertrag Halle 4“"
+   ],
+   "errors": [],
+   "shot": "documents/zone-version-fehlt-1280.png"
+  },
+  {
+   "app": "documents",
+   "case": "docx-ohne-kern",
+   "width": 1280,
+   "expect": "documents.editor",
+   "ok": true,
+   "fails": [],
+   "zoneEntries": [
+    "app:documents.editor"
+   ],
+   "G3": [
+    "Zustandszone sichtbar: „1\nDOCX editor konnte nicht geladen werden: CTOX Rust prepare did not return a Euro-Office DOCY editor payload“"
+   ],
+   "errors": [
+    "console: [documents] CTOX Documents mount failed OfficeRpcError: CTOX Rust prepare did not return a Euro-Office DOCY editor payload\n    at deserializeError (http://127.0.0.1:61788/~a/lib:ctox-office@1.0~lib:mo"
+   ],
+   "shot": "documents/zone-docx-ohne-kern-1280.png"
+  },
+  {
+   "app": "browser",
+   "case": "sitzung-fehlgeschlagen",
+   "width": 1280,
+   "expect": "browser.frame",
+   "ok": true,
+   "fails": [],
+   "zoneEntries": [
+    "app:browser.frame"
+   ],
+   "G3": [
+    "Zustandszone sichtbar: „1\nBrowser-Prozess beendet“"
+   ],
+   "errors": [],
+   "shot": "browser/zone-sitzung-fehlgeschlagen-1280.png"
+  }
+ ]
+}

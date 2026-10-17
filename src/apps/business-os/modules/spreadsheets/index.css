@@ -1,4 +1,4 @@
-@import url('../../shared/office-workspace.css?v=20260904-office-shell-v2');
+@import url('ctox:shared/office-workspace.css');
 /* Spreadsheets Module Styling for CTOX Business OS.
    Normal UI (pane headers, search/filters, lists, badges, buttons, fields,
    empty states, context menu) uses the shared kit classes from
@@ -8,7 +8,7 @@
    from shell tokens, so light/dark follow the shell theme switch. */
 
 /* The app contributes file and editor panes to the shared Shell V2 grid. */
-.spreadsheets-module {
+[data-app="spreadsheets"] :where(.spreadsheets-module) {
   --shell-col-left: 320px;
   position: relative;
   height: 100%;
@@ -20,7 +20,7 @@
   overflow: hidden;
 }
 
-.spreadsheets-editor {
+[data-app="spreadsheets"] :where(.spreadsheets-editor) {
   grid-column: 3;
   min-width: 0;
   flex: 1 1 auto;
@@ -30,41 +30,41 @@
   overflow: hidden;
 }
 
-.spreadsheets-explorer { grid-column: 1; }
-.spreadsheets-library-resizer { grid-column: 2; grid-row: 1; }
-.spreadsheets-library-toggle, .spreadsheets-library-backdrop { display: none; }
-.spreadsheets-editor > .spreadsheets-editor-header { flex:0 0 74px; height:74px; min-height:74px; }
-.shell-window[data-shell-contract="v2"] .spreadsheets-editor > .spreadsheets-editor-header {
+[data-app="spreadsheets"] :where(.spreadsheets-explorer) { grid-column: 1; }
+[data-app="spreadsheets"] :where(.spreadsheets-library-resizer) { grid-column: 2; grid-row: 1; }
+[data-app="spreadsheets"] :where(.spreadsheets-library-toggle), [data-app="spreadsheets"] :where(.spreadsheets-library-backdrop) { display: none; }
+[data-app="spreadsheets"] :where(.spreadsheets-editor) > .spreadsheets-editor-header { flex:0 0 74px; height:74px; min-height:74px; }
+[data-app="spreadsheets"] .spreadsheets-editor > .spreadsheets-editor-header {
   height: calc(var(--shell-v2-header-row-size, 37px) * 2);
   min-height: calc(var(--shell-v2-header-row-size, 37px) * 2);
 }
 @container business-app-window (max-width: 768px) {
-  .spreadsheets-module { grid-template-columns: minmax(0, 1fr); }
-  .spreadsheets-editor { grid-column: 1; grid-row: 1; }
-  .spreadsheets-library-resizer { display:none; }
-  .spreadsheets-library-toggle { display:grid; }
-  .spreadsheets-module .spreadsheets-explorer { display:none; position:absolute; z-index:12; inset:0 auto 0 0; width:min(340px, calc(100% - 32px)); border-right:1px solid var(--line); }
-  .spreadsheets-module.is-library-open .spreadsheets-explorer { display:flex; }
-  .spreadsheets-module.is-library-open .spreadsheets-library-backdrop:not([hidden]) { display:block; position:absolute; inset:0; z-index:11; border:0; background:color-mix(in srgb, var(--bg) 65%, transparent); }
-  .shell-window[data-shell-contract="v2"] .spreadsheets-editor > .spreadsheets-editor-header { padding-left:calc(var(--shell-v2-icon-size,80px) + 14px); }
+  [data-app="spreadsheets"] :where(.spreadsheets-module) { grid-template-columns: minmax(0, 1fr); }
+  [data-app="spreadsheets"] :where(.spreadsheets-editor) { grid-column: 1; grid-row: 1; }
+  [data-app="spreadsheets"] :where(.spreadsheets-library-resizer) { display:none; }
+  [data-app="spreadsheets"] :where(.spreadsheets-library-toggle) { display:grid; }
+  [data-app="spreadsheets"] :where(.spreadsheets-module) .spreadsheets-explorer { display:none; position:absolute; z-index:12; inset:0 auto 0 0; width:min(340px, calc(100% - 32px)); border-right:1px solid var(--line); }
+  [data-app="spreadsheets"] :where(.spreadsheets-module).is-library-open .spreadsheets-explorer { display:flex; }
+  [data-app="spreadsheets"] :where(.spreadsheets-module).is-library-open .spreadsheets-library-backdrop:not([hidden]) { display:block; position:absolute; inset:0; z-index:11; border:0; background:color-mix(in srgb, var(--bg) 65%, transparent); }
+  [data-app="spreadsheets"] .spreadsheets-editor > .spreadsheets-editor-header { padding-left:calc(var(--shell-v2-icon-size,80px) + 14px); }
 }
 
 /* Loading skeleton: shell-provided .module-loading-* parts, centered. */
-.spreadsheets-loading-shell {
+[data-app="spreadsheets"] :where(.spreadsheets-loading-shell) {
   flex: 1 1 auto;
   min-height: 0;
   display: grid;
   place-content: center;
 }
 
-.shell-window[data-shell-contract="v2"] .spreadsheets-loading-header {
+[data-app="spreadsheets"] .spreadsheets-loading-header {
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
-  padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
+  padding-right: var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size, 37px) * 2));
 }
 
-.spreadsheets-loading-reserved-row {
+[data-app="spreadsheets"] :where(.spreadsheets-loading-reserved-row) {
   flex: 0 0 var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
   background: transparent;
@@ -72,8 +72,8 @@
 }
 
 /* File-pane content wrapper rendered into the shell's left slot. */
-.spreadsheets-explorer,
-.spreadsheets-runbooks {
+[data-app="spreadsheets"] :where(.spreadsheets-explorer),
+[data-app="spreadsheets"] :where(.spreadsheets-runbooks) {
   display: flex;
   flex-direction: column;
   height: 100%;
@@ -96,7 +96,7 @@
    collapsed) clear the window control. The icon is 74px tall, i.e. two header
    rows, so the search strip directly below the left head clears it as well.
    -------------------------------------------------------------------------- */
-.shell-window[data-shell-contract="v2"]
+[data-app="spreadsheets"]
   :is(.spreadsheets-explorer, .spreadsheets-runbooks, .spreadsheets-editor)
   > .ctox-pane-header {
   box-sizing: border-box;
@@ -107,14 +107,14 @@
   padding-bottom: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .spreadsheets-explorer > .ctox-pane-header {
+[data-app="spreadsheets"] .spreadsheets-explorer > .ctox-pane-header {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
   height: calc(var(--shell-v2-header-row-size, 37px) * 2);
   min-height: calc(var(--shell-v2-header-row-size, 37px) * 2);
   border-bottom: 0;
 }
 
-.spreadsheets-explorer > .ctox-pane-header > .spreadsheets-search-bar {
+[data-app="spreadsheets"] :where(.spreadsheets-explorer) > .ctox-pane-header > .spreadsheets-search-bar {
   box-sizing: border-box;
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
@@ -124,7 +124,7 @@
 
 /* Unlike the library's title + search rows, the editor owns one continuous
    two-row band, leaving the complete window-control corner unobstructed. */
-.shell-window[data-shell-contract="v2"] .spreadsheets-editor > .ctox-pane-header {
+[data-app="spreadsheets"] .spreadsheets-editor > .ctox-pane-header {
   flex: 0 0 calc(var(--shell-v2-header-row-size, 37px) * 2);
   height: calc(var(--shell-v2-header-row-size, 37px) * 2);
   min-height: calc(var(--shell-v2-header-row-size, 37px) * 2);
@@ -134,40 +134,40 @@
    zwei Kopfzeilen breit. Der jeweils letzte Kopf der obersten Zeile weicht um
    genau diesen Betrag aus — 70px waren eine Schaetzung, die bei einer anderen
    Icon-Groesse unter den Schliessen-Knopf gelaufen waere. */
-.shell-window[data-shell-contract="v2"] .spreadsheets-editor > .ctox-pane-header,
-.shell-window[data-shell-contract="v2"] .spreadsheets-runbooks > .ctox-pane-header {
-  padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
+[data-app="spreadsheets"] .spreadsheets-editor > .ctox-pane-header,
+[data-app="spreadsheets"] .spreadsheets-runbooks > .ctox-pane-header {
+  padding-right: var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size, 37px) * 2));
 }
 
 /* Head content centered in the single row; the title yields, the actions do
    not grow. Without the min-width floors the title collapses to a few pixels
    as soon as the pane gets narrow. */
-.shell-window[data-shell-contract="v2"]
+[data-app="spreadsheets"]
   :is(.spreadsheets-explorer, .spreadsheets-runbooks, .spreadsheets-editor)
   > .ctox-pane-header .ctox-pane-title-row {
   height: 100%;
   min-width: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .spreadsheets-explorer > .ctox-pane-header .ctox-pane-title-row {
+[data-app="spreadsheets"] .spreadsheets-explorer > .ctox-pane-header .ctox-pane-title-row {
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
 }
 
-.shell-window[data-shell-contract="v2"]
+[data-app="spreadsheets"]
   :is(.spreadsheets-explorer, .spreadsheets-runbooks, .spreadsheets-editor)
   > .ctox-pane-header .ctox-pane-titles {
   min-width: 0;
   padding-top: 0;
 }
 
-.shell-window[data-shell-contract="v2"]
+[data-app="spreadsheets"]
   :is(.spreadsheets-explorer, .spreadsheets-runbooks, .spreadsheets-editor)
   > .ctox-pane-header .ctox-pane-kicker {
   line-height: 1.2;
 }
 
-.shell-window[data-shell-contract="v2"]
+[data-app="spreadsheets"]
   :is(.spreadsheets-explorer, .spreadsheets-runbooks, .spreadsheets-editor)
   > .ctox-pane-header .ctox-pane-title {
   min-width: 0;
@@ -180,18 +180,18 @@
 
 /* The kit pins pane actions to `min-width: max-content`; in the editor head
    the save-state badge would then push the document title out of the row. */
-.shell-window[data-shell-contract="v2"]
+[data-app="spreadsheets"]
   :is(.spreadsheets-explorer, .spreadsheets-runbooks, .spreadsheets-editor)
   > .ctox-pane-header .ctox-pane-actions {
   min-width: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .spreadsheets-dirty-badge {
+[data-app="spreadsheets"] .spreadsheets-dirty-badge {
   min-width: 0;
   overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .spreadsheets-dirty-badge > span {
+[data-app="spreadsheets"] .spreadsheets-dirty-badge > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -199,7 +199,7 @@
 
 /* Search and filter strips below the left head: own rows, never squeezed by
    the list. The search strip is the second header row (still under the icon). */
-.shell-window[data-shell-contract="v2"] .spreadsheets-explorer > .ctox-pane-tools {
+[data-app="spreadsheets"] .spreadsheets-explorer > .ctox-pane-tools {
   box-sizing: border-box;
   flex: 0 0 auto;
   margin-top: 0;
@@ -214,7 +214,7 @@
    gleicher Spezifitaet ueberschrieben, der Suchschlitz lief unter dem Icon.
    Die Flaeche selbst bleibt unbemalt (kein eigener Hintergrund), damit dort
    wirklich nichts gezeichnet wird — Einruecken allein genuegt nicht. */
-.shell-window[data-shell-contract="v2"] .spreadsheets-explorer > .spreadsheets-search-bar {
+[data-app="spreadsheets"] .spreadsheets-explorer > .spreadsheets-search-bar {
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
   padding-top: 0;
@@ -223,33 +223,33 @@
   background-color: transparent;
 }
 
-.shell-window[data-shell-contract="v2"] .spreadsheets-explorer > .spreadsheets-filter-bar {
+[data-app="spreadsheets"] .spreadsheets-explorer > .spreadsheets-filter-bar {
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.spreadsheets-filter-bar[hidden] {
+[data-app="spreadsheets"] :where(.spreadsheets-filter-bar)[hidden] {
   display: none;
 }
 
-.spreadsheets-search-bar .ctox-pane-search {
+[data-app="spreadsheets"] :where(.spreadsheets-search-bar) .ctox-pane-search {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.spreadsheets-filter-toggle {
+[data-app="spreadsheets"] :where(.spreadsheets-filter-toggle) {
   flex: 0 0 auto;
 }
 
 /* The empty/error state is the editor's only flex sibling below the head, so
    it takes the remaining height instead of adding the head's height on top. */
-.spreadsheets-editor > .ctox-empty {
+[data-app="spreadsheets"] :where(.spreadsheets-editor) > .ctox-empty {
   flex: 1 1 auto;
   min-height: 0;
 }
 
 /* custom: the filter row packs three kit .ctox-pane-filter selects; they
    share the row width equally instead of sizing to content. */
-.spreadsheets-filter-bar .ctox-pane-filter {
+[data-app="spreadsheets"] :where(.spreadsheets-filter-bar) .ctox-pane-filter {
   flex: 1 1 0;
   min-width: 0;
   overflow: hidden;
@@ -258,12 +258,12 @@
 }
 
 /* Let the kit empty state fill the scrollable list area. */
-.spreadsheets-list > .ctox-empty,
-.spreadsheets-runbook-list > .ctox-empty {
+[data-app="spreadsheets"] :where(.spreadsheets-list) > .ctox-empty,
+[data-app="spreadsheets"] :where(.spreadsheets-runbook-list) > .ctox-empty {
   flex: 1 1 auto;
 }
 
-.spreadsheets-empty-actions {
+[data-app="spreadsheets"] :where(.spreadsheets-empty-actions) {
   display: grid;
   gap: 8px;
   width: min(100%, 220px);
@@ -272,40 +272,42 @@
 
 /* The kit lists own scrolling; the pane wrappers are flex columns, so the
    lists must grow into the remaining height below the pane header. */
-.spreadsheets-explorer .ctox-list,
-.spreadsheets-runbooks .ctox-list {
+[data-app="spreadsheets"] :where(.spreadsheets-explorer) .ctox-list,
+[data-app="spreadsheets"] :where(.spreadsheets-runbooks) .ctox-list {
   flex: 1 1 auto;
   min-height: 0;
 }
 
 /* custom: record-card composition — a kit .ctox-list-item with an overlaid
    manage icon button (.ctox-pane-icon) pinned to the card's top-right. */
-.spreadsheets-card {
+[data-app="spreadsheets"] :where(.spreadsheets-card) {
   position: relative;
 }
 
-.spreadsheets-card .spreadsheets-card-manage {
+[data-app="spreadsheets"] :where(.spreadsheets-card) .spreadsheets-card-manage {
   position: absolute;
   top: 6px;
   right: 6px;
 }
 
-.spreadsheets-card-main {
+[data-app="spreadsheets"] :where(.spreadsheets-card-main) {
   padding-right: 40px; /* room for the overlaid manage icon */
 }
 
 /* Card content typography (kit covers the row chrome, not this content). */
-.spreadsheets-card-main strong {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+/* Kartentitel vollständig, umgebrochen statt nach zwei Zeilen gekappt (Geometrie G4). Der
+   Bibliotheks-Selektor aus shared/office-workspace.css (nowrap + Ellipse) wird hier überstimmt. */
+[data-app="spreadsheets"] :where(.spreadsheets-card-main) strong,
+[data-app="spreadsheets"] .ctox-office-library .spreadsheets-card-main strong {
+  overflow: visible;
+  display: block;
   white-space: normal;
   overflow-wrap: anywhere;
   font-weight: 600;
   color: var(--text);
 }
 
-.spreadsheets-card-main .spreadsheets-card-filename {
+[data-app="spreadsheets"] :where(.spreadsheets-card-main) .spreadsheets-card-filename {
   display: block;
   margin-top: 2px;
   color: var(--muted);
@@ -315,7 +317,7 @@
   white-space: nowrap;
 }
 
-.spreadsheets-card-badges {
+[data-app="spreadsheets"] :where(.spreadsheets-card-badges) {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -323,7 +325,7 @@
   margin-top: 4px;
 }
 
-.spreadsheets-card-main small {
+[data-app="spreadsheets"] :where(.spreadsheets-card-main) small {
   display: block;
   margin-top: 4px;
   color: var(--muted);
@@ -331,37 +333,37 @@
 }
 
 /* Center editor header: must not shrink inside the flex editor shell. */
-.spreadsheets-editor-header {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-header) {
   flex-shrink: 0;
   background: var(--surface);
 }
 
 /* custom: save-state indicator on top of .ctox-badge — state colors plus a
    pulsing status dot (dirty = danger, saving = accent pulse). */
-.spreadsheets-dirty-badge.is-dirty {
+[data-app="spreadsheets"] :where(.spreadsheets-dirty-badge).is-dirty {
   background: var(--danger-soft);
   border-color: color-mix(in srgb, var(--danger) 45%, var(--line));
   color: var(--danger);
 }
 
-.spreadsheets-dirty-badge.is-saving {
+[data-app="spreadsheets"] :where(.spreadsheets-dirty-badge).is-saving {
   background: var(--accent-soft);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
   color: var(--accent);
 }
 
-.spreadsheets-dirty-badge .indicator-dot {
+[data-app="spreadsheets"] :where(.spreadsheets-dirty-badge) .indicator-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
   background: var(--success);
 }
 
-.spreadsheets-dirty-badge.is-dirty .indicator-dot {
+[data-app="spreadsheets"] :where(.spreadsheets-dirty-badge).is-dirty .indicator-dot {
   background: var(--danger);
 }
 
-.spreadsheets-dirty-badge.is-saving .indicator-dot {
+[data-app="spreadsheets"] :where(.spreadsheets-dirty-badge).is-saving .indicator-dot {
   background: var(--accent);
   animation: pulse-saving 1s infinite alternate;
 }
@@ -372,7 +374,7 @@
 }
 
 /* custom: error emphasis inside the shared .ctox-empty component. */
-.spreadsheets-error strong {
+[data-app="spreadsheets"] :where(.spreadsheets-error) strong {
   color: var(--danger);
 }
 
@@ -382,7 +384,7 @@
    styles, so kit table classes cannot reach it; these overrides map the
    grid onto the shell tokens. This is the app's genuinely unique surface.
    -------------------------------------------------------------------------- */
-.spreadsheets-editor-canvas {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) {
   flex: 1 1 0;
   min-height: 0;
   overflow: hidden;
@@ -392,22 +394,22 @@
   box-sizing: border-box;
 }
 
-.spreadsheets-editor-canvas::-webkit-scrollbar {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas)::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
-.spreadsheets-editor-canvas::-webkit-scrollbar-track {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas)::-webkit-scrollbar-track {
   background: transparent;
 }
-.spreadsheets-editor-canvas::-webkit-scrollbar-thumb {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas)::-webkit-scrollbar-thumb {
   background: color-mix(in srgb, var(--line) 40%, transparent);
   border-radius: 5px;
 }
-.spreadsheets-editor-canvas::-webkit-scrollbar-thumb:hover {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas)::-webkit-scrollbar-thumb:hover {
   background: var(--muted);
 }
 
-.spreadsheets-editor-canvas .jexcel_container {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jexcel_container {
   font-family: inherit !important;
   border: 1px solid var(--line) !important;
   box-shadow: none !important;
@@ -416,7 +418,7 @@
   background: var(--surface) !important;
 }
 
-.spreadsheets-editor-canvas .jss_container {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jss_container {
   font-family: inherit !important;
   border: 1px solid var(--line) !important;
   box-shadow: none !important;
@@ -426,22 +428,22 @@
   color: var(--text) !important;
 }
 
-.spreadsheets-editor-canvas .jss_content {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jss_content {
   background: var(--surface) !important;
 }
 
-.spreadsheets-editor-canvas .jexcel {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jexcel {
   border-collapse: separate !important;
   border-spacing: 0 !important;
 }
 
-.spreadsheets-editor-canvas .jss_worksheet {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jss_worksheet {
   border-collapse: separate !important;
   border-spacing: 0 !important;
   background: var(--surface) !important;
 }
 
-.spreadsheets-editor-canvas .jexcel > thead > tr > td {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jexcel > thead > tr > td {
   background: var(--surface-2) !important;
   color: var(--muted) !important;
   font-size: 11px !important;
@@ -456,7 +458,7 @@
   box-sizing: border-box;
 }
 
-.spreadsheets-editor-canvas .jss_worksheet > thead > tr > td {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jss_worksheet > thead > tr > td {
   background: var(--surface-2) !important;
   color: var(--muted) !important;
   font-size: 11px !important;
@@ -471,7 +473,7 @@
   box-sizing: border-box;
 }
 
-.spreadsheets-editor-canvas .jexcel > tbody > tr > td:first-child {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jexcel > tbody > tr > td:first-child {
   background: var(--surface-2) !important;
   color: var(--muted) !important;
   font-weight: 800 !important;
@@ -482,7 +484,7 @@
   font-size: 11px !important;
 }
 
-.spreadsheets-editor-canvas .jss_worksheet > tbody > tr > td:first-child {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jss_worksheet > tbody > tr > td:first-child {
   background: var(--surface-2) !important;
   color: var(--muted) !important;
   font-weight: 800 !important;
@@ -493,7 +495,7 @@
   font-size: 11px !important;
 }
 
-.spreadsheets-editor-canvas .jexcel > tbody > tr > td {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jexcel > tbody > tr > td {
   border-right: 1px solid var(--line) !important;
   border-bottom: 1px solid var(--line) !important;
   color: var(--text) !important;
@@ -504,7 +506,7 @@
   background: var(--surface) !important;
 }
 
-.spreadsheets-editor-canvas .jss_worksheet > tbody > tr > td {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jss_worksheet > tbody > tr > td {
   border-right: 1px solid var(--line) !important;
   border-bottom: 1px solid var(--line) !important;
   color: var(--text) !important;
@@ -516,64 +518,64 @@
 }
 
 /* Selected cells */
-.spreadsheets-editor-canvas .jexcel .highlight {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jexcel .highlight {
   background-color: color-mix(in srgb, var(--accent) 12%, transparent) !important;
 }
 
-.spreadsheets-editor-canvas .jss_worksheet .highlight {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jss_worksheet .highlight {
   background-color: color-mix(in srgb, var(--accent) 12%, transparent) !important;
 }
 
-.spreadsheets-editor-canvas .jexcel .highlight-left {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jexcel .highlight-left {
   border-left: 2px solid var(--accent) !important;
 }
 
-.spreadsheets-editor-canvas .jss_worksheet .highlight-left {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jss_worksheet .highlight-left {
   border-left: 2px solid var(--accent) !important;
 }
 
-.spreadsheets-editor-canvas .jexcel .highlight-right {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jexcel .highlight-right {
   border-right: 2px solid var(--accent) !important;
 }
 
-.spreadsheets-editor-canvas .jss_worksheet .highlight-right {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jss_worksheet .highlight-right {
   border-right: 2px solid var(--accent) !important;
 }
 
-.spreadsheets-editor-canvas .jexcel .highlight-top {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jexcel .highlight-top {
   border-top: 2px solid var(--accent) !important;
 }
 
-.spreadsheets-editor-canvas .jss_worksheet .highlight-top {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jss_worksheet .highlight-top {
   border-top: 2px solid var(--accent) !important;
 }
 
-.spreadsheets-editor-canvas .jexcel .highlight-bottom {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jexcel .highlight-bottom {
   border-bottom: 2px solid var(--accent) !important;
 }
 
-.spreadsheets-editor-canvas .jss_worksheet .highlight-bottom {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jss_worksheet .highlight-bottom {
   border-bottom: 2px solid var(--accent) !important;
 }
 
-.spreadsheets-editor-canvas .jexcel_corner {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jexcel_corner {
   background-color: var(--accent) !important;
   border-color: var(--surface) !important;
 }
 
-.spreadsheets-editor-canvas .jss_corner {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jss_corner {
   background-color: var(--accent) !important;
   border-color: var(--surface) !important;
 }
 
-.spreadsheets-editor-canvas .jexcel td.formula-error {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jexcel td.formula-error {
   color: var(--danger) !important;
   background-color: color-mix(in srgb, var(--danger) 8%, transparent) !important;
   font-weight: 600;
   position: relative;
 }
 
-.spreadsheets-editor-canvas .jexcel td.formula-error::after {
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) .jexcel td.formula-error::after {
   content: '';
   position: absolute;
   top: 0;
@@ -587,13 +589,13 @@
 }
 
 /* Right pane: runbook list content (rows are kit .ctox-list-item). */
-.spreadsheets-runbook-card strong {
+[data-app="spreadsheets"] :where(.spreadsheets-runbook-card) strong {
   display: block;
   font-weight: 600;
   color: var(--text);
 }
 
-.spreadsheets-runbook-card span {
+[data-app="spreadsheets"] :where(.spreadsheets-runbook-card) span {
   display: block;
   margin-top: 2px;
   color: var(--muted);
@@ -602,7 +604,7 @@
 
 /* custom: prompt composer docked at the bottom of the runbook pane. The
    field is a kit .ctox-textarea, the action the kit .ctox-run-control. */
-.spreadsheets-runbook-workbench {
+[data-app="spreadsheets"] :where(.spreadsheets-runbook-workbench) {
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -612,63 +614,63 @@
   flex-shrink: 0;
 }
 
-.spreadsheets-runbook-workbench .ctox-textarea {
+[data-app="spreadsheets"] :where(.spreadsheets-runbook-workbench) .ctox-textarea {
   min-height: 80px;
 }
 
-.spreadsheets-runbook-workbench .ctox-run-control {
+[data-app="spreadsheets"] :where(.spreadsheets-runbook-workbench) .ctox-run-control {
   width: 100%;
 }
 
 /* Drawer forms: kit .ctox-field-label / .ctox-input / .ctox-select /
    .ctox-button components; only the stacked layout glue lives here. */
-.spreadsheets-drawer-form,
-.spreadsheets-drawer-form form {
+[data-app="spreadsheets"] :where(.spreadsheets-drawer-form),
+[data-app="spreadsheets"] :where(.spreadsheets-drawer-form) form {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.spreadsheets-drawer-form h3 {
+[data-app="spreadsheets"] :where(.spreadsheets-drawer-form) h3 {
   margin: 0;
   color: var(--text);
   font-size: 14px;
   font-weight: 700;
 }
 
-.spreadsheets-drawer-form label {
+[data-app="spreadsheets"] :where(.spreadsheets-drawer-form) label {
   display: flex;
   flex-direction: column;
 }
 
-.spreadsheets-drawer-copy,
-.spreadsheets-form-status {
+[data-app="spreadsheets"] :where(.spreadsheets-drawer-copy),
+[data-app="spreadsheets"] :where(.spreadsheets-form-status) {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
 }
 
-.spreadsheets-form-status:not([hidden]) {
+[data-app="spreadsheets"] :where(.spreadsheets-form-status):not([hidden]) {
   color: var(--danger);
   font-weight: 700;
 }
 
-.spreadsheets-drawer-actions {
+[data-app="spreadsheets"] :where(.spreadsheets-drawer-actions) {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
 }
 
-.spreadsheets-drawer-actions [data-action="delete"] {
+[data-app="spreadsheets"] :where(.spreadsheets-drawer-actions) [data-action="delete"] {
   margin-right: auto;
 }
 
 /* Shell-owned compact breakpoint (2 columns -> 1); the app does not own any
    breakpoint of its own. */
 @container business-app-window (max-width: 768px) {
-  .spreadsheets-editor-canvas {
+  [data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) {
     padding: 0;
   }
 }
@@ -681,36 +683,134 @@
    es scrollt ohnehin in .spreadsheets-editor-canvas (overflow: auto).
    -------------------------------------------------------------------------- */
 @media (pointer: coarse) {
-  .spreadsheets-module button,
-  .spreadsheets-module input,
-  .spreadsheets-module select,
-  .spreadsheets-module textarea {
+  [data-app="spreadsheets"] :where(.spreadsheets-module) button,
+  [data-app="spreadsheets"] :where(.spreadsheets-module) input,
+  [data-app="spreadsheets"] :where(.spreadsheets-module) select,
+  [data-app="spreadsheets"] :where(.spreadsheets-module) textarea {
     min-height: 44px;
   }
 
-  .spreadsheets-module .ctox-pane-icon {
+  [data-app="spreadsheets"] :where(.spreadsheets-module) .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .spreadsheets-module .ctox-pane-tab {
+  [data-app="spreadsheets"] :where(.spreadsheets-module) .ctox-pane-tab {
     min-height: 44px;
   }
 
-  .spreadsheets-module .spreadsheets-card,
-  .spreadsheets-module .spreadsheets-runbook-card,
-  .spreadsheets-module .ctox-list-item {
+  [data-app="spreadsheets"] :where(.spreadsheets-module) .spreadsheets-card,
+  [data-app="spreadsheets"] :where(.spreadsheets-module) .spreadsheets-runbook-card,
+  [data-app="spreadsheets"] :where(.spreadsheets-module) .ctox-list-item {
     min-height: 44px;
   }
 
   /* Ueberlagerter Manage-Button auf den Record-Karten: volle 44px-Flaeche,
      Karten-Inhalt weicht entsprechend weiter aus. */
-  .spreadsheets-card .spreadsheets-card-manage {
+  [data-app="spreadsheets"] :where(.spreadsheets-card) .spreadsheets-card-manage {
     top: 0;
     right: 0;
   }
 
-  .spreadsheets-card-main {
+  [data-app="spreadsheets"] :where(.spreadsheets-card-main) {
     padding-right: 48px;
+  }
+}
+
+/* v4: Drawer im App-Fenster (4.0 hat keine Shell-Drawer, app-api.d.ts OFFEN-D); nie außerhalb von root. */
+[data-app="spreadsheets"] :where(.spreadsheets-app-drawer) {
+  position: absolute;
+  z-index: 12;
+  inset: 0 auto 0 0;
+  width: min(380px, 100%);
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 14px 16px;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text);
+}
+
+/* v4: Der Fenster-Container `business-app-window` lag in v2 an der Shell (.business-app-window, außerhalb von
+   root). Die App stellt ihn jetzt selbst am App-root bereit, damit die @container-Regeln (≤ 768 px) greifen. */
+[data-app="spreadsheets"] {
+  container-name: business-app-window;
+  container-type: inline-size;
+}
+
+/* FIX9b: Lesevorschau der Tabelle, solange der Office-Editor dahinter startet. */
+[data-app="spreadsheets"] :where(.spreadsheets-editor-canvas) {
+  position: relative;
+}
+[data-app="spreadsheets"] :where(.spreadsheets-read-preview) {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: auto;
+  background: var(--bg);
+  color: var(--text);
+}
+[data-app="spreadsheets"] :where(.spreadsheets-read-preview) table {
+  border-collapse: collapse;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+[data-app="spreadsheets"] :where(.spreadsheets-read-preview) th,
+[data-app="spreadsheets"] :where(.spreadsheets-read-preview) td {
+  min-width: 88px;
+  max-width: 240px;
+  height: 24px;
+  padding: 2px 6px;
+  border: 1px solid var(--line);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
+}
+[data-app="spreadsheets"] :where(.spreadsheets-read-preview) th {
+  position: sticky;
+  top: 0;
+  min-width: 40px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-weight: 500;
+  text-align: center;
+}
+[data-app="spreadsheets"] :where(.spreadsheets-read-preview) tbody th {
+  left: 0;
+  z-index: 1;
+}
+[data-app="spreadsheets"] :where(.spreadsheets-read-preview) td.is-num {
+  text-align: right;
+}
+[data-app="spreadsheets"] :where(.spreadsheets-ctox-spreadsheets-frame.is-warming) {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* FIX11 (G4, 420 px): zwischen Icon-Zone (links) und Knopfzone (rechts) kuerzte der Pane-Titel auf wenige Buchstaben.
+   Schmal bricht die Titelzeile um: der Titel behaelt seine volle Breite (Umbruch nur an Wortgrenzen, nie Buchstabe
+   fuer Buchstabe), die Kopfknoepfe rutschen in eine zweite Zeile darunter. Breit bleibt die Kopfzeile unveraendert. */
+@container business-app-window (max-width: 768px) {
+  [data-app="spreadsheets"] .ctox-pane .ctox-pane-header > .ctox-pane-title-row,
+  [data-app="spreadsheets"] .ctox-pane-header .ctox-pane-title-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+    height: auto;
+    max-height: none;
+  }
+  [data-app="spreadsheets"] .ctox-pane .ctox-pane-header .ctox-pane-titles,
+  [data-app="spreadsheets"] .ctox-pane-header .ctox-pane-title-row > .ctox-pane-titles { flex: 1 0 auto; max-width: 100%; min-width: 0; overflow: visible; }
+  [data-app="spreadsheets"] .ctox-pane .ctox-pane-header .ctox-pane-title,
+  [data-app="spreadsheets"] .ctox-pane-header .ctox-pane-titles > .ctox-pane-title {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+    overflow-wrap: normal;
+    hyphens: manual;
+    -webkit-line-clamp: none;
+    line-clamp: none;
   }
 }

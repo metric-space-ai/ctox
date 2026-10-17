@@ -1,0 +1,41 @@
+[
+  {
+    "viewportWidth": 430,
+    "height": 279,
+    "width": 430,
+    "nodes": 16,
+    "errors": []
+  },
+  {
+    "viewportWidth": 630,
+    "height": 279,
+    "width": 630,
+    "nodes": 16,
+    "errors": []
+  },
+  {
+    "viewportWidth": 768,
+    "height": 339.1875,
+    "width": 768,
+    "nodes": 16,
+    "errors": []
+  },
+  {
+    "viewportWidth": 1000,
+    "height": 286.1875,
+    "width": 648,
+    "nodes": 16,
+    "errors": []
+  },
+  {
+    "viewportWidth": 1280,
+    "height": 408.09375,
+    "width": 928,
+    "nodes": 16,
+    "errors": []
+  },
+  {
+    "scenario": "pause-command-then-projection",
+    "passed": true
+  }
+]

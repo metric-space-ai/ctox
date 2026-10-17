@@ -1,0 +1,629 @@
+{
+  "_capability_evidence": {},
+  "_commands_out_evidence": {
+    "ctox ctox.app.modify.request": [
+      "index.js:522"
+    ],
+    "ctox ctox.chat.task": [
+      "index.js:522"
+    ]
+  },
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/desktop/index.html",
+  "_rust_basis": "für eigene Collections keine Logik (desktop_icons/layout ohne Treffer); `ctox.module.save` über `command_plane.rs`/`store.rs`. Plattform: Dateiebene `desktop_files.rs` (858), `rxdb_peer_desktop_files.rs` (1967), `desktop_file_stream.rs` (92",
+  "_source_dir": "src/apps/business-os/modules/desktop",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "desktop",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {
+    "channel_pairing_state": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/desktop.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "channel",
+        "properties": {
+          "account_key": {
+            "type": "string"
+          },
+          "channel": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "qr_payload": {
+            "type": "string"
+          },
+          "qr_svg": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "step": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "channel",
+          "status",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "desktop_file_chunks": {
+      "_class_proposal": "Chunk-Collection; §10.2a Nr. 4: Chunk-Collections entfallen, Inhalt über files/Spur 4 – Klasse blob bis zur Ablösung",
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/desktop.collections.schema.json",
+      "byte_budget": null,
+      "class": "blob",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "file_id",
+          [
+            "file_id",
+            "generation_id",
+            "idx"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "chunk_hash": {
+            "type": "string"
+          },
+          "chunk_hash_scheme": {
+            "type": "string"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "content_hash_scheme": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "type": "string"
+          },
+          "encoding": {
+            "type": "string"
+          },
+          "file_id": {
+            "type": "string"
+          },
+          "generation_id": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "idx": {
+            "type": "number"
+          },
+          "size_bytes": {
+            "type": "number"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "file_id",
+          "idx",
+          "total",
+          "encoding",
+          "data",
+          "created_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "desktop_files": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/desktop.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "content_generation_id": {
+            "type": "string"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "content_hash_scheme": {
+            "type": "string"
+          },
+          "content_ref": {
+            "type": "string"
+          },
+          "content_state": {
+            "type": "string"
+          },
+          "content_synced_at_ms": {
+            "type": "number"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "extension": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "linked_collection": {
+            "type": "string"
+          },
+          "linked_record_id": {
+            "type": "string"
+          },
+          "local_path": {
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "mtime_ms": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "number"
+          },
+          "sort_index": {
+            "type": "number"
+          },
+          "source": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "virtual_path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "desktop_icons": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/desktop.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "glyph": {
+            "type": "string"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
+          },
+          "sort_index": {
+            "type": "number"
+          },
+          "target_module": {
+            "type": "string"
+          },
+          "target_record_id": {
+            "type": "string"
+          },
+          "target_type": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "target_type",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "desktop_layout": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/desktop.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "desktop_style": {
+            "type": "string"
+          },
+          "grid_cell_h": {
+            "type": "number"
+          },
+          "grid_cell_w": {
+            "type": "number"
+          },
+          "grid_offset": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "menubar_apps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "taskbar_pins": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "tray_config": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "wallpaper_mode": {
+            "type": "string"
+          },
+          "wallpaper_url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "desktop_notifications": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/desktop.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "action_label": {
+            "type": "string"
+          },
+          "action_module": {
+            "type": "string"
+          },
+          "action_record_id": {
+            "type": "string"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "dismissed_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "module": {
+            "type": "string"
+          },
+          "read_at_ms": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "created_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "desktop_windows": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/desktop.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "always_on_top": {
+            "type": "boolean"
+          },
+          "height": {
+            "type": "number"
+          },
+          "icon": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "owner_id": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "snap_zone": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "stored_height": {
+            "type": "number"
+          },
+          "stored_width": {
+            "type": "number"
+          },
+          "stored_x": {
+            "type": "number"
+          },
+          "stored_y": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "width": {
+            "type": "number"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "owner_id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [
+    {
+      "app": "ctox",
+      "type": "ctox.app.modify.request"
+    },
+    {
+      "app": "ctox",
+      "type": "ctox.chat.task"
+    }
+  ],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "desktop_file_chunks": [
+      "read",
+      "write"
+    ],
+    "desktop_files": [
+      "read",
+      "write"
+    ]
+  },
+  "files": {
+    "V4-HANDLERS.md": "22260f78320f2ffdc9a9c101e26d1b4fb085a3ed37a097dbc99aa0aeec15c959",
+    "V4-PORT.md": "82e941e641e55a1720216bbc28645181e05ae13bdfc36fa97f36335307a0c8e9",
+    "appCommands.js": "f5fc22ef0a93110e2ce56717617e1a0d20d49513b4c9a5a5f52c729124d3aeaa",
+    "assets/icon.png": "4d5379c48aff92f80a2c230f44372eee79b5f01cf2d71a84ca64ada5a9c73f26",
+    "assets/icon@512.png": "a29aad670cdcbb65e8864c81e30bb6b5713cdb5e27dc0f738a5534bf6d40c8f3",
+    "collections.schema.json": "11a85edbc82ae942127238f5dce0077a571f40b85d2a0b65de91c075bed12ddf",
+    "ctoxLauncher.js": "4d8016083f94c3161d324fc8895eb43f057f7a3d5d1bb1cb59f565797d0c2fd4",
+    "desktopMenuActions.js": "1840846f417e2d8024e183740be7e71fbbbc47d9aa3496b8e41031af5d50e8fb",
+    "icon.svg": "3bbc1b17c60acb7ce2810ef4c6a18e9b6d40d54b90482aa4c67574810de88084",
+    "iconDrag.js": "a41234f2064aca0f1db5e2d20ecad545df699098b5faa95fca3951558eb6c0b3",
+    "iconLayout.js": "0ae3144412aa7eadf72de1b371069a0f9a81f013e0c34890ad0fdb70e33a085e",
+    "index.css": "7a2f58a112e216f01bf27bfb9742e930d0c672df32d5ec306842fd8c35d9d75d",
+    "index.html": "c932eecbaad9746151824d465ede69e6bf165eadf294474919264ea264fa966e",
+    "index.js": "913dd80821ae3fedd8e1a2ba31c4f36b19fb511ef797454f569b633b6c936072",
+    "locales/de.json": "242a8923e4c4d0bd6b90ec74edd3d233a36a15a2bed0888dfca0de180b51202b",
+    "locales/en.json": "223509a2c6d93f60e1afd71055eb155ae692225b962deaaa483e53e8276f17d6",
+    "module.json": "ed7fafa5bde5e474afa988935b72066e05cbc59e4142052f56d260d3c82440b6"
+  },
+  "foreign_collections": {
+    "business_apps": {
+      "_evidence": {
+        "code_read": [
+          "ctoxLauncher.js:1",
+          "index.js:144"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "business_commands": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "documents": {
+      "_evidence": {
+        "code_read": [
+          "index.js:591"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "documents"
+    },
+    "notes": {
+      "_evidence": {
+        "code_read": [
+          "index.js:350",
+          "index.js:362"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "notes"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_replaced": {
+      "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/desktop.png"
+    },
+    "_icon_asset_source": "shared/assets/workjet-icons/grok-shell-v1/desktop.png (shared/grok-shell-icon-selection.js, sha256 a29aad670cdc…, 512 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "category": "Workspace",
+    "icon_asset": "assets/icon.png",
+    "icon_asset_srcset": "assets/icon.png 1x, assets/icon@512.png 2x",
+    "icon_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-desktop\"><defs><linearGradient id=\"grad-desktop\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#94a3b8\" /><stop offset=\"100%\" stop-color=\"#3b82f6\" /></linearGradient></defs><rect x=\"2\" y=\"3\" width=\"20\" height=\"14\" rx=\"3\" ry=\"3\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.12\" stroke=\"url(#grad-desktop)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M12 17v4M8 21h8\" stroke=\"url(#grad-desktop)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><rect x=\"5\" y=\"6\" width=\"6\" height=\"4\" rx=\"1\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect><rect x=\"13\" y=\"6\" width=\"6\" height=\"8\" rx=\"1\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect><rect x=\"5\" y=\"12\" width=\"6\" height=\"2\" rx=\"0.5\" fill=\"url(#grad-desktop)\" fill-opacity=\"0.2\" stroke=\"url(#grad-desktop)\" stroke-width=\"1\"></rect></svg>",
+    "shell": "full-workspace"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "72d81af7e77a8ea8b8ffaa80d55a0e746f4db6679a3d4398d071302c31e91705",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Desktop",
+  "triggers": [],
+  "version": "1.0.1"
+}

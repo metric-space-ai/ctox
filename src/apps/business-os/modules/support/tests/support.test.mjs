@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { registerHooks } from 'node:module';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import {
   SUPPORT_AGENT_SUGGESTION_KINDS,
@@ -15,10 +16,21 @@ import {
   mergeSupportTimeline,
   supportQueueCounts,
 } from '../support-reducers.mjs';
-import { __supportTestHooks as hooks } from '../index.js';
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const moduleDir = resolve(testDir, '..');
+// App-API 4.0: shared helpers are imported as 'ctox:shared/x.js' (rewritten by the Service Worker,
+// PORTING.md R14 / §4 Falle 2). Node needs the same mapping onto the shell's shared/ directory.
+const sharedDir = resolve(moduleDir, '../../shared');
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.startsWith('ctox:shared/')) {
+      return nextResolve(pathToFileURL(resolve(sharedDir, specifier.slice('ctox:shared/'.length))).href, context);
+    }
+    return nextResolve(specifier, context);
+  },
+});
+const { __supportTestHooks: hooks } = await import('../index.js');
 const manifest = JSON.parse(readFileSync(resolve(moduleDir, 'module.json'), 'utf8'));
 const schemaDocument = JSON.parse(readFileSync(resolve(moduleDir, 'collections.schema.json'), 'utf8'));
 const collections = schemaDocument.collections || {};
@@ -67,16 +79,21 @@ assert.equal(command.command_type, 'support.conversation.claim');
 assert.equal(command.payload.conversation_id, 'conv_1');
 assert.equal(Object.hasOwn(command.client_context, 'actor'), false);
 
+// „CTOX fragen“ (Strang SKL-A1): App-Befehl support.agent.task statt Kernbefehl business_os.chat.task; Anweisung und
+// Skill setzt der Handler (prompts/agent-task.md, skills/support-workflow), nicht die UI.
 const taskCommand = buildSupportAgentTaskCommand({
   conversationId: 'conv_1',
   title: 'Support summary',
-  instruction: 'Summarize',
+  status: 'open',
+  priority: 'high',
+  recordSnapshot: { conversation: { id: 'conv_1' } },
 });
-assert.equal(taskCommand.command_type, 'business_os.chat.task');
-assert.equal(taskCommand.command_type, 'business_os.chat.task');
-assert.equal(taskCommand.payload.thread_key, 'business-os/support/conv_1');
-assert.equal(taskCommand.payload.writeback_contract.command_type, 'support.agent.writeback');
-assert.equal(taskCommand.payload.writeback_contract.collection, 'support_agent_suggestions');
+assert.equal(taskCommand.command_type, 'support.agent.task');
+assert.equal(taskCommand.record_id, 'conv_1');
+assert.deepEqual(taskCommand.payload, { conversation_id: 'conv_1', request_kind: 'summary', record_snapshot: { conversation: { id: 'conv_1' } }, title: 'Support summary', status: 'open', priority: 'high' });
+assert.equal(Object.hasOwn(taskCommand.payload, 'instruction'), false);
+assert.equal(Object.hasOwn(taskCommand.payload, 'required_skills'), false);
+assert.doesNotMatch(indexJs, /business_os\.chat\.task|business-os-support-workflow|buildAgentInstruction/);
 
 const writeback = buildAgentWritebackCommand({
   conversationId: 'conv_1',
@@ -149,7 +166,11 @@ test('left column carries the full shell-wired grammar (data-pg-*)', () => {
   assert.doesNotMatch(css, /\.ctox-filterbar\s*\{/);
   assert.doesNotMatch(css, /\.ctox-filter-tray\s*\{/);
   assert.doesNotMatch(css, /\.ctox-view-switch\s*\{/);
-  assert.doesNotMatch(css, /\.ctox-pane-tabs\s*\{/);
+  // Einzige erlaubte Ausnahme (VIS3, 8086cc80f): die gezählte Leiste der Queue-Spalte bricht um, statt den letzten
+  // Reiter am Spaltenrand abzuschneiden. Sonst keine eigene Reiterleisten-Regel.
+  const vis3Wrap = /\[data-app="support"\] \.support-module \.support-left > \.ctox-view-switch > \.ctox-pane-tabs \{\s*flex-wrap: wrap;\s*min-width: 0;\s*max-width: 100%;\s*\}/;
+  assert.match(css, vis3Wrap);
+  assert.doesNotMatch(css.replace(vis3Wrap, ''), /\.ctox-pane-tabs\s*\{/);
   assert.doesNotMatch(css, /\.ctox-well\s*\{/);
 });
 
@@ -217,9 +238,10 @@ test('import keeps only thread-linked entries and accepts an array or a single o
 test('import dispatches only the existing open_from_thread command (schemas untouched)', () => {
   // The import path re-opens conversations from their threads via a real,
   // already-declared command — it never writes a record directly.
-  const importFn = indexJs.match(/async function handleImport\(\)\s*\{[\s\S]*?\n\}/);
-  assert.ok(importFn, 'handleImport present');
+  const importFn = indexJs.match(/function importSupportText\(text\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(importFn, 'importSupportText present');
   assert.match(importFn[0], /support\.conversation\.open_from_thread/);
+  assert.doesNotMatch(importFn[0], /api\.(?:put|patch|remove)\(/);
 });
 
 test('selecting a conversation is an in-place flip, never a list rebuild', () => {
@@ -316,23 +338,19 @@ test('stacked view keeps the shell icon zone free (contract §7 iconZone)', () =
   assert.match(narrow[0], /overflow-x:\s*hidden;/);
 });
 
-test('queue list gates the data-driven empty state on collection readiness', () => {
-  // leer + unready ⇒ syncing shell, never "no conversations"
-  assert.equal(hooks.resolveConversationListState({ loading: false, sourceCount: 0, readiness: { ready: false, state: 'catching-up' } }), 'syncing');
-  assert.equal(hooks.resolveConversationListState({ loading: false, sourceCount: 0, readiness: { ready: false, state: 'offline-pending' } }), 'syncing');
-  assert.equal(hooks.resolveConversationListState({ loading: false, sourceCount: 0, readiness: { ready: false, state: 'never-synced' } }), 'syncing');
-  // leer + ready ⇒ plain empty
-  assert.equal(hooks.resolveConversationListState({ loading: false, sourceCount: 0, readiness: { ready: true, state: 'live' } }), 'empty');
-  // readiness unavailable (legacy ctx) ⇒ unchanged legacy behaviour
-  assert.equal(hooks.resolveConversationListState({ loading: false, sourceCount: 0, readiness: null }), 'empty');
-  // source has rows (filter/search empties included) ⇒ content, never syncing
-  assert.equal(hooks.resolveConversationListState({ loading: false, sourceCount: 2, readiness: { ready: false } }), 'content');
-  // initial load with no local rows keeps the module's loading state
-  assert.equal(hooks.resolveConversationListState({ loading: true, sourceCount: 0, readiness: null }), 'loading');
-  // the syncing branch renders the canonical kit shell markup
-  assert.match(indexJs, /<div class="ctox-syncing" role="status" aria-live="polite">/);
-  assert.match(indexJs, /subscribeCollectionReadiness/);
-  assert.match(indexJs, /collectionReadiness/);
+test('v4: an empty queue renders nothing — no loading/syncing copy, no readiness wiring', () => {
+  // App-API 4.0 (PORTING.md R4/R11): queries are always local and complete; state goes only to
+  // the shell's status zone via api.status.report.
+  assert.doesNotMatch(indexJs, /ctox-syncing/);
+  assert.doesNotMatch(indexJs, /subscribeCollectionReadiness|collectionReadiness|startCollection/);
+  assert.doesNotMatch(indexJs, /commandBus|ctx\.host|ctx\.sync/);
+  const listFn = indexJs.match(/function renderConversationList\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(listFn, 'renderConversationList present');
+  assert.match(listFn[0], /renderHtmlIfChanged\(container, '',/);
+  assert.match(indexJs, /api\.status\.report\(/);
+  for (const key of ['loadingTitle', 'loadingBody', 'emptyListTitle', 'commandPending']) {
+    assert.doesNotMatch(indexJs, new RegExp(`\\b${key}\\b`), `${key} state copy is gone`);
+  }
 });
 
 console.log('support module phase-0 smoke OK');

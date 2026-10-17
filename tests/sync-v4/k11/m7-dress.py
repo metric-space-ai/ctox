@@ -1,0 +1,269 @@
+#!/usr/bin/env python3
+"""Bounded, private release/upgrade/rollback rehearsal; never a tenant deploy.
+
+An owned synthetic fallback is explicitly separate from frozen WELSCH coverage.
+Missing product connections are not_run with an owner, never fabricated passes.
+"""
+import argparse
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import time
+
+OWNER = '01a087a0-169a-7e23-ba3d-71352256cbfb'
+HERE = Path(__file__).resolve().parent
+CRITERIA = {
+    'private-release-artifact': 'DevOps', 'frozen-welsch-coverage': 'ctox sync v4 / phase1',
+    'sqlite-snapshot': 'DevOps', 'foreground-restart-component': 'DevOps',
+    'public-key-restart-component': 'DevOps / Architecture CUTOVER-4',
+    'supported-update-rollback': 'DevOps / gpu3 lane owner', 'base-import-daemon-attachment': 'phase1 / Architecture',
+    'cutover-coverage': 'phase1', 'instance-key-restart': 'Architecture CUTOVER-4',
+    'installed-get-root-p99': 'DevOps', 'app-hot-plug': 'Harness #868',
+    'kernel-transport': 'Kernel #820 / ctox sync v4', 'workjet-project-list': 'Shell v4 / Workjet',
+    'rights-authority': 'Architecture CUTOVER-5', 'signed-v4-slot': 'Shell v4',
+    'main-release-delivery': 'ctox sync v4',
+}
+
+
+def sha(path):
+    result = hashlib.sha256()
+    with Path(path).open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+            result.update(chunk)
+    return result.hexdigest()
+
+
+def main():
+    def interrupted(signum, _frame):
+        raise RuntimeError('Owned dress rehearsal interrupted: '+str(signum))
+    signal.signal(signal.SIGTERM, interrupted)
+    signal.signal(signal.SIGINT, interrupted)
+    parser = argparse.ArgumentParser(description=__doc__)
+    for flag in ('release', 'before', 'profile', 'output'):
+        parser.add_argument('--'+flag, type=Path, required=True)
+    args = parser.parse_args()
+    assert os.uname().sysname == 'Linux' and os.environ.get('BUILD_LANE_BIN'), 'Canonical Linux lane required'
+    allowed = (Path(os.environ['BUILD_LANE_BIN'])/'../artifacts').resolve()
+    out = args.output.resolve()
+    assert allowed in out.parents and not out.exists(), 'New private output required'
+    out.mkdir(mode=0o700, parents=True)
+    result = dict(schema='ctox.m7.go-nogo.v1', owner=OWNER, startedAtMs=int(time.time()*1000),
+                  terminal=False, go=False, criteria=[dict(id=name,status='not_run',owner=owner,
+                  reason='Prerequisite phase not reached') for name,owner in CRITERIA.items()], commands=[], processes=[])
+    def save():
+        (out/'m7-go-nogo.json').write_text(json.dumps(result, indent=2)+'\n')
+    def criterion(name, status, owner, **details):
+        row = dict(id=name, status=status, owner=owner, **details)
+        index = next((i for i,c in enumerate(result['criteria']) if c['id']==name),None)
+        if index is None:
+            result['criteria'].append(row)
+        else:
+            result['criteria'][index] = row
+        save()
+    def run(name, command, timeout=60, env=None):
+        row = dict(name=name, command=[str(v) for v in command], startedAtMs=int(time.time()*1000),
+                   stderrLog=str(out/(name+'.stderr.log')))
+        result['commands'].append(row)
+        with (out/(name+'.log')).open('w') as log, (out/(name+'.stderr.log')).open('w') as err:
+            child = subprocess.Popen(row['command'], stdout=log, stderr=err, start_new_session=True, env=env)
+            process = dict(owner=OWNER, pid=child.pid, pgid=child.pid, purpose=name, stopAfterSeconds=timeout)
+            result['processes'].append(process)
+            save()
+            try:
+                row['exit'] = child.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                row['timeout'] = True
+                row['exit'] = None
+            finally:
+                try:
+                    os.killpg(child.pid, signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    os.killpg(child.pid, signal.SIGKILL)
+                    child.wait()
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    os.killpg(child.pid, 0)
+                    process['groupAbsent'] = False
+                except ProcessLookupError:
+                    process['groupAbsent'] = True
+        row['durationMs'] = int(time.time()*1000)-row['startedAtMs']
+        save()
+        return row['exit']
+    try:
+        release = json.loads(args.release.read_text())
+        assert release.get('terminal') and release.get('pass'), 'Terminal canonical release receipt required'
+        assert release['reference'].startswith('.github/workflows/release.yml:') and release['buildExit'] == 0
+        assert sha(release['binary']) == release['binarySha256'] and sha(release['package']) == release['packageSha256']
+        spec = importlib.util.spec_from_file_location('release', HERE/'m7-release.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        result['packageVerification'] = module.verify_package(release)
+        bundle = Path(release['binary']).parent.parent
+        for relative, digest in release['assets'].items():
+            assert not Path(relative).is_absolute() and '..' not in Path(relative).parts
+            assert sha(bundle/relative) == digest, 'Release asset differs: '+relative
+        result['candidate'] = release['revision']
+        result['release'] = {k: release[k] for k in ('revision','binary','binarySha256','package','packageSha256','sourceTree')}
+        criterion('private-release-artifact', 'pass', 'DevOps', receipt=str(args.release), receiptSha256=sha(args.release),
+                  limit='Private release-mode artifact; not published from main and not a full lane-suite qualification')
+        profile = args.profile.resolve()
+        assert allowed in profile.parents, 'Only the private lane fixture is permitted'
+        marker = json.loads((profile/'.sync-v4-e2e.json').read_text())
+        assert marker.get('owner') == OWNER and marker.get('synthetic') is True, 'No customer profile or protected files'
+        criterion('synthetic-v3-profile-custody', 'pass', 'DevOps',
+                  reason='Controller selected the owned synthetic V3 fixture for this rehearsal; the real E29 freeze remains in the Saturday window')
+        criterion('frozen-welsch-coverage', 'not_run', 'ctox sync v4 / Saturday freeze',
+                  reason='E29.7/E29.8 on WELSCH are planned for the authorized Saturday freeze, never fabricated from this synthetic fixture')
+        snapshot = out/'snapshot-before'
+        code = run('sqlite-api-snapshot', ['python3', HERE/'m7-backup.py', 'snapshot', '--root', profile, '--output', snapshot], 180)
+        assert code == 0, 'Private snapshot failed'
+        manifest = json.loads((snapshot/'snapshot.json').read_text())
+        assert manifest['complete'] and manifest['databases']
+        criterion('sqlite-snapshot', 'pass', 'DevOps', databases=len(manifest['databases']),
+                  manifest=str(snapshot/'snapshot.json'), sha256=sha(snapshot/'snapshot.json'),
+                  consistency='Per-file SQLite API snapshot of terminal owned fixture; no live customer copy')
+        # Start the real foreground twice as a fresh-state component control.
+        # The public instance ID can be observed without opening encrypted data.
+        # This does not replace the installed-profile/signature witness.
+        # Unix store IPC is STATE_ROOT/store/store.sock (SUN_LEN). Keep the
+        # private component root compact instead of changing the product path.
+        component = out/'f'
+        component.mkdir(mode=0o700)
+        (component/'.sync-v4-e2e.json').write_text(json.dumps(dict(owner=OWNER,synthetic=True,
+            source=release['revision'],purpose='fresh empty-state restart control')))
+        # Fresh empty state is only a startup control. SQLite-only clones do
+        # not include the product's sealed-key/file custody and must never be
+        # presented as a valid frozen-profile restoration.
+        (component/'runtime').mkdir(mode=0o700)
+        for name in ('src','contracts','Cargo.toml','bin'):
+            (component/name).symlink_to(bundle/name)
+        home = component/'home'
+        home.mkdir(mode=0o700)
+        env = dict(PATH=os.environ['PATH'], HOME=str(home), TMPDIR=os.environ['TMPDIR'], LANG='C.UTF-8',
+                   BUILD_LANE_BIN=os.environ['BUILD_LANE_BIN'],
+                   XDG_CONFIG_HOME=str(home/'.config'), XDG_CACHE_HOME=str(home/'.cache'),
+                   CTOX_ROOT=str(component), CTOX_STATE_ROOT=str(component/'runtime'))
+        assert run('component-bootstrap-fixture', ['python3', HERE/'m7-bootstrap-fixture.py',
+            '--root', component, '--output', out/'component-bootstrap-fixture.json'], 10, env) == 0
+        starts = []
+        for attempt in range(2):
+            log_path = out/('foreground-'+str(attempt)+'.log')
+            with log_path.open('w') as log:
+                at = time.monotonic()
+                child = subprocess.Popen([release['binary'],'service','--foreground','--root',str(component)],
+                                         cwd=component, env=env, stdout=log, stderr=log, start_new_session=True)
+                process = dict(owner=OWNER,pid=child.pid,pgid=child.pid,purpose='foreground restart component',stopAfterSeconds=25)
+                result['processes'].append(process)
+                start = dict(ready=False, readyMs=None, instanceId=None, log=str(log_path))
+                starts.append(start)
+                save()
+                try:
+                    ready = False
+                    deadline = time.monotonic()+20
+                    while child.poll() is None and time.monotonic()<deadline:
+                        if 'ctox v4 store daemon ready:' in log_path.read_text():
+                            ready = True
+                            break
+                        time.sleep(.05)
+                    identity = component/'runtime/business-os-instance-id'
+                    start.update(ready=ready,readyMs=(time.monotonic()-at)*1000,
+                                 instanceId=identity.read_text().strip() if identity.exists() else None)
+                    if ready:
+                        custody='open-databases-'+str(attempt)
+                        start['openDatabaseExit']=run(custody,['python3',HERE/'m7-freeze.py',
+                            '--pid',child.pid,'--root',component,'--output',out/(custody+'.json')],10,env)
+                finally:
+                    try:
+                        os.killpg(child.pid,signal.SIGTERM)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        child.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(child.pid,signal.SIGKILL)
+                        child.wait()
+                    start['exit'] = child.returncode
+                    try:
+                        os.killpg(child.pid,0)
+                        process['groupAbsent'] = False
+                    except ProcessLookupError:
+                        process['groupAbsent'] = True
+            # Official public-identity CLI, after owner drain. It only loads
+            # the existing key; the helper never opens/decrypts protected data.
+            name = 'public-identity-'+str(attempt)
+            start['identityExit'] = run(name,[release['binary'],'sync','identity','--root',component],10,env)
+            if start['identityExit'] == 0:
+                identity = json.loads((out/(name+'.log')).read_text())
+                start['publicIdentity'] = identity.get('identity')
+        stable = all(x['ready'] and x['exit']==0 for x in starts) and bool(starts[0]['instanceId']) and starts[0]['instanceId']==starts[1]['instanceId']
+        key_stable = all(x.get('identityExit')==0 for x in starts) and bool(starts[0].get('publicIdentity')) and starts[0].get('publicIdentity')==starts[1].get('publicIdentity')
+        criterion('foreground-restart-component','pass' if stable else 'fail','DevOps',
+                  measured=starts, publicSigningKeyStable=key_stable,
+                  limit='Candidate image on fresh empty state, not frozen-profile coverage or installed upgrade')
+        criterion('public-key-restart-component','pass' if key_stable else 'fail','DevOps / Architecture CUTOVER-4',
+                  measured=[dict(exit=x.get('identityExit'),publicIdentity=x.get('publicIdentity')) for x in starts],
+                  method='Official sync identity after each real foreground shutdown; no key extraction',
+                  limit='Fresh-state control, not the installed frozen-profile migration/signature witness')
+        # Try the actual approved namespace command once. sudo -n true is not
+        # a permission oracle: policy may allow unshare but disallow true.
+        # This fallback constructs a deterministic real V3 fixture via its
+        # old CLI, preserving its own full private file/key custody. Never
+        # boot a SQLite-only clone with missing sealed-key assets.
+        transition = out/'install'
+        code = run('supported-update-rollback', ['node',HERE/'installer-smoke.mjs',args.before,args.release,transition,'yes'],660)
+        proof = transition/'upgrade/installer.json'
+        details = json.loads(proof.read_text()) if proof.exists() else {}
+        success = code == 0 and details.get('roundtripExecuted') and details.get('canonicalReleasePackage') and details.get('rollback',{}).get('dataReadback',{}).get('matchesBefore') and details.get('forward',{}).get('dataReadback',{}).get('matchesBefore')
+        controller_log = transition/'controller.log'
+        admission = controller_log.read_text() if controller_log.exists() else ''
+        denied = any(text in admission for text in ('sudo: a password is required',
+            'sudo: a terminal is required', 'unshare: unshare failed: Operation not permitted'))
+        controller_file = transition/'upgrade/controller.json'
+        controller = json.loads(controller_file.read_text()) if controller_file.exists() else {}
+        if code != 0 and denied and not details.get('installerExecuted') and controller.get('groupAbsent') is True:
+            criterion('supported-update-rollback','not_run','gpu3 lane owner',
+                      reason='Actual sudo/unshare namespace command rejected before installer execution; no host service fallback.',
+                      evidence=str(controller_log),controller=str(controller_file),exit=code)
+        else:
+            criterion('supported-update-rollback', 'pass' if success else 'fail', 'DevOps',
+                      evidence=str(proof), exit=code, fixture='New deterministic real V3 fixture; not frozen WELSCH',
+                      dataReadback='full synthetic app row/schema match required; frozen WELSCH coverage remains separate')
+        for name, owner, reason in [
+            ('base-import-daemon-attachment','phase1 / Architecture','Library-only E21 witness is not a productive import attached to this installed daemon.'),
+            ('cutover-coverage','phase1','No cutover-coverage.json custody supplied for frozen WELSCH data.'),
+            ('instance-key-restart','Architecture CUTOVER-4','Requires installed foreground public-identity witness; unit/library evidence is not relabeled.'),
+            ('installed-get-root-p99','DevOps','Requires the completed installed foreground and its actual signed slot.'),
+            ('app-hot-plug','Architecture / Shell v4','#868 is in this candidate. The real native session and browser binding still require installed-profile qualification; fake core is not acceptance.'),
+            ('kernel-transport','Kernel #820 / ctox sync v4','PR #820 is open; ordered browser transport is not in the frozen integration candidate.'),
+            ('workjet-project-list','Shell v4 / Workjet','not_run(shell-slot): no signed V4 artifact from main supplied.'),
+            ('rights-authority','Architecture CUTOVER-5','Final productive rights/fence attachment not qualified in this candidate.'),
+            ('signed-v4-slot','Shell v4','No signed V4 slot artifact from main supplied; beta.106 is only a V3 mechanics reference.'),
+            ('main-release-delivery','ctox sync v4','Candidate is an isolated integration rehearsal; main milestone/full suite and publication are not executed.')]:
+            criterion(name, 'not_run', owner, reason=reason)
+    except Exception as error:
+        result['error'] = str(error)
+        criterion('rehearsal-execution','fail','DevOps',reason=str(error))
+    finally:
+        result['terminal'] = True
+        result['finishedAtMs'] = int(time.time()*1000)
+        result['go'] = bool(result['criteria']) and all(c['status']=='pass' for c in result['criteria'])
+        result['remainingBlockers'] = [{k:c.get(k) for k in ('id','status','owner','reason')}
+                                      for c in result['criteria'] if c['status']!='pass']
+        save()
+    print(json.dumps({k:v for k,v in result.items() if k not in ('commands','processes')}))
+    return 0 if result['go'] else 1 if result.get('error') or any(c['status']=='fail' for c in result['criteria']) else 2
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

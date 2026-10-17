@@ -33,7 +33,7 @@ test('left booking selector uses the complete shell-owned pane grammar', () => {
   assert.match(html, /data-pg-tray\b[^>]*hidden/);
   assert.match(html, /data-pg-reset/);
   assert.match(html, /class="ctox-pane-body ctox-well"/);
-  assert.match(html, /class="ctox-pane-footer"/);
+  assert.doesNotMatch(html, /data-pg-footer/, 'keine Fußzeile, die nur den Reiterzähler wiederholt');
   assert.doesNotMatch(html, /data-action="refresh|manual-refresh|neu laden/i);
 });
 
@@ -101,34 +101,37 @@ test('primary and secondary accounting rows carry the full context trio', () => 
   assert.match(js, /data-mileage-click-id=[^\n]+data-context-record-type="accounting_journal_entry"[^\n]+data-context-label=/);
 });
 
-test('data-driven empty states are gated by canonical collection readiness', () => {
-  // Canonical shell API is consumed, not rebuilt.
-  assert.match(js, /state\.ctx\?\.sync\?\.collectionReadiness/, 'readiness snapshot comes from the shell sync API');
-  assert.match(js, /state\.ctx\?\.sync\?\.subscribeCollectionReadiness/, 'readiness changes are subscribed');
-  assert.match(js, /state\.readinessCleanup = wireReadinessSubscriptions\(\)/, 'subscription is wired during mount');
-  assert.match(js, /state\.readinessCleanup\(\)/, 'readiness subscription is cleaned up on unmount');
-  assert.match(js, /ready !== false/, 'only ready === false gates the empty state (offline-pending keeps syncing)');
-  // Syncing shell uses the canonical kit class with status semantics.
-  assert.match(js, /<div class="ctox-syncing" role="status" aria-live="polite">/, 'syncing state uses the canonical kit class');
-  assert.match(js, /t\('syncingData'\)/, 'syncing copy goes through module i18n');
-  // Every backing collection whose empty state is gated is subscribed.
+test('v4: empty states render nothing and live data comes from api.query (App-API 4.0)', () => {
+  // Readiness/Ladefunktion entfällt (PORTING.md R4/R11): keine Sync-API, kein Ladeblock, leere Listen bleiben leer.
+  assert.doesNotMatch(js, /ctx\?\.sync|collectionReadiness|subscribeCollectionReadiness/);
+  assert.doesNotMatch(js, /ctox-syncing|syncingData/);
+  assert.match(js, /export async function mount\(root, api, \{ restored \} = \{\}\)/);
   for (const name of ['accounting_accounts', 'accounting_journal_entries', 'accounting_receipts', 'accounting_bank_statement_lines']) {
-    assert.ok(js.includes(`'${name}'`), `readiness wired for ${name}`);
+    assert.ok(js.includes(`'${name}'`), `live query wired for ${name}`);
   }
-  // Gating requires the unfiltered source to be empty — filtered/searched
-  // views with existing data keep their classic empty copy.
-  assert.match(js, /allRecords\.length === 0 && !fibuSourcesReady\(\['accounting_receipts', 'accounting_journal_entries'\]\)/);
-  assert.match(js, /state\.accounts\.length === 0 && !fibuSourcesReady\(\['accounting_accounts'\]\)/);
-  assert.match(js, /state\.journalEntries\.length === 0 && !fibuSourcesReady\(\['accounting_journal_entries'\]\)/);
-  assert.match(js, /!fibuSourcesReady\(\['accounting_receipts'\]\)/);
-  assert.match(js, /!fibuSourcesReady\(\['accounting_bank_statement_lines'\]\)/);
-  // Selection- and match-driven empties stay readiness-free.
+  assert.match(js, /disposers\.push\(api\.query\(name, \{\}\)\.subscribe\(scheduleFibuReload\)\)/);
+  // Selection- and match-driven empties stay.
   assert.match(js, /Keine Belegevidenz für diese Banktransaktion verknüpft\./);
   assert.match(js, /Keine Hauptbuchungen für dieses Sachkonto vorhanden\./);
 });
 
-test('v2 accounting overlays stay inside the module and context actions clamp locally', () => {
-  assert.match(css, /\.shell-window\[data-shell-contract="v2"\] \.fibu-module \{ position: relative;[\s\S]*overflow: hidden;/);
-  assert.match(js, /\(state\.els\.root \|\| state\.ctx\?\.host\)\?\.append\(menu\)/);
+test('v4 accounting overlays stay inside the module and context actions clamp locally', () => {
+  // v4: Shell-Vorfahr entfällt, Regel liegt unter dem App-Scope (scope-css.mjs).
+  assert.match(css, /\[data-app="buchhaltung"\] \.fibu-module \{ position: relative;[\s\S]*overflow: hidden;/);
+  assert.match(js, /\(state\.els\.root \|\| state\.root\)\?\.append\(menu\)/);
   assert.match(js, /const rootRect = state\.els\.root\?\.getBoundingClientRect/);
+});
+
+// FIX5: Die In-App-E2E-Suite (core/ui_e2e_tests.js, Ansicht „System & QS“) ist gelöscht, nicht stillgelegt. Sie schrieb
+// Testdaten in die echten Bücher (Kontenrahmen neu, Hetzner-Beleg, festgeschriebene Buchung) und griff auf
+// ctx.db/ctx.permissions zu, die es unter App-API 4.0 nicht gibt. Die Fachregeln prüft ../test.js gegen die Kernmodule.
+test('v4: no in-app E2E suite, no QS view writing test bookings into the live ledger', async () => {
+  const { access } = await import('node:fs/promises');
+  await assert.rejects(access(new URL('../core/ui_e2e_tests.js', import.meta.url)), { code: 'ENOENT' });
+  assert.doesNotMatch(js, /ui_e2e_tests|uiTestCases|uiTestResults|runAllUiTests|runSingleUiTest|buchhaltung\.uitest/);
+  assert.doesNotMatch(html, /data-panel="tests"|value="tests"|run-all-ui-tests|e2e-live-log|data-ui-tests-list/);
+  assert.doesNotMatch(css, /fibu-e2e|e2e-summary-bar|fibu-tests-|fibu-terminal/);
+  const workbenchSelect = html.match(/<select[^>]*data-workbench-view[^>]*>([\s\S]*?)<\/select>/)?.[1] || '';
+  assert.deepEqual([...workbenchSelect.matchAll(/<option value="([a-z]+)"/g)].map((m) => m[1]),
+    ['skr', 'journal', 'receipts', 'banking', 'travel', 'mileage', 'reports', 'assets']);
 });

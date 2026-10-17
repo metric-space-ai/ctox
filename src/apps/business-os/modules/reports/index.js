@@ -1,20 +1,28 @@
-import { loadModuleMessages } from '../../shared/i18n.js';
+// App-API 4.0 (Shell v4): mount(root, api, {restored}) -> {unmount, snapshot}.
+// Port-Protokoll: V4-PORT.md; Ersetzungsregeln: ../../v4/tools/port/PORTING.md.
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
+// Eingebettete Texte (relativer Modul-Import, kein HTTP-Ladeweg); api.shell.t übersteuert (OFFEN-B).
+import messagesDe from './locales/de.json' with { type: 'json' };
+import messagesEn from './locales/en.json' with { type: 'json' };
 
 const REPORTS_REFRESH_DEBOUNCE_MS = 80;
-const REPORTS_SYNC_RESTART_TIMEOUT_MS = 6000;
+// Alle gelesenen Collections sind fremd (Eigentümer ctox/threads/Shell), siehe V4-PORT.md.
 const REPORT_COLLECTIONS = [
   'business_module_reports',
   'ctox_bug_reports',
   'business_module_releases',
   'business_commands',
   'ctox_queue_tasks',
-  'ctox_task_approval_requests',
-  'business_users',
 ];
-const REPORT_DATA_COLLECTIONS = ['business_module_reports', 'ctox_bug_reports'];
+// App-Katalog (System-Collection, §16.14) für die App-Titel (moduleLabel).
+const REPORT_APPS_COLLECTION = 'business_apps';
 
 const state = {
-  ctx: null,
+  api: null,
+  root: null,
+  disposers: [],
+  data: {},
+  apps: [],
   reports: [],
   bugs: [],
   releases: [],
@@ -25,102 +33,163 @@ const state = {
   kind: 'all',
   status: 'all',
   viewMode: 'cards',
-  approvals: [],
-  users: [],
-  cleanup: null,
-  contextMenu: null,
-  contextMenuCleanup: null,
   renderTimer: null,
   renderKey: '',
   renderedDetailId: '',
   detailScrollByReport: {},
-  diagnostics: createDiagnosticsState(),
-  readiness: {},
+  pendingRestore: null,
+  messages: {},
   t: null,
   lang: 'de',
 };
 
-export async function mount(ctx) {
-  state.ctx = ctx;
-  // Reset volatile state on every mount so a remount can't leak a stale
-  // selectedId/renderedDetailId from a previous host element.
+const SNAPSHOT_VIEW_KEYS = Object.freeze(['selectedId', 'search', 'kind', 'status', 'viewMode']);
+
+function resetState() {
+  state.disposers = [];
+  state.data = {};
+  state.apps = [];
+  state.reports = [];
+  state.bugs = [];
+  state.releases = [];
+  state.commands = [];
+  state.queue = [];
   state.selectedId = '';
-  state.renderedDetailId = '';
+  state.search = '';
+  state.kind = 'all';
+  state.status = 'all';
+  state.viewMode = 'cards';
+  state.renderTimer = null;
   state.renderKey = '';
-  state.diagnostics = createDiagnosticsState();
-  state.readiness = readReportsReadiness();
-  await ensureStyles();
+  state.renderedDetailId = '';
+  state.detailScrollByReport = {};
+  state.pendingRestore = null;
+}
 
-  // Load localizations
-  const messages = await loadModuleMessages(import.meta.url, ctx.locale || 'de', {});
-  state.t = (key, fallback, ...args) => {
-    let val = messages[key] ?? fallback ?? key;
-    if (args.length) {
-      args.forEach((arg, i) => {
-        val = String(val).replace(`{${i}}`, arg);
-      });
-    }
-    return val;
-  };
-  state.lang = ctx.locale === 'en' ? 'en' : 'de';
-
-  ctx.host.innerHTML = await loadModuleMarkup();
-
-  applyStaticLabels(ctx.host, state.t);
-
-  ctx.left.replaceChildren();
-  ctx.right.replaceChildren();
+export async function mount(root, api, { restored } = {}) {
+  resetState();
+  // Abos gehören dieser Montage (PORTING.md §4 Falle 1).
+  const disposers = state.disposers;
+  state.api = api;
+  state.root = root;
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'reports';
+  state.lang = langFrom(api.shell.locale.get());
+  state.messages = messagesFor(state.lang);
+  state.t = translate;
+  // CSS lädt die Shell aus dem Manifest; index.html liefert der Service Worker versioniert (§16.15).
+  root.innerHTML = await loadModuleMarkup();
+  applyStaticLabels(root, state.t);
   wireUi();
-  // Local-first: subscribe first, then load in the background. The shell HTML
-  // is already in the DOM; awaiting the (local, but potentially large)
-  // multi-collection read before returning made the open feel laggy. The
-  // realtime subscription re-renders as soon as the read resolves and on every
-  // later change.
-  const stopReadiness = wireReportsReadiness();
-  const stopRealtime = wireRealtime();
-  state.cleanup = () => {
-    stopReadiness();
-    stopRealtime();
-  };
-  refreshReports().catch((error) => {
-    console.warn('[reports] initial load failed', error);
-  });
-
-  // Column resizing is owned by the shell-global resizer (setupModuleResizers
-  // in app.js), wired declaratively from the `.ctox-column-resizer[data-resizer-var]`
-  // handle inside the `[data-resize-frame]` root — no module JS needed.
-  window.addEventListener('ctox-business-os-reports-updated', handleReportsUpdated);
-  return () => {
-    state.cleanup?.();
-    state.contextMenuCleanup?.();
-    state.contextMenu?.remove();
-    state.contextMenu = null;
-    window.removeEventListener('ctox-business-os-reports-updated', handleReportsUpdated);
-    if (state.renderTimer) window.clearTimeout(state.renderTimer);
+  autoWirePaneGrammar(root);
+  api.shell.setTitle(state.t('reportsLabel', 'Bugs & Features'));
+  applyRestoredView(isPlainObject(restored) ? restored : null);
+  for (const name of REPORT_COLLECTIONS) {
+    disposers.push(api.query(name, {}).subscribe((rows) => {
+      state.data[name] = Array.isArray(rows) ? rows : [];
+      scheduleRefresh();
+    }));
+  }
+  disposers.push(api.query(REPORT_APPS_COLLECTION, { sort: [{ title: 'asc' }] }).subscribe((rows) => {
+    state.apps = Array.isArray(rows) ? rows : [];
+  }));
+  disposers.push(api.shell.locale.subscribe((locale) => {
+    const lang = langFrom(locale);
+    if (lang === state.lang) return;
+    state.lang = lang;
+    state.messages = messagesFor(lang);
+    if (state.root !== root) return;
+    applyStaticLabels(root, state.t);
+    api.shell.setTitle(state.t('reportsLabel', 'Bugs & Features'));
+    render();
+  }));
+  return {
+    unmount() {
+      if (state.renderTimer) clearTimeout(state.renderTimer);
+      state.renderTimer = null;
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (error) { console.warn('[reports] unsubscribe failed', error); }
+      }
+      root.replaceChildren();
+      if (state.root === root) {
+        state.api = null;
+        state.root = null;
+      }
+    },
+    snapshot: reportsSnapshot,
   };
 }
 
-async function ensureStyles() {
-  if (document.querySelector('link[data-reports-style]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  const styleUrl = new URL('./index.css', import.meta.url);
-  // Inherit the module's own cache-buster (index.js is imported with
-  // ?v=<build>): fresh JS must never render against a stale cached sheet.
-  const version = String(import.meta.url).split('?v=')[1] || '20260722-reports-grammar-v1';
-  styleUrl.searchParams.set('v', version);
-  link.href = styleUrl.href;
-  link.dataset.reportsStyle = 'true';
-  document.head.append(link);
+function langFrom(locale) {
+  return String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function messagesFor(lang) {
+  return { ...messagesDe, ...(lang === 'en' ? messagesEn : {}) };
+}
+
+function translate(key, fallback, ...args) {
+  let val = state.messages?.[key] ?? fallback ?? key;
+  const t = state.api?.shell?.t;
+  if (typeof t === 'function') {
+    const scoped = `reports.${key}`;
+    const shellValue = t.call(state.api.shell, scoped);
+    if (typeof shellValue === 'string' && shellValue && shellValue !== scoped) val = shellValue;
+  }
+  args.forEach((arg, i) => {
+    val = String(val).replace(`{${i}}`, arg);
+  });
+  return val;
+}
+
+// Snapshot für den Live-Remount (§10.2a Nr. 1): Auswahl, Filter, Ansicht.
+function reportsSnapshot() {
+  const snap = { v: 1 };
+  for (const key of SNAPSHOT_VIEW_KEYS) snap[key] = state[key];
+  snap.actionsHidden = Boolean(state.root?.querySelector('[data-reports-root]')?.classList.contains('is-actions-hidden'));
+  snap.detailScrollTop = state.root?.querySelector('[data-reports-detail-scroll]')?.scrollTop || 0;
+  return snap;
+}
+
+function applyRestoredView(restored) {
+  state.pendingRestore = restored;
+  if (!restored) return;
+  for (const key of SNAPSHOT_VIEW_KEYS) {
+    if (typeof restored[key] === typeof state[key]) state[key] = restored[key];
+  }
+  const root = state.root?.querySelector('[data-reports-root]');
+  if (root && typeof restored.actionsHidden === 'boolean') {
+    root.classList.toggle('is-actions-hidden', restored.actionsHidden);
+    updateToggleActionsAria(root);
+  }
+  const search = root?.querySelector('[data-pg-search]');
+  if (search) search.value = state.search;
+  const statusSelect = root?.querySelector('[data-pg-filter][data-pg-name="status"]');
+  if (statusSelect) statusSelect.value = state.status;
+  for (const tab of root?.querySelectorAll('[data-pg-band]') || []) {
+    const active = tab.getAttribute('data-pg-band') === state.kind;
+    tab.classList.toggle('is-active', active);
+    tab.setAttribute('aria-selected', active ? 'true' : 'false');
+  }
+  syncViewToggleButton(root);
+}
+
+// Offene Eingaben erst zurückspielen, wenn der ausgewählte Datensatz in den Live-Daten steht.
+function applyPendingRestore() {
+  const restored = state.pendingRestore;
+  if (!restored) return;
+  const items = normalizedReports();
+  if (restored.selectedId && !items.some((item) => item.id === restored.selectedId)) return;
+  state.pendingRestore = null;
+  const scroller = state.root?.querySelector('[data-reports-detail-scroll]');
+  if (scroller && Number.isFinite(restored.detailScrollTop)) scroller.scrollTop = restored.detailScrollTop;
 }
 
 async function loadModuleMarkup() {
-  // Markup inherits the JS cache-buster — like the stylesheet, a deploy must
-  // never leave fresh JS binding against stale cached markup (same contract
-  // as ctox/coding-agents/knowledge/threads/app-store).
-  const version = String(import.meta.url).split('?v=')[1] || '20260722-reports-grammar-v1';
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (version ? `?v=${version}` : '');
-  const html = await fetch(markupHref).then((res) => res.text());
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
@@ -216,23 +285,20 @@ function syncViewToggleButton(root) {
 }
 
 // Enablement of the detail head's single filled action. Mirrors the actions
-// pane exactly: no selected report, or a delegation already in flight, means
-// the handover is not available — the button then dims (`:disabled`) instead
-// of vanishing, so the head never changes height between reports.
+// pane exactly: without a selected report the handover is not available — the
+// button then dims (`:disabled`) instead of vanishing, so the head never
+// changes height between reports. A report already in work (coding_turn_id)
+// still opens the code view: the run is visible there.
 function syncHeadDelegateButton(report) {
-  const button = state.ctx?.host?.querySelector('[data-head-delegate]');
+  const button = state.root?.querySelector('[data-head-delegate]');
   if (!button) return;
   const t = state.t || ((key, fallback) => fallback ?? key);
-  const label = t('delegateCoding', 'An Coding Agent übergeben');
-  const delegation = report ? delegationInfoFor(report) : null;
-  const delegationOpen = Boolean(delegation?.approval && String(delegation.approval.status || 'pending') === 'pending')
-    || Boolean(delegation?.command && !['completed', 'failed'].includes(String(delegation.command.status || '')));
-  button.disabled = !report || delegationOpen;
+  button.disabled = !report;
   const title = !report
     ? t('selectReportTitle', 'Eintrag auswählen')
-    : delegationOpen
-      ? t('delegateCodingRunning', 'Übergabe läuft bereits.')
-      : label;
+    : isCodingRunning(report)
+      ? t('delegateCodingRunning', 'In Arbeit – in der Code-Ansicht öffnen')
+      : t('delegateCoding', 'An Coding Agent übergeben');
   button.setAttribute('aria-label', title);
   button.setAttribute('title', title);
 }
@@ -250,7 +316,7 @@ function updateToggleActionsAria(root) {
 }
 
 function wireUi() {
-  const root = state.ctx.host.querySelector('[data-reports-root]');
+  const root = state.root?.querySelector('[data-reports-root]');
   if (!root) return;
   // Header action: JSON export of the currently filtered list.
   root.querySelector('[data-action="export-json"]')?.addEventListener('click', () => exportVisibleReports());
@@ -278,7 +344,7 @@ function wireUi() {
   root.querySelector('[data-head-delegate]')?.addEventListener('click', (event) => {
     if (event.currentTarget.disabled) return;
     const report = currentReportForActions();
-    if (report) openDelegateDialog(report);
+    if (report) openInCodeView(report);
   });
   // Right actions column is collapsible — same toggle pattern threads/tickets
   // use. The toggle stays in the detail header so the actions pane never has
@@ -300,14 +366,20 @@ function wireUi() {
       if (report) focusCtoxTask(report);
       return;
     }
+    const navigateButton = target?.closest('[data-navigate-app]');
+    if (navigateButton) {
+      state.api?.shell.navigate(navigateButton.getAttribute('data-navigate-app'));
+      return;
+    }
     if (target?.closest('[data-rollback-module]')) {
       const report = currentReportForActions();
       if (report) rollbackSelectedRelease(report);
       return;
     }
-    if (target?.closest('[data-delegate-coding]') && !target.closest('[data-delegate-coding]').disabled) {
+    const codeButton = target?.closest('[data-delegate-coding], [data-open-code-view]');
+    if (codeButton && !codeButton.disabled) {
       const report = currentReportForActions();
-      if (report) openDelegateDialog(report);
+      if (report) openInCodeView(report);
     }
   });
   // Use event delegation on the list container so the click handler survives
@@ -356,7 +428,7 @@ function onRailGrammarChange(event) {
 // rebuild for a selection click (an innerHTML rebuild would clamp the
 // well's scrollTop to 0).
 function applyReportsSelection() {
-  const list = state.ctx?.host?.querySelector('[data-reports-list]');
+  const list = state.root?.querySelector('[data-reports-list]');
   if (!list) return;
   for (const row of list.querySelectorAll('[data-report-id]')) {
     const selected = row.getAttribute('data-report-id') === state.selectedId;
@@ -398,92 +470,29 @@ function exportVisibleReports() {
   anchor.href = url;
   anchor.download = `ctox-reports-${exportedAt.slice(0, 19).replace(/[:T]/g, '-')}.json`;
   anchor.style.display = 'none';
-  (state.ctx?.host || document.documentElement).appendChild(anchor);
+  (state.root || document.documentElement).appendChild(anchor);
   anchor.click();
   anchor.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function wireRealtime() {
-  const subscriptions = REPORT_COLLECTIONS.map((name) => reportCollection(name)?.$?.subscribe?.(() => scheduleRefresh())).filter(Boolean);
-  return () => subscriptions.forEach((sub) => {
-    try { sub.unsubscribe?.(); } catch {}
-  });
-}
-
-// Canonical sync readiness for the data collections behind the report list
-// (business_module_reports + ctox_bug_reports merge into one list, so the list
-// is only "live" once BOTH finished their initial replication). Until then an
-// empty source renders the syncing shell, never the "no data" empty state.
-function readReportsReadiness() {
-  const read = state.ctx?.sync?.collectionReadiness;
-  if (typeof read !== 'function') return {};
-  return Object.fromEntries(REPORT_DATA_COLLECTIONS.map((name) => [name, read.call(state.ctx.sync, name)]));
-}
-
-function wireReportsReadiness() {
-  const subscribe = state.ctx?.sync?.subscribeCollectionReadiness;
-  if (typeof subscribe !== 'function') return () => {};
-  const unsubscribes = REPORT_DATA_COLLECTIONS.map((name) => subscribe.call(state.ctx.sync, name, (snapshot) => {
-    state.readiness = { ...state.readiness, [name]: snapshot };
-    render();
-  })).filter((unsubscribe) => typeof unsubscribe === 'function');
-  return () => unsubscribes.forEach((unsubscribe) => {
-    try { unsubscribe(); } catch {}
-  });
-}
-
-function reportsDataReadiness() {
-  const snapshots = REPORT_DATA_COLLECTIONS.map((name) => state.readiness?.[name]).filter(Boolean);
-  if (!snapshots.length) return null;
-  return { ready: snapshots.every((snapshot) => snapshot?.ready === true) };
-}
-
-export function resolveReportsDataState({ sourceCount = 0, readiness = null } = {}) {
-  if (Number(sourceCount) > 0) return 'content';
-  return readiness?.ready === false ? 'syncing' : 'empty';
-}
-
-function renderReportsSyncingState() {
-  return `<div class="ctox-syncing" role="status" aria-live="polite"><strong>${escapeHtml(state.t('syncingReports', 'Bugs & Features werden synchronisiert.'))}</strong><span>${escapeHtml(state.t('syncingReportsDetail', 'Die Einträge werden gerade aus dem CTOX-Datenstrom geladen.'))}</span></div>`;
-}
-
-function reportCollection(name) {
-  return state.ctx?.db?.collection?.(name) || null;
-}
-
-function handleReportsUpdated() {
-  scheduleRefresh();
-}
-
 function scheduleRefresh() {
   if (state.renderTimer) return;
-  state.renderTimer = window.setTimeout(() => {
+  state.renderTimer = setTimeout(() => {
     state.renderTimer = null;
-    refreshReports().catch((error) => console.warn('[reports] refresh failed', error));
+    try { refreshReports(); } catch (error) { console.warn('[reports] refresh failed', error); }
   }, REPORTS_REFRESH_DEBOUNCE_MS);
 }
 
-async function refreshReports(options = {}) {
+// Live-Abfragen liefern lokal und vollständig (§10.2a); die Ansicht wird nur aus diesem Stand berechnet.
+function refreshReports() {
+  if (!state.root) return;
   const previousSelectedId = state.selectedId;
-  state.diagnostics = {
-    ...state.diagnostics,
-    loading: true,
-    lastAttemptAt: Date.now(),
-    lastManual: Boolean(options.manual),
-  };
-
-  const syncErrors = options.restartSync ? await restartReportSync() : [];
-  const results = await Promise.all(REPORT_COLLECTIONS.map((name) => loadCollectionResult(name)));
-  const byName = Object.fromEntries(results.map((result) => [result.name, result]));
-  const reports = byName.business_module_reports?.items || [];
-  const bugs = byName.ctox_bug_reports?.items || [];
-  const releases = byName.business_module_releases?.items || [];
-  const commands = byName.business_commands?.items || [];
-  const queue = byName.ctox_queue_tasks?.items || [];
-  state.approvals = byName.ctox_task_approval_requests?.items || [];
-  state.users = (byName.business_users?.items || []).filter((user) => user && user.active !== false);
-  reconcileDelegationBackfill(reports, commands);
+  const reports = state.data.business_module_reports || [];
+  const bugs = state.data.ctox_bug_reports || [];
+  const releases = state.data.business_module_releases || [];
+  const commands = state.data.business_commands || [];
+  const queue = state.data.ctox_queue_tasks || [];
   const nextRenderKey = buildRenderKey({ reports, bugs, releases, commands, queue });
   const hadSameData = nextRenderKey === state.renderKey;
   state.reports = reports;
@@ -491,63 +500,23 @@ async function refreshReports(options = {}) {
   state.releases = releases;
   state.commands = commands;
   state.queue = queue;
-  state.diagnostics = buildDiagnosticsState({
-    results,
-    syncErrors,
-    syncDiagnostics: state.ctx.sync?.diagnostics,
-    reportCount: normalizeReportItems({ reports, bugs, commands, queue, t: state.t }).length,
-    manual: Boolean(options.manual),
-  });
   state.renderKey = nextRenderKey;
   syncSelectionToVisibleItems();
-  if (hadSameData && previousSelectedId === state.selectedId) {
+  if (hadSameData && previousSelectedId === state.selectedId && !state.pendingRestore) {
     return;
   }
   render();
-}
-
-async function restartReportSync() {
-  const sync = state.ctx.sync;
-  if (!sync) return [];
-  const errors = [];
-  try {
-    if (typeof sync.restartCollections === 'function') {
-      await withTimeout(sync.restartCollections(REPORT_COLLECTIONS), REPORTS_SYNC_RESTART_TIMEOUT_MS, 'Sync-Neustart laeuft noch');
-      return errors;
-    }
-  } catch (error) {
-    errors.push({ name: 'sync', message: safeErrorMessage(error) });
-  }
-  await Promise.all(REPORT_COLLECTIONS.map(async (name) => {
-    try {
-      await withTimeout(sync.startCollection?.(name), REPORTS_SYNC_RESTART_TIMEOUT_MS, 'Sync-Start laeuft noch');
-    } catch (error) {
-      errors.push({ name, message: safeErrorMessage(error) });
-    }
-  }));
-  return errors;
-}
-
-async function loadCollectionResult(name) {
-  const collection = reportCollection(name);
-  if (!collection) return { name, items: [], missing: true, error: '' };
-  try {
-    const docs = await collection.find().exec();
-    return { name, items: docs.map((doc) => doc.toJSON()), missing: false, error: '' };
-  } catch (error) {
-    return { name, items: [], missing: false, error: safeErrorMessage(error) };
-  }
+  applyPendingRestore();
 }
 
 function buildRenderKey(collections) {
   const summarize = (items, fields) => items.map((item) => fields.map((field) => item[field] ?? '').join(':')).sort().join('|');
   return [
-    summarize(collections.reports, ['id', 'report_id', 'status', 'updated_at_ms', 'ctox_command_id', 'task_id']),
+    summarize(collections.reports, ['id', 'report_id', 'status', 'updated_at_ms', 'ctox_command_id', 'task_id', 'coding_turn_id']),
     summarize(collections.bugs, ['id', 'report_id', 'status', 'updated_at_ms']),
     summarize(collections.releases, ['id', 'version_id', 'module_id', 'version', 'status', 'updated_at_ms']),
     summarize(collections.commands, ['id', 'command_id', 'status', 'updated_at_ms']),
     summarize(collections.queue, ['id', 'task_id', 'status', 'route_status', 'updated_at_ms']),
-    summarize(state.approvals || [], ['id', 'approval_request_id', 'status', 'updated_at_ms']),
   ].join('\n');
 }
 
@@ -555,35 +524,6 @@ function render({ resetScroll = false } = {}) {
   renderList({ resetScroll });
   renderDetail();
   renderActions();
-}
-
-function renderListEmptyState(allItems) {
-  if (hasBlockingReportDiagnostic()) {
-    return `<div class="ctox-empty"><strong>${escapeHtml(state.t('reportsListUnavailable', 'Noch keine Einträge'))}</strong><span>${escapeHtml(state.t('reportsListUnavailableDetail', 'Wird automatisch gefüllt.'))}</span></div>`;
-  }
-  if (allItems.length) {
-    return `<p class="ctox-empty">${escapeHtml(state.t('noFilteredReports', 'Keine Einträge im aktuellen Filter.'))}</p>`;
-  }
-  if (resolveReportsDataState({ sourceCount: allItems.length, readiness: reportsDataReadiness() }) === 'syncing') {
-    return renderReportsSyncingState();
-  }
-  return `<p class="ctox-empty">${escapeHtml(reportStoreEmptyMessage(state.t('noReports', 'Noch keine Einträge.')))}</p>`;
-}
-
-function renderDetailEmptyState({ normalized, filtered }) {
-  if (hasBlockingReportDiagnostic()) {
-    return `<div class="ctox-empty"><strong>${escapeHtml(state.t('reportsUnavailable', 'Bugs & Features sind gerade nicht verfügbar.'))}</strong><span>${escapeHtml(state.t('reportsUnavailableDetail', 'Die Liste wird automatisch gefüllt, sobald Einträge geladen sind.'))}</span></div>`;
-  }
-  if (!normalized.length) {
-    if (resolveReportsDataState({ sourceCount: normalized.length, readiness: reportsDataReadiness() }) === 'syncing') {
-      return renderReportsSyncingState();
-    }
-    return `<div class="ctox-empty"><strong>${escapeHtml(state.t('noReportsTitle', 'Noch keine Bugs oder Features'))}</strong><span>${escapeHtml(reportStoreEmptyMessage(state.t('noReportsDetail', 'Sobald Bugs oder Feature-Wünsche vorliegen, erscheinen Liste und Details hier.')))}</span></div>`;
-  }
-  if (!filtered.length) {
-    return `<div class="ctox-empty"><strong>${escapeHtml(state.t('noFilteredReportsTitle', 'Filter ohne Treffer'))}</strong><span>${escapeHtml(state.t('noFilteredReportsDetail', 'Suche oder Filter ändern, um wieder Details zu sehen.'))}</span></div>`;
-  }
-  return `<div class="ctox-empty"><strong>${escapeHtml(state.t('selectReportTitle', 'Eintrag auswählen'))}</strong><span>${escapeHtml(state.t('selectReport', 'Wähle links einen Bug oder Feature-Wunsch aus.'))}</span></div>`;
 }
 
 function syncSelectionToVisibleItems() {
@@ -599,219 +539,41 @@ function syncSelectionToVisibleItems() {
 
 function rememberDetailScroll() {
   if (!state.renderedDetailId) return;
-  const scroller = state.ctx.host.querySelector('[data-reports-detail-scroll]');
+  const scroller = state.root?.querySelector('[data-reports-detail-scroll]');
   if (!scroller) return;
   state.detailScrollByReport[state.renderedDetailId] = scroller.scrollTop;
 }
 
 // ---------------------------------------------------------------------------
-// Coding-agent delegation: a report is handed to the pi coding agent through
-// a Threads approval (threads.ctox_approval.request with a target command).
-// On approve the native side enqueues ctox.coding.turn for the target module.
+// Übergabe an den Coding Agent (Strang LOOP Runde 2, Kern §16.44). Coding-Aufträge entstehen nur in der Code-Ansicht
+// der Ziel-App (eigener Entwurf, eigene Revision): „An Coding Agent übergeben“ öffnet sie über
+// api.shell.openSource(moduleId, {tab:'reports', reportId}) direkt auf dem Reiter „Meldungen“ mit markierter Meldung;
+// dort „Agent beauftragen“ (v4/source/source-mode.js assignReport). Der frühere Weg über eine threads-Freigabe
+// (threads-Freigabeanfrage → ctox.coding.turn als Reviewer) ist entfallen: er konnte §16.44 nicht erfüllen
+// (draft_not_owned, payload_invalid, veraltete base_draft_rev). „In Arbeit“ folgt aus report.coding_turn_id, das die
+// Code-Ansicht beim Beauftragen setzt (v4/shell/report.js linkReportToTurn).
 // ---------------------------------------------------------------------------
-// Durable Rückweg: once the approved coding turn exists, stamp its command/
-// task ids (and a running/blocked status while the report is still open) back
-// onto the report record so every surface — not just this app — sees the
-// linkage. Idempotent: only writes when a field actually changes.
-async function reconcileDelegationBackfill(reports, commands) {
-  try {
-    const collection = reportCollection('business_module_reports');
-    if (!collection) return;
-    for (const report of reports || []) {
-      const reportId = report?.id || report?.report_id;
-      if (!reportId) continue;
-      const turn = (commands || []).find((item) => String(item?.command_type || item?.type || '') === 'ctox.coding.turn'
-        && item?.payload?.context?.record_id === reportId);
-      if (!turn) continue;
-      const commandId = String(turn.command_id || turn.id || '');
-      const taskId = String(turn.task_id || '');
-      const turnStatus = String(turn.status || turn.task_status || '');
-      const nextStatus = turnStatus === 'completed' ? 'completed'
-        : turnStatus === 'failed' ? 'blocked'
-          : 'running';
-      const statusChangeAllowed = ['open', 'running'].includes(String(report.status || 'open'));
-      const patch = {};
-      if (commandId && report.ctox_command_id !== commandId) patch.ctox_command_id = commandId;
-      if (taskId && report.task_id !== taskId) patch.task_id = taskId;
-      if (statusChangeAllowed && report.status !== nextStatus) patch.status = nextStatus;
-      if (!Object.keys(patch).length) continue;
-      await collection.upsert({ ...report, ...patch, updated_at_ms: Date.now() });
-    }
-  } catch (error) {
-    console.warn('[reports] delegation backfill skipped', error);
-  }
+/** Ziel der Übergabe: Code-Ansicht der betroffenen App, Reiter „Meldungen“, Meldung markiert. */
+export function codeViewTargetFor(report) {
+  return { appId: report.moduleId, options: { tab: 'reports', reportId: report.rowId || report.id } };
 }
 
-function delegationInfoFor(report) {
-  const approval = (state.approvals || []).find((item) => {
-    const source = item?.source_context || {};
-    return item?.target_record_id === report.id || source.record_id === report.id;
-  }) || null;
-  const command = (state.commands || []).find((item) => {
-    if (String(item?.command_type || item?.type || '') !== 'ctox.coding.turn') return false;
-    const context = item?.payload?.context || {};
-    return context.record_id === report.id;
-  }) || null;
-  return { approval, command };
+function openInCodeView(report) {
+  if (!report?.moduleId) return false;
+  const { appId, options } = codeViewTargetFor(report);
+  // Nicht möglich (kein apps.source.view, App ohne Quelltext) → die Shell meldet es in der Zustandszone.
+  return state.api?.shell.openSource(appId, options) ?? false;
+}
+
+export function isCodingRunning(report) {
+  return Boolean(report?.codingTurnId) && normalizeStatus(report.status) === 'running';
 }
 
 function delegationStatusHtml(report) {
-  const { approval, command } = delegationInfoFor(report);
-  if (command) {
-    const status = String(command.status || command.task_status || 'running');
-    const badge = status === 'completed' ? 'is-success' : status === 'failed' ? 'is-danger' : 'is-warning';
-    return `<p class="reports-delegation-status"><span class="ctox-badge ${badge}">Coding Agent · ${escapeHtml(displayStatus(status))}</span> <a href="#coding-agents" class="reports-delegation-link">Im Coding-Agents-Log öffnen</a></p>`;
-  }
-  if (approval) {
-    const status = String(approval.status || 'pending');
-    const badge = status === 'approved' ? 'is-success' : status === 'rejected' ? 'is-danger' : 'is-warning';
-    const label = status === 'pending' ? `Freigabe offen · ${escapeHtml(approval.reviewer_display_name || approval.reviewer_user_id || '')}`
-      : status === 'approved' ? 'Freigegeben' : status === 'rejected' ? 'Abgelehnt' : escapeHtml(status);
-    return `<p class="reports-delegation-status"><span class="ctox-badge ${badge}">${label}</span> <a href="#threads" class="reports-delegation-link">In Threads öffnen</a></p>`;
-  }
-  return '';
-}
-
-function editableTargetModules() {
-  const modules = Array.isArray(state.ctx?.modules) ? state.ctx.modules : [];
-  const seen = new Set();
-  return modules
-    .filter((mod) => mod && typeof mod.id === 'string' && mod.id.trim() && mod.hidden !== true && mod.editable !== false)
-    .map((mod) => ({ id: mod.id.trim(), title: String(mod.title || mod.id).trim() }))
-    .filter((mod) => (seen.has(mod.id) ? false : (seen.add(mod.id), true)))
-    .sort((left, right) => left.title.localeCompare(right.title, undefined, { sensitivity: 'base' }));
-}
-
-function delegationPromptFor(report) {
-  const lines = [
-    `Bug/Feature-Report aus der Reports-App (${report.kindLabel || report.kind || 'Report'} · ${report.id}):`,
-    '',
-    `Titel: ${report.title || ''}`,
-  ];
-  if (report.summary) lines.push('', `Beschreibung: ${report.summary}`);
-  if (report.expected) lines.push('', `Erwartet: ${report.expected}`);
-  if (report.moduleId) lines.push('', `Betroffenes Modul: ${report.moduleId}`);
-  lines.push('', 'Behebe das Problem in einem begrenzten Coding-Turn und halte die Änderung klein.');
-  return lines.join('\n');
-}
-
-function openDelegateDialog(report) {
-  const host = state.ctx.host;
-  host.querySelector('[data-delegate-modal]')?.remove();
-  const actorId = state.ctx.session?.user?.id
-    || state.ctx.session?.user_id
-    || state.ctx.session?.userId
-    || '';
-  // The reviewer must themselves be authorized to run coding turns for the
-  // module (server policy refuses otherwise) — offer only admin/chef roles.
-  const reviewers = (state.users || []).filter((user) => (user.id || user.user_id) !== actorId
-    && ['admin', 'chef'].includes(String(user.role || '').toLowerCase()));
-  const targets = editableTargetModules();
-  const preferred = targets.some((mod) => mod.id === report.moduleId) ? report.moduleId : (targets[0]?.id || '');
-  const wrap = document.createElement('div');
-  wrap.className = 'ctox-modal';
-  wrap.setAttribute('data-delegate-modal', '');
-  wrap.innerHTML = `
-    <div class="ctox-modal-card">
-      <header class="ctox-modal-header"><h3 class="ctox-modal-title">An Coding Agent übergeben</h3></header>
-      <div class="ctox-modal-body reports-delegate-body">
-        <label class="ctox-field-label" for="delegate-target">Ziel-App</label>
-        <select class="ctox-select" id="delegate-target">${targets.map((mod) => `<option value="${escapeAttr(mod.id)}" ${mod.id === preferred ? 'selected' : ''}>${escapeHtml(mod.title)} (${escapeHtml(mod.id)})</option>`).join('')}</select>
-        <label class="ctox-field-label" for="delegate-reviewer">Freigabe durch</label>
-        ${reviewers.length
-          ? `<select class="ctox-select" id="delegate-reviewer">${reviewers.map((user) => `<option value="${escapeAttr(user.id || user.user_id)}">${escapeHtml(user.display_name || user.name || user.id || user.user_id)}</option>`).join('')}</select>`
-          : `<input class="ctox-input" id="delegate-reviewer" type="text" placeholder="Reviewer-User-ID (z. B. alice)" aria-label="Reviewer-User-ID">`}
-        <label class="ctox-field-label" for="delegate-prompt">Auftrag an den Agenten</label>
-        <textarea class="ctox-textarea" id="delegate-prompt" rows="8"></textarea>
-        <p class="reports-delegate-hint">Die Delegation läuft als Freigabe über Threads; erst nach der Freigabe startet der Coding-Turn.</p>
-      </div>
-      <footer class="ctox-modal-footer">
-        <button type="button" class="ctox-button" data-delegate-cancel>Abbrechen</button>
-        <button type="button" class="ctox-button is-primary" data-delegate-submit ${targets.length ? '' : 'disabled'}>Zur Freigabe einreichen</button>
-      </footer>
-    </div>
-  `;
-  host.appendChild(wrap);
-  const promptInput = wrap.querySelector('#delegate-prompt');
-  promptInput.value = delegationPromptFor(report);
-  wrap.querySelector('[data-delegate-cancel]').addEventListener('click', () => wrap.remove());
-  wrap.addEventListener('click', (event) => { if (event.target === wrap) wrap.remove(); });
-  const submitButton = wrap.querySelector('[data-delegate-submit]');
-  submitButton.addEventListener('click', async () => {
-    const target = wrap.querySelector('#delegate-target').value;
-    const reviewer = wrap.querySelector('#delegate-reviewer').value.trim();
-    const prompt = promptInput.value.trim();
-    if (!target || !reviewer || prompt.length < 20) {
-      showReportNotification(state.ctx.notifications, {
-        type: 'warning',
-        title: 'Delegation unvollständig',
-        message: 'Ziel-App, Reviewer und ein aussagekräftiger Auftrag sind nötig.',
-      });
-      return;
-    }
-    if (submitButton.disabled) return;
-    submitButton.disabled = true;
-    submitButton.setAttribute('aria-busy', 'true');
-    const originalSubmitLabel = submitButton.textContent;
-    submitButton.textContent = 'Wird eingereicht …';
-    try {
-      await dispatchModuleCommand({
-        commandType: 'threads.ctox_approval.request',
-        module: 'threads',
-        moduleId: target,
-        recordId: report.id,
-        source: 'reports-coding-delegation',
-        payload: {
-          approval_request_id: `approval_${newId()}`,
-          title: `Coding-Delegation: ${report.title || report.id}`,
-          prompt,
-          reviewer_user_id: reviewer,
-          target_module: target,
-          target_record_id: report.id,
-          target_command_type: 'ctox.coding.turn',
-          target_payload: { module_id: target, prompt },
-          source_context: {
-            module: 'reports',
-            record_type: report.kind === 'bug' ? 'bug_report' : 'feature_request',
-            record_id: report.id,
-            label: report.title || report.id,
-          },
-        },
-      });
-      wrap.remove();
-      showReportNotification(state.ctx.notifications, {
-        type: 'success',
-        title: 'Zur Freigabe eingereicht',
-        message: 'Der Auftrag wartet in Threads auf die Freigabe.',
-      });
-      await refreshReports({});
-    } catch (error) {
-      showReportNotification(state.ctx.notifications, {
-        type: 'error',
-        title: 'Delegation fehlgeschlagen',
-        message: safeErrorMessage(error),
-      });
-    } finally {
-      if (submitButton.isConnected) {
-        submitButton.disabled = false;
-        submitButton.removeAttribute('aria-busy');
-        submitButton.textContent = originalSubmitLabel;
-      }
-    }
-  });
-}
-
-export function showReportNotification(notifications, options) {
-  if (typeof notifications?.show === 'function') {
-    return notifications.show(options);
-  }
-  if (typeof notifications?.notify === 'function') {
-    return notifications.notify({
-      ...options,
-      body: options?.message || '',
-    });
-  }
-  return null;
+  if (!report.codingTurnId) return '';
+  const status = normalizeStatus(report.status);
+  const badge = status === 'completed' ? 'is-success' : status === 'blocked' ? 'is-danger' : 'is-warning';
+  return `<p class="reports-delegation-status" data-coding-turn="${escapeAttr(report.codingTurnId)}"><span class="ctox-badge ${badge}">Coding Agent · ${escapeHtml(displayStatus(status))}</span> <button type="button" class="reports-delegation-link" data-open-code-view>${escapeHtml(state.t('openCodeView', 'In der Code-Ansicht öffnen'))}</button></p>`;
 }
 
 function syncGrammarSurfaces(allItems, searched) {
@@ -820,11 +582,11 @@ function syncGrammarSurfaces(allItems, searched) {
     bug: searched.filter((item) => item.kind === 'bug').length,
     feature: searched.filter((item) => item.kind !== 'bug').length,
   };
-  const root = state.ctx.host.querySelector('[data-reports-root]');
+  const root = state.root?.querySelector('[data-reports-root]');
   const grammar = root?.querySelector('.reports-rail')?.__ctoxPaneGrammar;
   if (grammar) {
     grammar.setCounts?.(counts);
-    grammar.setFooter?.(`${allItems.length} Meldungen`);
+    grammar.setFooter?.(''); // Textdiät R2: „6 Meldungen“ wiederholte nur den Reiterzähler „Alle (6)“.
     return;
   }
   for (const kind of ['all', 'bug', 'feature']) {
@@ -832,23 +594,24 @@ function syncGrammarSurfaces(allItems, searched) {
     if (node) node.textContent = ` (${counts[kind]})`;
   }
   const footer = root?.querySelector('.reports-rail [data-pg-footer]');
-  if (footer) footer.textContent = `${allItems.length} Meldungen`;
+  if (footer) footer.textContent = '';
 }
 
 function renderList({ resetScroll = false } = {}) {
-  const list = state.ctx.host.querySelector('[data-reports-list]');
+  const list = state.root?.querySelector('[data-reports-list]');
   if (!list) return;
-  syncViewToggleButton(state.ctx.host.querySelector('[data-reports-root]'));
+  syncViewToggleButton(state.root?.querySelector('[data-reports-root]'));
   const items = filteredReports();
   const allItems = normalizedReports();
   // Counted view band (zeros included) + one-line footer.
   const searched = filterReportItems(normalizedReports(), { search: state.search, kind: 'all', status: state.status });
   syncGrammarSurfaces(allItems, searched);
-  const well = state.ctx.host.querySelector('.ctox-well');
+  const well = state.root?.querySelector('.ctox-well');
   const savedScrollTop = well ? well.scrollTop : 0;
   list.classList.toggle('is-list-view', state.viewMode === 'list');
   if (!items.length) {
-    list.innerHTML = renderListEmptyState(allItems);
+    // Leere Liste rendert nichts (Zustand nur in der Zustandszone).
+    list.replaceChildren();
     if (resetScroll && well) requestAnimationFrame(() => { well.scrollTop = 0; });
     else if (well) well.scrollTop = savedScrollTop;
     return;
@@ -871,9 +634,9 @@ function renderList({ resetScroll = false } = {}) {
       <span class="reports-badges">
         <span class="ctox-badge ${report.kind === 'bug' ? 'is-danger' : 'is-feature'}">${escapeHtml(report.kindLabel)}</span>
         <span class="ctox-badge${statusBadgeClass(report.status)}">${escapeHtml(displayStatus(report.status))}</span>
-        <span class="ctox-badge">${escapeHtml(report.severity || 'medium')}</span>
+        <span class="ctox-badge">${escapeHtml(severityLabel(report.severity))}</span>
       </span>
-      <small class="report-row-sub">${escapeHtml(report.moduleId)} · ${escapeHtml(formatDate(report.updatedAt || report.createdAt))}</small>
+      <small class="report-row-sub">${escapeHtml([moduleLabel(report.moduleId), formatDate(report.updatedAt || report.createdAt)].filter(Boolean).join(' · '))}</small>
     </button>
   `).join('');
   }
@@ -884,17 +647,15 @@ function renderList({ resetScroll = false } = {}) {
 }
 
 function renderDetailFooter(report) {
-  const node = state.ctx.host.querySelector('.reports-detail [data-pg-footer]');
+  const node = state.root?.querySelector('.reports-detail [data-pg-footer]');
   if (!node) return;
   if (!report) { node.textContent = ''; return; }
-  const { approval, command } = delegationInfoFor(report);
-  const delegated = command ? `Coding Agent: ${displayStatus(String(command.status || 'running'))}`
-    : approval ? `Freigabe: ${String(approval.status || 'pending')}` : '';
-  node.textContent = [report.moduleId, displayStatus(report.status), delegated].filter(Boolean).join(' · ');
+  // Textdiät: Modul-ID und Status stehen schon im Kopf (Kicker) – der Fuß trägt nur noch die Übergabe.
+  node.textContent = report.codingTurnId ? `Coding Agent: ${displayStatus(report.status)}` : '';
 }
 
 function renderDetail() {
-  const detail = state.ctx.host?.querySelector('[data-reports-detail]');
+  const detail = state.root?.querySelector('[data-reports-detail]');
   if (!detail) {
     // Container not mounted yet (or mount() was torn down) — bail gracefully
     // rather than throwing into nothing. A later refreshReports()/render()
@@ -902,7 +663,6 @@ function renderDetail() {
     return;
   }
   rememberDetailScroll();
-  const normalized = normalizedReports();
   const filtered = filteredReports();
   const report = filtered.find((item) => item.id === state.selectedId) || null;
   renderDetailFooter(report);
@@ -912,7 +672,7 @@ function renderDetail() {
   if (!report) {
     state.renderedDetailId = '';
     if (kindLabelNode) kindLabelNode.textContent = '';
-    if (titleNode) titleNode.textContent = state.t('selectReportTitle', 'Eintrag auswählen');
+    if (titleNode) titleNode.textContent = '';
     let scroller = detail.querySelector('[data-reports-detail-scroll]');
     if (!scroller) {
       scroller = document.createElement('div');
@@ -920,7 +680,7 @@ function renderDetail() {
       scroller.setAttribute('data-reports-detail-scroll', '');
       detail.append(scroller);
     }
-    scroller.innerHTML = renderDetailEmptyState({ normalized, filtered });
+    scroller.replaceChildren();
     return;
   }
   const previousRenderedId = state.renderedDetailId;
@@ -944,33 +704,16 @@ function renderDetail() {
       <header>${escapeHtml(state.t('report', 'Eintrag'))}</header>
       <div class="ctox-card-body">
         <dl class="ctox-fields">
-          ${fact(state.t('module', 'Modul'), report.moduleId)}
-          ${fact(state.t('severity', 'Priorität'), report.severity || 'medium')}
-          ${fact(state.t('command', 'Command'), report.commandId || state.t('notCreated', 'nicht angelegt'))}
-          ${fact(state.t('task', 'Task'), report.taskId || state.t('notCreated', 'nicht angelegt'))}
+          ${moduleLabel(report.moduleId) ? fact(state.t('module', 'Modul'), moduleLabel(report.moduleId)) : ''}
+          ${fact(state.t('severity', 'Priorität'), severityLabel(report.severity))}
           ${fact(state.t('created', 'Angelegt'), formatDate(report.createdAt))}
           ${fact(state.t('updated', 'Aktualisiert'), formatDate(report.updatedAt))}
         </dl>
       </div>
     </section>
-    <section class="ctox-card">
-      <header>${escapeHtml(state.t('description', 'Beschreibung'))}</header>
-      <div class="ctox-card-body">
-        <p>${escapeHtml(report.summary || state.t('noDescription', 'Keine Beschreibung hinterlegt.'))}</p>
-      </div>
-    </section>
-    <section class="ctox-card">
-      <header>${escapeHtml(state.t('expectation', 'Erwartung'))}</header>
-      <div class="ctox-card-body">
-        <p>${escapeHtml(report.expected || state.t('noExpectation', 'Keine Erwartung hinterlegt.'))}</p>
-      </div>
-    </section>
-    <section class="ctox-card">
-      <header>${escapeHtml(state.t('whatCtoxChanged', 'Was CTOX geändert hat'))}</header>
-      <div class="ctox-card-body">
-        <p>${escapeHtml(report.changeSummary || changeFallback(report))}</p>
-      </div>
-    </section>
+    ${textCard(state.t('description', 'Beschreibung'), report.summary)}
+    ${textCard(state.t('expectation', 'Erwartung'), report.expected)}
+    ${textCard(state.t('whatCtoxChanged', 'Was CTOX geändert hat'), report.changeSummary)}
     ${attachment ? `
       <section class="ctox-card">
         <header>${escapeHtml(state.t('screenshotAndMarkup', 'Screenshot und Markup'))}</header>
@@ -994,53 +737,44 @@ function renderDetail() {
 // .is-actions-hidden on the module root; toggled from the detail header so
 // the most-common case (just reading a report) keeps the full detail width.
 function renderActions() {
-  const actions = state.ctx.host?.querySelector('[data-reports-actions]');
+  const actions = state.root?.querySelector('[data-reports-actions]');
   if (!actions) return;
   const filtered = filteredReports();
   const report = filtered.find((item) => item.id === state.selectedId) || null;
   if (!report) {
-    actions.innerHTML = `
-      <div class="ctox-pane-scroll reports-actions-scroll">
-        <div class="ctox-empty">
-          <span>${escapeHtml(state.t('selectReport', 'Wähle links einen Bug oder Feature-Wunsch aus.'))}</span>
-        </div>
-      </div>
-    `;
+    actions.innerHTML = '<div class="ctox-pane-scroll reports-actions-scroll"></div>';
     return;
   }
   const releases = releasesForModule(report.moduleId);
   const hasCtoxTask = Boolean(report.commandId || report.taskId);
-  const delegation = delegationInfoFor(report);
-  const delegationOpen = Boolean(delegation.approval && String(delegation.approval.status || 'pending') === 'pending') || Boolean(delegation.command && !['completed', 'failed'].includes(String(delegation.command.status || '')));
   actions.innerHTML = `
     <div class="ctox-pane-scroll reports-actions-scroll">
       <section class="ctox-card">
         <header>${escapeHtml(state.t('actionsTitle', 'Aktionen'))}</header>
         <div class="ctox-card-body">
           <button type="button" class="ctox-button is-primary reports-actions-task" data-focus-task ${hasCtoxTask ? '' : 'disabled'}>
-            ${escapeHtml(state.t('showCtoxTask', 'CTOX Task zeigen'))}
+            ${escapeHtml(state.t('showCtoxTask', 'CTOX-Aufgabe zeigen'))}
           </button>
         </div>
       </section>
       <section class="ctox-card">
         <header>${escapeHtml(state.t('codingAgent', 'Coding Agent'))}</header>
         <div class="ctox-card-body">
-          <button type="button" class="ctox-button is-primary" data-delegate-coding ${delegationOpen ? 'disabled' : ''}>
+          <button type="button" class="ctox-button is-primary" data-delegate-coding title="${escapeAttr(state.t('delegateCodingTitle', 'Öffnet die Code-Ansicht der App mit dieser Meldung'))}">
             ${escapeHtml(state.t('delegateCoding', 'An Coding Agent übergeben'))}
           </button>
-          ${delegationStatusHtml(report) || `<p class="reports-delegation-status reports-delegation-empty">${escapeHtml(state.t('delegationNone', 'Noch nicht delegiert. Die Übergabe läuft als Freigabe über Threads.'))}</p>`}
+          ${delegationStatusHtml(report)}
         </div>
       </section>
       <section class="ctox-card">
-        <header>${escapeHtml(state.t('rollback', 'Rollback'))}</header>
+        <header>${escapeHtml(state.t('rollback', 'Zurücksetzen'))}</header>
         <div class="ctox-card-body">
           <div class="reports-rollback">
-            <p class="reports-rollback-prompt">${escapeHtml(releases.length ? state.t('rollbackPrompt', 'Wähle eine gespeicherte Modulversion und rolle das betroffene Modul zurück.') : state.t('noReleaseFound', 'Für dieses Modul gibt es noch keine gespeicherte Version.'))}</p>
+            ${releases.length ? `<p class="reports-rollback-prompt">${escapeHtml(state.t('rollbackPrompt', 'Wähle eine gespeicherte Modulversion und rolle das betroffene Modul zurück.'))}</p>` : ''}
             <select class="ctox-select" data-rollback-version ${releases.length ? '' : 'disabled'}>
               ${releases.map((release) => `<option value="${escapeAttr(release.versionId)}">v${escapeHtml(release.version)} · ${escapeHtml(release.status || '')} · ${escapeHtml(formatDate(release.createdAt))}</option>`).join('')}
             </select>
-            <button type="button" class="ctox-button is-primary reports-rollback-action" data-rollback-module ${releases.length ? '' : 'disabled'}>${escapeHtml(state.t('rollback', 'Rollback'))}</button>
-            <small class="reports-rollback-status" data-rollback-status></small>
+            <button type="button" class="ctox-button is-primary reports-rollback-action" data-rollback-module ${releases.length ? '' : 'disabled'}>${escapeHtml(state.t('rollback', 'Zurücksetzen'))}</button>
           </div>
         </div>
       </section>
@@ -1115,7 +849,10 @@ export function normalizeReportItems({ reports = [], bugs = [], commands = [], q
     const taskId = report.task_id || payload.task_id || '';
     const command = commandById.get(commandId) || {};
     const task = queueByTaskId.get(taskId) || {};
-    const status = task.route_status || task.status || report.status || bug.status || command.status || 'open';
+    const baseStatus = task.route_status || task.status || report.status || bug.status || command.status || 'open';
+    // LOOP Runde 2: ein Agent-Lauf aus der Code-Ansicht (coding_turn_id) heißt „In Arbeit“, bis er behoben/blockiert ist.
+    const codingTurnId = typeof report.coding_turn_id === 'string' ? report.coding_turn_id : '';
+    const status = codingTurnId && normalizeStatus(baseStatus) === 'open' ? 'running' : baseStatus;
     const kind = normalizeKind(report.kind || payload.kind || bug.kind);
     const changeSummary = payload.change_summary
       || payload.ctox_change_summary
@@ -1133,6 +870,9 @@ export function normalizeReportItems({ reports = [], bugs = [], commands = [], q
       expected: report.expected || payload.expected || '',
       status,
       moduleId: report.module_id || bug.module || report.inbound_channel || bug.inbound_channel || 'ctox',
+      // Zeile in business_module_reports (Markierung im Reiter „Meldungen“ der Code-Ansicht).
+      rowId: typeof report.id === 'string' ? report.id : '',
+      codingTurnId,
       commandId,
       taskId,
       changeSummary,
@@ -1174,57 +914,6 @@ function defaultTranslate(_key, fallback) {
   return fallback;
 }
 
-function createDiagnosticsState() {
-  return {
-    loading: false,
-    lastAttemptAt: 0,
-    lastSuccessAt: 0,
-    lastManual: false,
-    reportCount: 0,
-    collections: Object.fromEntries(REPORT_COLLECTIONS.map((name) => [name, {
-      name,
-      count: 0,
-      missing: false,
-      error: '',
-      syncStatus: '',
-      syncError: '',
-    }])),
-    syncErrors: [],
-  };
-}
-
-function buildDiagnosticsState({ results, syncErrors, syncDiagnostics, reportCount, manual }) {
-  const collections = {};
-  for (const result of results) {
-    const syncInfo = syncDiagnostics?.collections?.[result.name] || {};
-    collections[result.name] = {
-      name: result.name,
-      count: result.items.length,
-      missing: Boolean(result.missing),
-      error: result.error || '',
-      syncStatus: syncInfo.connectionStatus || syncInfo.status || '',
-      syncError: safeErrorMessage(syncInfo.lastError || ''),
-    };
-  }
-  return {
-    loading: false,
-    lastAttemptAt: Date.now(),
-    lastSuccessAt: Date.now(),
-    lastManual: manual,
-    reportCount,
-    collections,
-    syncErrors,
-  };
-}
-
-function hasBlockingReportDiagnostic() {
-  const dataCollections = REPORT_DATA_COLLECTIONS.map((name) => state.diagnostics.collections?.[name]).filter(Boolean);
-  if (!dataCollections.length) return true;
-  const allStoresUnavailable = dataCollections.every((info) => info.missing || info.error);
-  const anyDataError = dataCollections.some((info) => info.missing || info.error || info.syncError);
-  return allStoresUnavailable || ((state.diagnostics.reportCount || 0) === 0 && anyDataError);
-}
-
 function releasesForModule(moduleId) {
   return state.releases
     .filter((release) => release.module_id === moduleId)
@@ -1237,69 +926,94 @@ function releasesForModule(moduleId) {
     .sort((left, right) => (right.version || 0) - (left.version || 0));
 }
 
+// Sprung in die CTOX-App über api.shell.navigate (Ziel liest die Parameter über onRoute).
 function focusCtoxTask(report) {
-  window.dispatchEvent(new CustomEvent('ctox-business-os-focus-task', {
-    detail: {
-      taskId: report.taskId,
-      commandId: report.commandId,
-      taskStatus: report.status,
-      sourceModule: report.moduleId,
-    },
-  }));
-  location.hash = '#ctox';
+  state.api?.shell.navigate('ctox', {
+    task_id: report.taskId,
+    command_id: report.commandId,
+    task_status: report.status,
+    source_module: report.moduleId,
+  });
 }
 
-async function rollbackSelectedRelease(report) {
-  const actions = state.ctx.host.querySelector('[data-reports-actions]');
+function rollbackSelectedRelease(report) {
+  const actions = state.root?.querySelector('[data-reports-actions]');
   if (!actions) return;
-  const status = actions.querySelector('[data-rollback-status]');
   const versionId = actions.querySelector('[data-rollback-version]')?.value || report.rollbackVersionId || '';
   if (!versionId) return;
-  if (status) status.textContent = state.t('rollbackRunning', 'Rollback läuft...');
-  try {
-    await dispatchModuleCommand({
-      commandType: 'ctox.module.rollback',
-      moduleId: report.moduleId,
-      recordId: versionId,
-      payload: { module_id: report.moduleId, version_id: versionId },
-      source: 'business-os-reports',
-    });
-    if (status) status.textContent = state.t('rollbackExecuted', 'Rollback ausgeführt.');
-    await refreshReports();
-  } catch (error) {
-    if (status) status.textContent = error.message || String(error);
-  }
+  dispatchModuleCommand({
+    commandType: 'ctox.module.rollback',
+    moduleId: report.moduleId,
+    recordId: versionId,
+    payload: { module_id: report.moduleId, version_id: versionId },
+    source: 'business-os-reports',
+    label: state.t('rollback', 'Zurücksetzen'),
+  });
 }
 
-async function dispatchModuleCommand({
+// Befehl absetzen, nie warten (R5). failed bzw. lokal ungültig → Zustandszone, done → Eintrag löschen.
+function dispatchModuleCommand({
   commandType,
   moduleId,
   recordId,
   payload,
   source,
+  label = commandType,
   module = 'ctox',
 }) {
-  if (!state.ctx.commandBus?.dispatch || !state.ctx.db?.collection?.('business_commands')) {
-    throw new Error(state.t('commandsUnavailable', 'Aktionen sind gerade nicht verfügbar.'));
+  const api = state.api;
+  if (!api) return null;
+  const code = `reports.command.${commandType}`;
+  const record_id = recordId || moduleId;
+  const failText = (error) => `${state.t('commandFailed', 'Aktion {0} ist fehlgeschlagen.', label)}${error ? ` ${error}` : ''}`;
+  let handle;
+  try {
+    handle = api.command(commandType, {
+      ...payload,
+      module,
+      record_id,
+      inbound_channel: moduleId,
+      client_context: {
+        source,
+        module_id: moduleId,
+        actor: actorContext(),
+      },
+    }, { record_id });
+  } catch (error) {
+    api.status.report({ level: 'error', code, text: failText(safeErrorMessage(error)) });
+    return null;
   }
-  await Promise.all([
-    state.ctx.sync?.startCollection?.('business_commands'),
-    state.ctx.sync?.startCollection?.('business_module_releases'),
-  ]);
-  const commandId = `cmd_${newId()}`;
-  return state.ctx.commandBus.dispatch({
-    id: commandId,
-    module,
-    type: commandType,
-    record_id: recordId || moduleId,
-    inbound_channel: moduleId,
-    payload,
-    client_context: {
-      source,
-      module_id: moduleId,
-      actor: actorContext(state.ctx.session),
-    },
-  }, { until: 'accepted' });
+  handle.local?.catch?.((error) => api.status.report({ level: 'error', code, text: failText(safeErrorMessage(error)), ref: handle.id }));
+  let off = null;
+  let finished = false;
+  const stop = () => {
+    finished = true;
+    if (off) { off(); off = null; }
+  };
+  off = handle.status.subscribe((commandState) => {
+    if (commandState?.status === 'failed') {
+      api.status.report({ level: 'error', code, text: failText(commandState.error || ''), ref: handle.id });
+      stop();
+    } else if (commandState?.status === 'done') {
+      api.status.clear(code);
+      stop();
+    }
+  });
+  if (finished && off) { off(); off = null; }
+  if (off) state.disposers.push(() => off?.());
+  return handle;
+}
+
+// Leere Textfelder rendern keine Karte (keine Platzhaltertexte im Inhalt).
+function textCard(label, value) {
+  if (!String(value || '').trim()) return '';
+  return `
+    <section class="ctox-card">
+      <header>${escapeHtml(label)}</header>
+      <div class="ctox-card-body">
+        <p>${escapeHtml(value)}</p>
+      </div>
+    </section>`;
 }
 
 function fact(label, value) {
@@ -1314,13 +1028,6 @@ function statusBadgeClass(status) {
   return '';
 }
 
-function changeFallback(report) {
-  if (report.commandId || report.taskId) {
-    return state.t('reportAccepted', 'CTOX hat den Report angenommen. Command {0}, Task {1}. Sobald der Lauf eine Change Summary schreibt, erscheint sie hier.', report.commandId || '-', report.taskId || '-');
-  }
-  return state.t('noChangeSummary', 'Noch keine CTOX-Annahme oder Change Summary vorhanden.');
-}
-
 function normalizeKind(value) {
   const text = String(value || '').toLowerCase();
   return text.includes('feature') || text.includes('request') ? 'feature' : 'bug';
@@ -1332,6 +1039,21 @@ function normalizeStatus(value) {
   if (['running', 'leased', 'working', 'review', 'drafting'].includes(text)) return 'running';
   if (['blocked', 'failed', 'cancelled', 'canceled'].includes(text)) return 'blocked';
   return 'open';
+}
+
+// Textdiät Regel 4: Rohwerte (high/medium/low, pending, App-IDs) in Nutzerbegriffen.
+function severityLabel(value) {
+  const key = String(value || 'medium').trim().toLowerCase();
+  const de = { critical: 'Kritisch', urgent: 'Dringend', high: 'Hoch', medium: 'Mittel', normal: 'Mittel', low: 'Niedrig' };
+  const en = { critical: 'Critical', urgent: 'Urgent', high: 'High', medium: 'Medium', normal: 'Medium', low: 'Low' };
+  return (state.lang === 'en' ? en : de)[key] || '';
+}
+
+function moduleLabel(id) {
+  const key = String(id || '').trim();
+  const mod = (Array.isArray(state.apps) ? state.apps : []).find((item) => item && item.id === key);
+  // DARK: nur der App-Titel aus dem Katalog; ohne Katalogeintrag nichts (keine Roh-ID wie „module-001“).
+  return String(mod?.title || mod?.name || '');
 }
 
 function displayStatus(value) {
@@ -1369,31 +1091,14 @@ function formatDate(value) {
   }).format(new Date(timestamp));
 }
 
-function actorContext(session) {
-  const user = session?.user || {};
+function actorContext() {
+  const actor = state.api?.actor || {};
   return {
-    id: user.id || '',
-    display_name: user.display_name || user.name || user.id || '',
-    role: user.role || 'user',
-    is_admin: Boolean(user.is_admin),
+    id: actor.id || '',
+    display_name: actor.display_name || actor.id || '',
+    role: actor.role || 'user',
+    is_admin: String(actor.role || '') === 'admin',
   };
-}
-
-function newId() {
-  return globalThis.crypto?.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`;
-}
-
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function withTimeout(promise, timeoutMs, message) {
-  if (!promise || typeof promise.then !== 'function') return promise;
-  promise.catch(() => {});
-  return Promise.race([
-    promise,
-    delay(timeoutMs).then(() => { throw new Error(message); }),
-  ]);
 }
 
 function safeErrorMessage(error) {
@@ -1416,91 +1121,6 @@ function escapeAttr(value) {
   return escapeHtml(value).replace(/`/g, '&#96;');
 }
 
-function reportStoreEmptyMessage(prefix = '') {
-  const reportInfo = state.diagnostics.collections?.business_module_reports;
-  const bugInfo = state.diagnostics.collections?.ctox_bug_reports;
-  const count = [reportInfo, bugInfo]
-    .filter(Boolean)
-    .reduce((sum, info) => sum + Number(info.count || 0), 0);
-  const base = prefix || state.t('emptyStoreSummary', 'Noch keine Bugs oder Features verfügbar.');
-  if (!count) return base;
-  return `${base} ${state.t('emptyStoreCounts', 'Einträge')}: ${count}.`;
-}
-
-function initReportsContextMenu(state) {
-  state.contextMenu?.remove();
-  const moduleHost = state.ctx?.host;
-  if (!moduleHost) return () => {};
-  const menu = document.createElement('div');
-  menu.className = 'ctox-context-menu reports-context-menu';
-  menu.hidden = true;
-  moduleHost.append(menu);
-  state.contextMenu = menu;
-
-  const handleContextMenu = (event) => {
-    if (state.ctx.module?.id !== 'reports') return;
-    const context = reportsCommandContextFromElement(state, event.target);
-    event.preventDefault();
-    event.stopPropagation();
-    renderReportsContextMenu(state, context, event.clientX, event.clientY);
-  };
-  const handleOutsideClick = (event) => {
-    if (state.contextMenu?.contains(event.target)) return;
-    hideReportsContextMenu(state);
-  };
-  const handleEscape = (event) => {
-    if (event.key === 'Escape') hideReportsContextMenu(state);
-  };
-
-  window.addEventListener('click', handleOutsideClick, { capture: true });
-  window.addEventListener('keydown', handleEscape);
-
-  return () => {
-    window.removeEventListener('click', handleOutsideClick, { capture: true });
-    window.removeEventListener('keydown', handleEscape);
-    hideReportsContextMenu(state);
-    state.contextMenu?.remove();
-    state.contextMenu = null;
-  };
-}
-
-function hideReportsContextMenu(state) {
-  if (state.contextMenu) state.contextMenu.hidden = true;
-}
-
-function canModifyReportsApp(state) {
-  if (typeof state.ctx.canModifyModule === 'function' && state.ctx.canModifyModule()) return true;
-  const user = state.ctx.session?.user || {};
-  const role = String(user.role || (user.is_admin ? 'admin' : 'user')).trim().toLowerCase().replace(/^business_os_/, '');
-  return ['admin', 'chef'].includes(role);
-}
-
-function reportsCommandContextFromElement(state, target) {
-  const element = target?.nodeType === Node.ELEMENT_NODE ? target : target?.parentElement;
-  const visibleReports = filteredReports();
-  const allReports = normalizedReports();
-  const clickedRow = element?.closest?.('[data-report-id]');
-  const clickedReportId = clickedRow?.getAttribute?.('data-report-id') || '';
-  const activeReport = resolveReportsContextRecord({
-    clickedReportId,
-    selectedId: state.selectedId,
-    visibleReports,
-    allReports,
-  });
-  const column = reportsColumnFromElement(element, clickedRow);
-
-  return {
-    module: 'reports',
-    column,
-    record_type: activeReport ? 'report' : 'module',
-    record_id: activeReport?.id || '',
-    label: activeReport?.title || '',
-    body_snippet: activeReport?.summary?.slice(0, 500) || '',
-    selected_text: String(window.getSelection?.()?.toString?.() || '').trim().slice(0, 1000),
-    clicked_text: String(element?.innerText || element?.textContent || '').trim().replace(/\s+/g, ' ').slice(0, 500),
-  };
-}
-
 export function resolveReportsContextRecord({
   clickedReportId = '',
   selectedId = '',
@@ -1513,126 +1133,4 @@ export function resolveReportsContextRecord({
     || allReports.find((item) => item.id === selectedId)
     || allReports[0]
     || null;
-}
-
-function reportsColumnFromElement(element, clickedRow) {
-  if (!element) return 'module';
-  // The detail pane header now uses the shared .ctox-pane-header markup too,
-  // so the detail check must run before the header/rail heuristics.
-  if (!clickedRow && element.closest?.('[data-reports-detail]')) return 'detail';
-  if (clickedRow || element.closest?.('[data-reports-list], .reports-rail, .ctox-pane-tools, .ctox-pane-header')) return 'list';
-  return 'module';
-}
-
-function renderReportsContextMenu(state, context, x, y) {
-  const canModifyApp = canModifyReportsApp(state);
-  const reportsLabel = state.t('reportsLabel', 'Reports');
-  state.contextMenu.innerHTML = `
-    <form class="reports-context-chat" data-reports-context-chat-form>
-      <header>
-        <div>
-          <strong>${escapeHtml(state.t('chatToCtox', 'Chat to CTOX'))}</strong>
-          <span>${escapeHtml(context.label || reportsLabel)}</span>
-        </div>
-        <button type="button" data-reports-context-close aria-label="${escapeHtml(state.t('close', 'Schließen'))}">×</button>
-      </header>
-      <div class="ctox-context-mode" role="radiogroup" aria-label="${escapeHtml(state.t('chatActionLabel', 'CTOX Aufgabe'))}">
-        <label><input type="radio" name="contextMode" value="data" checked /> ${escapeHtml(state.t('chatWorkDataLabel', 'Mit Daten arbeiten'))}</label>
-        <label><input type="radio" name="contextMode" value="ask" /> ${escapeHtml(state.t('chatAnswerLabel', 'Frage beantworten'))}</label>
-        ${canModifyApp ? `<label><input type="radio" name="contextMode" value="app" /> ${escapeHtml(state.t('chatModifyAppLabel', 'App modifizieren'))}</label>` : ''}
-      </div>
-      <textarea data-reports-context-message placeholder="${escapeHtml(state.t('chatPlaceholder', 'Was soll CTOX hier tun oder prüfen?'))}"></textarea>
-      <footer>
-        <span data-reports-context-status></span>
-        <button type="submit">${escapeHtml(state.t('send', 'Senden'))}</button>
-      </footer>
-    </form>
-  `;
-  state.contextMenu.hidden = false;
-  state.contextMenu.style.left = '0px';
-  state.contextMenu.style.top = '0px';
-  const rect = state.contextMenu.getBoundingClientRect();
-  const clampNumber = (val, min, max) => Math.min(max, Math.max(min, val));
-  const maxLeft = Math.max(8, window.innerWidth - rect.width - 8);
-  const maxTop = Math.max(8, window.innerHeight - rect.height - 8);
-  state.contextMenu.style.left = `${clampNumber(x, 8, maxLeft)}px`;
-  state.contextMenu.style.top = `${clampNumber(y, 8, maxTop)}px`;
-
-  const form = state.contextMenu.querySelector('[data-reports-context-chat-form]');
-  const textarea = state.contextMenu.querySelector('[data-reports-context-message]');
-  state.contextMenu.querySelector('[data-reports-context-close]')?.addEventListener('click', () => hideReportsContextMenu(state));
-  form?.addEventListener('submit', async (event) => {
-    event.preventDefault();
-    const mode = new FormData(form).get('contextMode') || 'data';
-    await dispatchReportsContextChat(state, context, textarea?.value || '', mode);
-  });
-  requestAnimationFrame(() => textarea?.focus());
-}
-
-async function dispatchReportsContextChat(state, context, message, mode = 'data') {
-  const trimmed = String(message || '').trim();
-  const status = state.contextMenu?.querySelector('[data-reports-context-status]');
-  if (!trimmed) {
-    if (status) status.textContent = state.t('chatMissingMessage', 'Nachricht fehlt.');
-    return;
-  }
-
-  const safeMode = mode === 'app' && canModifyReportsApp(state) ? 'app' : (mode === 'ask' ? 'ask' : 'data');
-  const visibleReports = filteredReports();
-  const allReports = normalizedReports();
-  const contextReportId = context.record_id || '';
-  const activeReport = resolveReportsContextRecord({
-    clickedReportId: contextReportId,
-    selectedId: state.selectedId,
-    visibleReports,
-    allReports,
-  });
-  if (!document.querySelector('[data-ctox-chat-root]')) {
-    if (status) status.textContent = state.t('chatNotReady', 'Chat ist noch nicht bereit.');
-    return;
-  }
-  if (status) status.textContent = state.t('chatOpening', 'Öffne Chat...');
-  const reportsLabel = state.t('reportsLabel', 'Reports');
-  const titlePrefix = safeMode === 'app'
-    ? state.t('modifyReportsApp', 'Reports App modifizieren')
-    : safeMode === 'ask'
-      ? state.t('chatAnswerLabel', 'Frage beantworten')
-      : state.t('editReport', 'Report bearbeiten');
-  const title = `${titlePrefix} · ${context.label || reportsLabel}`;
-  const instruction = safeMode === 'app'
-    ? `Modifiziere die Reports-App anhand dieser Admin-Anweisung. Kontext nur als UI-Bezug verwenden, Reportdaten selbst nicht als primäres Ziel verändern.\n\n${trimmed}`
-    : safeMode === 'ask'
-      ? `Beantworte die folgende Frage ausschließlich lesend. Nutze nur vorhandene Daten und Kontext; führe keine Änderungen an Daten, Records, Dateien oder der App aus. Antworte knapp und direkt.\n\n${trimmed}`
-      : trimmed;
-
-  window.dispatchEvent(new CustomEvent('ctox-business-os-chat-submit', {
-    detail: {
-      text: trimmed,
-      module: 'reports',
-      source_title: reportsLabel,
-      command_type: safeMode === 'app' ? 'ctox.business_os.app.modify' : 'business_os.chat.task',
-      record_id: safeMode === 'app' ? 'reports' : (activeReport?.id || 'reports'),
-      title,
-      instruction,
-      payload: {
-        title,
-        instruction,
-        prompt: trimmed,
-        user_message: trimmed,
-        mode: safeMode,
-        target: safeMode === 'app' ? 'app' : (safeMode === 'ask' ? 'read' : 'data'),
-        selected_report: activeReport,
-        context,
-        thread_key: 'business-os/reports',
-      },
-      client_context: {
-        action: 'context-chat',
-        mode: safeMode,
-        column: context.column,
-        record_type: context.record_type,
-        report_id: activeReport?.id || '',
-      },
-    },
-  }));
-  hideReportsContextMenu(state);
 }

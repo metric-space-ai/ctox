@@ -1,0 +1,617 @@
+{
+  "_capability_evidence": {},
+  "_commands_out_evidence": {
+    "ctox ctox.app.modify.request": [
+      "index.js:4415"
+    ],
+    "ctox ctox.chat.task": [
+      "index.js:4415"
+    ]
+  },
+  "_declaration": "modules/buchhaltung/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/buchhaltung/index.html",
+  "_rust_basis": "keine app-eigene Logik. `invoices.rs` schreibt `accounting_journal_entries/number_series` für das Rechnungsmodul (7 Treffer), `module_lifecycle.rs`/`store.rs` nennen die ID nur in Listen (`store.rs:36589`).",
+  "_source_dir": "src/apps/business-os/modules/buchhaltung",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "buchhaltung",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {
+    "accounting_accounts": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/buchhaltung.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "account_type": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "is_group": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "parent_id": {
+            "type": "string"
+          },
+          "root_type": {
+            "type": "string"
+          },
+          "skr": {
+            "type": "string"
+          },
+          "tax_rate_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "code",
+          "name",
+          "root_type",
+          "account_type",
+          "is_group",
+          "skr",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_bank_statement_lines": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/buchhaltung.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "counterparty_iban": {
+            "type": "string"
+          },
+          "counterparty_name": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "match_status": {
+            "type": "string"
+          },
+          "narration": {
+            "type": "string"
+          },
+          "reconciled_entry_id": {
+            "type": "string"
+          },
+          "statement_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "value_date": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "statement_id",
+          "value_date",
+          "amount",
+          "narration",
+          "match_status",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_bank_statements": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/buchhaltung.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "account_number": {
+            "type": "string"
+          },
+          "bank_code": {
+            "type": "string"
+          },
+          "end_balance": {
+            "type": "number"
+          },
+          "end_date": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "start_balance": {
+            "type": "number"
+          },
+          "start_date": {
+            "type": "string"
+          },
+          "statement_number": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "account_number",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_journal_entries": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/buchhaltung.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "narration": {
+            "type": "string"
+          },
+          "number": {
+            "type": "string"
+          },
+          "posted_at": {
+            "type": "number"
+          },
+          "posting_date": {
+            "type": "string"
+          },
+          "ref_id": {
+            "type": "string"
+          },
+          "ref_type": {
+            "type": "string"
+          },
+          "reversed_by_id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "posting_date",
+          "type",
+          "number",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_journal_entry_lines": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/buchhaltung.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "credit": {
+            "type": "number"
+          },
+          "debit": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "journal_entry_id": {
+            "type": "string"
+          },
+          "line_no": {
+            "type": "number"
+          },
+          "party_id": {
+            "type": "string"
+          },
+          "tax_rate_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "journal_entry_id",
+          "account_id",
+          "debit",
+          "credit",
+          "line_no",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_ledger_entries": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/buchhaltung.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "credit": {
+            "type": "number"
+          },
+          "debit": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "journal_entry_id": {
+            "type": "string"
+          },
+          "journal_entry_line_id": {
+            "type": "string"
+          },
+          "narration": {
+            "type": "string"
+          },
+          "posted_at": {
+            "type": "number"
+          },
+          "posting_date": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "journal_entry_line_id",
+          "journal_entry_id",
+          "posting_date",
+          "account_id",
+          "debit",
+          "credit",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_number_series": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/buchhaltung.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "fiscal_year": {
+            "type": "number"
+          },
+          "gap_policy": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "last_issued_number": {
+            "type": "string"
+          },
+          "next_value": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "series_key": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "updated_by_command_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "series_key",
+          "fiscal_year",
+          "next_value",
+          "gap_policy",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "accounting_receipts": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/buchhaltung.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "file_storage_url": {
+            "type": "string"
+          },
+          "filename": {
+            "type": "string"
+          },
+          "gross_amount": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "invoice_date": {
+            "type": "string"
+          },
+          "invoice_number": {
+            "type": "string"
+          },
+          "net_amount": {
+            "type": "number"
+          },
+          "ocr_raw": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "suggested_account_id": {
+            "type": "string"
+          },
+          "supplier_name": {
+            "type": "string"
+          },
+          "tax_amount": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "vat_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "file_storage_url",
+          "filename",
+          "status",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [
+    {
+      "app": "ctox",
+      "type": "ctox.app.modify.request"
+    },
+    {
+      "app": "ctox",
+      "type": "ctox.chat.task"
+    }
+  ],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "accounting_accounts": [
+      "read"
+    ],
+    "accounting_bank_statement_lines": [
+      "read"
+    ],
+    "accounting_journal_entries": [
+      "read",
+      "write"
+    ],
+    "accounting_journal_entry_lines": [
+      "read",
+      "write"
+    ],
+    "accounting_ledger_entries": [
+      "read"
+    ],
+    "accounting_number_series": [
+      "read",
+      "write"
+    ],
+    "accounting_receipts": [
+      "read"
+    ]
+  },
+  "files": {
+    "BUCH.md": "9e0813ba818953272903671423161904c98d695ddf5d10023d7bbe5eb1922aeb",
+    "V4-HANDLERS.md": "a6a6b2d30bf95b0498bb75fc4a47f22a444cb42b0974ccccf69f89fac3a0ec2e",
+    "V4-PORT.md": "e57e250b57c0b8fa10cc0b71d19de6d2629fe9b65ccf2d37e4f1c22170e32938",
+    "assets/icon.jpg": "ffc3ab2ffd28030717493bdbbe0527ee4a9367d5c4c99445d7db5344de801795",
+    "assets/icon@512.jpg": "7209dffd78d7b12267c51cb0a8cd27e321a5925e7770e4c7f3bceb3f49cbb160",
+    "collections.schema.json": "bc16606db50ac9bb414f62f6e1c5ab7bb076e6f078fa88eede95108f3b758ae7",
+    "core/depreciation.js": "79d7848777245441308ed11eab00c31bcb3017dab0a483cb9d03acc529bb08a2",
+    "core/ledger.js": "1fa2b10cd74ad47b05a5ccfdc404319cac773539499a1623b8ab2a4c387fba48",
+    "core/mileage_log.js": "c05a674b0f1b02e44bea48c45cc2e73e47d299468b187b88d3d0222b0211ff0b",
+    "core/reconciler.js": "196af033fda716d480383ab5190ed92f6eecd1a86ac2677aac134d54730ee8cf",
+    "core/splits.js": "1282211eba9a6b157985c970456e63f6de97fa5d110f8d7f415874441797483c",
+    "core/tax_tricks.js": "6a6de645f233adf197816dd4f3c4290ea4a79e0eabbf77b67f6bd88e17f4b18c",
+    "core/travel_expenses.js": "568c19170a77c1c29b373c8397b4fc5eb517aa9f14660751b6f1613255f7f05c",
+    "exporters/datev.js": "34bd7cc59dc6220d5f391dd9da72bf1e14f959fd8ac3a4631b9c759229fcea41",
+    "icon.svg": "e869d739f5c146dd1e8ab6ba0e7ed174ffe6e98e2862504de1f75d148861cc90",
+    "index.css": "7ed8b28adecae07faff418eadac92be2a439c650be76b882848c4fe1b009f8bb",
+    "index.html": "79121fdee1cc512ff89eea1e962ccfcc610bf63d91b4ebc821f513d7921c0781",
+    "index.js": "dbbf5698a7e7a18bc8ce61b8f05fc0c45e1d7f4eb2a94a564867b33c9ed5475c",
+    "locales/de.json": "6250300df9cc3d6622889d9748c8dbb49b66ff88941eb3ef2641b5d12ddcf3db",
+    "locales/en.json": "08d36c647adeb2207ecd29df740f6c78a1df4fe6136ee1f598e4dd1bd17a18c7",
+    "module.json": "54e7b291a5abfb57c880c64c14a7c58756a1c4226ac786b552c44b194cf20ef0",
+    "parsers/camt.js": "52faf2e9c8c30965bd204d1b0054267b2a7f602f1fddaa9fda0463e146bd0c0b",
+    "parsers/mt940.js": "6c751849711accabc1ed4fa755e5702d66abe797b720fe7699167b9a7a066975",
+    "reports/elster.js": "448af5b4d65682829e649de70bfcdf97a16d25028db49fcd8cb3f57222b37f6a",
+    "reports/hgb.js": "7eb315325400efba8e54a8f2b60d0eab72ddc494ceb9d3aaaf22e4b289686888",
+    "templates/skr.js": "74a5845aa2fc82381154124f1f447bd50e4e9d8614b7ec1da48b3080c0f7ef29",
+    "v4-manifest.json": "8d9043e859d3d58ed3312b2d56f9329fd53713c0b5435ff912afdc5fb09dcc37"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/buchhaltung.jpg (shared/operator-icon-selection.js, sha256 56b558dd0dbc…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Finance",
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-buchhaltung\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-buchhaltung\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#818cf8\" /><stop offset=\"100%\" stop-color=\"#db2777\" /></linearGradient></defs><path d=\"M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z\" fill=\"url(#grad-buchhaltung)\" fill-opacity=\"0.12\" stroke=\"url(#grad-buchhaltung)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><path d=\"M8 11h8M8 15h5M9 7h6\" stroke=\"url(#grad-buchhaltung)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 760,
+        "width": 1120
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#15803d",
+        "category": "Finance",
+        "iconAssetId": "workjet.business-os.buchhaltung",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "list-detail",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Buchhaltung"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "f3ff6b39ed6405498d8324c1ac9b0a964236694addd2ea78ee8c7371e3f12039",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Buchhaltung",
+  "triggers": [],
+  "version": "1.0.2"
+}

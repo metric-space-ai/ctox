@@ -2,7 +2,6 @@
   "title": "Consent",
   "subtitle": "Generic GDPR consent/legal-basis register with purpose and retention period.",
   "add": "Create",
-  "empty": "No entries yet.",
   "listTitle": "Consent",
   "newAction": "New check",
   "importAction": "Import",

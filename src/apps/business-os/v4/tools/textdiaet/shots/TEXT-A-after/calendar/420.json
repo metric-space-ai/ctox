@@ -1,0 +1,100 @@
+{
+ "app": "calendar",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Kalender",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neu",
+    "button:Importieren",
+    "button:Exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Kalender (6)",
+    "nav:Buchungsseiten (6)",
+    "row:Budgetplanung Vertrieb Süd anz",
+    "row:Quartalsbericht Q3 2026 anzeig",
+    "row:Angebot Wartungsvertrag Halle ",
+    "row:Projektplan Relaunch Kundenpor",
+    "row:Lieferantenbewertung 2026 anze",
+    "row:Onboarding neue Mitarbeitende ",
+    "button:Neuer Termin",
+    "button:Vorheriger Zeitraum",
+    "button:Heute",
+    "button:Nächster Zeitraum",
+    "nav:Monat",
+    "nav:Woche",
+    "nav:Tag",
+    "row:Mo Di Mi Do Fr Sa So",
+    "button:Angebot Wartungsvertrag Halle ",
+    "button:Budgetplanung Vertrieb Süd",
+    "button:Rahmenvertrag über Wartung und",
+    "row:Budgetplanung Vertrieb Süd Bud",
+    "row:Quartalsbericht Q3 2026 Quarta",
+    "row:Angebot Wartungsvertrag Halle ",
+    "row:Projektplan Relaunch Kundenpor",
+    "row:Lieferantenbewertung 2026 Lief",
+    "row:Onboarding neue Mitarbeitende ",
+    "row:Angebot Wartungsvertrag Halle ",
+    "row:Budgetplanung Vertrieb Süd",
+    "row:Rahmenvertrag über Wartung und"
+   ],
+   "shot": "calendar/420-01-open.png"
+  },
+  {
+   "step": "nav Kalender (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "calendar/420-02-nav_Kalender_6_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 768,
+   "shot": "calendar/420-03-suche_ohne_Treffer.png",
+   "textAfter": 447
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "calendar/420-04-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "calendar",
+  "Kalender"
+ ]
+}

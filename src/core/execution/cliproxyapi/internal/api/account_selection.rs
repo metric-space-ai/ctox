@@ -238,6 +238,41 @@ mod isolation_tests {
     }
 }
 
+/// Native callers use the same exact-account scope as the listener. Only the
+/// executor can report selection/upstream evidence; a router's local 200 is
+/// insufficient. No upstream body, credential or header escapes this scope.
+#[derive(Default)]
+pub struct PinnedObservation {
+    pub selected: Option<String>,
+    pub upstream_status: Option<u16>,
+    pub error_class: Option<&'static str>,
+}
+pub async fn with_pinned_account<T>(
+    account: String,
+    call: impl std::future::Future<Output = T>,
+) -> (T, PinnedObservation) {
+    ACCOUNT_SELECTION
+        .scope(
+            Mutex::new(AccountSelection {
+                requested: Some(account),
+                ..Default::default()
+            }),
+            async move {
+                let value = call.await;
+                let observation = ACCOUNT_SELECTION.with(|state| {
+                    let state = state.lock().unwrap();
+                    PinnedObservation {
+                        selected: state.selected.clone(),
+                        upstream_status: state.upstream_status,
+                        error_class: state.error_class,
+                    }
+                });
+                (value, observation)
+            },
+        )
+        .await
+}
+
 #[cfg(test)]
 mod upstream_witness_tests {
     use super::*;

@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-// Real module + WebGL regression. Only the shell-owned cached DB handle and
-// pending sync bridge are fixtures; no production records or tenant are used.
+// Real module + WebGL regression gegen den App-API-4.0-Stub (gepinnt). Fixtures sind nur Plattform-Dokumente
+// business_apps/business_app_versions; keine Produktionsdaten, kein Tenant.
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const output = process.argv[process.argv.indexOf('--output-dir') + 1];
@@ -19,42 +20,52 @@ const artworkSource = artworkArg < 0 ? null : path.resolve(process.argv[artworkA
 const countArg = process.argv.indexOf('--catalogue-size');
 const catalogueSize = countArg < 0 ? 3 : Number(process.argv[countArg + 1]);
 assert.ok(Number.isInteger(catalogueSize) && catalogueSize >= 3 && catalogueSize <= 48, 'catalogue-size must be 3..48');
+// v4: Kern-Stub (gepinnt, CTOX_APP_API_STUB) unter /__stub/; ctox:shared/ wird wie vom Service Worker umgeschrieben.
+const stubDir = path.resolve(process.env.CTOX_APP_API_STUB || path.join(process.env.HOME || '', '.local/state/shell-v4/stub-pins/64acc2c'));
+// PIN-ALL (E48): echte Routen/Fremd-Collections aus v4/manifests/app-store.manifest.json; ohne aktive app-store-Version
+// liefert der Kern business_apps/business_app_versions nicht an die App.
+const routes = realManifestRoutes('app-store');
+const publishedExtraApps = ['app-store', ...(routes._fixture_owners ?? []).map((o) => o.app).filter((id) => id !== 'ctox-platform' && id !== 'shell')];
 const html = `<!doctype html><html lang="de" data-theme="dark" data-shell-style="ctox">
 <meta charset="utf-8"><link rel="stylesheet" href="/app.css"><link rel="stylesheet" href="/shared/base.css">
+<link rel="stylesheet" href="/modules/app-store/index.css">
 <style>body{margin:0;background:#0b0e13}#open{position:absolute;right:8px;top:8px}
-.shell-window{position:absolute;left:20px;top:50px;width:1180px;height:760px}</style>
+#window{position:absolute;left:20px;top:50px;width:1180px;height:760px;display:flex;flex-direction:column;overflow:hidden}</style>
 <button id="open">App Store öffnen</button><div id="desktop"></div>
 <script type="module">
 import { mount } from '/modules/app-store/index.js';
-const catalog = { modules: [], templates: [], marketplace: [
-  { id:'fixture-calendar', title:'Offline Calendar', category:'Business', description:'Cached calendar', version:'1.0.0', download_url:'/fixture-unused.zip', status:'installed' },
-  { id:'fixture-mail', title:'Offline Mail', category:'Business', description:'Cached mail', version:'1.0.0', download_url:'/fixture-unused.zip', status:'installed' },
-  { id:'fixture-notes', title:'Offline Notes', category:'Business', description:'Cached notes', version:'1.0.0', download_url:'/fixture-unused.zip', status:'installed' },
-]};
-while (catalog.marketplace.length < ${catalogueSize}) {
-  const index = catalog.marketplace.length;
-  catalog.marketplace.push({ ...catalog.marketplace[index % 3], id:'fixture-extra-'+index, title:'Cached App '+index });
+import { createStubKernel } from '/__stub/ctox-app-api-stub.mjs';
+const base = [
+  { id:'fixture-calendar', title:'Cached Calendar', category:'Business', description:'Cached calendar', version:'1.0.0' },
+  { id:'fixture-mail', title:'Cached Mail', category:'Business', description:'Cached mail', version:'1.0.0' },
+  { id:'fixture-notes', title:'Cached Notes', category:'Business', description:'Cached notes', version:'1.0.0' },
+];
+const apps = [...base];
+while (apps.length < ${catalogueSize}) {
+  const index = apps.length;
+  apps.push({ ...base[index % 3], id:'fixture-extra-'+index, title:'Cached App '+index });
 }
-let cleanup, frame;
+const kernel = createStubKernel({ storage:'memory', latencyMs:5, multiTab:false, actor:{ role:'owner' } });
+await kernel.ready;
+// Zeilen nach den Plattform-Schemas (business_app_versions ohne Zusatzfelder, business_apps.migrated_at_seq als string).
+await kernel.sim.push('business_app_versions', apps.map((app) => ({ id: app.id + '@1', app_id: app.id, app_ver: '1',
+  manifest: { version: app.version, description: app.description, layout: { category: app.category }, provenance: {} } })));
+await kernel.sim.push('business_apps', apps.map((app) => ({ id: app.id, title: app.title, active_ver: '1', migrated_at_seq: '0' })));
+const routes = ${JSON.stringify(routes)};
+for (const o of routes._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+await kernel.sim.publishAppVersion('app-store', '1', { title: 'App Store', manifestExtra: routes });
+await kernel.sim.settle();
+const api = kernel.appApi('app-store', '1');
+let handle, frame;
 document.querySelector('#open').onclick = async () => {
   window.openStarted = performance.now();
   window.fixtureArtwork = [];
   frame = document.createElement('section');
-  frame.className = 'shell-window is-focused';
-  frame.dataset.shellContract = 'v2';
-  frame.dataset.shellWindowChrome = 'shared-v2';
-  frame.innerHTML = '<header class="shell-window-header"></header><div class="shell-window-controls"><button id="close" aria-label="Schließen">×</button></div><div class="shell-window-content"><div class="module-root shell-window-module-root"><main class="module-content"></main></div></div>';
+  frame.id = 'window';
+  frame.innerHTML = '<button id="close" aria-label="Schließen" style="position:fixed;left:8px;top:8px">×</button><div id="root" style="flex:1;min-height:0;display:flex;flex-direction:column"></div>';
   document.querySelector('#desktop').append(frame);
-  frame.querySelector('#close').onclick = () => { cleanup?.(); frame.remove(); };
-  cleanup = await mount({
-    host: frame.querySelector('main'), locale:'de', modules:[],
-    session:{ user:{ id:'fixture-owner', role:'owner' } },
-    sync:{ startCollection:() => new Promise(() => {}) },
-    db:{ collection:() => ({ findOne:() => ({
-      exec:async () => ({ toJSON:() => catalog }),
-      $:{ subscribe:() => ({ unsubscribe() {} }) },
-    }) }) },
-  });
+  frame.querySelector('#close').onclick = () => { handle?.unmount(); frame.remove(); };
+  handle = await mount(frame.querySelector('#root'), api, { restored: { v: 1, scope: 'installed' } });
 };
 window.fixtureReady = true;
 </script></html>`;
@@ -63,13 +74,18 @@ const mime = { '.js':'text/javascript', '.mjs':'text/javascript', '.css':'text/c
 const server = http.createServer((req, res) => {
   const pathname = new URL(req.url, 'http://localhost').pathname;
   if (pathname === '/') { res.setHeader('content-type', 'text/html'); return res.end(html); }
-  const file = artworkSource && /^\/vendor\/store-shelf\/(?:store-shelf|box-art)\.mjs$/.test(pathname)
+  const file = artworkSource && /^\/modules\/app-store\/vendor\/store-shelf\/(?:store-shelf|box-art)\.mjs$/.test(pathname)
     ? path.join(artworkSource, path.basename(pathname))
+    : pathname.startsWith('/__stub/') ? path.resolve(stubDir, '.' + pathname.slice('/__stub'.length))
     : path.resolve(root, '.' + pathname);
-  if (!file.startsWith(root + path.sep) && !(artworkSource && file.startsWith(artworkSource + path.sep))) { res.writeHead(403); return res.end(); }
+  if (!file.startsWith(root + path.sep) && !file.startsWith(stubDir + path.sep)
+    && !(artworkSource && file.startsWith(artworkSource + path.sep))) { res.writeHead(403); return res.end(); }
   try {
     res.setHeader('content-type', mime[path.extname(file)] || 'application/octet-stream');
-    res.end(readFileSync(oldSource && pathname === '/modules/app-store/index.js' ? oldSource : file));
+    let body = readFileSync(oldSource && pathname === '/modules/app-store/index.js' ? oldSource : file);
+    // Wie der Service Worker (§16.15, OFFEN-F): ctox:shared/x.js → /shared/x.js.
+    if (/\.m?js$/.test(file)) body = Buffer.from(body.toString('utf8').replace(/(['"])ctox:shared\//g, '$1/shared/'));
+    res.end(body);
   } catch { res.writeHead(404); res.end(); }
 });
 await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -138,8 +154,11 @@ try {
   await page.screenshot({path:path.join(output,'reopened.png')});
   await context.setOffline(true);
   await page.getByRole('button', {name:'Als Liste anzeigen', exact:true}).click();
-  assert.equal(await page.locator('[data-apps-grid] [data-app-id]').count(), catalogueSize);
-  assert.equal(await page.locator('[data-apps-grid]').getByText('Offline Calendar', {exact:true}).count(), 1);
+  // Erwartet: die Katalog-Apps der Fixture plus jede weitere echte App, die sie veröffentlicht (app-store selbst und die
+  // Eigentümer seiner Fremd-Collections, E48); Plattform/Shell sind keine Apps und erscheinen nie.
+  assert.equal(await page.locator('[data-apps-grid] [data-app-id="ctox-platform"], [data-apps-grid] [data-app-id="shell"]').count(), 0);
+  assert.equal(await page.locator('[data-apps-grid] [data-app-id]').count(), catalogueSize + publishedExtraApps.length);
+  assert.equal(await page.locator('[data-apps-grid]').getByText('Cached Calendar', {exact:true}).count(), 1);
   await page.screenshot({path:path.join(output,'offline.png')});
   assert.deepEqual(pageErrors, []);
   writeFileSync(path.join(output,'result.json'),JSON.stringify({first,reopened,offlineCachedItems:catalogueSize,pageErrors},null,2)+'\n');

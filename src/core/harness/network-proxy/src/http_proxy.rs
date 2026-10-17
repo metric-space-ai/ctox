@@ -299,6 +299,18 @@ async fn http_connect_accept(
         return Err(blocked_text_with_details(REASON_MITM_REQUIRED, &details));
     }
 
+    match app_state.pin_destination(&host, authority.port).await {
+        Ok(Some(target)) => {
+            req.extensions_mut().insert(target);
+        }
+        Ok(None) => {}
+        Err(_) => {
+            return Err(text_response(
+                StatusCode::FORBIDDEN,
+                "blocked DNS destination",
+            ));
+        }
+    }
     req.extensions_mut().insert(ProxyTarget(authority));
     req.extensions_mut().insert(mode);
     if let Some(mitm_state) = mitm_state {
@@ -735,6 +747,18 @@ async fn http_plain_proxy(
         UpstreamClient::direct()
     };
 
+    match app_state.pin_destination(&host, port).await {
+        Ok(Some(target)) => {
+            req.extensions_mut().insert(target);
+        }
+        Ok(None) => {}
+        Err(_) => {
+            return Ok(text_response(
+                StatusCode::FORBIDDEN,
+                "blocked DNS destination",
+            ));
+        }
+    }
     // Strip hop-by-hop headers only after extracting metadata used for policy correlation.
     remove_hop_by_hop_request_headers(req.headers_mut());
     match client.serve(req).await {
@@ -979,4 +1003,146 @@ struct BlockedResponse<'a> {
     port: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use crate::config::NetworkProxySettings;
+    use crate::runtime::network_proxy_state_for_policy;
+    use rama_http::Method;
+    use rama_http::Request;
+    use std::net::Ipv4Addr;
+    use std::sync::Arc;
+    use tokio::io::AsyncReadExt;
+    use tokio::io::AsyncWriteExt;
+    use tokio::net::TcpListener as TokioTcpListener;
+    use tokio::time::Duration;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn e20b_foreign_domain_is_rejected_without_dns() -> anyhow::Result<()> {
+        ensure_rustls_crypto_provider();
+        struct Dns(std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl crate::runtime::DestinationResolver for Dns {
+            async fn resolve(&self, _: &str, _: u16) -> anyhow::Result<Vec<SocketAddr>> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                anyhow::bail!("foreign DNS must not be consulted");
+            }
+        }
+        let dns = Arc::new(Dns(std::sync::atomic::AtomicUsize::new(0)));
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["example.com".into()],
+            allow_upstream_proxy: false,
+            ..NetworkProxySettings::default()
+        })
+        .with_public_destinations_only()
+        .with_resolver(dns.clone());
+        let mut req = Request::builder()
+            .uri("http://foreign.invalid/")
+            .body(Body::empty())?;
+        req.extensions_mut().insert(Arc::new(state));
+        let response = http_plain_proxy(None, req).await?;
+        assert_eq!(
+            dns.0.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "E20b foreign domain triggered DNS"
+        );
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn e20b_private_dns_destination_cannot_reach_host_service() -> anyhow::Result<()> {
+        ensure_rustls_crypto_provider();
+        let listener = TokioTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let port = listener.local_addr()?.port();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0; 4096];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecret",
+                    )
+                    .await;
+            }
+        });
+        let state = || {
+            network_proxy_state_for_policy(NetworkProxySettings {
+                allowed_domains: vec!["localhost".into()],
+                allow_upstream_proxy: false,
+                ..NetworkProxySettings::default()
+            })
+        };
+        let request = |state| -> anyhow::Result<_> {
+            let mut req = Request::builder()
+                .uri(format!("http://localhost:{port}/"))
+                .body(Body::empty())?;
+            req.extensions_mut().insert(Arc::new(state));
+            Ok(req)
+        };
+        // Real target control: the existing explicitly-local Harness policy
+        // reaches this listener. Strict process DNS must refuse that answer.
+        let control = timeout(
+            Duration::from_secs(5),
+            http_plain_proxy(None, request(state())?),
+        )
+        .await??;
+        assert_eq!(control.status(), StatusCode::OK);
+        struct Rebinding(std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl crate::runtime::DestinationResolver for Rebinding {
+            async fn resolve(&self, host: &str, port: u16) -> anyhow::Result<Vec<SocketAddr>> {
+                assert_eq!(host, "rebinding.test");
+                let answer = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let ip = if answer < 2 {
+                    "93.184.215.14"
+                } else {
+                    "127.0.0.1"
+                };
+                Ok(vec![SocketAddr::new(ip.parse()?, port)])
+            }
+        }
+        let dns = Arc::new(Rebinding(std::sync::atomic::AtomicUsize::new(0)));
+        let strict = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["rebinding.test".into()],
+            allow_upstream_proxy: false,
+            ..NetworkProxySettings::default()
+        })
+        .with_public_destinations_only()
+        .with_resolver(dns.clone());
+        let mut rebound = Request::builder()
+            .uri(format!("http://rebinding.test:{port}/"))
+            .body(Body::empty())?;
+        rebound.extensions_mut().insert(Arc::new(strict));
+        let result = timeout(Duration::from_secs(5), http_plain_proxy(None, rebound)).await;
+        server.abort();
+        let response = result??;
+        assert_eq!(
+            dns.0.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "fixture must rebind only at connect-time DNS"
+        );
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "E20b private DNS reached host service"
+        );
+
+        let mut req = Request::builder()
+            .method(Method::CONNECT)
+            .uri(format!("localhost:{port}"))
+            .body(Body::empty())?;
+        req.extensions_mut()
+            .insert(Arc::new(state().with_public_destinations_only()));
+        let response = match http_connect_accept(None, req).await {
+            Err(response) => response,
+            Ok(_) => anyhow::bail!("private CONNECT was admitted"),
+        };
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        Ok(())
+    }
 }

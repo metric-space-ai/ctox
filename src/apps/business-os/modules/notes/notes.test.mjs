@@ -3,110 +3,49 @@ import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
-// Prefer the esbuild bundle (CI installs the dev dependency in
-// src/apps/business-os); fall back to a direct source import when esbuild is
-// not installed. The module graph (index.js + vendor/lexical.mjs + shared/*)
-// has no transitive imports and is Node-safe at top level — the same code the
-// bundle executes.
-let hooks;
-try {
-  const { build } = await import('esbuild');
-  const bundledModule = await build({
-    entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
-    bundle: true,
-    format: 'esm',
-    platform: 'browser',
-    write: false,
-  });
-
-  const [{ text: bundledSource }] = bundledModule.outputFiles;
-  ({ __notesTestHooks: hooks } = await import(
-    `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
-  ));
-} catch (error) {
-  if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
-  ({ __notesTestHooks: hooks } = await import(new URL('./index.js', import.meta.url)));
+// Bundle with esbuild (CI: dev dependency in src/apps/business-os; Klon ohne node_modules: aus
+// ESBUILD_MODULE oder ~/Documents/ctox/src/apps/business-os/node_modules). v4: `ctox:shared/x.js` wird wie vom
+// Service Worker (§16.15) auf ../../shared/ abgebildet.
+async function loadEsbuild() {
+  try { return await import('esbuild'); } catch (error) {
+    if (error?.code !== 'ERR_MODULE_NOT_FOUND') throw error;
+    const require = createRequire(import.meta.url);
+    return require(process.env.ESBUILD_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/esbuild'));
+  }
 }
+const { build } = await loadEsbuild();
+const bundledModule = await build({
+  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  write: false,
+  plugins: [{
+    name: 'ctox-shared',
+    setup(b) {
+      b.onResolve({ filter: /^ctox:shared\// }, (args) => ({ path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)) }));
+    },
+  }],
+});
+const [{ text: bundledSource }] = bundledModule.outputFiles;
+const { __notesTestHooks: hooks } = await import(
+  `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
+);
 
 const t = (_key, fallback) => fallback;
 
-test('empty state distinguishes sync diagnostics from real empty lists', () => {
-  const diagnostic = hooks.buildNotesEmptyState({
-    totalNotes: 0,
-    scopedNotes: 0,
-    hasSearch: false,
-    activeLabel: 'Alle Notizen',
-    diagnostics: { kind: 'missing', message: 'notes collection missing' },
-    t,
-  });
-
-  assert.equal(diagnostic.kind, 'unavailable');
-  assert.doesNotMatch(diagnostic.body, /missing|collection/i);
-
-  const empty = hooks.buildNotesEmptyState({
-    totalNotes: 0,
-    scopedNotes: 0,
-    hasSearch: false,
-    activeLabel: 'Alle Notizen',
-    diagnostics: { kind: 'ok-empty', message: '' },
-    t,
-  });
-
-  assert.equal(empty.kind, 'empty');
-});
-
-test('empty source list follows collection readiness (syncing vs empty)', () => {
-  const base = {
-    totalNotes: 0,
-    scopedNotes: 0,
-    hasSearch: false,
-    activeLabel: 'Alle Notizen',
-    diagnostics: { kind: 'ok-empty', message: '' },
-    t,
-  };
-
-  const syncing = hooks.buildNotesEmptyState({
-    ...base,
-    readiness: { collection: 'notes', state: 'catching-up', ready: false, syncing: true, updatedAt: 0 },
-  });
-  assert.equal(syncing.kind, 'syncing');
-
-  const offlinePending = hooks.buildNotesEmptyState({
-    ...base,
-    readiness: { collection: 'notes', state: 'offline-pending', ready: false, syncing: false, updatedAt: 0 },
-  });
-  assert.equal(offlinePending.kind, 'syncing');
-
-  const ready = hooks.buildNotesEmptyState({
-    ...base,
-    readiness: { collection: 'notes', state: 'live', ready: true, syncing: false, updatedAt: 1 },
-  });
-  assert.equal(ready.kind, 'empty');
-
-  // Readiness never overrides filter/search empties — data exists there.
-  const searchMiss = hooks.buildNotesEmptyState({
-    ...base,
-    totalNotes: 2,
-    scopedNotes: 2,
-    hasSearch: true,
-    diagnostics: { kind: 'ok', message: '' },
-    readiness: { collection: 'notes', state: 'catching-up', ready: false, syncing: true, updatedAt: 0 },
-  });
-  assert.equal(searchMiss.kind, 'no-results');
-});
-
-test('search misses are not rendered as missing notes', () => {
-  const state = hooks.buildNotesEmptyState({
-    totalNotes: 3,
-    scopedNotes: 3,
-    hasSearch: true,
-    activeLabel: 'Alle Notizen',
-    diagnostics: { kind: 'ok', message: '' },
-    t,
-  });
-
-  assert.equal(state.kind, 'no-results');
+// v4-Vertrag (PORTING.md R4/R11): keine Readiness, keine Leer-/Synchronisierungstexte im Inhalt.
+test('empty list renders nothing and there is no sync readiness path', async () => {
+  const js = await readFile(fileURLToPath(new URL('./index.js', import.meta.url)), 'utf8');
+  const list = js.match(/function renderNotesList\(\)\s*\{[\s\S]*?\n\}/);
+  assert.ok(list, 'renderNotesList present');
+  assert.match(list[0], /if \(list\.length === 0\) \{[\s\S]*?renderHtmlIfChanged\(els\.notesList, '', \{ signature: 'empty' \}\);\s*return;/);
+  assert.doesNotMatch(js, /ctox-syncing|collectionReadiness|subscribeCollectionReadiness|ctx\.db|syncingNotes/);
+  assert.equal('buildNotesEmptyState' in hooks, false);
 });
 
 test('default notes provide notebooks, tags, and favorites for first render', () => {

@@ -1,0 +1,622 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/tickets/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/tickets/index.html",
+  "_rust_basis": "keine Datei im business_os; `crate::mission::tickets::run_business_os_ticket_command` (`rs:command_plane.rs:2325–2336`, außerhalb Snapshot); 24 Fundstellen `rs:threads.rs`, 12 `rs:rxdb_peer.rs:20966–21183`.",
+  "_source_dir": "src/apps/business-os/modules/tickets",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "tickets",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {
+    "ctox_ticket_approvals": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/tickets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "ctox_ticket_cases": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/tickets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "ctox_ticket_clarification_requests": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/tickets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "ctox_ticket_control_bundles": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/tickets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "ctox_ticket_event_routing_state": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/tickets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "ctox_ticket_events": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/tickets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "ctox_ticket_items": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/tickets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "ctox_ticket_label_assignments": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/tickets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "ctox_ticket_self_work_items": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/tickets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "ctox_ticket_self_work_notes": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/tickets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "ctox_ticket_verifications": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/tickets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "ctox_ticket_writebacks": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/tickets.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms"
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 512,
+            "type": "string"
+          },
+          "is_deleted": {
+            "type": "boolean"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "ctox_ticket_approvals": [
+      "read"
+    ],
+    "ctox_ticket_cases": [
+      "read"
+    ],
+    "ctox_ticket_clarification_requests": [
+      "read"
+    ],
+    "ctox_ticket_self_work_items": [
+      "read"
+    ],
+    "ctox_ticket_self_work_notes": [
+      "read"
+    ]
+  },
+  "files": {
+    "V4-HANDLERS.md": "72e7898a3d12b157858f008a7f98e01abf367529ee17e2d4daa4e362a7ed9dd9",
+    "V4-PORT.md": "65b686d355085006a9c8aafc25e0d229d056928a04f2a42b70cdc97a33dfa772",
+    "assets/icon.jpg": "ab27b9d0eb830319747c8b4c285304ba6fe7540eab99ce8b13a189225ff5772a",
+    "assets/icon@512.jpg": "ce4afdc10fa64023e57050fa786cc1afc02eeba960a6d6090133ff97b07c3d85",
+    "collections.schema.json": "6b3877bc0294b270cfde27a3336c2d094bc0a94d590ec2f4bc8144af3228db24",
+    "handlers/_base.js": "9150293c4a852db693ac102df849ffdad84fcd36c6f1d93aa25a083706263d69",
+    "handlers/_tickets.js": "5a4cfef49779eb8d75b5860b3587a3a2aaad70791381a6475e5bef94e5e5b654",
+    "handlers/_writeback.js": "6d2e90ae99c8cdce9f61a953e06213934c70d1215f6ac4af6a1e5015ef61088e",
+    "handlers/ctox.ticket.approve.js": "3e44465327919e29d8e0bb91eb0e29990ff8cd3c2ca1e788cdc237062984c9bf",
+    "handlers/ctox.ticket.close.js": "1d7300e29249bb284689f393e9efcd556d8973851c8944d5a20880389943b328",
+    "handlers/ctox.ticket.execute.js": "9fda60cd70fef48bc45a7a7ad742eb087296e86b5863d76fc0fe420f358b7257",
+    "handlers/ctox.ticket.local.comment.js": "84993910e7aa1b05538c2f18f2792be2ac24293d4eb35958699847b2bd21e63e",
+    "handlers/ctox.ticket.local.create.js": "4b9458d7f0fce02c64a1dcf75fe915fdcf9f566abcf92d2b8f708626bc55c286",
+    "handlers/ctox.ticket.local.transition.js": "0e8bbefce2c59b1a7da906b197ff30fc6dc134224a173903ac8e1daad78c592b",
+    "handlers/ctox.ticket.publish_clarification.js": "84202ca72ea10d2e048dada6dcbbb96de19d781f767a3463c9ef67aecab4eac2",
+    "handlers/ctox.ticket.request_clarification.js": "8abcd4422b1fe485626c82b568ef48f1fabfc6858d62c4ad7d863ff9ec81e62f",
+    "handlers/ctox.ticket.resolve_clarification.js": "d8f8cfcaf9c99358e877b1efadb79b07b10445274febd038638415b6d8217be4",
+    "handlers/ctox.ticket.verify.js": "2f8833db6271892cc834871f57fc072219b73f6e41058526bdb413c9221e62b1",
+    "handlers/ctox.ticket.writeback.complete.js": "57d4aeb934fb6e21e082ea54d11ef04b3a77d8f3e848d90ec1db43d6b1dd7d39",
+    "handlers/ctox.ticket.writeback.failed.js": "b049f1ee0a571a754658e97a6eb859c943989f73c287428a17f3c15790de17c3",
+    "handlers/ctox.ticket.writeback_comment.js": "6404c69851be39f0836eecde96ffef6afd5b8fe745aea8d31f7ef2fe13a5e604",
+    "handlers/ctox.ticket.writeback_transition.js": "a6e1d9e394385c25b2c25481484014d1b0229c40ae3c9fff3c22f5862ae08744",
+    "icon.svg": "02242294f8dcf18e332f3a63e8b422264ae14b507b83ffe670ddc3175ccde327",
+    "index.css": "f9afe2adb0c7b398800c2733a0cdbb40979b38fe57111c9ac731185bf516eba0",
+    "index.html": "17ef45d04e73fa3e6fd8986da31a86305fc7ced47533179d55cc808bc153b67a",
+    "index.js": "77431ab9edf5380bbfdf015af81bdabc130ca946b91e10203125f9119f6a7805",
+    "locales/de.json": "ef3ea6b126608be2a9eb95ea8ed9a903b1ada7a55b785f11ac8fcea1252e8e6a",
+    "locales/en.json": "7ad202c9e6cbe8c6f77ad33db59e03a314228fccb509925a87dc54367aaebde0",
+    "module.json": "4ad2041748546b6233dd38c62ac53e3e1239ed612c2fad3433b19ab506e1ddd5",
+    "prompts/writeback-comment.md": "a5b9397cc0bdd1402b95fdc9e13aacc12dbd4d1e355fa4c44c8d9dcfb8b8535a",
+    "prompts/writeback-transition-note.md": "c968f6b7cfe848eb6a26dcc63f5b725f725679d386d966da2fb0e89a57c66ace",
+    "prompts/writeback-transition.md": "e72536f57e8bcabe0abb0655ae514e67c7c77735985f1843741f4a35d45b096c",
+    "skills/zammad-writeback/SKILL.md": "0d1f6ab13823977f6730b1645701cdbf92271a127b9247111885cf8117ef992d",
+    "skills/zammad-writeback/references/api-access.md": "7a61dd5a1197654b855676b59d77b64300cf378a730cbaff2a657645e24201f7",
+    "v4-manifest.json": "6ab2a05066a6862109d9cf3e38635173f592b4e147d01b865cc8b26bcf1b8edb"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "declaration_basis": "modules/tickets/V4-PORT.md OFFEN 5",
+        "sources": [
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "ctox_crew_members": {
+      "_evidence": {
+        "code_read": [
+          "index.js:384"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/tickets/V4-PORT.md OFFEN 5",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "ctox_queue_tasks": {
+      "_evidence": {
+        "code_read": [
+          "index.js:380"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/tickets/V4-PORT.md OFFEN 5",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "notes": {
+      "_evidence": {
+        "code_read": [
+          "index.js:1143"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "notes"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/tickets.jpg (shared/operator-icon-selection.js, sha256 6d0cbd213897…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; modules/tickets/V4-PORT.md OFFEN 4; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Operations",
+    "default_height": 780,
+    "default_width": 1180,
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-tickets\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-tickets\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><path d=\"M4 5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z\" fill=\"url(#grad-tickets)\" fill-opacity=\"0.12\" stroke=\"url(#grad-tickets)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M15 3v5h5\" stroke=\"url(#grad-tickets)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M8 12h8M8 16h6\" stroke=\"url(#grad-tickets)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
+    "min_height": 480,
+    "min_width": 640,
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 780,
+        "width": 1180
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#0f766e",
+        "category": "Operations",
+        "iconAssetId": "workjet.business-os.tickets",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "list-detail",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Tickets"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "prompts": [
+    {
+      "name": "writeback-comment",
+      "path": "prompts/writeback-comment.md"
+    },
+    {
+      "name": "writeback-transition-note",
+      "path": "prompts/writeback-transition-note.md"
+    },
+    {
+      "name": "writeback-transition",
+      "path": "prompts/writeback-transition.md"
+    }
+  ],
+  "provenance": {
+    "base_hash": "ed6847a167212139173b366a2734d9bb08ef75a3e3f6ad1a9b2f8f46d55b28d9",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "skills": [
+    {
+      "name": "zammad-writeback",
+      "path": "skills/zammad-writeback/SKILL.md"
+    }
+  ],
+  "styles": [
+    "index.css"
+  ],
+  "title": "Tickets",
+  "triggers": [],
+  "version": "1.0.2"
+}

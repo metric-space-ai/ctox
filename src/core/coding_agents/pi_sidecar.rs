@@ -22,6 +22,18 @@ pub(crate) mod anthropic_coding_bridge;
 
 use anthropic_coding_bridge::{AnthropicCodingBridge, BRIDGE_TOKEN_HEADER};
 
+fn with_runtime_owner<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce(&Path) -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    let work = root.to_owned();
+    crate::persistence::run_core_blocking_at(root, move || operation(&work))
+}
+
+#[cfg(test)]
+#[path = "pi_sidecar_test_owners.rs"]
+pub(super) mod test_owners;
+
 struct PreparedCodingTurnModel {
     model: Value,
     coding_plan_bridge: Option<AnthropicCodingBridge>,
@@ -97,79 +109,83 @@ versioned commits to the module source.",
 
 /// Public descriptor for the inherited main route. Its private endpoint and
 /// capability are resolved by the native owner immediately before a real turn.
-pub fn gateway_model(root: &Path) -> Value {
-    let gateway = crate::execution::responses::gateway::GatewayConfig::resolve_with_root(root);
-    let model_id = gateway
-        .active_model
-        .unwrap_or_else(|| "ctox-gateway".to_string());
-    serde_json::json!({
-        "id": model_id,
-        "name": "CTOX Model Gateway",
-        "api": "openai-responses",
-        "provider": "ctox-gateway",
-        "baseUrl": "http://127.0.0.1:1/v1",
-        "ctoxRoute": { "kind": "inherit_ctox" },
-        "reasoning": false,
-        "input": ["text"],
-        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-        "contextWindow": 0,
-        "maxTokens": 0
+pub fn gateway_model(root: &Path) -> anyhow::Result<Value> {
+    with_runtime_owner(root, move |root| {
+        crate::inference::runtime_env::load_persisted_runtime_env_map_cached(root)?;
+        let gateway = crate::execution::responses::gateway::GatewayConfig::resolve_with_root(root);
+        let model_id = gateway
+            .active_model
+            .unwrap_or_else(|| "ctox-gateway".to_string());
+        Ok(serde_json::json!({
+            "id": model_id,
+            "name": "CTOX Model Gateway",
+            "api": "openai-responses",
+            "provider": "ctox-gateway",
+            "baseUrl": "http://127.0.0.1:1/v1",
+            "ctoxRoute": { "kind": "inherit_ctox" },
+            "reasoning": false,
+            "input": ["text"],
+            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+            "contextWindow": 0,
+            "maxTokens": 0
+        }))
     })
 }
 
 /// The coding default inherits CTOX's active main model through its native owner.
 /// Provider credentials and routing remain server-side; callers may still
 /// supply an explicit typed pi-ai model override.
-pub fn coding_default_model(root: &Path) -> Value {
+pub fn coding_default_model(root: &Path) -> anyhow::Result<Value> {
     gateway_model(root)
 }
 
 /// Server-authoritative public capability document. The browser receives no
 /// credentials and may select the subscription route only after the owning
 /// same-root listener is actually ready.
-pub fn coding_model_capabilities(root: &Path) -> Value {
-    let model = gateway_model(root);
-    let active_model = model
-        .get("id")
-        .and_then(Value::as_str)
-        .unwrap_or("ctox-gateway");
-    let mut presets = vec![serde_json::json!({
-        "id": "ctox",
-        "label": format!("CTOX (Standard · {active_model})"),
-        "default": true,
-        "model": Value::Null,
-    })];
-    for route in crate::execution::cliproxyapi_host::instance_proxy_route_capabilities(root) {
-        let provider = route.provider;
-        let route_model = route.model;
-        presets.push(serde_json::json!({
-            "id": format!("{provider}-subscription-{route_model}"),
-            "label": format!("{provider} subscription · {route_model}"),
-            "default": false,
-            "model": {
-                "id": route_model,
-                "name": format!("{route_model} via {provider} subscription"),
-                "api": "openai-responses",
-                "provider": "ctox-gateway",
-                "baseUrl": crate::execution::cliproxyapi_host::instance_codex_proxy_base_url(),
-                "headers": { "X-CTOX-Provider": provider },
-                "reasoning": false,
-                "input": ["text"],
-                "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-                "contextWindow": 0,
-                "maxTokens": 0
-            }
-        }));
-    }
-    // MiniMax Coding Plan is an independent direct account route. It does not
-    // inherit or mutate CTOX's main provider and is never represented as
-    // `ctox_proxy`. Only accounts whose encrypted secret handle resolves are
-    // advertised.
-    for account in
-        crate::execution::models::minimax_coding::ready_accounts(root).unwrap_or_default()
-    {
-        for route_model in account.effective_models() {
+pub fn coding_model_capabilities(root: &Path) -> anyhow::Result<Value> {
+    with_runtime_owner(root, move |root| {
+        let model = gateway_model(root)?;
+        let active_model = model
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or("ctox-gateway");
+        let mut presets = vec![serde_json::json!({
+            "id": "ctox",
+            "label": format!("CTOX (Standard · {active_model})"),
+            "default": true,
+            "model": Value::Null,
+        })];
+        for route in crate::execution::cliproxyapi_host::instance_proxy_route_capabilities(root) {
+            let provider = route.provider;
+            let route_model = route.model;
             presets.push(serde_json::json!({
+                "id": format!("{provider}-subscription-{route_model}"),
+                "label": format!("{provider} subscription · {route_model}"),
+                "default": false,
+                "model": {
+                    "id": route_model,
+                    "name": format!("{route_model} via {provider} subscription"),
+                    "api": "openai-responses",
+                    "provider": "ctox-gateway",
+                    "baseUrl": crate::execution::cliproxyapi_host::instance_codex_proxy_base_url(),
+                    "headers": { "X-CTOX-Provider": provider },
+                    "reasoning": false,
+                    "input": ["text"],
+                    "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+                    "contextWindow": 0,
+                    "maxTokens": 0
+                }
+            }));
+        }
+        // MiniMax Coding Plan is an independent direct account route. It does not
+        // inherit or mutate CTOX's main provider and is never represented as
+        // `ctox_proxy`. Only accounts whose encrypted secret handle resolves are
+        // advertised.
+        for account in
+            crate::execution::models::minimax_coding::ready_accounts(root).unwrap_or_default()
+        {
+            for route_model in account.effective_models() {
+                presets.push(serde_json::json!({
                 // Length-prefixing makes the opaque id injective without
                 // parsing provider/model identity back out of user input.
                 "id": format!("minimax-coding-{}-{}-{route_model}", account.id.len(), account.id),
@@ -194,45 +210,48 @@ pub fn coding_model_capabilities(root: &Path) -> Value {
                     }
                 }
             }));
+            }
         }
-    }
-    // Kimi Coding Plan is likewise account-scoped and independent from both
-    // the Kimi subscription route and CTOX's main model.
-    for account in crate::execution::models::kimi_coding::ready_accounts(root).unwrap_or_default() {
-        for route_model in account.effective_models() {
-            presets.push(serde_json::json!({
-                "id": format!("kimi-coding-{}-{}-{route_model}", account.id.len(), account.id),
-                "label": format!("Kimi Coding Plan · {} · {route_model}", account.id),
-                "default": false,
-                "model": {
-                    "id": route_model,
-                    "name": format!("{route_model} via Kimi Coding Plan ({})", account.id),
-                    "api": "anthropic-messages",
-                    "provider": "ctox-kimi-coding",
-                    "baseUrl": "http://127.0.0.1:1",
-                    "reasoning": true,
-                    "input": ["text"],
-                    "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-                    "contextWindow": 1048576,
-                    "maxTokens": 8192,
-                    "ctoxRoute": {
-                        "kind": "kimi_coding_plan",
-                        "accountId": account.id,
+        // Kimi Coding Plan is likewise account-scoped and independent from both
+        // the Kimi subscription route and CTOX's main model.
+        for account in
+            crate::execution::models::kimi_coding::ready_accounts(root).unwrap_or_default()
+        {
+            for route_model in account.effective_models() {
+                presets.push(serde_json::json!({
+                    "id": format!("kimi-coding-{}-{}-{route_model}", account.id.len(), account.id),
+                    "label": format!("Kimi Coding Plan · {} · {route_model}", account.id),
+                    "default": false,
+                    "model": {
+                        "id": route_model,
+                        "name": format!("{route_model} via Kimi Coding Plan ({})", account.id),
+                        "api": "anthropic-messages",
+                        "provider": "ctox-kimi-coding",
+                        "baseUrl": "http://127.0.0.1:1",
+                        "reasoning": true,
+                        "input": ["text"],
+                        "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
+                        "contextWindow": 1048576,
+                        "maxTokens": 8192,
+                        "ctoxRoute": {
+                            "kind": "kimi_coding_plan",
+                            "accountId": account.id,
+                        }
                     }
-                }
-            }));
+                }));
+            }
         }
-    }
-    serde_json::json!({
-        "schema": "ctox.coding.models.v1",
-        "subscription_listener_ready": crate::execution::cliproxyapi_host::instance_codex_proxy_status(root).phase
-            == crate::execution::cliproxyapi_host::InstanceCodexProxyPhase::Ready,
-        "default": {
-            "mode": "inherit_ctox",
-            "provider": "ctox-gateway",
-            "model": active_model,
-        },
-        "presets": presets,
+        Ok(serde_json::json!({
+            "schema": "ctox.coding.models.v1",
+            "subscription_listener_ready": crate::execution::cliproxyapi_host::instance_codex_proxy_status(root).phase
+                == crate::execution::cliproxyapi_host::InstanceCodexProxyPhase::Ready,
+            "default": {
+                "mode": "inherit_ctox",
+                "provider": "ctox-gateway",
+                "model": active_model,
+            },
+            "presets": presets,
+        }))
     })
 }
 
@@ -240,17 +259,18 @@ pub fn coding_model_capabilities(root: &Path) -> Value {
 /// sends only the opaque preset ID; provider URLs, routing headers and model
 /// objects are never accepted from the browser command payload.
 pub fn resolve_coding_model_preset(root: &Path, preset_id: &str) -> anyhow::Result<Option<Value>> {
-    resolve_coding_model_preset_from_capabilities(&coding_model_capabilities(root), preset_id)
+    resolve_coding_model_preset_from_capabilities(&coding_model_capabilities(root)?, preset_id)
 }
 
 /// The operator CLI reads the daemon's public topology rather than guessing
-/// readiness from its own short-lived process. Offline roots keep local rules.
+/// readiness from its own short-lived process. Without IPC, only an explicitly
+/// installed local owner may serve this request; missing owners stay an error.
 pub(crate) fn coding_model_capabilities_for_cli(root: &Path) -> anyhow::Result<Value> {
     #[cfg(unix)]
     if let Some(capabilities) = crate::service::coding_model_capabilities_via_service(root)? {
         return Ok(capabilities);
     }
-    Ok(coding_model_capabilities(root))
+    coding_model_capabilities(root)
 }
 
 pub(crate) fn resolve_coding_model_preset_for_cli(
@@ -312,12 +332,32 @@ fn spawn_sidecar(
     transport: &LocalTransport,
     faux: bool,
 ) -> anyhow::Result<SidecarDaemon> {
+    let child = sidecar_command(dist, transport, faux)?
+        .spawn()
+        .context("spawn pi-sidecar daemon (is `node` on PATH?)")?;
+    Ok(SidecarDaemon {
+        child,
+        unix_socket_path: transport.unix_socket_path().map(Path::to_path_buf),
+    })
+}
+
+fn sidecar_command(dist: &Path, transport: &LocalTransport, faux: bool) -> anyhow::Result<Command> {
+    sidecar_command_with_node(dist, transport, faux, std::ffi::OsStr::new("node"))
+}
+
+fn sidecar_command_with_node(
+    dist: &Path,
+    transport: &LocalTransport,
+    faux: bool,
+    node: &std::ffi::OsStr,
+) -> anyhow::Result<Command> {
     anyhow::ensure!(
         dist.exists(),
         "pi-sidecar bundle is not built: {} (run `npm run build` in pi-sidecar)",
         dist.display()
     );
-    let mut command = Command::new("node");
+    ensure_sidecar_node(node)?;
+    let mut command = Command::new(node);
     command
         .arg(dist)
         .arg(transport.endpoint_string())
@@ -334,13 +374,90 @@ fn spawn_sidecar(
     if faux {
         command.env("CTOX_PI_SIDECAR_FAUX", "1");
     }
-    let child = command
-        .spawn()
-        .context("spawn pi-sidecar daemon (is `node` on PATH?)")?;
-    Ok(SidecarDaemon {
-        child,
-        unix_socket_path: transport.unix_socket_path().map(Path::to_path_buf),
-    })
+    Ok(command)
+}
+
+#[derive(Debug)]
+enum SidecarNodeUnavailable {
+    Runtime(String),
+}
+
+impl std::fmt::Display for SidecarNodeUnavailable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Runtime(reason) => write!(
+                f,
+                "pi-sidecar unavailable: {reason}; requires Node >=22.19.0"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SidecarNodeUnavailable {}
+
+fn sidecar_node_version_supported(version: &str) -> bool {
+    let parts = version
+        .trim()
+        .strip_prefix('v')
+        .unwrap_or(version.trim())
+        .split('.')
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>();
+    matches!(parts, Ok(ref parts) if parts.len() == 3 && (parts[0], parts[1], parts[2]) >= (22, 19, 0))
+}
+
+// Probe before importing the bundle: undici requires worker_threads APIs that
+// Node 20 cannot load. The probe has the same empty environment and is reaped
+// on every exit path, including timeout or malformed version output.
+fn ensure_sidecar_node(node: &std::ffi::OsStr) -> anyhow::Result<()> {
+    let probe = || -> anyhow::Result<()> {
+        let child = Command::new(node)
+            .arg("--version")
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .context("cannot execute Node version probe")?;
+        let mut daemon = SidecarDaemon {
+            child,
+            unix_socket_path: None,
+        };
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = daemon.child.try_wait()? {
+                break status;
+            }
+            anyhow::ensure!(Instant::now() < deadline, "Node version probe timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        anyhow::ensure!(status.success(), "Node version probe failed");
+        let mut version = String::new();
+        daemon
+            .child
+            .stdout
+            .take()
+            .context("Node version output missing")?
+            .take(64)
+            .read_to_string(&mut version)?;
+        anyhow::ensure!(
+            sidecar_node_version_supported(&version),
+            "unsupported Node version {}",
+            version.trim()
+        );
+        Ok(())
+    };
+    probe().map_err(|error| SidecarNodeUnavailable::Runtime(format!("{error:#}")).into())
+}
+
+fn sidecar_transport_failure(error: anyhow::Error) -> super::draft_turn::TurnFailure {
+    let reason = if error.is::<SidecarNodeUnavailable>() {
+        "sidecar_node_unavailable"
+    } else {
+        "sidecar_transport"
+    };
+    super::draft_turn::TurnFailure::new("unavailable", reason).detail(error.to_string())
 }
 
 fn connect_with_retry(
@@ -388,13 +505,68 @@ fn read_line(stream: &mut LocalStream, max_bytes: usize) -> anyhow::Result<Vec<u
 /// (a `CtoxTurnRequest` JSON), return the `CtoxTurnResponse` JSON. `faux` runs
 /// the sidecar's offline no-model mode (owner integration tests).
 pub fn run_pi_turn(dist: &Path, request: &Value, faux: bool) -> anyhow::Result<Value> {
-    let endpoint_id = Uuid::new_v4();
-    let transport = LocalTransport::ipc_for_host(
-        std::env::temp_dir().join(format!("ctox-pi-{endpoint_id}.sock")),
-        format!("ctox-pi-{endpoint_id}"),
-    );
+    let transport = fresh_transport();
     let _daemon = spawn_sidecar(dist, &transport, faux)?;
-    let mut stream = connect_with_retry(&transport, Duration::from_secs(10))?;
+    exchange_turn(&transport, request)
+}
+
+fn fresh_transport() -> LocalTransport {
+    let endpoint_id = Uuid::new_v4();
+    LocalTransport::ipc_for_host(
+        sidecar_socket_path(&std::env::temp_dir(), endpoint_id),
+        format!("ctox-pi-{endpoint_id}"),
+    )
+}
+
+/// Unix socket addresses must fit SUN_LEN (104 bytes on macOS/BSD, 108 on
+/// Linux), while TMPDIR may be arbitrarily deep (build lanes, sandboxes). A
+/// too-long temp path falls back to /tmp, as managed runtime sockets do; the
+/// random endpoint id keeps the name unguessable.
+fn sidecar_socket_path(temp_dir: &Path, endpoint_id: Uuid) -> PathBuf {
+    let name = format!("ctox-pi-{endpoint_id}.sock");
+    let preferred = temp_dir.join(&name);
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        const MAX_UNIX_SOCKET_PATH_LEN: usize = 100;
+        if preferred.as_os_str().as_bytes().len() >= MAX_UNIX_SOCKET_PATH_LEN {
+            return Path::new("/tmp").join(name);
+        }
+    }
+    preferred
+}
+
+/// §16.44 variant of [`run_pi_turn`]: the fresh daemon is owned by `control`,
+/// so `ctox.coding.cancel` kills it (the blocked read then fails) and every
+/// exit path reaps it. Same bounded protocol, limits and sandboxed env.
+#[allow(dead_code)] // constructed by the store owner's CodingPanel wiring
+pub(crate) fn run_pi_turn_controlled(
+    dist: &Path,
+    request: &Value,
+    faux: bool,
+    control: &super::draft_turn::TurnControl,
+) -> anyhow::Result<Value> {
+    struct SocketCleanup(Option<PathBuf>);
+    impl Drop for SocketCleanup {
+        fn drop(&mut self) {
+            if let Some(path) = &self.0 {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+    let transport = fresh_transport();
+    let _socket = SocketCleanup(transport.unix_socket_path().map(Path::to_path_buf));
+    let child = sidecar_command(dist, &transport, faux)?
+        .spawn()
+        .context("spawn pi-sidecar daemon (is `node` on PATH?)")?;
+    let _daemon = control
+        .attach(child)
+        .map_err(|failure| anyhow::anyhow!("pi coding turn {}", failure.reason))?;
+    exchange_turn(&transport, request)
+}
+
+fn exchange_turn(transport: &LocalTransport, request: &Value) -> anyhow::Result<Value> {
+    let mut stream = connect_with_retry(transport, Duration::from_secs(10))?;
     stream
         .set_write_timeout(Some(Duration::from_secs(30)))
         .context("set pi-sidecar write timeout")?;
@@ -411,7 +583,7 @@ pub fn run_pi_turn(dist: &Path, request: &Value, faux: bool) -> anyhow::Result<V
     stream
         .write_all(line.as_bytes())
         .context("write turn request")?;
-    stream.flush().ok();
+    stream.flush().context("flush turn request")?;
 
     let response_bytes = read_line(&mut stream, MAX_PI_TURN_RESPONSE_BYTES)?;
     anyhow::ensure!(
@@ -540,7 +712,10 @@ fn prepare_coding_turn_model(
     coding_plan_upstream_override: Option<&str>,
     require_unique_subscription_account: bool,
 ) -> anyhow::Result<PreparedCodingTurnModel> {
-    let mut model = model_override.unwrap_or_else(|| coding_default_model(root));
+    let mut model = match model_override {
+        Some(model) => model,
+        None => coding_default_model(root)?,
+    };
     if model.pointer("/ctoxRoute/kind").and_then(Value::as_str) == Some("inherit_ctox") {
         return prepare_inherited_coding_model(root);
     }
@@ -678,12 +853,22 @@ fn resolve_inherited_catalog_route(root: &Path) -> anyhow::Result<InheritedCodin
     resolve_inherited_route(root, InheritedRoutePurpose::ModelCatalog)
 }
 
+#[derive(Clone, Copy)]
 enum InheritedRoutePurpose {
     Inference,
     ModelCatalog,
 }
 
 fn resolve_inherited_route(
+    root: &Path,
+    purpose: InheritedRoutePurpose,
+) -> anyhow::Result<InheritedCodingRoute> {
+    with_runtime_owner(root, move |root| {
+        resolve_inherited_route_admitted(root, purpose)
+    })
+}
+
+fn resolve_inherited_route_admitted(
     root: &Path,
     purpose: InheritedRoutePurpose,
 ) -> anyhow::Result<InheritedCodingRoute> {
@@ -813,23 +998,28 @@ fn prepare_inherited_coding_model_route(
     root: &Path,
     route: InheritedCodingRoute,
 ) -> anyhow::Result<PreparedCodingTurnModel> {
-    let settings = crate::execution::models::runtime_env::load_runtime_env_map(root)?;
-    let api_key = settings
-        .get(route.credential_key)
-        .filter(|value| !value.trim().is_empty())
-        .with_context(|| {
-            format!(
-                "CTOX main provider {} has no configured credential",
-                route.provider
-            )
-        })?
-        .to_owned();
+    let credential_key = route.credential_key;
+    let api_key = with_runtime_owner(root, move |root| {
+        Ok(crate::secrets::read_secret_value_optional(
+            root,
+            crate::secrets::credential_scope(),
+            credential_key,
+        )?)
+    })?
+    .filter(|value| !value.trim().is_empty())
+    .with_context(|| {
+        format!(
+            "CTOX main provider {} has no configured credential",
+            route.provider
+        )
+    })?
+    .to_owned();
     let bridge = if route.api == "openai-completions" {
         AnthropicCodingBridge::spawn_chat_completions(api_key, &route.base_url, &route.model_id)?
     } else {
         AnthropicCodingBridge::spawn_responses(api_key, &route.base_url, &route.model_id)?
     };
-    let mut model = gateway_model(root);
+    let mut model = gateway_model(root)?;
     model["id"] = Value::String(route.model_id.clone());
     model["api"] = Value::String(route.api.to_owned());
     if route.api == "openai-completions" {
@@ -980,6 +1170,60 @@ pub(crate) fn run_coding_preset_smoke_with_subscription_proxy_for_test(
 /// `coding_plan_upstream_override` unset. Tests use a controlled loopback
 /// upstream so the complete preset -> account -> bridge -> Pi route can be
 /// proven without adding an ambient runtime toggle or contacting a provider.
+/// §16.44 production runner: one fresh pi-sidecar daemon per draft turn over
+/// LocalTransport. `model` from the command is an opaque preset id published by
+/// `ctox.coding.models`; raw model JSON never crosses the command boundary.
+#[allow(dead_code)] // constructed by the store owner's CodingPanel wiring
+pub(crate) struct PiSidecarRunner {
+    pub root: PathBuf,
+}
+
+impl super::draft_turn::SidecarRunner for PiSidecarRunner {
+    fn run(
+        &self,
+        input: &super::draft_turn::SidecarTurnInput,
+        control: &super::draft_turn::TurnControl,
+        progress: &dyn Fn(),
+    ) -> Result<Value, super::draft_turn::TurnFailure> {
+        use super::draft_turn::TurnFailure;
+        let dist = resolve_sidecar_dist(&self.root).map_err(|error| {
+            TurnFailure::new("unavailable", "sidecar_bundle_missing").detail(error.to_string())
+        })?;
+        let preset = input.model_preset.as_deref().unwrap_or("ctox");
+        let model_override = resolve_coding_model_preset(&self.root, preset).map_err(|error| {
+            TurnFailure::new("invalid", "model_preset_unknown").detail(error.to_string())
+        })?;
+        let prepared = prepare_coding_turn_model(&self.root, model_override, None, false).map_err(
+            |error| {
+                TurnFailure::new("unavailable", "model_route_unavailable").detail(error.to_string())
+            },
+        )?;
+        let request = serde_json::json!({
+            "id": input.turn_id,
+            "prompt": input.prompt,
+            "files": input.files,
+            "maxAssistantTurns": 8,
+            "systemPrompt": business_os_system_prompt(),
+            "model": prepared.model,
+        });
+        progress();
+        let response = run_pi_turn_controlled(&dist, &request, false, control);
+        drop(prepared.coding_plan_bridge);
+        let response = response.map_err(|error| {
+            if control.is_cancelled() {
+                TurnFailure::new("conflict", "cancelled")
+            } else {
+                sidecar_transport_failure(error)
+            }
+        })?;
+        if response.get("ok").and_then(Value::as_bool) != Some(true) {
+            return Err(TurnFailure::new("unavailable", "sidecar_turn_failed")
+                .detail(pi_turn_failure_detail(&response)));
+        }
+        Ok(response)
+    }
+}
+
 fn run_module_coding_turn_inner(
     root: &Path,
     dist: &Path,
@@ -1175,6 +1419,26 @@ mod tests {
     use super::*;
     use std::collections::BTreeMap;
     use tiny_http::{Header, Response, Server};
+
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_socket_path_fits_sun_len_under_a_deep_temp_dir() {
+        use std::os::unix::ffi::OsStrExt;
+        let id = Uuid::new_v4();
+        let short = Path::new("/tmp");
+        assert_eq!(
+            sidecar_socket_path(short, id),
+            short.join(format!("ctox-pi-{id}.sock"))
+        );
+        let deep = Path::new("/home/runner/build-lane/target/v4-train12/tmp").join("x".repeat(60));
+        let path = sidecar_socket_path(&deep, id);
+        assert!(
+            path.as_os_str().as_bytes().len() < 104,
+            "socket path exceeds SUN_LEN: {}",
+            path.display()
+        );
+        assert!(path.ends_with(format!("ctox-pi-{id}.sock")));
+    }
 
     fn seed_coding_source_records(
         root: &Path,
@@ -1427,6 +1691,71 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
     }
 
+    #[test]
+    fn sidecar_node_minimum_matches_bundle_dependency_contract() {
+        for version in ["v20.20.1", "v22.18.0", "v22.0.0", "v22.19", "garbage"] {
+            assert!(
+                !sidecar_node_version_supported(version),
+                "accepted {version}"
+            );
+        }
+        for version in ["v22.19.0", "v22.20.0", "v24.13.1\n"] {
+            assert!(
+                sidecar_node_version_supported(version),
+                "rejected {version}"
+            );
+        }
+        let package: Value = serde_json::from_str(include_str!("pi-sidecar/package.json")).unwrap();
+        assert!(package["scripts"]["build"]
+            .as_str()
+            .unwrap()
+            .contains("--target=node22"));
+        let lock: Value =
+            serde_json::from_str(include_str!("pi-sidecar/package-lock.json")).unwrap();
+        assert_eq!(
+            lock["packages"]["node_modules/undici"]["engines"]["node"],
+            ">=22.19.0"
+        );
+    }
+
+    // Explicit lane acceptance: requires a real Node 20 executable. This is a
+    // test input only; production always uses the existing Node resolver.
+    #[test]
+    #[ignore = "set CTOX_TEST_PI_NODE20 to a real Node 20 executable"]
+    fn sidecar_node20_is_unavailable_before_bundle_load() -> anyhow::Result<()> {
+        let node =
+            std::env::var_os("CTOX_TEST_PI_NODE20").context("real Node 20 fixture required")?;
+        let version = Command::new(&node).arg("--version").output()?;
+        anyhow::ensure!(
+            String::from_utf8_lossy(&version.stdout).starts_with("v20."),
+            "fixture must be Node 20"
+        );
+        let dist = sidecar_dist_path(&repo_root());
+        anyhow::ensure!(dist.exists(), "real bundled sidecar required");
+        let transport = fresh_transport();
+        // If the version guard is removed, actually load the bundle under Node
+        // 20. Its undici import fails before any IPC or provider connection.
+        let error = match sidecar_command_with_node(&dist, &transport, true, &node) {
+            Err(error) => error,
+            Ok(mut command) => {
+                let output = command.stderr(Stdio::piped()).output()?;
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                panic!(
+                    "version guard bypassed; Node20 bundle exit={}: {}",
+                    output.status, stderr
+                );
+            }
+        };
+        let failure = sidecar_transport_failure(error);
+        assert_eq!(failure.code, "unavailable");
+        assert_eq!(failure.reason, "sidecar_node_unavailable");
+        let detail = failure.detail.unwrap();
+        assert!(detail.contains("requires Node >=22.19.0"));
+        assert!(detail.contains("v20."));
+        assert!(!transport.unix_socket_path().is_some_and(Path::exists));
+        Ok(())
+    }
+
     fn node_available() -> bool {
         Command::new("node")
             .arg("--version")
@@ -1532,296 +1861,303 @@ mod tests {
 
     #[test]
     fn faux_sidecar_serves_a_turn_over_the_socket() -> anyhow::Result<()> {
-        let dist = sidecar_dist_path(&repo_root());
-        if !dist.exists() {
-            eprintln!("SKIP: pi-sidecar bundle not built ({})", dist.display());
-            return Ok(());
-        }
-        if !node_available() {
-            eprintln!("SKIP: `node` not on PATH");
-            return Ok(());
-        }
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            let dist = sidecar_dist_path(&repo_root());
+            if !dist.exists() {
+                eprintln!("SKIP: pi-sidecar bundle not built ({})", dist.display());
+                return Ok(());
+            }
+            if !node_available() {
+                eprintln!("SKIP: `node` not on PATH");
+                return Ok(());
+            }
 
-        let request = serde_json::json!({
-            "id": "rust-1",
-            "prompt": "add a marker",
-            "files": { "index.js": "export const v = 1;\n" },
-            "maxAssistantTurns": 4
-        });
-        let response = run_pi_turn(&dist, &request, true)?;
+            let request = serde_json::json!({
+                "id": "rust-1",
+                "prompt": "add a marker",
+                "files": { "index.js": "export const v = 1;\n" },
+                "maxAssistantTurns": 4
+            });
+            let response = run_pi_turn(&dist, &request, true)?;
 
-        assert_eq!(response["ok"], Value::Bool(true), "turn ok");
-        assert_eq!(response["id"], "rust-1", "response echoes id");
-        let has_marker = response["snapshot"]
-            .as_array()
-            .map(|entries| {
-                entries.iter().any(|entry| {
-                    entry["path"]
-                        .as_str()
-                        .map(|path| path.ends_with("faux-marker.js"))
-                        .unwrap_or(false)
+            assert_eq!(response["ok"], Value::Bool(true), "turn ok");
+            assert_eq!(response["id"], "rust-1", "response echoes id");
+            let has_marker = response["snapshot"]
+                .as_array()
+                .map(|entries| {
+                    entries.iter().any(|entry| {
+                        entry["path"]
+                            .as_str()
+                            .map(|path| path.ends_with("faux-marker.js"))
+                            .unwrap_or(false)
+                    })
                 })
-            })
-            .unwrap_or(false);
-        assert!(has_marker, "faux write should round-trip over the socket");
-        Ok(())
+                .unwrap_or(false);
+            assert!(has_marker, "faux write should round-trip over the socket");
+            Ok(())
+        })
     }
 
     #[test]
     fn run_module_coding_turn_records_the_faux_edit() -> anyhow::Result<()> {
-        use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
 
-        let dist = sidecar_dist_path(&repo_root());
-        if !dist.exists() {
-            eprintln!("SKIP: pi-sidecar bundle not built ({})", dist.display());
-            return Ok(());
-        }
-        if !node_available() {
-            eprintln!("SKIP: `node` not on PATH");
-            return Ok(());
-        }
+            let dist = sidecar_dist_path(&repo_root());
+            if !dist.exists() {
+                eprintln!("SKIP: pi-sidecar bundle not built ({})", dist.display());
+                return Ok(());
+            }
+            if !node_available() {
+                eprintln!("SKIP: `node` not on PATH");
+                return Ok(());
+            }
 
-        let temp = tempfile::tempdir()?;
-        let root = temp.path();
-        let app_root = root.join("src").join("apps").join("business-os");
-        std::fs::create_dir_all(app_root.join("modules").join("widget"))?;
-        std::fs::write(app_root.join("index.html"), b"<!doctype html>")?;
-        std::fs::write(
-            app_root.join("modules").join("widget").join("module.json"),
-            serde_json::to_vec_pretty(&serde_json::json!({
-                "id": "widget",
-                "title": "Widget",
-                "entry": "modules/widget/index.html"
-            }))?,
-        )?;
-        std::fs::write(
-            app_root.join("modules").join("widget").join("index.js"),
-            "export const v = 1;\n",
-        )?;
-        load_module_source_records(
-            root,
-            &ModuleSourceLoadMutation {
-                module_id: "widget".to_string(),
-            },
-        )?;
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let root = temp.path();
+            let app_root = root.join("src").join("apps").join("business-os");
+            std::fs::create_dir_all(app_root.join("modules").join("widget"))?;
+            std::fs::write(app_root.join("index.html"), b"<!doctype html>")?;
+            std::fs::write(
+                app_root.join("modules").join("widget").join("module.json"),
+                serde_json::to_vec_pretty(&serde_json::json!({
+                    "id": "widget",
+                    "title": "Widget",
+                    "entry": "modules/widget/index.html"
+                }))?,
+            )?;
+            std::fs::write(
+                app_root.join("modules").join("widget").join("index.js"),
+                "export const v = 1;\n",
+            )?;
+            load_module_source_records(
+                root,
+                &ModuleSourceLoadMutation {
+                    module_id: "widget".to_string(),
+                },
+            )?;
 
-        let summary = run_module_coding_turn(root, &dist, "widget", "add a marker", true, None)?;
-        assert_eq!(summary["ok"], Value::Bool(true), "owner turn ok");
+            let summary =
+                run_module_coding_turn(root, &dist, "widget", "add a marker", true, None)?;
+            assert_eq!(summary["ok"], Value::Bool(true), "owner turn ok");
 
-        // The faux edit must now be part of the module's source records — proving
-        // the full owner loop project -> pi turn -> apply -> P0 source records.
-        let files = project_module_source(root, "widget")?;
-        assert!(
-            files.keys().any(|path| path.ends_with("faux-marker.js")),
-            "faux edit recorded into module source via the owner loop"
-        );
-        Ok(())
+            // The faux edit must now be part of the module's source records — proving
+            // the full owner loop project -> pi turn -> apply -> P0 source records.
+            let files = project_module_source(root, "widget")?;
+            assert!(
+                files.keys().any(|path| path.ends_with("faux-marker.js")),
+                "faux edit recorded into module source via the owner loop"
+            );
+            Ok(())
+        })
     }
 
     #[test]
     fn responses_edit_owner_applies_only_complete_source_and_session() -> anyhow::Result<()> {
-        use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
-        let dist = sidecar_dist_path(&repo_root());
-        anyhow::ensure!(
-            node_available() && dist.exists(),
-            "Responses owner regression requires Node and built sidecar"
-        );
-        for incomplete in [false, true] {
-            let temp = tempfile::tempdir()?;
-            let root = temp.path();
-            let module = root.join("src/apps/business-os/modules/widget");
-            std::fs::create_dir_all(&module)?;
-            std::fs::write(
-                module
-                    .parent()
-                    .unwrap()
-                    .parent()
-                    .unwrap()
-                    .join("index.html"),
-                "<!doctype html>",
-            )?;
-            std::fs::write(
-                module.join("module.json"),
-                r#"{"id":"widget","title":"Widget","entry":"modules/widget/index.html"}"#,
-            )?;
-            std::fs::write(module.join("index.js"), "export const v = 1;\n")?;
-            load_module_source_records(
-                root,
-                &ModuleSourceLoadMutation {
-                    module_id: "widget".into(),
-                },
-            )?;
-            let before = project_module_source(root, "widget")?;
-            let key = before
-                .keys()
-                .find(|path| path.ends_with("index.js"))
-                .context("projected index")?
-                .clone();
-
-            // Materialize real isolated projection tables so a missing-table
-            // no-op cannot masquerade as proof that failed turns skip logging.
-            let db = rusqlite::Connection::open(
-                crate::paths::runtime_dir(root).join("business-os-rxdb.sqlite3"),
-            )?;
-            for collection in ["coding_agent_sessions", "coding_agent_events"] {
-                db.execute_batch(&format!("CREATE TABLE ctox_business_os__{collection}__v0 (id TEXT PRIMARY KEY, data TEXT NOT NULL, lastWriteTime REAL NOT NULL)"))?;
-            }
-            crate::business_os::store::record_coding_agent_session_turn(
-                root,
-                "widget",
-                "baseline",
-                &[],
-                1,
-            )?;
-            let session_before: String = db.query_row(
-                "SELECT data FROM ctox_business_os__coding_agent_sessions__v0 WHERE id='pi:widget'",
-                [],
-                |row| row.get(0),
-            )?;
-            let event_count = || {
-                db.query_row::<i64, _, _>(
-                    "SELECT COUNT(*) FROM ctox_business_os__coding_agent_events__v0",
-                    [],
-                    |row| row.get(0),
-                )
-            };
-            assert_eq!(event_count()?, 1, "session logger fixture is active");
-
-            let settings = BTreeMap::from([
-                ("CTOX_CHAT_SOURCE".into(), "api".into()),
-                ("CTOX_API_PROVIDER".into(), "ctox_proxy".into()),
-                ("CTOX_CHAT_MODEL".into(), "MiniMax-M3".into()),
-                ("CTOX_CHAT_MODEL_BASE".into(), "MiniMax-M3".into()),
-                (
-                    "CTOX_UPSTREAM_BASE_URL".into(),
-                    "https://llm.ctox.dev".into(),
-                ),
-                (
-                    "CTOX_LLM_PROXY_API_KEY".into(),
-                    "owner-fixture-secret".into(),
-                ),
-            ]);
-            crate::execution::models::runtime_env::save_runtime_env_map(root, &settings)?;
-            let mut route = resolve_inherited_coding_route(root)?;
-            assert_eq!(route.api, "openai-responses");
-            let upstream =
-                Server::http("127.0.0.1:0").map_err(|error| anyhow::anyhow!(error.to_string()))?;
-            route.base_url = format!(
-                "http://{}/v1",
-                upstream.server_addr().to_ip().context("fixture IP")?
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            use crate::business_os::store::{load_module_source_records, ModuleSourceLoadMutation};
+            let dist = sidecar_dist_path(&repo_root());
+            anyhow::ensure!(
+                node_available() && dist.exists(),
+                "Responses owner regression requires Node and built sidecar"
             );
-            let source_key = key.clone();
-            let worker = std::thread::spawn(move || {
-                for turn in 0..3 {
-                    let mut request = upstream
-                        .recv_timeout(Duration::from_secs(15))
+            for incomplete in [false, true] {
+                let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+                let root = temp.path();
+                let module = root.join("src/apps/business-os/modules/widget");
+                std::fs::create_dir_all(&module)?;
+                std::fs::write(
+                    module
+                        .parent()
                         .unwrap()
-                        .expect("real Responses Pi request");
-                    assert_eq!(request.url(), "/v1/responses");
-                    assert!(request.headers().iter().any(|header| header
-                        .field
-                        .as_str()
-                        .as_str()
-                        .eq_ignore_ascii_case("authorization")
-                        && header.value.as_str() == "Bearer owner-fixture-secret"));
-                    let mut body = String::new();
-                    request.as_reader().read_to_string(&mut body).unwrap();
-                    let body: Value = serde_json::from_str(&body).unwrap();
-                    assert_eq!(
-                        body["input"]
-                            .as_array()
-                            .unwrap()
-                            .iter()
-                            .filter(|item| item["type"] == "function_call_output")
-                            .count(),
-                        turn
-                    );
-                    let item = match turn {
-                        0 | 1 => {
-                            serde_json::json!({"type":"function_call", "id":format!("fc-{turn}"), "call_id":format!("call-{turn}"), "name":if turn == 0 {"read"} else {"edit"}, "arguments": if turn == 0 { serde_json::json!({"path":source_key}).to_string() } else { serde_json::json!({"path":source_key, "edits":[{"oldText":"v = 1", "newText":"v = 2"}]}).to_string() }, "status":"completed"})
-                        }
-                        _ => {
-                            serde_json::json!({"type":"message", "id":"msg-final", "role":"assistant", "status":"completed", "content":[{"type":"output_text", "text":"PRIVATE_PROVIDER_TEXT", "annotations":[]}]})
-                        }
-                    };
-                    let mut added = item.clone();
-                    added["status"] = Value::String("in_progress".into());
-                    if turn < 2 {
-                        added["arguments"] = Value::String(String::new());
-                    } else {
-                        added["content"] = serde_json::json!([]);
-                    }
-                    let terminal = if incomplete && turn == 2 {
-                        "incomplete"
-                    } else {
-                        "completed"
-                    };
-                    let delta = if turn < 2 {
-                        serde_json::json!({"type":"response.function_call_arguments.delta", "item_id":item["id"], "output_index":0, "delta":item["arguments"]})
-                    } else {
-                        serde_json::json!({"type":"response.output_text.delta", "item_id":item["id"], "output_index":0, "content_index":0, "delta":"PRIVATE_PROVIDER_TEXT"})
-                    };
-                    let events = [
-                        serde_json::json!({"type":"response.created", "response":{"id":format!("r-{turn}"), "status":"in_progress", "output":[]}}),
-                        serde_json::json!({"type":"response.output_item.added", "output_index":0, "item":added}),
-                        delta,
-                        serde_json::json!({"type":"response.output_item.done", "output_index":0, "item":item}),
-                        serde_json::json!({"type":format!("response.{terminal}"), "response":{"id":format!("r-{turn}"), "status":terminal, "output":[item], "usage":{"input_tokens":10,"output_tokens":10,"total_tokens":20}}}),
-                    ];
-                    let sse = events
-                        .iter()
-                        .map(|event| {
-                            format!(
-                                "event: {}\ndata: {event}\n\n",
-                                event["type"].as_str().unwrap()
-                            )
-                        })
-                        .collect::<String>();
-                    request
-                        .respond(Response::from_string(sse).with_header(
-                            Header::from_bytes("content-type", "text/event-stream").unwrap(),
-                        ))
-                        .unwrap();
+                        .parent()
+                        .unwrap()
+                        .join("index.html"),
+                    "<!doctype html>",
+                )?;
+                std::fs::write(
+                    module.join("module.json"),
+                    r#"{"id":"widget","title":"Widget","entry":"modules/widget/index.html"}"#,
+                )?;
+                std::fs::write(module.join("index.js"), "export const v = 1;\n")?;
+                load_module_source_records(
+                    root,
+                    &ModuleSourceLoadMutation {
+                        module_id: "widget".into(),
+                    },
+                )?;
+                let before = project_module_source(root, "widget")?;
+                let key = before
+                    .keys()
+                    .find(|path| path.ends_with("index.js"))
+                    .context("projected index")?
+                    .clone();
+
+                // Materialize real isolated projection tables so a missing-table
+                // no-op cannot masquerade as proof that failed turns skip logging.
+                let db = rusqlite::Connection::open(
+                    crate::paths::runtime_dir(root).join("business-os-rxdb.sqlite3"),
+                )?;
+                for collection in ["coding_agent_sessions", "coding_agent_events"] {
+                    db.execute_batch(&format!("CREATE TABLE ctox_business_os__{collection}__v0 (id TEXT PRIMARY KEY, data TEXT NOT NULL, lastWriteTime REAL NOT NULL)"))?;
                 }
-            });
-            let prepared = prepare_inherited_coding_model_route(root, route)?;
-            let result = run_module_coding_turn(
-                root,
-                &dist,
-                "widget",
-                "Read, edit, finish",
-                false,
-                Some(prepared.model),
-            );
-            worker.join().expect("Responses upstream assertions");
-            drop(prepared.coding_plan_bridge);
-            let persisted = project_module_source(root, "widget")?;
-            let session_after: String = db.query_row(
+                crate::business_os::store::record_coding_agent_session_turn(
+                    root,
+                    "widget",
+                    "baseline",
+                    &[],
+                    1,
+                )?;
+                let session_before: String = db.query_row(
                 "SELECT data FROM ctox_business_os__coding_agent_sessions__v0 WHERE id='pi:widget'",
                 [],
                 |row| row.get(0),
             )?;
-            if incomplete {
-                let error = result.unwrap_err().to_string();
-                assert!(
-                    error.contains("incomplete_turn")
-                        && error.contains("\"terminal_stop_reason\":\"length\"")
+                let event_count = || {
+                    db.query_row::<i64, _, _>(
+                        "SELECT COUNT(*) FROM ctox_business_os__coding_agent_events__v0",
+                        [],
+                        |row| row.get(0),
+                    )
+                };
+                assert_eq!(event_count()?, 1, "session logger fixture is active");
+
+                let settings = BTreeMap::from([
+                    ("CTOX_CHAT_SOURCE".into(), "api".into()),
+                    ("CTOX_API_PROVIDER".into(), "ctox_proxy".into()),
+                    ("CTOX_CHAT_MODEL".into(), "MiniMax-M3".into()),
+                    ("CTOX_CHAT_MODEL_BASE".into(), "MiniMax-M3".into()),
+                    (
+                        "CTOX_UPSTREAM_BASE_URL".into(),
+                        "https://llm.ctox.dev".into(),
+                    ),
+                    (
+                        "CTOX_LLM_PROXY_API_KEY".into(),
+                        "owner-fixture-secret".into(),
+                    ),
+                ]);
+                crate::execution::models::runtime_env::save_runtime_env_map(root, &settings)?;
+                let mut route = resolve_inherited_coding_route(root)?;
+                assert_eq!(route.api, "openai-responses");
+                let upstream = Server::http("127.0.0.1:0")
+                    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                route.base_url = format!(
+                    "http://{}/v1",
+                    upstream.server_addr().to_ip().context("fixture IP")?
                 );
-                assert!(
-                    !error.contains("PRIVATE_PROVIDER_TEXT")
-                        && !error.contains("owner-fixture-secret")
+                let source_key = key.clone();
+                let worker = std::thread::spawn(move || {
+                    for turn in 0..3 {
+                        let mut request = upstream
+                            .recv_timeout(Duration::from_secs(15))
+                            .unwrap()
+                            .expect("real Responses Pi request");
+                        assert_eq!(request.url(), "/v1/responses");
+                        assert!(request.headers().iter().any(|header| header
+                            .field
+                            .as_str()
+                            .as_str()
+                            .eq_ignore_ascii_case("authorization")
+                            && header.value.as_str() == "Bearer owner-fixture-secret"));
+                        let mut body = String::new();
+                        request.as_reader().read_to_string(&mut body).unwrap();
+                        let body: Value = serde_json::from_str(&body).unwrap();
+                        assert_eq!(
+                            body["input"]
+                                .as_array()
+                                .unwrap()
+                                .iter()
+                                .filter(|item| item["type"] == "function_call_output")
+                                .count(),
+                            turn
+                        );
+                        let item = match turn {
+                            0 | 1 => {
+                                serde_json::json!({"type":"function_call", "id":format!("fc-{turn}"), "call_id":format!("call-{turn}"), "name":if turn == 0 {"read"} else {"edit"}, "arguments": if turn == 0 { serde_json::json!({"path":source_key}).to_string() } else { serde_json::json!({"path":source_key, "edits":[{"oldText":"v = 1", "newText":"v = 2"}]}).to_string() }, "status":"completed"})
+                            }
+                            _ => {
+                                serde_json::json!({"type":"message", "id":"msg-final", "role":"assistant", "status":"completed", "content":[{"type":"output_text", "text":"PRIVATE_PROVIDER_TEXT", "annotations":[]}]})
+                            }
+                        };
+                        let mut added = item.clone();
+                        added["status"] = Value::String("in_progress".into());
+                        if turn < 2 {
+                            added["arguments"] = Value::String(String::new());
+                        } else {
+                            added["content"] = serde_json::json!([]);
+                        }
+                        let terminal = if incomplete && turn == 2 {
+                            "incomplete"
+                        } else {
+                            "completed"
+                        };
+                        let delta = if turn < 2 {
+                            serde_json::json!({"type":"response.function_call_arguments.delta", "item_id":item["id"], "output_index":0, "delta":item["arguments"]})
+                        } else {
+                            serde_json::json!({"type":"response.output_text.delta", "item_id":item["id"], "output_index":0, "content_index":0, "delta":"PRIVATE_PROVIDER_TEXT"})
+                        };
+                        let events = [
+                            serde_json::json!({"type":"response.created", "response":{"id":format!("r-{turn}"), "status":"in_progress", "output":[]}}),
+                            serde_json::json!({"type":"response.output_item.added", "output_index":0, "item":added}),
+                            delta,
+                            serde_json::json!({"type":"response.output_item.done", "output_index":0, "item":item}),
+                            serde_json::json!({"type":format!("response.{terminal}"), "response":{"id":format!("r-{turn}"), "status":terminal, "output":[item], "usage":{"input_tokens":10,"output_tokens":10,"total_tokens":20}}}),
+                        ];
+                        let sse = events
+                            .iter()
+                            .map(|event| {
+                                format!(
+                                    "event: {}\ndata: {event}\n\n",
+                                    event["type"].as_str().unwrap()
+                                )
+                            })
+                            .collect::<String>();
+                        request
+                            .respond(Response::from_string(sse).with_header(
+                                Header::from_bytes("content-type", "text/event-stream").unwrap(),
+                            ))
+                            .unwrap();
+                    }
+                });
+                let prepared = prepare_inherited_coding_model_route(root, route)?;
+                let result = run_module_coding_turn(
+                    root,
+                    &dist,
+                    "widget",
+                    "Read, edit, finish",
+                    false,
+                    Some(prepared.model),
                 );
-                assert_eq!(persisted, before);
-                assert_eq!(session_after, session_before);
-                assert_eq!(event_count()?, 1);
-            } else {
-                assert_eq!(result?["ok"], true);
-                assert_eq!(persisted[&key], "export const v = 2;\n");
-                assert_ne!(session_after, session_before);
-                assert_eq!(event_count()?, 2);
+                worker.join().expect("Responses upstream assertions");
+                drop(prepared.coding_plan_bridge);
+                let persisted = project_module_source(root, "widget")?;
+                let session_after: String = db.query_row(
+                "SELECT data FROM ctox_business_os__coding_agent_sessions__v0 WHERE id='pi:widget'",
+                [],
+                |row| row.get(0),
+            )?;
+                if incomplete {
+                    let error = result.unwrap_err().to_string();
+                    assert!(
+                        error.contains("incomplete_turn")
+                            && error.contains("\"terminal_stop_reason\":\"length\"")
+                    );
+                    assert!(
+                        !error.contains("PRIVATE_PROVIDER_TEXT")
+                            && !error.contains("owner-fixture-secret")
+                    );
+                    assert_eq!(persisted, before);
+                    assert_eq!(session_after, session_before);
+                    assert_eq!(event_count()?, 1);
+                } else {
+                    assert_eq!(result?["ok"], true);
+                    assert_eq!(persisted[&key], "export const v = 2;\n");
+                    assert_ne!(session_after, session_before);
+                    assert_eq!(event_count()?, 2);
+                }
             }
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     #[test]
@@ -1963,580 +2299,616 @@ mod tests {
 
     #[test]
     fn embedded_sidecar_extracts_and_runs() -> anyhow::Result<()> {
-        // The override must not leak in from the environment for this test.
-        std::env::remove_var("CTOX_PI_SIDECAR_DIST");
-        let temp = tempfile::tempdir()?;
-        let root = temp.path();
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            // The override must not leak in from the environment for this test.
+            std::env::remove_var("CTOX_PI_SIDECAR_DIST");
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let root = temp.path();
 
-        let dist = resolve_sidecar_dist(root)?;
-        assert!(
-            dist.exists(),
-            "embedded sidecar extracted to {}",
-            dist.display()
-        );
-        assert_eq!(
-            std::fs::metadata(&dist)?.len(),
-            SIDECAR_BUNDLE.len() as u64,
-            "extracted bundle size matches the embedded bytes"
-        );
-        // Idempotent: a second resolve does not rewrite / returns the same path.
-        assert_eq!(resolve_sidecar_dist(root)?, dist);
+            let dist = resolve_sidecar_dist(root)?;
+            assert!(
+                dist.exists(),
+                "embedded sidecar extracted to {}",
+                dist.display()
+            );
+            assert_eq!(
+                std::fs::metadata(&dist)?.len(),
+                SIDECAR_BUNDLE.len() as u64,
+                "extracted bundle size matches the embedded bytes"
+            );
+            // Idempotent: a second resolve does not rewrite / returns the same path.
+            assert_eq!(resolve_sidecar_dist(root)?, dist);
 
-        if !node_available() {
-            eprintln!("SKIP: `node` not on PATH (extraction verified, run skipped)");
-            return Ok(());
-        }
-        // The extracted bundle must actually be runnable end-to-end.
-        let request = serde_json::json!({
-            "id": "embed-1",
-            "prompt": "x",
-            "files": { "index.js": "1\n" },
-            "maxAssistantTurns": 4
-        });
-        let response = run_pi_turn(&dist, &request, true)?;
-        assert_eq!(
-            response["ok"],
-            Value::Bool(true),
-            "the extracted embedded sidecar serves a turn"
-        );
-        Ok(())
+            if !node_available() {
+                eprintln!("SKIP: `node` not on PATH (extraction verified, run skipped)");
+                return Ok(());
+            }
+            // The extracted bundle must actually be runnable end-to-end.
+            let request = serde_json::json!({
+                "id": "embed-1",
+                "prompt": "x",
+                "files": { "index.js": "1\n" },
+                "maxAssistantTurns": 4
+            });
+            let response = run_pi_turn(&dist, &request, true)?;
+            assert_eq!(
+                response["ok"],
+                Value::Bool(true),
+                "the extracted embedded sidecar serves a turn"
+            );
+            Ok(())
+        })
     }
 
     #[test]
     fn coding_default_inherits_the_active_ctox_model() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;
-        let settings = BTreeMap::from([
-            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
-            ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
-            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
-            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
-            (
-                "CTOX_UPSTREAM_BASE_URL".to_owned(),
-                "https://llm.ctox.dev".to_owned(),
-            ),
-        ]);
-        crate::execution::models::runtime_env::save_runtime_env_map(temp.path(), &settings)?;
-        let model = coding_default_model(temp.path());
-        assert_eq!(model["id"], "MiniMax-M3");
-        assert_eq!(
-            model["api"].as_str(),
-            Some("openai-responses"),
-            "the public descriptor advertises the default wire shape before native preparation"
-        );
-        assert_eq!(
-            model["baseUrl"], "http://127.0.0.1:1/v1",
-            "the public descriptor must defer its private endpoint to the native turn owner"
-        );
-        assert_eq!(
-            model["ctoxRoute"],
-            serde_json::json!({ "kind": "inherit_ctox" }),
-            "the coding default must request native main-route resolution"
-        );
-        Ok(())
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let settings = BTreeMap::from([
+                ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+                ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
+                ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+                ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+                (
+                    "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                    "https://llm.ctox.dev".to_owned(),
+                ),
+            ]);
+            crate::execution::models::runtime_env::save_runtime_env_map(temp.path(), &settings)?;
+            let model = coding_default_model(temp.path())?;
+            assert_eq!(model["id"], "MiniMax-M3");
+            assert_eq!(
+                model["api"].as_str(),
+                Some("openai-responses"),
+                "the public descriptor advertises the default wire shape before native preparation"
+            );
+            assert_eq!(
+                model["baseUrl"], "http://127.0.0.1:1/v1",
+                "the public descriptor must defer its private endpoint to the native turn owner"
+            );
+            assert_eq!(
+                model["ctoxRoute"],
+                serde_json::json!({ "kind": "inherit_ctox" }),
+                "the coding default must request native main-route resolution"
+            );
+            Ok(())
+        })
     }
 
     #[test]
     fn coding_model_preset_is_resolved_server_side_and_unknown_ids_fail() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;
-        assert_eq!(resolve_coding_model_preset(temp.path(), "ctox")?, None);
-        let error = resolve_coding_model_preset(temp.path(), "browser-forged")
-            .unwrap_err()
-            .to_string();
-        assert!(error.contains("unavailable"));
-        Ok(())
+        // Preset resolution reads through the installed Core owner (#843); a bare
+        // tempdir has none, so the isolated owner fixture supplies it.
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            assert_eq!(resolve_coding_model_preset(temp.path(), "ctox")?, None);
+            let error = resolve_coding_model_preset(temp.path(), "browser-forged")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("unavailable"));
+            Ok(())
+        })
     }
 
     #[test]
     fn minimax_coding_plan_is_an_independent_account_preset() -> anyhow::Result<()> {
-        use crate::execution::models::minimax_coding::{
-            store_accounts, MiniMaxCodingAccount, MiniMaxCodingAccountsConfig,
-            MiniMaxCodingEndpointProfile, MiniMaxSecretRef,
-        };
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            use crate::execution::models::minimax_coding::{
+                store_accounts, MiniMaxCodingAccount, MiniMaxCodingAccountsConfig,
+                MiniMaxCodingEndpointProfile, MiniMaxSecretRef,
+            };
 
-        let temp = tempfile::tempdir()?;
-        let root = temp.path();
-        let config = MiniMaxCodingAccountsConfig {
-            accounts: vec![MiniMaxCodingAccount {
-                id: "bulk-primary".to_owned(),
-                disabled: false,
-                models: vec!["MiniMax-M3".to_owned()],
-                api_key_secret: MiniMaxSecretRef {
-                    scope: "provider-subscriptions".to_owned(),
-                    name: "bulk-primary-api-key".to_owned(),
-                },
-                endpoint_profile: MiniMaxCodingEndpointProfile::GlobalAnthropic,
-            }],
-            ..MiniMaxCodingAccountsConfig::default()
-        };
-        store_accounts(root, &config)?;
-
-        // Config alone must not advertise an unusable account.
-        assert_eq!(
-            coding_model_capabilities(root)["presets"]
-                .as_array()
-                .map(Vec::len),
-            Some(1)
-        );
-        crate::secrets::write_secret_record(
-            root,
-            "provider-subscriptions",
-            "bulk-primary-api-key",
-            "test-secret",
-            None,
-            serde_json::json!({"provider":"minimax","access_mode":"coding_plan"}),
-        )?;
-
-        let capabilities = coding_model_capabilities(root);
-        let preset = capabilities["presets"]
-            .as_array()
-            .and_then(|presets| {
-                presets.iter().find(|preset| {
-                    preset["model"]["provider"].as_str() == Some("ctox-minimax-coding")
-                })
-            })
-            .context("MiniMax preset missing")?;
-        let preset_id = preset["id"].as_str().context("preset id missing")?;
-        let resolved = resolve_coding_model_preset(root, preset_id)?.context("route model")?;
-        assert_eq!(resolved["id"], "MiniMax-M3");
-        assert_eq!(resolved["ctoxRoute"]["accountId"], "bulk-primary");
-        assert_ne!(resolved["provider"], "ctox_proxy");
-        assert!(
-            serde_json::to_string(&capabilities)?
-                .find("test-secret")
-                .is_none(),
-            "public capability document must not expose secret material"
-        );
-        assert!(
-            serde_json::to_string(&capabilities)?
-                .find(BRIDGE_TOKEN_HEADER)
-                .is_none(),
-            "turn-local bridge authority must not exist in capability projection"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn kimi_coding_plan_is_an_independent_account_preset() -> anyhow::Result<()> {
-        use crate::execution::models::kimi_coding::{
-            store_accounts, KimiCodingAccount, KimiCodingAccountsConfig, KimiCodingEndpointProfile,
-            KimiSecretRef,
-        };
-
-        let temp = tempfile::tempdir()?;
-        let root = temp.path();
-        let config = KimiCodingAccountsConfig {
-            accounts: vec![KimiCodingAccount {
-                id: "kimi-primary".to_owned(),
-                disabled: false,
-                models: vec!["k3[1m]".to_owned()],
-                api_key_secret: KimiSecretRef {
-                    scope: "provider-subscriptions".to_owned(),
-                    name: "kimi-primary-api-key".to_owned(),
-                },
-                endpoint_profile: KimiCodingEndpointProfile::KimiCoding,
-            }],
-            ..KimiCodingAccountsConfig::default()
-        };
-        store_accounts(root, &config)?;
-
-        assert_eq!(
-            coding_model_capabilities(root)["presets"]
-                .as_array()
-                .map(Vec::len),
-            Some(1)
-        );
-        crate::secrets::write_secret_record(
-            root,
-            "provider-subscriptions",
-            "kimi-primary-api-key",
-            "test-secret",
-            None,
-            serde_json::json!({"provider":"kimi","access_mode":"coding_plan"}),
-        )?;
-
-        let capabilities = coding_model_capabilities(root);
-        let preset = capabilities["presets"]
-            .as_array()
-            .and_then(|presets| {
-                presets
-                    .iter()
-                    .find(|preset| preset["model"]["provider"].as_str() == Some("ctox-kimi-coding"))
-            })
-            .context("Kimi coding preset missing")?;
-        let preset_id = preset["id"].as_str().context("preset id missing")?;
-        let resolved = resolve_coding_model_preset(root, preset_id)?.context("route model")?;
-        assert_eq!(resolved["id"], "k3[1m]");
-        assert_eq!(resolved["contextWindow"], 1_048_576);
-        assert_eq!(resolved["ctoxRoute"]["accountId"], "kimi-primary");
-        assert_ne!(resolved["provider"], "ctox_proxy");
-        let public = serde_json::to_string(&capabilities)?;
-        assert!(!public.contains("test-secret"));
-        assert!(!public.contains(BRIDGE_TOKEN_HEADER));
-        Ok(())
-    }
-
-    #[test]
-    fn minimax_preset_drives_a_real_pi_edit_through_the_selected_account() -> anyhow::Result<()> {
-        use crate::execution::models::minimax_coding::{
-            store_accounts, MiniMaxCodingAccount, MiniMaxCodingAccountsConfig,
-            MiniMaxCodingEndpointProfile, MiniMaxSecretRef,
-        };
-
-        if !node_available() {
-            eprintln!("SKIP: `node` not on PATH");
-            return Ok(());
-        }
-        let dist = sidecar_dist_path(&repo_root());
-        if !dist.exists() {
-            eprintln!("SKIP: pi-sidecar bundle not built ({})", dist.display());
-            return Ok(());
-        }
-        let temp = tempfile::tempdir()?;
-        let root = temp.path();
-        seed_unrelated_main_model(root)?;
-        store_accounts(
-            root,
-            &MiniMaxCodingAccountsConfig {
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let root = temp.path();
+            let config = MiniMaxCodingAccountsConfig {
                 accounts: vec![MiniMaxCodingAccount {
-                    id: "minimax-smoke-account".to_owned(),
+                    id: "bulk-primary".to_owned(),
                     disabled: false,
                     models: vec!["MiniMax-M3".to_owned()],
                     api_key_secret: MiniMaxSecretRef {
                         scope: "provider-subscriptions".to_owned(),
-                        name: "minimax-smoke-key".to_owned(),
+                        name: "bulk-primary-api-key".to_owned(),
                     },
                     endpoint_profile: MiniMaxCodingEndpointProfile::GlobalAnthropic,
                 }],
                 ..MiniMaxCodingAccountsConfig::default()
-            },
-        )?;
-        crate::secrets::write_secret_record(
-            root,
-            "provider-subscriptions",
-            "minimax-smoke-key",
-            "minimax-smoke-secret-must-not-leak",
-            None,
-            serde_json::json!({"test":true}),
-        )?;
-        let preset_id = coding_model_capabilities(root)["presets"]
-            .as_array()
-            .and_then(|presets| {
-                presets.iter().find(|preset| {
-                    preset["model"]["provider"].as_str() == Some("ctox-minimax-coding")
-                })
-            })
-            .and_then(|preset| preset["id"].as_str())
-            .context("MiniMax smoke preset")?
-            .to_owned();
-        let (upstream, worker) =
-            spawn_anthropic_edit_upstream("MiniMax-M3", "minimax-smoke-secret-must-not-leak")?;
-        let evidence =
-            run_coding_preset_smoke_inner(root, &dist, &preset_id, None, Some(&upstream), None)?;
-        worker.join().expect("fake MiniMax upstream");
+            };
+            store_accounts(root, &config)?;
 
-        assert_eq!(evidence["provider"], "minimax_coding_plan");
-        assert_eq!(evidence["model"], "MiniMax-M3");
-        assert_eq!(evidence["main_model_unchanged"], true);
-        assert_eq!(
-            crate::inference::runtime_env::effective_chat_model(root).as_deref(),
-            Some("main-model-must-stay-selected")
-        );
-        let rendered = evidence.to_string();
-        assert!(!rendered.contains("minimax-smoke-account"));
-        assert!(!rendered.contains("minimax-smoke-secret-must-not-leak"));
-        assert!(!rendered.contains(&upstream));
-        Ok(())
+            // Config alone must not advertise an unusable account.
+            assert_eq!(
+                coding_model_capabilities(root)?["presets"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(1)
+            );
+            crate::secrets::write_secret_record(
+                root,
+                "provider-subscriptions",
+                "bulk-primary-api-key",
+                "test-secret",
+                None,
+                serde_json::json!({"provider":"minimax","access_mode":"coding_plan"}),
+            )?;
+
+            let capabilities = coding_model_capabilities(root)?;
+            let preset = capabilities["presets"]
+                .as_array()
+                .and_then(|presets| {
+                    presets.iter().find(|preset| {
+                        preset["model"]["provider"].as_str() == Some("ctox-minimax-coding")
+                    })
+                })
+                .context("MiniMax preset missing")?;
+            let preset_id = preset["id"].as_str().context("preset id missing")?;
+            let resolved = resolve_coding_model_preset(root, preset_id)?.context("route model")?;
+            assert_eq!(resolved["id"], "MiniMax-M3");
+            assert_eq!(resolved["ctoxRoute"]["accountId"], "bulk-primary");
+            assert_ne!(resolved["provider"], "ctox_proxy");
+            assert!(
+                serde_json::to_string(&capabilities)?
+                    .find("test-secret")
+                    .is_none(),
+                "public capability document must not expose secret material"
+            );
+            assert!(
+                serde_json::to_string(&capabilities)?
+                    .find(BRIDGE_TOKEN_HEADER)
+                    .is_none(),
+                "turn-local bridge authority must not exist in capability projection"
+            );
+            Ok(())
+        })
     }
 
     #[test]
-    fn kimi_preset_drives_a_real_pi_edit_through_the_selected_account() -> anyhow::Result<()> {
-        use crate::execution::models::kimi_coding::{
-            store_accounts, KimiCodingAccount, KimiCodingAccountsConfig, KimiCodingEndpointProfile,
-            KimiSecretRef,
-        };
+    fn kimi_coding_plan_is_an_independent_account_preset() -> anyhow::Result<()> {
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            use crate::execution::models::kimi_coding::{
+                store_accounts, KimiCodingAccount, KimiCodingAccountsConfig,
+                KimiCodingEndpointProfile, KimiSecretRef,
+            };
 
-        if !node_available() {
-            eprintln!("SKIP: `node` not on PATH");
-            return Ok(());
-        }
-        let dist = sidecar_dist_path(&repo_root());
-        if !dist.exists() {
-            eprintln!("SKIP: pi-sidecar bundle not built ({})", dist.display());
-            return Ok(());
-        }
-        let temp = tempfile::tempdir()?;
-        let root = temp.path();
-        seed_unrelated_main_model(root)?;
-        store_accounts(
-            root,
-            &KimiCodingAccountsConfig {
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let root = temp.path();
+            let config = KimiCodingAccountsConfig {
                 accounts: vec![KimiCodingAccount {
-                    id: "kimi-smoke-account".to_owned(),
+                    id: "kimi-primary".to_owned(),
                     disabled: false,
                     models: vec!["k3[1m]".to_owned()],
                     api_key_secret: KimiSecretRef {
                         scope: "provider-subscriptions".to_owned(),
-                        name: "kimi-smoke-key".to_owned(),
+                        name: "kimi-primary-api-key".to_owned(),
                     },
                     endpoint_profile: KimiCodingEndpointProfile::KimiCoding,
                 }],
                 ..KimiCodingAccountsConfig::default()
-            },
-        )?;
-        crate::secrets::write_secret_record(
-            root,
-            "provider-subscriptions",
-            "kimi-smoke-key",
-            "kimi-smoke-secret-must-not-leak",
-            None,
-            serde_json::json!({"test":true}),
-        )?;
-        let preset_id = coding_model_capabilities(root)["presets"]
-            .as_array()
-            .and_then(|presets| {
-                presets
-                    .iter()
-                    .find(|preset| preset["model"]["provider"].as_str() == Some("ctox-kimi-coding"))
-            })
-            .and_then(|preset| preset["id"].as_str())
-            .context("Kimi smoke preset")?
-            .to_owned();
-        let (upstream, worker) =
-            spawn_anthropic_edit_upstream("k3[1m]", "kimi-smoke-secret-must-not-leak")?;
-        let evidence =
-            run_coding_preset_smoke_inner(root, &dist, &preset_id, None, Some(&upstream), None)?;
-        worker.join().expect("fake Kimi upstream");
+            };
+            store_accounts(root, &config)?;
 
-        assert_eq!(evidence["provider"], "kimi_coding_plan");
-        assert_eq!(evidence["model"], "k3[1m]");
-        assert_eq!(evidence["main_model_unchanged"], true);
-        assert_eq!(
-            crate::inference::runtime_env::effective_chat_model(root).as_deref(),
-            Some("main-model-must-stay-selected")
-        );
-        let rendered = evidence.to_string();
-        assert!(!rendered.contains("kimi-smoke-account"));
-        assert!(!rendered.contains("kimi-smoke-secret-must-not-leak"));
-        assert!(!rendered.contains(&upstream));
-        Ok(())
+            assert_eq!(
+                coding_model_capabilities(root)?["presets"]
+                    .as_array()
+                    .map(Vec::len),
+                Some(1)
+            );
+            crate::secrets::write_secret_record(
+                root,
+                "provider-subscriptions",
+                "kimi-primary-api-key",
+                "test-secret",
+                None,
+                serde_json::json!({"provider":"kimi","access_mode":"coding_plan"}),
+            )?;
+
+            let capabilities = coding_model_capabilities(root)?;
+            let preset = capabilities["presets"]
+                .as_array()
+                .and_then(|presets| {
+                    presets.iter().find(|preset| {
+                        preset["model"]["provider"].as_str() == Some("ctox-kimi-coding")
+                    })
+                })
+                .context("Kimi coding preset missing")?;
+            let preset_id = preset["id"].as_str().context("preset id missing")?;
+            let resolved = resolve_coding_model_preset(root, preset_id)?.context("route model")?;
+            assert_eq!(resolved["id"], "k3[1m]");
+            assert_eq!(resolved["contextWindow"], 1_048_576);
+            assert_eq!(resolved["ctoxRoute"]["accountId"], "kimi-primary");
+            assert_ne!(resolved["provider"], "ctox_proxy");
+            let public = serde_json::to_string(&capabilities)?;
+            assert!(!public.contains("test-secret"));
+            assert!(!public.contains(BRIDGE_TOKEN_HEADER));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn minimax_preset_drives_a_real_pi_edit_through_the_selected_account() -> anyhow::Result<()> {
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            use crate::execution::models::minimax_coding::{
+                store_accounts, MiniMaxCodingAccount, MiniMaxCodingAccountsConfig,
+                MiniMaxCodingEndpointProfile, MiniMaxSecretRef,
+            };
+
+            if !node_available() {
+                eprintln!("SKIP: `node` not on PATH");
+                return Ok(());
+            }
+            let dist = sidecar_dist_path(&repo_root());
+            if !dist.exists() {
+                eprintln!("SKIP: pi-sidecar bundle not built ({})", dist.display());
+                return Ok(());
+            }
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let root = temp.path();
+            seed_unrelated_main_model(root)?;
+            store_accounts(
+                root,
+                &MiniMaxCodingAccountsConfig {
+                    accounts: vec![MiniMaxCodingAccount {
+                        id: "minimax-smoke-account".to_owned(),
+                        disabled: false,
+                        models: vec!["MiniMax-M3".to_owned()],
+                        api_key_secret: MiniMaxSecretRef {
+                            scope: "provider-subscriptions".to_owned(),
+                            name: "minimax-smoke-key".to_owned(),
+                        },
+                        endpoint_profile: MiniMaxCodingEndpointProfile::GlobalAnthropic,
+                    }],
+                    ..MiniMaxCodingAccountsConfig::default()
+                },
+            )?;
+            crate::secrets::write_secret_record(
+                root,
+                "provider-subscriptions",
+                "minimax-smoke-key",
+                "minimax-smoke-secret-must-not-leak",
+                None,
+                serde_json::json!({"test":true}),
+            )?;
+            let preset_id = coding_model_capabilities(root)?["presets"]
+                .as_array()
+                .and_then(|presets| {
+                    presets.iter().find(|preset| {
+                        preset["model"]["provider"].as_str() == Some("ctox-minimax-coding")
+                    })
+                })
+                .and_then(|preset| preset["id"].as_str())
+                .context("MiniMax smoke preset")?
+                .to_owned();
+            let (upstream, worker) =
+                spawn_anthropic_edit_upstream("MiniMax-M3", "minimax-smoke-secret-must-not-leak")?;
+            let evidence = run_coding_preset_smoke_inner(
+                root,
+                &dist,
+                &preset_id,
+                None,
+                Some(&upstream),
+                None,
+            )?;
+            worker.join().expect("fake MiniMax upstream");
+
+            assert_eq!(evidence["provider"], "minimax_coding_plan");
+            assert_eq!(evidence["model"], "MiniMax-M3");
+            assert_eq!(evidence["main_model_unchanged"], true);
+            assert_eq!(
+                crate::inference::runtime_env::effective_chat_model(root).as_deref(),
+                Some("main-model-must-stay-selected")
+            );
+            let rendered = evidence.to_string();
+            assert!(!rendered.contains("minimax-smoke-account"));
+            assert!(!rendered.contains("minimax-smoke-secret-must-not-leak"));
+            assert!(!rendered.contains(&upstream));
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn kimi_preset_drives_a_real_pi_edit_through_the_selected_account() -> anyhow::Result<()> {
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            use crate::execution::models::kimi_coding::{
+                store_accounts, KimiCodingAccount, KimiCodingAccountsConfig,
+                KimiCodingEndpointProfile, KimiSecretRef,
+            };
+
+            if !node_available() {
+                eprintln!("SKIP: `node` not on PATH");
+                return Ok(());
+            }
+            let dist = sidecar_dist_path(&repo_root());
+            if !dist.exists() {
+                eprintln!("SKIP: pi-sidecar bundle not built ({})", dist.display());
+                return Ok(());
+            }
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let root = temp.path();
+            seed_unrelated_main_model(root)?;
+            store_accounts(
+                root,
+                &KimiCodingAccountsConfig {
+                    accounts: vec![KimiCodingAccount {
+                        id: "kimi-smoke-account".to_owned(),
+                        disabled: false,
+                        models: vec!["k3[1m]".to_owned()],
+                        api_key_secret: KimiSecretRef {
+                            scope: "provider-subscriptions".to_owned(),
+                            name: "kimi-smoke-key".to_owned(),
+                        },
+                        endpoint_profile: KimiCodingEndpointProfile::KimiCoding,
+                    }],
+                    ..KimiCodingAccountsConfig::default()
+                },
+            )?;
+            crate::secrets::write_secret_record(
+                root,
+                "provider-subscriptions",
+                "kimi-smoke-key",
+                "kimi-smoke-secret-must-not-leak",
+                None,
+                serde_json::json!({"test":true}),
+            )?;
+            let preset_id = coding_model_capabilities(root)?["presets"]
+                .as_array()
+                .and_then(|presets| {
+                    presets.iter().find(|preset| {
+                        preset["model"]["provider"].as_str() == Some("ctox-kimi-coding")
+                    })
+                })
+                .and_then(|preset| preset["id"].as_str())
+                .context("Kimi smoke preset")?
+                .to_owned();
+            let (upstream, worker) =
+                spawn_anthropic_edit_upstream("k3[1m]", "kimi-smoke-secret-must-not-leak")?;
+            let evidence = run_coding_preset_smoke_inner(
+                root,
+                &dist,
+                &preset_id,
+                None,
+                Some(&upstream),
+                None,
+            )?;
+            worker.join().expect("fake Kimi upstream");
+
+            assert_eq!(evidence["provider"], "kimi_coding_plan");
+            assert_eq!(evidence["model"], "k3[1m]");
+            assert_eq!(evidence["main_model_unchanged"], true);
+            assert_eq!(
+                crate::inference::runtime_env::effective_chat_model(root).as_deref(),
+                Some("main-model-must-stay-selected")
+            );
+            let rendered = evidence.to_string();
+            assert!(!rendered.contains("kimi-smoke-account"));
+            assert!(!rendered.contains("kimi-smoke-secret-must-not-leak"));
+            assert!(!rendered.contains(&upstream));
+            Ok(())
+        })
     }
 
     #[test]
     fn inherited_ctox_proxy_route_keeps_credentials_and_configuration_native() -> anyhow::Result<()>
     {
-        use crate::execution::models::runtime_env;
-        let temp = tempfile::tempdir()?;
-        let root = temp.path();
-        let settings = BTreeMap::from([
-            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
-            ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
-            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
-            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
-            (
-                "CTOX_UPSTREAM_BASE_URL".to_owned(),
-                "https://llm.ctox.dev".to_owned(),
-            ),
-            (
-                "CTOX_LLM_PROXY_API_KEY".to_owned(),
-                "selected-proxy-secret".to_owned(),
-            ),
-            (
-                "MINIMAX_API_KEY".to_owned(),
-                "unrelated-minimax-secret".to_owned(),
-            ),
-        ]);
-        runtime_env::save_runtime_env_map(root, &settings)?;
-        let before = runtime_env::load_runtime_env_map(root)?;
-        let prepared = prepare_coding_turn_model(root, None, None, false)?;
-        assert_eq!(prepared.provider, "ctox_proxy");
-        assert_eq!(prepared.model_id, "MiniMax-M3");
-        let inference = resolve_inherited_coding_route(root)?;
-        let catalog = resolve_inherited_catalog_route(root)?;
-        assert_eq!(
-            url::Url::parse(&catalog.base_url)?
-                .origin()
-                .ascii_serialization(),
-            "https://llm.ctox.dev"
-        );
-        // A proxy may serve both protocols at the same upstream origin.
-        // Their resolution purposes must not require different endpoint strings.
-        assert_eq!(inference.base_url, "https://llm.ctox.dev/v1");
-        assert_eq!(catalog.provider, inference.provider);
-        assert_eq!(catalog.model_id, inference.model_id);
-        assert_eq!(catalog.credential_key, inference.credential_key);
-        assert!(prepared.coding_plan_bridge.is_some());
-        let public = prepared.model.to_string();
-        assert!(!public.contains("selected-proxy-secret"));
-        assert!(!public.contains("unrelated-minimax-secret"));
-        assert!(!public.contains("llm.ctox.dev"));
-        assert!(!public.contains(":12434"));
-        assert!(prepared.model.get("ctoxRoute").is_none());
-        assert_eq!(runtime_env::load_runtime_env_map(root)?, before);
-        drop(prepared);
-        Ok(())
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            use crate::execution::models::runtime_env;
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let root = temp.path();
+            let settings = BTreeMap::from([
+                ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+                ("CTOX_API_PROVIDER".to_owned(), "ctox_proxy".to_owned()),
+                ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+                ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+                (
+                    "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                    "https://llm.ctox.dev".to_owned(),
+                ),
+                (
+                    "CTOX_LLM_PROXY_API_KEY".to_owned(),
+                    "selected-proxy-secret".to_owned(),
+                ),
+                (
+                    "MINIMAX_API_KEY".to_owned(),
+                    "unrelated-minimax-secret".to_owned(),
+                ),
+            ]);
+            runtime_env::save_runtime_env_map(root, &settings)?;
+            let before = runtime_env::load_runtime_env_map(root)?;
+            let prepared = prepare_coding_turn_model(root, None, None, false)?;
+            assert_eq!(prepared.provider, "ctox_proxy");
+            assert_eq!(prepared.model_id, "MiniMax-M3");
+            let inference = resolve_inherited_coding_route(root)?;
+            let catalog = resolve_inherited_catalog_route(root)?;
+            assert_eq!(
+                url::Url::parse(&catalog.base_url)?
+                    .origin()
+                    .ascii_serialization(),
+                "https://llm.ctox.dev"
+            );
+            // A proxy may serve both protocols at the same upstream origin.
+            // Their resolution purposes must not require different endpoint strings.
+            assert_eq!(inference.base_url, "https://llm.ctox.dev/v1");
+            assert_eq!(catalog.provider, inference.provider);
+            assert_eq!(catalog.model_id, inference.model_id);
+            assert_eq!(catalog.credential_key, inference.credential_key);
+            assert!(prepared.coding_plan_bridge.is_some());
+            let public = prepared.model.to_string();
+            assert!(!public.contains("selected-proxy-secret"));
+            assert!(!public.contains("unrelated-minimax-secret"));
+            assert!(!public.contains("llm.ctox.dev"));
+            assert!(!public.contains(":12434"));
+            assert!(prepared.model.get("ctoxRoute").is_none());
+            assert_eq!(runtime_env::load_runtime_env_map(root)?, before);
+            drop(prepared);
+            Ok(())
+        })
     }
 
     #[test]
     fn inherited_minimax_uses_chat_wire_and_its_own_credential() -> anyhow::Result<()> {
-        use crate::execution::models::runtime_env;
-        let temp = tempfile::tempdir()?;
-        let settings = BTreeMap::from([
-            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
-            ("CTOX_API_PROVIDER".to_owned(), "minimax".to_owned()),
-            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
-            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
-            (
-                "CTOX_UPSTREAM_BASE_URL".to_owned(),
-                "https://api.minimax.io".to_owned(),
-            ),
-            (
-                "MINIMAX_API_KEY".to_owned(),
-                "native-minimax-key".to_owned(),
-            ),
-            (
-                "CTOX_LLM_PROXY_API_KEY".to_owned(),
-                "unrelated-proxy-key".to_owned(),
-            ),
-        ]);
-        runtime_env::save_runtime_env_map(temp.path(), &settings)?;
-        let route = resolve_inherited_coding_route(temp.path())?;
-        assert_eq!(route.credential_key, "MINIMAX_API_KEY");
-        assert_eq!(route.base_url, "https://api.minimax.io/v1");
-        let evidence = inherited_coding_route_status(temp.path())?;
-        assert_eq!(evidence["provider"], "minimax");
-        assert_eq!(evidence["wire_api"], "openai-completions");
-        assert_eq!(evidence["upstream_origin"], "https://api.minimax.io");
-        assert!(!evidence.to_string().contains("key"));
-        let prepared = prepare_coding_turn_model(temp.path(), None, None, false)?;
-        assert_eq!(prepared.model["api"], "openai-completions");
-        assert_eq!(prepared.model["compat"]["maxTokensField"], "max_tokens");
-        assert!(!prepared.model.to_string().contains("native-minimax-key"));
-        Ok(())
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            use crate::execution::models::runtime_env;
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let settings = BTreeMap::from([
+                ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+                ("CTOX_API_PROVIDER".to_owned(), "minimax".to_owned()),
+                ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+                ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+                (
+                    "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                    "https://api.minimax.io".to_owned(),
+                ),
+                (
+                    "MINIMAX_API_KEY".to_owned(),
+                    "native-minimax-key".to_owned(),
+                ),
+                (
+                    "CTOX_LLM_PROXY_API_KEY".to_owned(),
+                    "unrelated-proxy-key".to_owned(),
+                ),
+            ]);
+            runtime_env::save_runtime_env_map(temp.path(), &settings)?;
+            let route = resolve_inherited_coding_route(temp.path())?;
+            assert_eq!(route.credential_key, "MINIMAX_API_KEY");
+            assert_eq!(route.base_url, "https://api.minimax.io/v1");
+            let evidence = inherited_coding_route_status(temp.path())?;
+            assert_eq!(evidence["provider"], "minimax");
+            assert_eq!(evidence["wire_api"], "openai-completions");
+            assert_eq!(evidence["upstream_origin"], "https://api.minimax.io");
+            assert!(!evidence.to_string().contains("key"));
+            let prepared = prepare_coding_turn_model(temp.path(), None, None, false)?;
+            assert_eq!(prepared.model["api"], "openai-completions");
+            assert_eq!(prepared.model["compat"]["maxTokensField"], "max_tokens");
+            assert!(!prepared.model.to_string().contains("native-minimax-key"));
+            Ok(())
+        })
     }
 
     #[test]
     fn inherited_minimax_route_drives_real_pi_tools_through_native_bridge() -> anyhow::Result<()> {
-        let dist = sidecar_dist_path(&repo_root());
-        anyhow::ensure!(
-            node_available() && dist.exists(),
-            "real Pi regression requires Node and built sidecar bundle"
-        );
-        let temp = tempfile::tempdir()?;
-        let settings = BTreeMap::from([
-            ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
-            ("CTOX_API_PROVIDER".to_owned(), "minimax".to_owned()),
-            ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
-            ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
-            (
-                "CTOX_UPSTREAM_BASE_URL".to_owned(),
-                "https://api.minimax.io".to_owned(),
-            ),
-            (
-                "MINIMAX_API_KEY".to_owned(),
-                "fixture-main-secret".to_owned(),
-            ),
-        ]);
-        crate::execution::models::runtime_env::save_runtime_env_map(temp.path(), &settings)?;
-        let mut route = resolve_inherited_coding_route(temp.path())?;
-        assert_eq!(route.api, "openai-completions");
-        let upstream =
-            Server::http("127.0.0.1:0").map_err(|error| anyhow::anyhow!(error.to_string()))?;
-        // Private test seam changes only transport destination after resolving
-        // the real provider, model, credential selector and protocol.
-        route.base_url = format!(
-            "http://{}/v1",
-            upstream.server_addr().to_ip().context("fixture IP")?
-        );
-        let worker = std::thread::spawn(move || {
-            for turn in 0..2 {
-                let mut request = upstream
-                    .recv_timeout(Duration::from_secs(15))
-                    .unwrap()
-                    .expect("real Pi request");
-                assert_eq!(request.url(), "/v1/chat/completions");
-                assert!(request.headers().iter().any(|header| header
-                    .field
-                    .as_str()
-                    .as_str()
-                    .eq_ignore_ascii_case("authorization")
-                    && header.value.as_str() == "Bearer fixture-main-secret"));
-                let mut body = String::new();
-                request.as_reader().read_to_string(&mut body).unwrap();
-                let body: Value = serde_json::from_str(&body).unwrap();
-                assert_eq!(body["model"], "MiniMax-M3");
-                assert!(body.get("store").is_none());
-                let (delta, finish) = if turn == 0 {
-                    (
-                        serde_json::json!({"role":"assistant", "tool_calls":[{"index":0,"id":"write-1","type":"function","function":{"name":"write","arguments":"{\"path\":\"index.js\",\"content\":\"export const v = 2;\\n\"}"}}]}),
-                        "tool_calls",
-                    )
-                } else {
-                    assert!(body["messages"]
-                        .as_array()
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            let dist = sidecar_dist_path(&repo_root());
+            anyhow::ensure!(
+                node_available() && dist.exists(),
+                "real Pi regression requires Node and built sidecar bundle"
+            );
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let settings = BTreeMap::from([
+                ("CTOX_CHAT_SOURCE".to_owned(), "api".to_owned()),
+                ("CTOX_API_PROVIDER".to_owned(), "minimax".to_owned()),
+                ("CTOX_CHAT_MODEL".to_owned(), "MiniMax-M3".to_owned()),
+                ("CTOX_CHAT_MODEL_BASE".to_owned(), "MiniMax-M3".to_owned()),
+                (
+                    "CTOX_UPSTREAM_BASE_URL".to_owned(),
+                    "https://api.minimax.io".to_owned(),
+                ),
+                (
+                    "MINIMAX_API_KEY".to_owned(),
+                    "fixture-main-secret".to_owned(),
+                ),
+            ]);
+            crate::execution::models::runtime_env::save_runtime_env_map(temp.path(), &settings)?;
+            let mut route = resolve_inherited_coding_route(temp.path())?;
+            assert_eq!(route.api, "openai-completions");
+            let upstream =
+                Server::http("127.0.0.1:0").map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            // Private test seam changes only transport destination after resolving
+            // the real provider, model, credential selector and protocol.
+            route.base_url = format!(
+                "http://{}/v1",
+                upstream.server_addr().to_ip().context("fixture IP")?
+            );
+            let worker = std::thread::spawn(move || {
+                for turn in 0..2 {
+                    let mut request = upstream
+                        .recv_timeout(Duration::from_secs(15))
                         .unwrap()
-                        .iter()
-                        .any(|message| message["role"] == "tool"));
-                    (
-                        serde_json::json!({"role":"assistant", "content":"Done"}),
-                        "stop",
-                    )
-                };
-                let chunk = serde_json::json!({"id":"fixture", "object":"chat.completion.chunk", "created":1, "model":"MiniMax-M3", "choices":[{"index":0,"delta":delta,"finish_reason":null}]});
-                let end = serde_json::json!({"id":"fixture", "object":"chat.completion.chunk", "created":1, "model":"MiniMax-M3", "choices":[{"index":0,"delta":{},"finish_reason":finish}], "usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}});
-                request
-                    .respond(
-                        Response::from_string(format!(
-                            "data: {chunk}\n\ndata: {end}\n\ndata: [DONE]\n\n"
-                        ))
-                        .with_header(
-                            Header::from_bytes("content-type", "text/event-stream").unwrap(),
-                        ),
-                    )
-                    .unwrap();
-            }
-        });
-        let prepared = prepare_inherited_coding_model_route(temp.path(), route)?;
-        let response = run_pi_turn(
-            &dist,
-            &serde_json::json!({
-                "id":"main-route-fixture", "prompt":"Write index.js with v = 2", "files":{"index.js":"export const v = 1;\n"},
-                "maxAssistantTurns":3, "tools":["write"], "model":prepared.model,
-            }),
-            false,
-        )?;
-        worker.join().expect("provider fixture assertions");
-        assert_eq!(response["ok"], true, "{response}");
-        assert!(response["snapshot"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|entry| entry["content"] == "export const v = 2;\n"));
-        drop(prepared.coding_plan_bridge);
-        Ok(())
+                        .expect("real Pi request");
+                    assert_eq!(request.url(), "/v1/chat/completions");
+                    assert!(request.headers().iter().any(|header| header
+                        .field
+                        .as_str()
+                        .as_str()
+                        .eq_ignore_ascii_case("authorization")
+                        && header.value.as_str() == "Bearer fixture-main-secret"));
+                    let mut body = String::new();
+                    request.as_reader().read_to_string(&mut body).unwrap();
+                    let body: Value = serde_json::from_str(&body).unwrap();
+                    assert_eq!(body["model"], "MiniMax-M3");
+                    assert!(body.get("store").is_none());
+                    let (delta, finish) = if turn == 0 {
+                        (
+                            serde_json::json!({"role":"assistant", "tool_calls":[{"index":0,"id":"write-1","type":"function","function":{"name":"write","arguments":"{\"path\":\"index.js\",\"content\":\"export const v = 2;\\n\"}"}}]}),
+                            "tool_calls",
+                        )
+                    } else {
+                        assert!(body["messages"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|message| message["role"] == "tool"));
+                        (
+                            serde_json::json!({"role":"assistant", "content":"Done"}),
+                            "stop",
+                        )
+                    };
+                    let chunk = serde_json::json!({"id":"fixture", "object":"chat.completion.chunk", "created":1, "model":"MiniMax-M3", "choices":[{"index":0,"delta":delta,"finish_reason":null}]});
+                    let end = serde_json::json!({"id":"fixture", "object":"chat.completion.chunk", "created":1, "model":"MiniMax-M3", "choices":[{"index":0,"delta":{},"finish_reason":finish}], "usage":{"prompt_tokens":10,"completion_tokens":10,"total_tokens":20}});
+                    request
+                        .respond(
+                            Response::from_string(format!(
+                                "data: {chunk}\n\ndata: {end}\n\ndata: [DONE]\n\n"
+                            ))
+                            .with_header(
+                                Header::from_bytes("content-type", "text/event-stream").unwrap(),
+                            ),
+                        )
+                        .unwrap();
+                }
+            });
+            let prepared = prepare_inherited_coding_model_route(temp.path(), route)?;
+            let response = run_pi_turn(
+                &dist,
+                &serde_json::json!({
+                    "id":"main-route-fixture", "prompt":"Write index.js with v = 2", "files":{"index.js":"export const v = 1;\n"},
+                    "maxAssistantTurns":3, "tools":["write"], "model":prepared.model,
+                }),
+                false,
+            )?;
+            worker.join().expect("provider fixture assertions");
+            assert_eq!(response["ok"], true, "{response}");
+            assert!(response["snapshot"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["content"] == "export const v = 2;\n"));
+            drop(prepared.coding_plan_bridge);
+            Ok(())
+        })
     }
 
     #[test]
     fn gateway_model_defers_private_route_resolution_to_the_turn_owner() -> anyhow::Result<()> {
-        let temp = tempfile::tempdir()?;
-        let model = gateway_model(temp.path());
-        let base_url = model["baseUrl"].as_str().unwrap_or_default();
-        assert!(
-            base_url == "http://127.0.0.1:1/v1",
-            "public descriptor must not advertise the retired gateway (got {base_url})"
-        );
-        assert_eq!(model["ctoxRoute"]["kind"], "inherit_ctox");
-        assert_eq!(
-            model["api"].as_str(),
-            Some("openai-responses"),
-            "uses pi-ai's OpenAI Responses provider"
-        );
-        assert!(
-            model["id"]
-                .as_str()
-                .map(|id| !id.is_empty())
-                .unwrap_or(false),
-            "an active model id is resolved from the gateway config"
-        );
-        Ok(())
+        crate::coding_agents::pi_sidecar::test_owners::run(move || {
+            let temp = crate::coding_agents::pi_sidecar::test_owners::root()?;
+            let model = gateway_model(temp.path())?;
+            let base_url = model["baseUrl"].as_str().unwrap_or_default();
+            assert!(
+                base_url == "http://127.0.0.1:1/v1",
+                "public descriptor must not advertise the retired gateway (got {base_url})"
+            );
+            assert_eq!(model["ctoxRoute"]["kind"], "inherit_ctox");
+            assert_eq!(
+                model["api"].as_str(),
+                Some("openai-responses"),
+                "uses pi-ai's OpenAI Responses provider"
+            );
+            assert!(
+                model["id"]
+                    .as_str()
+                    .map(|id| !id.is_empty())
+                    .unwrap_or(false),
+                "an active model id is resolved from the gateway config"
+            );
+            Ok(())
+        })
     }
 }

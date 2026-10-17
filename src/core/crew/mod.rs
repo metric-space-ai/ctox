@@ -6,6 +6,8 @@ mod lifecycle;
 #[cfg(test)]
 mod lifecycle_tests;
 mod memory;
+#[cfg(test)]
+mod owner_tests;
 mod router;
 mod runtime;
 use anyhow::{bail, Context, Result};

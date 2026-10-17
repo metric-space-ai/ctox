@@ -1,0 +1,358 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/intake/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/intake/index.html",
+  "_rust_basis": "`store_ats_commands.rs` Arm `ats.intake.capture` (`:429`, ~46); `customer_apps.rs` 2 Treffer `applications`.",
+  "_source_dir": "src/apps/business-os/modules/intake",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "command_rights ats.*: kein passender Handler.",
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "intake",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {
+    "applications": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/intake.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "candidate": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "channel": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "dedupe_key": {
+            "type": "string"
+          },
+          "documents": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "received_at_ms": {
+            "type": "number"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "vacancy_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "channel",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "applications": [
+      "read",
+      "write"
+    ]
+  },
+  "files": {
+    "README.md": "d02b8b388b5460948a135befe74a5097527cfd2f8562ba9ce56d350a962ff762",
+    "V4-HANDLERS.md": "a6cba6526e1e56d38338c409bedb335081c7a15316e3cd9bccabba7ea10350f2",
+    "V4-PORT.md": "24e83f61a1a8afd9fde974676dfcf5c7a0f2a4e561f44f4a5a4a7cb07aa84a48",
+    "assets/icon.jpg": "c8d7b89bca0fae1d33515df1ae03b7d05990dfdcbd6c65d0491123606ef808c8",
+    "assets/icon@512.jpg": "9e726744227e863edd5ef21db994fdbf47e0bf5345d3f348ca76232eb6f40a2d",
+    "collections.schema.json": "a3f05b78b31df5ba252da30bac9dcca9859c649b6061d91276bb8765a6a08aaa",
+    "core/application.js": "316716e83da479ca062d603af4d6726d5d6d811755fce51252934d2f2a9def18",
+    "handlers/_ats.js": "106c6da0358fb3fad8885549b272cd91b6f6113ad1db0416a61c8791c3229988",
+    "handlers/ats.intake.capture.js": "38193b8fbb20832b9c4b8f954107803b2b483d4ea8924ceaffa4e9e670eef9ef",
+    "icon.svg": "5ac669bdc1e1d85643d48745fb0c67d5e55923a1c8c376e765e24e37ac28e2c9",
+    "index.css": "d86a25dfc7c3ae97b0842df16f8ccee285c4cfa10e518a76ec7c5a359acf9a54",
+    "index.html": "d3028b579df23d4284a2d23a24da58e988a1f296fe5e4eae2497d46d5cc18a2a",
+    "index.js": "a40f0031ee42303f2090e5316cd80f82eeaf218b1774d8d84b4765081376862f",
+    "locales/de.json": "15a92338d8d0d90976de084ca3ae385d9e9664ffbcd14d501a48056768df263f",
+    "locales/en.json": "0720022cf23477599e949ef6f7c32fa44caf1e6cc9182938df3c8b39b89c70e1",
+    "module.json": "68ae8470679bdd4cc894982b732bbc290ffa507e0faafcb8361f9b35d9fc4a49",
+    "v4-manifest.json": "47c5c9030276c4461f665ff2cc937ec82d5744461206a45e566f816671838d18"
+  },
+  "foreign_collections": {
+    "accounting_invoices": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:264"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "invoices"
+    },
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:233"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "business_consents": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "consent"
+    },
+    "business_credentials": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "nachweise"
+    },
+    "customer_accounts": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "declaration_basis": "TEXT-C Runde 2 (15.10.): Namen statt IDs – Kandidat aus applications (intake), Kunde aus customer_accounts (customers), nur lesen",
+        "sources": [
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "customers"
+    },
+    "interview_meetings": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:198"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "interviews"
+    },
+    "interview_scorecards": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:198"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "interviews"
+    },
+    "offers": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "placements"
+    },
+    "placements": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "placements"
+    },
+    "planning_time_records": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:198"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "shiftflow"
+    },
+    "signature_requests": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:198"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "esign"
+    },
+    "submissions": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "submissions"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/intake.jpg (shared/operator-icon-selection.js, sha256 0a6d81e7d9c1…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "category": "Operations",
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 680,
+        "width": 960
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#0284c7",
+        "category": "Operations",
+        "iconAssetId": "workjet.business-os.intake",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "form",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Intake"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "7c6d1e395d23f0b8f8c7e94c9377d63a31b1e16cbc7cd1b3437cfeabdf5d2709",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Bewerbungseingang",
+  "triggers": [],
+  "version": "0.2.1"
+}

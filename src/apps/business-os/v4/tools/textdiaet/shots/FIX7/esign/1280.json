@@ -1,0 +1,372 @@
+{
+ "app": "esign",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "E-Signatur",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 744
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neu",
+    "button:Importieren",
+    "button:Exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Offen (4)",
+    "nav:Abgeschlossen (2)",
+    "button:string done Aktualisiert 14.10",
+    "button:string abgeschlossen Aktualisi",
+    "button:string abgelehnt Aktualisiert ",
+    "button:string gesendet Aktualisiert 1",
+    "button:string teilweise signiert Aktu",
+    "button:string failed Aktualisiert 08.",
+    "button:Spaltenbreite anpassen",
+    "select:Arbeitsvertrag Vermittlungsver",
+    "button:Anlegen"
+   ],
+   "shot": "esign/1280-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "esign/1280-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Offen (4)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "esign/1280-03-nav_Offen_4_.png"
+  },
+  {
+   "step": "nav Abgeschlossen (2)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "esign/1280-04-nav_Abgeschlossen_2_.png"
+  },
+  {
+   "step": "zurück zu Reiter Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "esign/1280-05-zur_ck_zu_Reiter_Alle_6_.png"
+  },
+  {
+   "step": "button Neu",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-06-button_Neu.png"
+  },
+  {
+   "step": "button Importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Exportieren",
+   "changed": 1,
+   "ops": [],
+   "zone": [
+    "{\"level\":\"info\",\"code\":\"esign.export.done\",\"text\":\"Export erstellt.\"}"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-07-button_Exportieren.png"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-08-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-09-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-10-button_Filter.png"
+  },
+  {
+   "step": "button string done Aktualisiert 14.10.2026 · Läuft ab 28.10.2026",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-11-button_string_done_Aktualisiert_14.10.20.png"
+  },
+  {
+   "step": "button string abgeschlossen Aktualisiert 13.10.2026 · Läuft ab 26.1",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-12-button_string_abgeschlossen_Aktualisiert.png"
+  },
+  {
+   "step": "button string abgelehnt Aktualisiert 11.10.2026 · Läuft ab 25.10.20",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-13-button_string_abgelehnt_Aktualisiert_11..png"
+  },
+  {
+   "step": "button string gesendet Aktualisiert 10.10.2026 · Läuft ab 24.10.202",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-14-button_string_gesendet_Aktualisiert_10.1.png"
+  },
+  {
+   "step": "button string teilweise signiert Aktualisiert 09.10.2026 · Läuft ab",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-15-button_string_teilweise_signiert_Aktuali.png"
+  },
+  {
+   "step": "button string failed Aktualisiert 08.10.2026 · Läuft ab 22.10.2026",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-16-button_string_failed_Aktualisiert_08.10..png"
+  },
+  {
+   "step": "button Spaltenbreite anpassen",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Detail einklappen",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear esign.export.done"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-17-button_Detail_einklappen.png"
+  },
+  {
+   "step": "button Ändern",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-18-button_ndern.png"
+  },
+  {
+   "step": "button Anlegen",
+   "changed": 3,
+   "ops": [],
+   "zone": [
+    "clear esign.result",
+    "clear esign.blocked",
+    "{\"level\":\"warn\",\"code\":\"esign.form.document_required\",\"text\":\"Bitte ein Dokument auswählen.\"}"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-19-button_Anlegen.png"
+  },
+  {
+   "step": "auswahl Vertragstyp filtern → arbeitsvertrag",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "esign/1280-20-auswahl_Vertragstyp_filtern_arbeitsvertr.png"
+  },
+  {
+   "step": "auswahl Arbeitsvertrag Vermittlungsvertrag Überlassungsvertrag → vermittlungsvertrag",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true
+  },
+  {
+   "step": "button Filter zurücksetzen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "esign/1280-21-button_Filter_zur_cksetzen.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 598,
+   "shot": "esign/1280-22-suche_ohne_Treffer.png",
+   "textAfter": 216
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "esign/1280-23-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "esign",
+  "E-Signatur"
+ ]
+}

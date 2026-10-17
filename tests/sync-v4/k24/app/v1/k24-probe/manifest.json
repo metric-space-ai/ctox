@@ -1,0 +1,45 @@
+{
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_purpose": "K24-Abnahme: fremde App ohne Core-Wissen (Strang K24PREP). Keine Beziehung zu einer bestehenden App.",
+  "app_id": "k24-probe",
+  "title": "K24 Probe",
+  "version": "1.0.0",
+  "entry": "index.js",
+  "min_app_api": "4.0",
+  "layout": {
+    "category": "K24",
+    "icon_asset": "icon.svg",
+    "_icon_file": "icon.svg"
+  },
+  "styles": [
+    "index.css"
+  ],
+  "handlers": {
+    "k24.tick.add": "handlers/k24.tick.add.js",
+    "k24.agent.start": "handlers/k24.agent.start.js",
+    "k24.agent.done": "handlers/k24.agent.done.js",
+    "k24.agent.failed": "handlers/k24.agent.failed.js"
+  },
+  "triggers": [
+    {
+      "handler": "handlers/k24.tick.every.js",
+      "every": "PT1M"
+    }
+  ],
+  "skills": [
+    {
+      "name": "k24-summary",
+      "path": "skills/k24-summary/SKILL.md"
+    }
+  ],
+  "prompts": [
+    "prompts/k24-summary.md"
+  ],
+  "capabilities_required": [
+    "audit.event",
+    "agent.task.enqueue"
+  ],
+  "command_rights": {},
+  "foreign_collections": {},
+  "exports": {}
+}

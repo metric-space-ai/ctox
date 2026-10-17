@@ -16,13 +16,6 @@ import {
   compactCount,
   cronForTopic,
   issueLabel,
-  issueWindow,
-  digestOf,
-  withDigest,
-  digestActive,
-  cronForDigest,
-  issueNodeLabel,
-  normalizeStoryUrl,
   issuesForTopic,
   mergeIntoAccountSource,
   newSource,
@@ -33,9 +26,9 @@ import {
   trendsForIssue,
   validateTopic,
 } from '../core/news-model.mjs';
-import { collections } from '../schema.js';
-
 const moduleDir = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+// v4 (§16.13): einzige Schemaquelle ist collections.schema.json; schema.js ist gelöscht.
+const { collections } = JSON.parse(await readFile(resolve(moduleDir, 'collections.schema.json'), 'utf8'));
 
 test('cadence maps to a five-field cron expression', () => {
   assert.equal(cronForTopic({ cadence: 'daily', run_time: '07:05' }), '5 7 * * *');
@@ -71,12 +64,9 @@ test('topic records satisfy the declared schema shape', () => {
   for (const key of collections.news_sources.required) assert.ok(key in source, `source misses required ${key}`);
 });
 
-test('collections.schema.json and schema.js agree', async () => {
-  const json = JSON.parse(await readFile(resolve(moduleDir, 'collections.schema.json'), 'utf8'));
-  assert.deepEqual(Object.keys(json.collections).sort(), Object.keys(collections).sort());
-  for (const [name, schema] of Object.entries(collections)) {
-    assert.deepEqual(json.collections[name], JSON.parse(JSON.stringify(schema)), `${name} drifted`);
-  }
+test('collections.schema.json is the single schema source (schema.js removed)', async () => {
+  await assert.rejects(readFile(resolve(moduleDir, 'schema.js'), 'utf8'));
+  assert.deepEqual(Object.keys(collections).sort(), ['news_issues', 'news_posts', 'news_sources', 'news_topics']);
 });
 
 test('sources: presets skip known urls and account sources merge selectors', () => {
@@ -148,11 +138,12 @@ test('commands carry canonical type, record id, skill and record snapshot', () =
   assert.equal(generate.record_id, 'topic_1');
   assert.equal(generate.command_id, generate.id);
   assert.equal('type' in generate, false);
-  assert.deepEqual(generate.payload.required_skills, ['news-aggregation']);
+  assert.equal(generate.payload.required_skills, undefined, 'skill is chosen by the handler (news/news-aggregation)');
   assert.equal(generate.payload.issue_id, 'issue_1');
   assert.equal(generate.payload.thread_key, 'business-os/news/topic_1');
   assert.equal(generate.payload.record_snapshot.sources.length, 1, 'only enabled sources of this topic');
-  assert.match(generate.payload.instruction, /Lab-Releases/);
+  assert.equal(generate.payload.instruction, undefined, 'prompt lives in prompts/issue.md');
+  assert.equal(generate.payload.record_snapshot.topic.prompt, topic.prompt);
 
   const schedule = buildScheduleCommand(topic);
   assert.equal(schedule.command_type, NEWS_TOPIC_SCHEDULE);
@@ -163,7 +154,7 @@ test('commands carry canonical type, record id, skill and record snapshot', () =
   assert.equal(removed.payload.cron_expr, '');
 
   const adapter = buildAdapterCommand(topic, sources[0]);
-  assert.deepEqual(adapter.payload.required_skills, ['universal-scraping']);
+  assert.equal(adapter.payload.instruction, undefined, 'prompt lives in prompts/source-adapter.md');
   assert.ok(adapter.payload.record_snapshot.source);
   const auth = buildAuthCommand(topic, newSource('topic_1', 'x', '', 'Home'));
   assert.equal(auth.payload.target_url, 'https://x.com/home');
@@ -186,18 +177,14 @@ test('reddit and x read through a CTOX account, never an API', async () => {
   const connect = model.buildAdapterCommand({ id: 'topic_a' }, reddit);
   assert.equal(connect.command_type, model.NEWS_SOURCE_ADAPTER);
   assert.equal(connect.payload.auth_source, 'reddit.com');
-  assert.deepEqual(connect.payload.required_skills, [model.NEWS_SKILL]);
-  assert.ok(connect.payload.instruction.includes(`--task-id ${connect.command_id}`));
-  assert.ok(connect.payload.instruction.includes('--generate-credential'));
+  assert.equal(connect.payload.instruction, undefined, 'prompt lives in prompts/source-connect.md');
+  assert.equal(connect.payload.output_contract, model.SOURCE_REPLY_CONTRACT);
   assert.equal(model.buildAuthCommand({ id: 'topic_a' }, reddit).payload.target_url, 'https://www.reddit.com/');
 
   const topic = model.normalizeTopic({ id: 'topic_a', title: 'KI' });
   const generate = model.buildGenerateCommand(topic, [reddit], { id: 'issue_a', issue_date: '2026-10-14' }, null);
-  assert.ok(generate.payload.instruction.includes(`--task-id ${generate.command_id}`));
+  // --task-id line: handler test news.issue.generate.test.mjs (prompts/issue.md, uses the kernel command id)
   assert.equal(generate.payload.record_snapshot.sources[0].auth_source, 'reddit.com');
-  const lab = model.newSource('topic_a', 'lab', 'OpenAI', 'https://openai.com/news/');
-  const plain = model.buildGenerateCommand(topic, [lab], { id: 'issue_b', issue_date: '2026-10-14' }, null);
-  assert.ok(!plain.payload.instruction.includes('--task-id'));
 });
 
 test('a failed run replaced on the same day leaves the issue list; same-day runs show their time', async () => {
@@ -229,48 +216,4 @@ test('legacy subreddit scrape targets fold into one Reddit account source', asyn
   assert.ok(sources.includes(hn));
   const again = model.migrateLegacyRedditSources(sources, 't');
   assert.deepEqual(again.removedIds, []);
-});
-
-test('issue window runs since the previous issue and lists covered links', () => {
-  const now = Date.parse('2026-10-15T07:00:00Z');
-  const topic = { id: 't1', cadence: 'daily' };
-  const issues = [
-    { id: 'i1', topic_id: 't1', status: 'ready', generated_at_ms: now - 9 * 3_600_000 },
-    { id: 'i2', topic_id: 't1', status: 'failed', generated_at_ms: now - 3_600_000 },
-  ];
-  const posts = [{ issue_id: 'i1', link_card: { url: 'https://www.Cohere.com/blog/new/' },
-    sources: [{ url: 'https://news.ycombinator.com/item?id=1', kind: 'discussion' }] }];
-  const window = issueWindow(topic, issues, posts, now);
-  assert.equal(window.startMs, now - 9 * 3_600_000);
-  assert.equal(window.previousIssueId, 'i1');
-  assert.deepEqual(window.coveredUrls, ['cohere.com/blog/new']);
-  assert.equal(issueWindow(topic, [], [], now).startMs, now - 24 * 3_600_000);
-  assert.equal(issueWindow({ id: 't1', cadence: 'weekly' }, [], [], now).startMs, now - 7 * 24 * 3_600_000);
-  assert.equal(normalizeStoryUrl('https://x.ai/news#a'), 'x.ai/news');
-  const command = buildGenerateCommand({ ...normalizeTopic({ id: 't1', title: 'KI', cadence: 'daily' }) }, [], { id: 'i3', issue_date: '2026-10-15' }, issues[0], window);
-  assert.equal(command.payload.window_start_ms, window.startMs);
-  assert.deepEqual(command.payload.covered_urls, ['cohere.com/blog/new']);
-  assert.match(command.payload.instruction, /Zeitfenster: nur Meldungen/);
-});
-
-test('weekly digest rides on a daily topic with its own schedule', () => {
-  const topic = normalizeTopic({ id: 't1', title: 'KI', cadence: 'daily', run_time: '07:00' });
-  assert.deepEqual(digestOf(topic), { enabled: false, weekday: 5, run_time: '17:00' });
-  const on = withDigest(topic, { enabled: true, weekday: 0, run_time: '18:30' });
-  assert.equal(digestActive(on), true);
-  assert.equal(cronForDigest(on), '30 18 * * 0');
-  assert.equal(digestActive({ ...on, cadence: 'weekly' }), false);
-  assert.equal(digestActive({ ...on, enabled: false }), false);
-  const command = buildScheduleCommand(on, { digest: true });
-  assert.equal(command.payload.mode, 'digest');
-  assert.equal(command.payload.cron_expr, '30 18 * * 0');
-  assert.equal(command.payload.enabled, true);
-  assert.equal(buildScheduleCommand(on).payload.cron_expr, '0 7 * * *');
-  assert.equal(buildScheduleCommand(on).payload.mode, undefined);
-  const off = buildScheduleCommand(withDigest(on, { enabled: false }), { digest: true });
-  assert.equal(off.payload.enabled, false);
-  const today = new Date('2026-10-16T12:00:00Z');
-  const digestIssue = { issue_date: '2026-10-16', payload: { kind: 'weekly_digest' } };
-  assert.match(issueNodeLabel(digestIssue, [digestIssue], 'de', today), /^Woche · /);
-  assert.match(issueNodeLabel(digestIssue, [digestIssue], 'en', today), /^Week · /);
 });
