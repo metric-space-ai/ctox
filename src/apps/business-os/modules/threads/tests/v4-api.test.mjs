@@ -23,10 +23,13 @@ test('mount: Live-Daten, gescoptes Root, Titel über api.shell, je Collection ge
   for (const c of ['user_threads', 'user_thread_states', 'ctox_task_approval_requests', 'user_notifications', 'business_users', 'business_apps', 'workjet_projects']) {
     assert.equal(await page.evaluate((c) => window.__c.subscribers(c), c), 1, `ein Abo auf ${c}`);
   }
-  // Zähler sind exakt (lokale Abfrage vollständig): kein „≥“, keine Zustandszeile.
+  // Zähler sind exakt (lokale Abfrage vollständig): kein „≥“, keine Zustandszeile. Sichtbar stehen hinter den Reitern
+  // keine Zahlen (UI-Regel workjet#801, aus main übernommen, Zug 16m); der Zählknoten bleibt für den Pane-Grammar-Vertrag.
   const band = await page.$eval('.threads-view-switch', (el) => el.innerText.replace(/\s+/g, ' '));
-  assert.match(band, /Handeln \(4\)/);
-  assert.doesNotMatch(band, /≥/);
+  const counts = await page.$eval('.threads-view-switch', (el) => el.textContent.replace(/\s+/g, ' '));
+  assert.match(counts, /Handeln \(4\)/);
+  assert.doesNotMatch(counts, /≥/);
+  assert.doesNotMatch(band, /\(\d+\)/, 'keine sichtbaren Zahlen hinter den Reitern');
   assert.equal(await page.$$eval('[role="status"], .ctox-syncing', (n) => n.length), 0);
   // Reiter im Originalwortlaut; keine Fußzeile/Zählzeile (Owner-Regel), nur die Tab-Zähler.
   assert.match(band, /Wartet/);
