@@ -95,7 +95,11 @@ export const GLOBAL_QUERY_META_BUDGET_BYTES = 512 * 1024 * 1024;
 export const DEFAULT_QUERY_META_BUDGET_BYTES = 6 * 1024 * 1024;
 export const KNOWLEDGE_TABLE_QUERY_META_BUDGET_BYTES = 16 * 1024 * 1024;
 const LOCAL_WRITE_PUSH_DEBOUNCE_MS = 50;
-const DIRECT_PUSH_BATCH_MAX_BYTES = 2 * 1024 * 1024;
+// One framed transfer occupies the single per-connection send worker for its
+// whole stop-and-wait duration (4 x 10 KiB per ACK round trip). A 2 MiB lead
+// batch held it for ~52 RTTs and starved command writes behind it (field
+// incident 17.10.2026). 512 KiB bounds that to ~13 RTTs.
+const DIRECT_PUSH_BATCH_MAX_BYTES = 512 * 1024;
 // Native allows a full minute for the symmetric request/answer leg because
 // the protocol exchange can frame hundreds of collection schemas first. The
 // browser must expire second; otherwise a busy tenant tears down the peer at
@@ -247,6 +251,8 @@ export const replicationWebRtcTestInternals = Object.freeze({
   demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
   // real state machines without opening a network connection.
+  boundedDirectPushBatches,
+  DIRECT_PUSH_BATCH_MAX_BYTES,
   getSharedRoomPeerClass: () => SharedRoomPeer,
   getReplicationStateClass: () => CtoxWebRtcReplicationState,
 });
@@ -1851,12 +1857,18 @@ class CtoxWebRtcReplicationState {
     const maxAttempts = 3;
     let activePeerId = peerId;
     let lastError = null;
+    // A timed-out batch is retried SMALLER from the same checkpoint. Re-asking
+    // for the identical multi-hundred-KB batch over a slow relay never
+    // finished (lead initial replication, field incident 17.10.2026); half
+    // the batch can complete, the checkpoint advances and is persisted, and a
+    // later reconnect resumes from there instead of from zero.
+    let attemptBatchSize = Math.max(1, Math.floor(Number(batchSize) || 1));
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         const result = await this.peer.request(
           activePeerId,
           'masterChangesSince',
-          [checkpoint, batchSize],
+          [checkpoint, attemptBatchSize],
           timeoutMs,
           this.collection.name,
         );
@@ -1873,6 +1885,7 @@ class CtoxWebRtcReplicationState {
         activePeerId = await this.waitForOpenPeerId().catch(() => {
           throw error;
         });
+        attemptBatchSize = Math.max(1, Math.floor(attemptBatchSize / 2));
         await delay(250);
       }
     }

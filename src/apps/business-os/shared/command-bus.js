@@ -476,9 +476,52 @@ function assertCommandDocumentAuthorized(doc, commandId) {
   });
 }
 
+// The local insert into business_commands is the submit atomicity boundary.
+// Every failure BEFORE it means no command exists anywhere: not in IndexedDB,
+// not in the outbox, not on the wire. Field incident 17.10.2026: such a
+// failure (no connected business_commands peer within the readiness window)
+// emitted no lifecycle event, so the last reported phase stayed `sync_ready`
+// and modules attached the never-written command_id to their records. The
+// wrapper marks every rejection with `local_inserted` and reports a pre-write
+// failure as the terminal `submit_failed` lifecycle phase.
 async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt = 0 }) {
   const submitStartedAt = Date.now();
   const commandId = command.id || `cmd_${crypto.randomUUID()}`;
+  const progress = { localInserted: false };
+  try {
+    return await submitRxdbCommandUntilReceipt({
+      db, sync, session, command, dispatchStartedAt, submitStartedAt, commandId, progress,
+    });
+  } catch (error) {
+    markCommandSubmitFailure(error, commandId, progress.localInserted);
+    if (!progress.localInserted) {
+      emitCommandLifecycle(
+        commandId,
+        command.command_type || command.type,
+        'submit_failed',
+        submitStartedAt,
+        { code: cleanContextText(error?.code) || 'submit_failed', local_inserted: false },
+      );
+    }
+    throw error;
+  }
+}
+
+function markCommandSubmitFailure(error, commandId, localInserted) {
+  if (!error || typeof error !== 'object') return;
+  try {
+    error.command_id ||= commandId;
+    error.local_inserted = localInserted === true;
+    error.command_written = localInserted === true;
+  } catch {
+    // Frozen/foreign error objects keep their identity; the lifecycle event
+    // still reports the pre-write failure.
+  }
+}
+
+async function submitRxdbCommandUntilReceipt({
+  db, sync, session, command, dispatchStartedAt, submitStartedAt, commandId, progress,
+}) {
   if (commandTimingProbeEnabled(command)) {
     rememberCommandTimingProbe(commandId, Number(dispatchStartedAt) || submitStartedAt);
     transferCommandTimingProbe('', commandId);
@@ -543,6 +586,9 @@ async function submitRxdbCommand({ db, sync, session, command, dispatchStartedAt
     const localWriteStartedAt = Date.now();
     recordCommandPreinsertMark(commandId, 'local_write_started', localWriteStartedAt);
     const inserted = await insertOrPatchCommandDocument(collection, commandId, doc);
+    // Either this call inserted the document or the same immutable intent was
+    // already persisted: from here on the command exists locally.
+    progress.localInserted = true;
     if (!inserted) {
       // Same immutable payload already exists. Track that persisted command;
       // never push this freshly prepared document with a different capability
@@ -679,13 +725,17 @@ export function assertCommandDocumentTransportBudget(doc, commandId = '') {
   throw error;
 }
 
-function emitCommandLifecycle(commandId, commandType, phase, startedAt = 0) {
+function emitCommandLifecycle(commandId, commandType, phase, startedAt = 0, extra = null) {
   const detail = {
     command_id: String(commandId || '').slice(0, 120),
     command_type: String(commandType || '').slice(0, 120),
     phase: String(phase || '').slice(0, 80),
     elapsed_ms: startedAt ? Math.max(0, Date.now() - Number(startedAt)) : 0,
   };
+  if (extra && typeof extra === 'object') {
+    if (extra.code) detail.code = String(extra.code).slice(0, 80);
+    if (typeof extra.local_inserted === 'boolean') detail.local_inserted = extra.local_inserted;
+  }
   recordCommandTimingFromLifecycle(detail.command_id, detail.phase);
   recordCommandPreinsertMark(detail.command_id, detail.phase);
   globalThis.dispatchEvent?.(new CustomEvent('ctox-business-command-lifecycle', { detail }));

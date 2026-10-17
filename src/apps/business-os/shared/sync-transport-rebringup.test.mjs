@@ -63,24 +63,25 @@ function createRoomModel() {
   return room;
 }
 
-function createState(room, collection) {
+function createState(room, collection, broken = false) {
   const transport = room.register(null);
   const state = {
     collection,
     transport,
+    broken,
     cancelled: false,
     error$: events(), active$: events(), canceled$: events(), transportStatus$: events(),
     peerStates$: {
       ...events(),
       getValue() {
-        if (state.cancelled || transport.dead || transport.closed) return new Map();
+        if (state.broken || state.cancelled || transport.dead || transport.closed) return new Map();
         return new Map([['native', { remoteProtocol: { peerSession: { role: 'ctox_instance' } } }]]);
       },
     },
     peer: {
       connections: {
         get() {
-          const open = !state.cancelled && !transport.dead && !transport.closed;
+          const open = !state.broken && !state.cancelled && !transport.dead && !transport.closed;
           return {
             channel: { readyState: open ? 'open' : 'connecting' },
             peer: { connectionState: open ? 'connected' : 'connecting' },
@@ -117,6 +118,9 @@ function fixture() {
   };
   const room = createRoomModel();
   const statesByCollection = new Map();
+  // Collection-local failure: this collection's bridge never reaches an open
+  // native peer, while the shared transport itself is alive.
+  const brokenCollections = new Set();
   const collectionNames = ['business_commands', 'user_thread_states'];
   const raw = Object.fromEntries(collectionNames.map((name) => [name, {
     name,
@@ -139,7 +143,7 @@ function fixture() {
         getMultiTabSyncCoordinator() { return coordinator; },
         getConnectionHandlerSimplePeer(options) { return options; },
         async replicateWebRTC({ collection }) {
-          const state = createState(room, collection.name);
+          const state = createState(room, collection.name, brokenCollections.has(collection.name));
           statesByCollection.set(collection.name, state);
           return state;
         },
@@ -163,6 +167,7 @@ function fixture() {
     runtime,
     room,
     statesByCollection,
+    brokenCollections,
     windowListeners,
     get reloads() { return reloads; },
     get diagnostic() { return lastDiagnostic; },
@@ -183,7 +188,7 @@ async function waitFor(predicate, timeoutMs, label) {
 }
 
 function isOpen(state) {
-  return Boolean(state && !state.cancelled && !state.transport.dead && !state.transport.closed);
+  return Boolean(state && !state.broken && !state.cancelled && !state.transport.dead && !state.transport.closed);
 }
 
 test('failed individual restart immediately re-brings up the whole shared transport', async () => {
@@ -237,6 +242,49 @@ test('failed individual restart immediately re-brings up the whole shared transp
     assert.equal(resources.leaseCounts.user_thread_states, 1, 'leases survive the re-bring-up');
     assert.ok(recoveryMs < 8_000, `recovered in ${recoveryMs}ms`);
     await lease.release();
+  } finally {
+    await f.close();
+  }
+});
+
+// Field incident 17.10.2026: one collection (user_thread_states) failing its
+// individual restart re-brought up the shared transport of all 30
+// collections every 2-3 minutes while 28 of them were connected over an open
+// channel; the ~1 MB lead initial replication never finished in between.
+test('a single collection failure on a live transport never re-brings up the whole transport', async () => {
+  const f = fixture();
+  try {
+    await f.runtime.startCollection('business_commands');
+    f.brokenCollections.add('user_thread_states');
+    const lease = await f.runtime.leaseCollection('user_thread_states', 'open-window').catch(() => null);
+    await waitFor(
+      () => f.diagnostic?.collections?.business_commands?.connectionStatus === 'connected',
+      2_000,
+      'business_commands connected on the shared transport',
+    );
+    const liveTransport = f.room.transport;
+    const healthyState = f.statesByCollection.get('business_commands');
+    f.statesByCollection.get('user_thread_states')?.error$.emit(
+      Object.assign(new Error('ERR_CONNECTION_FAILURE'), { code: 'ERR_CONNECTION_FAILURE' }),
+    );
+    // Several repair cycles (300 ms attempt + retry each) fail for the broken
+    // collection only.
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    assert.equal(f.room.transportsCreated, 1, 'no new shared transport for one collection');
+    assert.equal(liveTransport.closed, false, 'the live shared transport must stay open');
+    assert.strictEqual(f.statesByCollection.get('business_commands'), healthyState,
+      'the healthy collection keeps its bridge (no restart from zero)');
+    assert.ok(isOpen(healthyState), 'the healthy collection stays open');
+    assert.notEqual(f.diagnostic?.transportRebringup?.state, 'running');
+    assert.equal(f.diagnostic?.transportRebringup, undefined, 'no transport re-bring-up was started');
+    // The collection-local cause clears: per-collection repair recovers it on
+    // the SAME transport.
+    f.brokenCollections.delete('user_thread_states');
+    await waitFor(() => isOpen(f.statesByCollection.get('user_thread_states')), 12_000,
+      'user_thread_states recovered per collection');
+    assert.equal(f.room.transportsCreated, 1, 'recovered without a transport re-bring-up');
+    assert.strictEqual(f.statesByCollection.get('business_commands'), healthyState);
+    await lease?.release?.();
   } finally {
     await f.close();
   }

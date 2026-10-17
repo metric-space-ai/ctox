@@ -35,6 +35,13 @@ import { revealDetailIfStacked } from './stacked-detail-reveal.mjs';
 import { doppelteAdapterIds } from './adapter-dedupe.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
 import {
+  isTransientResearchWaitError,
+  nativeResearchFingerprint,
+  patchClaimsResearchStart,
+  researchStartFailureOutcome,
+  terminalResearchStatusWins,
+} from './research-start-outcome.mjs';
+import {
   actionAllowedOnStartupSnapshot, buildStartupSnapshot, readStartupSnapshot,
   startupCacheScope, writeStartupSnapshot,
 } from './startup-cache.mjs';
@@ -4579,6 +4586,7 @@ async function startCampaignResearch(campaignName) {
 }
 
 async function startScopedResearch(campaign, leads, options = {}) {
+  const campaignStartedAtMs = Date.now();
   const configuration = await researchConfigurationReadiness();
   if (!configuration.ready) {
     if (configuration.reconcile) {
@@ -4776,6 +4784,10 @@ async function startScopedResearch(campaign, leads, options = {}) {
       return patchCampaignQueuedLeadIfCurrent(
         lead.id,
         campaignQueuedLeadPatch(current, submissionFor(lead.id), runId, queuedAtMs),
+        {
+          sinceMs: campaignStartedAtMs,
+          commandId: String(submissionFor(lead.id)?.command_id || ''),
+        },
       );
     }));
   } catch (error) {
@@ -4851,7 +4863,7 @@ function campaignQueuedLeadPatch(lead, submission, runId, queuedAtMs = Date.now(
 // patchLead wuerde dann den nativen Child-Writeback wieder mit der Parent-ID und
 // leeren Daten ueberschreiben. Innerhalb desselben Kampagnenlaufs gewinnt daher
 // immer ein bereits beobachteter Child-Command gegen den Parent-Platzhalter.
-async function patchCampaignQueuedLeadIfCurrent(id, patch) {
+async function patchCampaignQueuedLeadIfCurrent(id, patch, researchStart = null) {
   const doc = await state.collections.leads.findOne(id).exec();
   if (!doc) return false;
   const current = doc.toJSON?.() || doc;
@@ -4863,8 +4875,8 @@ async function patchCampaignQueuedLeadIfCurrent(id, patch) {
     && currentCommandId && currentCommandId !== parentCommandId) {
     return false;
   }
-  await patchLead(id, patch);
-  return true;
+  const outcome = await patchLead(id, patch, { researchStart });
+  return !outcome?.skipped;
 }
 
 function staleCampaignParentPlaceholder(lead, run = null, nowMs = Date.now()) {
@@ -10290,6 +10302,14 @@ async function researchLead(id, options = {}) {
   renderCenter();
   renderDetail();
   const commandId = `leadgen-lead-research-${crypto.randomUUID()}`;
+  // Basis aus dem gespeicherten Dokument, nicht aus der (schlanken) Listenzeile.
+  let startDoc = null;
+  try { startDoc = await state.collections?.leads?.findOne?.(id)?.exec?.(); } catch { startDoc = null; }
+  const researchStart = {
+    sinceMs: Date.now(),
+    commandId,
+    baseFingerprint: startDoc ? nativeResearchFingerprint(startDoc.toJSON?.() || startDoc) : null,
+  };
   // Vor der nativen Annahme ist der Vorgang nur "wird gestartet", niemals
   // "Wartet". Eine optimistische queued-Projektion war eine falsche
   // Erfolgsbestätigung: schloss man das Fenster während der Sellify-Vorprüfung,
@@ -10536,7 +10556,7 @@ async function researchLead(id, options = {}) {
         campaign_run_id: options.campaignRunId || '',
         research_started_at_ms: Date.now(),
       },
-    });
+    }, { researchStart: { ...researchStart, commandId: result.command_id || commandId } });
     return { status: 'queued', commandId: result.command_id, taskId: result.task_id || '' };
   } catch (error) {
     const message = String(error?.message || error);
@@ -10544,6 +10564,15 @@ async function researchLead(id, options = {}) {
       await recoverCommandChannel('research-lead');
       state.pendingResearchIds.delete(id);
       return researchLead(id, { ...options, _kanalRetry: true });
+    }
+    // Vor dem lokalen Schreiben gescheitert: den Befehl gibt es nirgends.
+    // Keine command_id am Lead und kein Lead-Patch (17.10.2026: Geister-IDs
+    // standen auf "running", jeder Fehlstart kostete einen Lead-masterWrite).
+    if (researchStartFailureOutcome(error) === 'not_written') {
+      if (!options.suppressAlerts) {
+        showBusinessAlert(auftragNichtZugestellt(error) ? NICHT_ZUGESTELLT_HINWEIS : message);
+      }
+      return { status: 'not_sent', commandId: '', error: message };
     }
     // Ein abgelaufener Wartender ist KEIN gescheiterter Auftrag. Der Command-Bus
     // meldet den Zeitablauf ausdruecklich als transient/projection_delayed: der
@@ -10566,7 +10595,7 @@ async function researchLead(id, options = {}) {
           research_wait_note: message,
           research_wait_since_ms: Number(lead.payload?.research_wait_since_ms || Date.now()),
         },
-      });
+      }, { researchStart });
       return { status: 'running', commandId, note: message };
     }
     if (auftragNichtZugestellt(error)) {
@@ -11074,20 +11103,6 @@ function uniqueCommands(commands = []) {
 // und wiederholbar (shared/command-bus.js, code 'projection_delayed'). Wir lesen
 // diese Kennzeichnung, statt den Text zu vergleichen; der Text bleibt nur als
 // letzter Rueckfall, falls ein aelterer Bus die Felder noch nicht mitschickt.
-function isTransientResearchWaitError(error) {
-  if (!error) return false;
-  const code = String(error.code || error.details?.code || '').trim();
-  if (code === 'projection_delayed' || code === 'projection_pending') return true;
-  const status = String(error.status || error.details?.status || '').trim();
-  if (status === 'projection_pending') return true;
-  if (error.transient === true || error.details?.transient === true) return true;
-  // Die Shell meldet nach 30 s "Die Uebergabe an die Queue wurde ... nicht
-  // bestaetigt. Der Auftrag kann trotzdem angenommen worden sein". Am
-  // 26.09.2026 kamen 13 von 14 so gemeldeten Starts danach an. Das ist
-  // unbestaetigt, nicht gescheitert: der Lead bleibt verfolgbar, kein Dialog.
-  if (/nicht best(ä|ae)tigt|kann trotzdem angenommen/i.test(String(error.message || ''))) return true;
-  return /wartet noch auf die R/i.test(String(error.message || ''));
-}
 
 // Kennung, MIT DER SICH INHALTLICH ETWAS GEAENDERT HAT — bewusst ohne Zeitstempel.
 //
@@ -12725,10 +12740,20 @@ function deduplicateEvidence(entries) {
 // AKTUELLEN Datensatz nehmen. Hintergrundpruefungen (Sellify-Vorabgleich, bis
 // zu 20 s) schrieben sonst die ganze payload aus einem alten Schnappschuss
 // zurueck und loeschten zwischenzeitlich Geschriebenes (Klicktest P2 V15).
-async function patchLead(id, patch, { payloadMerge = false, dataMerge = false } = {}) {
+async function patchLead(id, patch, { payloadMerge = false, dataMerge = false, researchStart = null } = {}) {
   const doc = await state.collections.leads.findOne(id).exec();
   if (!doc) throw new Error('LEAD_NOT_FOUND: Der Lead wurde zwischenzeitlich entfernt.');
   const current = doc.toJSON?.() || doc;
+  // Ein Start-Patch ("running"/"queued") ueberschreibt nie einen nativen
+  // Endstatus, der nach diesem Start geschrieben wurde (17.10.2026: Leads
+  // standen auf "running", obwohl ihr Task erledigt war). Der Patch traegt
+  // eine Kopie des alten Payloads und entfaellt deshalb ganz.
+  if (researchStart && patchClaimsResearchStart(patch) && terminalResearchStatusWins(current, researchStart)) {
+    state.pendingLeadPatches.delete(id);
+    const index = state.leads.findIndex((lead) => lead.id === id);
+    if (index >= 0) state.leads[index] = normalizeLeadRecipientShape({ ...state.leads[index], ...current });
+    return { skipped: 'terminal_research_status' };
+  }
   if (payloadMerge && patch?.payload) patch = { ...patch, payload: { ...(current.payload || {}), ...patch.payload } };
   if (dataMerge && patch?.data) patch = { ...patch, data: { ...(current.data || {}), ...patch.data } };
   const normalized = normalizeLeadRecipientShape({ ...current, ...patch, id });
@@ -12739,7 +12764,11 @@ async function patchLead(id, patch, { payloadMerge = false, dataMerge = false } 
     selected_contact_ids: normalized.selected_contact_ids,
     updated_at_ms: updatedAt,
   };
-  state.pendingLeadPatches.set(id, { patch: applied, at: updatedAt });
+  state.pendingLeadPatches.set(id, {
+    patch: applied,
+    at: updatedAt,
+    researchStart: researchStart && patchClaimsResearchStart(patch) ? researchStart : null,
+  });
   const index = state.leads.findIndex((lead) => lead.id === id);
   const before = index >= 0 ? state.leads[index] : null;
   if (index >= 0) state.leads[index] = normalizeLeadRecipientShape({ ...state.leads[index], ...applied });
@@ -12758,6 +12787,12 @@ function applyPendingLeadPatches(leads) {
     const pending = state.pendingLeadPatches.get(lead.id);
     if (!pending) return lead;
     if (Number(lead.updated_at_ms || 0) >= pending.at) {
+      state.pendingLeadPatches.delete(lead.id);
+      return lead;
+    }
+    // Ein ausstehender Start-Patch darf einen inzwischen abgeschlossenen Lauf
+    // nicht wiederbeleben: der native Endstatus gewinnt.
+    if (pending.researchStart && terminalResearchStatusWins(lead, pending.researchStart)) {
       state.pendingLeadPatches.delete(lead.id);
       return lead;
     }
