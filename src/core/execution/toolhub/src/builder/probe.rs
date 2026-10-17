@@ -71,6 +71,10 @@ pub fn check(data: &Value, expect: Option<&Expect>) -> Result<(), String> {
     Ok(())
 }
 
+/// Wait before the single live-test retry after HTTP 429. Providers often send
+/// no `Retry-After` (Spaceflight News: burst limit of about 4 requests/s).
+pub const RATE_LIMIT_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// Network/TLS hiccups worth one retry; HTTP answers and policy refusals are not.
 pub fn is_transient(err: &str) -> bool {
     let e = err.to_ascii_lowercase();

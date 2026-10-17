@@ -245,6 +245,8 @@ pub struct Builder<'a> {
     actor: String,
     project: String,
     clock: Clock,
+    /// Wait before the one live-test retry after HTTP 429 (tests pass a no-op).
+    pause: Arc<dyn Fn(std::time::Duration) + Send + Sync>,
 }
 
 impl<'a> Builder<'a> {
@@ -268,7 +270,14 @@ impl<'a> Builder<'a> {
             actor: actor.to_string(),
             project: "default".into(),
             clock: system_clock(),
+            pause: Arc::new(std::thread::sleep),
         }
+    }
+
+    /// Replace the 429 back-off wait (tests).
+    pub fn with_pause(mut self, pause: Arc<dyn Fn(std::time::Duration) + Send + Sync>) -> Self {
+        self.pause = pause;
+        self
     }
 
     pub fn with_clock(mut self, clock: Clock) -> Self {
@@ -718,6 +727,11 @@ impl<'a> Builder<'a> {
                     outcome = hub.execute(&self.project, &p.tool, &args, account);
                 }
             }
+            // One retry after a short back-off on HTTP 429 (burst limits; no endless retry).
+            if matches!(outcome, Ok(ToolOutcome::ProviderError { status: 429, .. })) {
+                (self.pause)(probe::RATE_LIMIT_BACKOFF);
+                outcome = hub.execute(&self.project, &p.tool, &args, account);
+            }
             let (result, status, detail) = match outcome {
                 Ok(ToolOutcome::Success { data }) => match probe::check(&data, p.expect.as_ref()) {
                     Ok(()) => {
@@ -810,6 +824,13 @@ impl<'a> Builder<'a> {
         let GateSubject::Call { toolkit: slug, .. } = &rec.subject;
         self.audit(slug, json!({"event": "decision", "gate_id": gate_id, "decision": decision}))?;
         Ok(json!({"gate_id": gate_id, "decision": decision}))
+    }
+
+    /// Toolkit slug for a live builder mission (`nager-date` -> `nager_date`),
+    /// so a draft made inside the mission can be activated in it.
+    pub fn mission_slug(&self, work_id: &str) -> Result<String> {
+        let service = self.gates.builder_mission_service(work_id)?.ok_or_else(|| anyhow!("{work_id} is not a live builder mission"))?;
+        Ok(safe(&service.to_ascii_lowercase().replace('-', "_"))?.to_string())
     }
 
     /// Activate a version autonomously. Needs: the installed text validates and

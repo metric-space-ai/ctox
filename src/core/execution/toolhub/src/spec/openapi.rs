@@ -23,6 +23,9 @@ pub struct Options {
     pub max_actions: usize,
     /// Only these operations (operationId or generated action slug), if set.
     pub operations: Vec<String>,
+    /// Never these operations (operationId or generated action slug), e.g. one
+    /// whose live data is always empty.
+    pub skip_operations: Vec<String>,
     /// Where the document came from (URL or file), for `docs` and relative servers.
     pub source: String,
     /// Overrides the document's server (relative servers in local files,
@@ -32,7 +35,7 @@ pub struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Self { slug: None, version: "1.0.0".into(), max_actions: 40, operations: vec![], source: String::new(), base_url: None }
+        Self { slug: None, version: "1.0.0".into(), max_actions: 40, operations: vec![], skip_operations: vec![], source: String::new(), base_url: None }
     }
 }
 
@@ -345,6 +348,16 @@ fn expect_for(schema: Option<&Value>, doc: &Value) -> Value {
     Value::Object(e)
 }
 
+/// `/v4/blogs/{id}/` -> `/v4/blogs` (the collection a detail path belongs to).
+fn parent_path(p: &str) -> String {
+    let t = p.trim_end_matches('/');
+    parent_path_norm(t.rsplit_once('/').map_or("", |(head, _)| head))
+}
+
+fn parent_path_norm(p: &str) -> String {
+    p.trim_end_matches('/').to_string()
+}
+
 pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
     let mut notes = Vec::new();
     let mut skipped = Vec::new();
@@ -371,8 +384,8 @@ pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
     let mut actions: Vec<(bool, Value, Option<Value>, Value)> = Vec::new(); // (is_read, action, probe, missing)
     let mut slugs = BTreeSet::new();
     // Probe chaining: list results that can feed detail probes.
-    let mut sources: Vec<(String, String, Value)> = Vec::new(); // (tool, pointer to an item array, item schema)
-    let mut chain_wanted: BTreeMap<String, (String, String, Value)> = BTreeMap::new(); // tool -> (arg, param name, response schema)
+    let mut sources: Vec<(String, String, Value, String)> = Vec::new(); // (tool, pointer to an item array, item schema, path)
+    let mut chain_wanted: BTreeMap<String, (String, String, Value, String)> = BTreeMap::new(); // tool -> (arg, param name, response schema, path)
     for (raw_path, item) in paths {
         let item = deref(doc, item).unwrap_or(item);
         let shared: Vec<Value> = item.get("parameters").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -394,6 +407,10 @@ pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
             }
             let label = format!("{method} {raw_path}");
             if !opts.operations.is_empty() && !opts.operations.iter().any(|o| Some(o) == op_id.as_ref() || *o == aslug) {
+                continue;
+            }
+            if opts.skip_operations.iter().any(|o| Some(o) == op_id.as_ref() || *o == aslug) {
+                skipped.push(json!({"operation": label, "reason": "--skip-operations"}));
                 continue;
             }
             if op.get("deprecated").and_then(Value::as_bool) == Some(true) {
@@ -592,12 +609,12 @@ pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
                 if let Some(rs) = resp_schema.as_ref() {
                     if missing.is_empty() {
                         for (ptr, item) in item_arrays(doc, rs) {
-                            sources.push((aslug.clone(), ptr, item));
+                            sources.push((aslug.clone(), ptr, item, raw_path.to_string()));
                         }
                     }
                     if let [(a, pname)] = path_args.as_slice() {
                         if missing.iter().all(|m| m == a) {
-                            chain_wanted.insert(aslug.clone(), (a.clone(), pname.clone(), rs.clone()));
+                            chain_wanted.insert(aslug.clone(), (a.clone(), pname.clone(), rs.clone(), raw_path.to_string()));
                         }
                     }
                 }
@@ -633,9 +650,14 @@ pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
         let tool = a["slug"].as_str().unwrap_or_default().to_string();
         // A detail probe takes its id from a list probe whose items have the
         // same schema as the detail response (document examples go stale).
-        let chain = chain_wanted.get(&tool).and_then(|(arg, pname, rs)| {
+        // Prefer the list on the parent path (`/blogs/` for `/blogs/{id}/`):
+        // articles and blogs can share one schema but not their ids.
+        let chain = chain_wanted.get(&tool).and_then(|(arg, pname, rs, dpath)| {
             let target = deref(doc, rs).unwrap_or(rs);
-            sources.iter().filter(|(t, ..)| kept.contains(t)).find_map(|(t, ptr, item)| {
+            let parent = parent_path(dpath);
+            let mut ordered: Vec<&(String, String, Value, String)> = sources.iter().filter(|(t, ..)| kept.contains(t)).collect();
+            ordered.sort_by_key(|(.., sp)| parent_path_norm(sp) != parent);
+            ordered.into_iter().find_map(|(t, ptr, item, _)| {
                 let item = deref(doc, item).unwrap_or(item);
                 if item != target {
                     return None;
@@ -649,7 +671,7 @@ pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
             (Some((arg, src)), p) => {
                 let mut p = p.unwrap_or_else(|| {
                     let mut p = json!({"tool": tool, "args": {}});
-                    if let Some((_, _, rs)) = chain_wanted.get(&tool) {
+                    if let Some((_, _, rs, _)) = chain_wanted.get(&tool) {
                         let e = expect_for(Some(rs), doc);
                         if e.as_object().is_some_and(|m| !m.is_empty()) {
                             p["expect"] = e;

@@ -109,6 +109,7 @@ session, never by you. Rules per role: `ctox toolhub --as <role> rules`.
 | Queue a builder mission | `ctox_toolhub_request_adapter` / `request-adapter <service>` | supervisor, worker |
 | Draft | `ctox_toolhub_draft_spec` (`spec_json`, `from_catalog`, or `from_openapi` URL/file) | all except MCP (URLs: supervisor, worker) |
 | Validate | `ctox_toolhub_validate <slug> <version>` | all except MCP |
+| Draft from OpenAPI | `draft-spec --from-openapi <url> --mission <work_id> [--skip-operations a,b] [--version v]` | supervisor, worker (file: all) |
 | Live test + review proof | `ctox_toolhub_live_test` with `probes_json` `[{tool,args,cleanup[],expect,from}]` (or the drafted probes) and `mission` | reads: all; write probes: supervisor; destructive: never |
 | Activate (no user approval) | `ctox_toolhub_activate <slug> <version> [mission]` | supervisor; worker only with its builder mission |
 | Deactivate / rollback | `ctox_toolhub_deactivate`, `ctox_toolhub_rollback` | supervisor (plus automatic rollback on repeated failures) |
@@ -216,6 +217,37 @@ always applies. Destructive calls still need a single-use per-call gate. Every s
 ## Lessons
 
 ### OpenAPI dogfood 2026-10-17 (Spaceflight News, Autobahn, PEGELONLINE)
+
+**Re-run on a fresh instance root (2026-10-17, 10:45-11:05 Berlin time)** with only the
+built CLI as worker. Per service: `request-adapter` -> `draft-spec --from-openapi
+<url> --mission <work_id>` -> `validate` -> `live-test --mission` (drafted probes)
+-> `activate --mission` (mission closed itself) -> `execute`. Result: Spaceflight
+News 7/7, Autobahn 12/12, PEGELONLINE 5/5 live PASS, 24 actions active; the
+resulting specs are byte-identical to `specs/` (Autobahn apart from the version).
+
+- **Pass `--mission` to `draft-spec`.** The slug then comes from the mission
+  (`spaceflight-news` -> `spaceflight_news`). Without it the slug comes from the
+  document title (`autobahn_app`), and activation in the `autobahn` mission is
+  refused (`builder mission ... is for autobahn, not autobahn_app`).
+- **Leave out actions that cannot pass with `--skip-operations <operationId|ACTION>`**
+  (Autobahn `AUTOBAHN_GET_WEBCAM`: the webcam lists are empty on every road).
+  Re-drafts need a new `--version`, because a live test installs the version.
+- **Chained probes use the list on the parent path.** Spaceflight articles and
+  blogs share one schema; the blog detail probe used to take an article id. Since
+  2026-10-17 `/v4/blogs/{id}/` is fed from `/v4/blogs/` first.
+- **HTTP 429 in the live test:** one retry after 2 s (Spaceflight News allows
+  about 4 requests per second and sends no `Retry-After`). Before that fix, all
+  three detail probes failed with 429.
+- **Fix wrong documented shapes in the drafted probes file**
+  (`runtime/toolhub/drafts/<slug>/<version>.probes.json`), not in the spec:
+  PEGELONLINE `waters.json` returns an array. Then run `live-test` again without probes.
+- **A passing shape is not the whole answer.** PEGELONLINE
+  `GET_CURRENT_MEASURMENT_BY_STATION` returns the time-series metadata without
+  the measurement unless `includeCurrentMeasurement=true` is set. The probe passes
+  as an object. When an action has a "current value" in its name, add a pointer
+  to `expect`.
+- **The doc host can still be down:** pegelonline.api.bund.dev failed TLS
+  again; the bundesAPI GitHub raw copy worked.
 
 - **Document examples go stale.** Autobahn's example ids answered `{}` (5 of 13
   probes); the shape check caught it. The generator now chains detail probes to

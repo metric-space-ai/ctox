@@ -196,7 +196,7 @@ pub(crate) fn handle_toolhub_command(root: &Path, args: &[String]) -> Result<()>
     Ok(())
 }
 
-pub(crate) const USAGE: &str = "usage: ctox toolhub [--as supervisor|worker|oneshot|mcp] <search|get-schema|list|execute|draft-spec|validate|live-test|approve|activate|deactivate|rollback|request-adapter|rules|config> ...\n  draft-spec --from-openapi <https-url|file> [--slug s] [--version v] [--max-actions n] [--operations a,b] [--base-url https://host/base]\n  live-test <slug> <version> [--probes-json|--probes-file] [--mission <work_id>]   (no probes: the drafted ones)\n  config show | config set fake-ip-egress on|off   (supervisor)";
+pub(crate) const USAGE: &str = "usage: ctox toolhub [--as supervisor|worker|oneshot|mcp] <search|get-schema|list|execute|draft-spec|validate|live-test|approve|activate|deactivate|rollback|request-adapter|rules|config> ...\n  draft-spec --from-openapi <https-url|file> [--slug s] [--version v] [--max-actions n] [--operations a,b] [--skip-operations a,b] [--mission <work_id>] [--base-url https://host/base]\n  live-test <slug> <version> [--probes-json|--probes-file] [--mission <work_id>]   (no probes: the drafted ones)\n  config show | config set fake-ip-egress on|off   (supervisor)";
 
 /// Instance config key for the fake-IP egress transport option.
 const FAKE_IP_KEY: &str = "CTOX_TOOLHUB_FAKE_IP_EGRESS";
@@ -271,11 +271,20 @@ pub(crate) fn run(
                 } else {
                     std::fs::read_to_string(src).with_context(|| format!("read {src}"))?
                 };
+                // Inside a builder mission the slug defaults to the mission's
+                // service, so activation in that mission matches.
+                let slug = match (flag(args, "--slug"), flag(args, "--mission")) {
+                    (Some(s), _) => Some(s.to_string()),
+                    (None, Some(m)) => Some(b.mission_slug(m)?),
+                    (None, None) => None,
+                };
+                let list = |f: &str| flag(args, f).map(|o| o.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default();
                 let opts = ctox_toolhub::spec::openapi::Options {
-                    slug: flag(args, "--slug").map(String::from),
+                    slug,
                     version: flag(args, "--version").unwrap_or("1.0.0").to_string(),
                     max_actions: flag(args, "--max-actions").and_then(|n| n.parse().ok()).unwrap_or(40),
-                    operations: flag(args, "--operations").map(|o| o.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
+                    operations: list("--operations"),
+                    skip_operations: list("--skip-operations"),
                     source: src.to_string(),
                     base_url: flag(args, "--base-url").map(String::from),
                 };

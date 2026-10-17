@@ -20,6 +20,12 @@ impl HttpTransport for Mock {
         if r.url.contains("/items/empty") {
             return Ok(HttpResponse { status: 200, body: vec![], session_id: None });
         }
+        if r.url.contains("/items/limited") && self.calls.lock().unwrap().iter().filter(|c| c.contains("/items/limited")).count() == 1 {
+            return Ok(HttpResponse { status: 429, body: b"{}".to_vec(), session_id: None });
+        }
+        if r.url.contains("/items/always429") {
+            return Ok(HttpResponse { status: 429, body: b"{}".to_vec(), session_id: None });
+        }
         if r.url.contains("/items/flaky") && self.calls.lock().unwrap().iter().filter(|c| c.contains("/items/flaky")).count() == 1 {
             bail!("http transport error: Network Error: peer closed connection without sending TLS close_notify");
         }
@@ -95,7 +101,7 @@ fn env() -> Env {
 impl Env {
     fn b<'a>(&'a self, role: AgentRole, policy: &'a dyn PolicyGate) -> Builder<'a> {
         let now = self.now.clone();
-        Builder::new(&self.root, self.backend.clone(), self.mock.clone(), &self.gates, policy, role, "test").with_clock(Arc::new(move || now.load(Ordering::SeqCst)))
+        Builder::new(&self.root, self.backend.clone(), self.mock.clone(), &self.gates, policy, role, "test").with_clock(Arc::new(move || now.load(Ordering::SeqCst))).with_pause(Arc::new(|_| {}))
     }
 }
 
@@ -397,6 +403,13 @@ fn live_test_checks_shape_retries_once_and_names_redirects() {
     let t = s.live_test("testsvc", "1.0.0", &get("flaky", None), None).unwrap();
     assert_eq!(t["passed"], json!(true), "{t}");
     assert_eq!(e.mock.calls.lock().unwrap().iter().filter(|c| c.contains("/items/flaky")).count(), 2);
+    // HTTP 429: one retry after the back-off, then it fails (no endless retry).
+    let t = s.live_test("testsvc", "1.0.0", &get("limited", None), None).unwrap();
+    assert_eq!(t["passed"], json!(true), "{t}");
+    assert_eq!(e.mock.calls.lock().unwrap().iter().filter(|c| c.contains("/items/limited")).count(), 2);
+    let t = s.live_test("testsvc", "1.0.0", &get("always429", None), None).unwrap();
+    assert_eq!(t["passed"], json!(false), "{t}");
+    assert_eq!(e.mock.calls.lock().unwrap().iter().filter(|c| c.contains("/items/always429")).count(), 2);
     // A redirect names the final host as a suggestion.
     let t = s.live_test("testsvc", "1.0.0", &get("moved", None), None).unwrap();
     assert_eq!(t["passed"], json!(false));
@@ -428,4 +441,13 @@ fn chained_probe_takes_its_arg_from_an_earlier_probe() {
     assert!(t["review"]["results"][1]["detail"].as_str().unwrap().contains("no value at `/nope`"), "{t}");
     let t = s.live_test("testsvc", "1.0.0", &[p("x", &[("id", "TESTSVC_LIST#/0/id")])], None).unwrap();
     assert!(t["review"]["results"][0]["detail"].as_str().unwrap().contains("has not passed"), "{t}");
+}
+
+#[test]
+fn mission_slug_is_the_mission_service_in_snake_case() {
+    let e = env();
+    e.gates.missions.borrow_mut().insert("m-x".into(), "spaceflight-news".into());
+    let w = e.b(AgentRole::Worker, &Allow);
+    assert_eq!(w.mission_slug("m-x").unwrap(), "spaceflight_news");
+    assert!(w.mission_slug("m-none").is_err());
 }

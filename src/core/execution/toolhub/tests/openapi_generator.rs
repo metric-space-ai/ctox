@@ -137,3 +137,28 @@ fn relative_server_in_a_local_file_needs_and_takes_base_url() {
     assert_eq!(d.probes[1]["from"], json!({"id": "SPACE_NEWS_ARTICLES_LIST#/results/0/id"}));
     assert_eq!(d.probes[1]["expect"]["pointers"], json!(["/id"]));
 }
+
+#[test]
+fn detail_probe_chains_to_the_list_on_its_parent_path_when_schemas_are_shared() {
+    // Spaceflight News shape: articles and blogs share one item schema, but a
+    // blog id must come from the blog list (2026-10-17 dogfood finding).
+    let item = json!({"type": "object", "properties": {"id": {"type": "integer"}, "title": {"type": "string"}}, "required": ["id"]});
+    let page = json!({"type": "object", "properties": {"count": {"type": "integer"}, "results": {"type": "array", "items": {"$ref": "#/components/schemas/Article"}}}});
+    let ok = |s: Value| json!({"200": {"description": "ok", "content": {"application/json": {"schema": s}}}});
+    let id = json!([{"name": "id", "in": "path", "required": true, "schema": {"type": "integer"}}]);
+    let doc = json!({
+        "openapi": "3.0.3", "info": {"title": "Shared News", "version": "4"},
+        "servers": [{"url": "https://api.news.example.com"}],
+        "components": {"schemas": {"Article": item, "Page": page}},
+        "paths": {
+            "/v4/articles/": {"get": {"operationId": "articles_list", "responses": ok(json!({"$ref": "#/components/schemas/Page"}))}},
+            "/v4/articles/{id}/": {"get": {"operationId": "articles_retrieve", "parameters": id, "responses": ok(json!({"$ref": "#/components/schemas/Article"}))}},
+            "/v4/blogs/": {"get": {"operationId": "blogs_list", "responses": ok(json!({"$ref": "#/components/schemas/Page"}))}},
+            "/v4/blogs/{id}/": {"get": {"operationId": "blogs_retrieve", "parameters": id, "responses": ok(json!({"$ref": "#/components/schemas/Article"}))}}
+        }
+    });
+    let d = draft_from_openapi(&doc, &opts("https://api.news.example.com/schema/")).unwrap();
+    let from = |t: &str| d.probes.iter().find(|p| p["tool"] == json!(t)).map(|p| p["from"].clone()).unwrap_or_default();
+    assert_eq!(from("SHARED_NEWS_ARTICLES_RETRIEVE"), json!({"id": "SHARED_NEWS_ARTICLES_LIST#/results/0/id"}));
+    assert_eq!(from("SHARED_NEWS_BLOGS_RETRIEVE"), json!({"id": "SHARED_NEWS_BLOGS_LIST#/results/0/id"}));
+}
