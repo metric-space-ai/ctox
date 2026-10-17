@@ -3,8 +3,8 @@
 //! before calling. A manifest is metadata, not a grant; every physical send
 //! still requires the current native publication guard. No eager file walk.
 use super::{
-    Cas, NativeSendScheduler, VerifiedBlob, WebRTCPublicationGuard, artifact_path, failure,
-    send_blob,
+    artifact_path, failure, send_blob, Cas, NativeSendScheduler, VerifiedBlob,
+    WebRTCPublicationGuard,
 };
 use crate::rx_error::RxResult;
 use serde::Deserialize;
