@@ -1260,12 +1260,14 @@ function syncLiveTicker(state) {
 
 function deriveHarnessHealth(state) {
   const tasks = Array.isArray(state?.model?.tasks) ? state.model.tasks : [];
-  const waitingTasks = tasks.filter(taskIsHarnessWaiting);
+  const now = Date.now();
+  // Eine Aufgabe im Retry-Backoff (retry_not_before in der Zukunft) wartet geplant auf ihren nächsten Versuch – kein
+  // Stillstand der Crew (welsch 17.10.: news.issue.generate im Backoff löste „Crew arbeitet keine Aufgaben ab“ aus).
+  const waitingTasks = tasks.filter((task) => taskIsHarnessWaiting(task) && !taskInRetryBackoff(task, now));
   const activeTasks = tasks.filter(taskIsHarnessActive);
   const flowProjectionMissing = harnessFlowProjectionMissing(state);
-  const now = Date.now();
   const oldestWaitingAt = waitingTasks.reduce((oldest, task) => {
-    const timestamp = taskTimestampMs(task);
+    const timestamp = taskWaitingSinceMs(task);
     return Number.isFinite(timestamp) ? Math.min(oldest, timestamp) : oldest;
   }, Number.POSITIVE_INFINITY);
   const oldestWaitingAgeMs = waitingTasks.length && Number.isFinite(oldestWaitingAt)
@@ -1321,6 +1323,23 @@ function taskHarnessStatuses(task) {
   return raw.length
     ? raw.map((value) => normalizeCommandStatus(value))
     : ['queued'];
+}
+
+function taskRetryNotBeforeMs(task) {
+  return Date.parse(task?.retryNotBefore || task?.retry_not_before || '');
+}
+
+function taskInRetryBackoff(task, now = Date.now()) {
+  const retryAt = taskRetryNotBeforeMs(task);
+  return Number.isFinite(retryAt) && retryAt > now;
+}
+
+// Wartezeit zählt ab dem fälligen Wiederholungszeitpunkt, nicht ab der Anlage der Aufgabe.
+function taskWaitingSinceMs(task) {
+  const created = taskTimestampMs(task);
+  const retryAt = taskRetryNotBeforeMs(task);
+  if (Number.isFinite(retryAt) && (!Number.isFinite(created) || retryAt > created)) return retryAt;
+  return created;
 }
 
 function taskTimestampMs(task) {
