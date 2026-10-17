@@ -503,15 +503,61 @@ async fn kernel_component(e25: bool) {
         .join("src/apps/business-os/kernel")
         .canonicalize()
         .unwrap();
-    struct OwnedChild(std::process::Child);
-    impl Drop for OwnedChild {
-        fn drop(&mut self) {
-            let _ = self.0.kill();
-            let _ = self.0.wait();
+    const CHILD_TAIL_BYTES: usize = 16 * 1024;
+    struct OwnedChild {
+        process: std::process::Child,
+        stderr_path: std::path::PathBuf,
+        stdout_tail: Vec<u8>,
+        failure_reported: bool,
+    }
+    impl OwnedChild {
+        fn record_stdout(&mut self, bytes: &[u8]) {
+            let bytes = &bytes[bytes.len().saturating_sub(CHILD_TAIL_BYTES)..];
+            let excess = (self.stdout_tail.len() + bytes.len()).saturating_sub(CHILD_TAIL_BYTES);
+            self.stdout_tail.drain(..excess);
+            self.stdout_tail.extend_from_slice(bytes);
+        }
+        fn diagnostics(&self) -> String {
+            use std::io::{Read, Seek, SeekFrom};
+            let stderr = std::fs::File::open(&self.stderr_path).and_then(|mut file| {
+                let count = file.metadata()?.len().min(CHILD_TAIL_BYTES as u64);
+                file.seek(SeekFrom::End(-(count as i64)))?;
+                let mut bytes = Vec::with_capacity(count as usize);
+                file.read_to_end(&mut bytes)?;
+                Ok(bytes)
+            });
+            let stderr = match stderr {
+                Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                Err(error) => format!("could not read child stderr: {error}"),
+            };
+            format!(
+                "child stderr tail (max {CHILD_TAIL_BYTES} bytes):\n{stderr}\nchild stdout tail (max {CHILD_TAIL_BYTES} bytes):\n{}",
+                String::from_utf8_lossy(&self.stdout_tail)
+            )
         }
     }
-    let mut child = OwnedChild(
-        Command::new("node")
+    impl Drop for OwnedChild {
+        fn drop(&mut self) {
+            let _ = self.process.kill();
+            let status = self.process.wait();
+            if std::thread::panicking() && !self.failure_reported {
+                eprintln!(
+                    "Kernel child during parent failure: {status:?}\n{}",
+                    self.diagnostics()
+                );
+            }
+        }
+    }
+    // A file in this test's existing isolated root cannot block the child on
+    // an undrained stderr pipe or mix diagnostics with another kernel child.
+    let stderr_path = _dir.path().join("kernel-child.stderr");
+    let stderr_file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&stderr_path)
+        .unwrap();
+    let mut child = OwnedChild {
+        process: Command::new("node")
             .arg(
                 std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(if e25 {
                     "command_routes_e2e.mjs"
@@ -528,12 +574,15 @@ async fn kernel_component(e25: bool) {
             )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(Stdio::from(stderr_file))
             .spawn()
             .unwrap(),
-    );
-    let mut input = child.0.stdin.take().unwrap();
-    let mut output = BufReader::new(child.0.stdout.take().unwrap());
+        stderr_path,
+        stdout_tail: Vec::new(),
+        failure_reported: false,
+    };
+    let mut input = child.process.stdin.take().unwrap();
+    let mut output = BufReader::new(child.process.stdout.take().unwrap());
     let mut line = String::new();
     let mut executor_seq = 0;
     let mut first = None;
@@ -548,6 +597,7 @@ async fn kernel_component(e25: bool) {
         if output.read_line(&mut line).unwrap() == 0 {
             break;
         }
+        child.record_stdout(line.as_bytes());
         let request: Value = serde_json::from_str(&line).expect("component stdout is JSON");
         if request["type"] == "measured" {
             // Preserve raw measurements even when a latency assertion makes
@@ -757,16 +807,20 @@ async fn kernel_component(e25: bool) {
             } else {
                 panic!(
                     "Kernel component child closed input: {error}; exit={:?}",
-                    child.0.try_wait()
+                    child.process.try_wait()
                 );
             }
         }
     }
     drop(input);
-    assert!(
-        child.0.wait().unwrap().success(),
-        "real Kernel/native command harness failed"
-    );
+    let status = child.process.wait().unwrap();
+    if !status.success() {
+        child.failure_reported = true;
+        panic!(
+            "real Kernel/native command harness failed: {status}\n{}",
+            child.diagnostics()
+        );
+    }
     let mut measured = measured.expect("missing actual runtime measurement");
     measured["read_reply_closed_during_teardown"] = json!(reply_closed);
     projection_us.sort_by(|a, b| a.total_cmp(b));
