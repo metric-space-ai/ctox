@@ -32,15 +32,18 @@ struct Listener {
 pub(crate) struct HttpSurface {
     inputs: Arc<StoreInputs>,
     closing: Arc<AtomicBool>,
+    _bootstrap: Arc<crate::business_os::browser_bootstrap::BrowserBootstrap>,
     listeners: Mutex<Vec<Listener>>,
 }
 impl HttpSurface {
-    pub fn new(inputs: Arc<StoreInputs>) -> Arc<Self> {
-        Arc::new(Self {
+    pub async fn new(inputs: Arc<StoreInputs>) -> Result<Arc<Self>, StoreError> {
+        let bootstrap = crate::business_os::browser_bootstrap::BrowserBootstrap::start(&inputs).await?;
+        Ok(Arc::new(Self {
             inputs,
+            _bootstrap: bootstrap,
             closing: Arc::new(AtomicBool::new(false)),
             listeners: Mutex::new(Vec::new()),
-        })
+        }))
     }
     /// Runs only on a blocking/IPC worker. Admission and thread count are bounded.
     pub fn listen(&self, addr: SocketAddr) -> Result<SocketAddr, StoreError> {
@@ -251,6 +254,7 @@ fn answer(
     {
         return Ok((404, "text/plain", Vec::new()));
     }
+    let asset_started = std::time::Instant::now();
     let target = match std::fs::canonicalize(app.join(relative)) {
         Ok(path) if path.starts_with(app) && path.is_file() => path,
         _ => return Ok((404, "text/plain", Vec::new())),
@@ -267,15 +271,9 @@ fn answer(
     if target.metadata()?.len() > 1024 * 1024 {
         return Ok((413, "text/plain", Vec::new()));
     }
-    Ok((
-        200,
-        mime,
-        if method == &Method::Head {
-            Vec::new()
-        } else {
-            std::fs::read(target)?
-        },
-    ))
+    let bytes = if method == &Method::Head { Vec::new() } else { std::fs::read(target)? };
+    eprintln!("ctox_bootstrap_asset_timing={}", serde_json::json!({"slot_asset_read_us":asset_started.elapsed().as_micros(),"sync_config_us":0,"launch_config_value_us":0,"catalog_us":0}));
+    Ok((200,mime,bytes))
 }
 
 pub(crate) fn serve(root: &Path, addr: &str) -> anyhow::Result<()> {

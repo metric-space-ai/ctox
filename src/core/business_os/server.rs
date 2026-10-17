@@ -176,6 +176,17 @@ fn serve_owned_business_os(root: &Path, options: BusinessOsServeOptions) -> anyh
     {
         eprintln!("[business-os] reconciled release-managed module shadows: {reconciled}");
     }
+    // Initialize only the local connection/role credentials before accepting
+    // requests. First-use key creation/rotation must not sit on the document
+    // path; no peer startup or network wait belongs to this readiness phase.
+    let work = root.to_owned();
+    crate::persistence::run_core_blocking_at(root, move || {
+        // Read the complete shared bootstrap configuration once. ICE/runtime
+        // config has its own lazy initialization beyond connection credentials.
+        // No per-user session or authorization result is retained here.
+        store::sync_config_for_browser(&work, "").map(|_| ())
+    })
+    .context("Business OS bootstrap configuration initialization failed")?;
     // Prepare the generation-bound bootstrap catalog before accepting its
     // first document request. Later installs are detected by the same reader.
     let work = root.to_owned();

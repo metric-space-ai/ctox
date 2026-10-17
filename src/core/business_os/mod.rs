@@ -117,6 +117,7 @@ mod rxdb_peer_dictation;
 mod rxdb_peer_grok;
 mod rxdb_peer_jour_fixe_speech;
 mod rxdb_peer_workjet_devices;
+pub(crate) mod browser_bootstrap;
 pub mod server;
 mod session;
 mod session_handoff_gate;

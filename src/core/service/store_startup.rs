@@ -289,9 +289,14 @@ impl Foreground {
                 return Err(error);
             }
         }
-        owner
-            .stores
-            .install_http(super::store_http::HttpSurface::new(owner.inputs.clone()))?;
+        let http = match super::store_http::HttpSurface::new(owner.inputs.clone()).await {
+            Ok(http) => http,
+            Err(error) => {
+                owner.drain().await?;
+                return Err(error);
+            }
+        };
+        owner.stores.install_http(http)?;
         let app_engine =
             crate::business_os::app_platform::runtime_host::attach_native(owner.inputs.clone())
                 .await; // APP-PLATFORM-4 attach
