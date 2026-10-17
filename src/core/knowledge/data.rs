@@ -2724,6 +2724,155 @@ mod tests {
 
     /// An archived catalog row must not be projected.
     #[test]
+    fn knowledge_table_row_window_clamps_limit_and_rejects_unknown_table() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let domain = "verified_research";
+        let table_key = "sensor_readings";
+        let table_id = "kdt-sensor-readings";
+        let row_total = KNOWLEDGE_TABLE_ROW_WINDOW_MAX + 5;
+        let live_path = compute_parquet_path(root, domain, table_key);
+        let conn = open_runtime_db(root)?;
+        insert_knowledge_catalog_row(
+            &conn,
+            table_id,
+            domain,
+            table_key,
+            &live_path.display().to_string(),
+            row_total as i64,
+            None,
+        )?;
+        insert_knowledge_catalog_row(
+            &conn,
+            "kdt-archived-window",
+            domain,
+            "archived_readings",
+            "/nope.parquet",
+            4,
+            Some("2026-01-01T00:00:00Z"),
+        )?;
+        insert_knowledge_catalog_row(
+            &conn,
+            "kdt-missing-parquet",
+            domain,
+            "missing_parquet",
+            "/stale.parquet",
+            42,
+            None,
+        )?;
+        let rows = (0..row_total)
+            .map(|index| json!({"reading": index as i64}))
+            .collect::<Vec<_>>();
+        let df = super::super::parquet_io::rows_to_df(&rows)?;
+        super::super::parquet_io::commit_parquet(&live_path, df)?;
+
+        let window = knowledge_table_row_window(root, table_id, 0, 5_000)?;
+        assert_eq!(KNOWLEDGE_TABLE_ROW_WINDOW_MAX, 1_000);
+        assert_eq!(window.limit, 1_000);
+        assert_eq!(window.rows.len(), 1_000);
+        assert_eq!(window.row_count, row_total as i64);
+        assert_eq!(window.rows[0]["reading"].as_i64(), Some(0));
+        assert_eq!(window.rows[999]["reading"].as_i64(), Some(999));
+
+        let missing = knowledge_table_row_window(root, "kdt-missing-parquet", 0, 10)?;
+        assert!(missing.rows.is_empty());
+        assert_eq!(missing.row_count, 42);
+        assert!(missing.content_hash.is_empty());
+        assert_eq!(missing.schema_hash, "catalog-schema");
+        let incomplete = knowledge_table_all_rows(root, "kdt-missing-parquet").unwrap_err();
+        assert!(
+            incomplete
+                .to_string()
+                .contains("before its advertised row count"),
+            "{incomplete:#}"
+        );
+
+        let unknown = knowledge_table_row_window(root, "kdt-does-not-exist", 0, 10).unwrap_err();
+        let unknown_message = format!("{unknown:#}");
+        assert!(
+            unknown_message.contains("unknown knowledge table: kdt-does-not-exist"),
+            "{unknown_message}"
+        );
+        let archived = knowledge_table_row_window(root, "kdt-archived-window", 0, 10).unwrap_err();
+        let archived_message = format!("{archived:#}");
+        assert!(
+            archived_message.contains("archived knowledge table: kdt-archived-window"),
+            "{archived_message}"
+        );
+        assert!(is_knowledge_table_not_found(&unknown));
+        assert!(is_knowledge_table_not_found(&archived));
+        assert!(is_knowledge_table_not_found(
+            &unknown.context("wrapped by a caller")
+        ));
+        assert!(!is_knowledge_table_not_found(&anyhow::anyhow!(
+            "unknown knowledge table: text alone does not classify"
+        )));
+        Ok(())
+    }
+
+    #[test]
+    fn knowledge_table_snapshot_survives_replacement_between_pages() -> anyhow::Result<()> {
+        let temp = tempfile::tempdir()?;
+        let root = temp.path();
+        let table_id = "kdt-atomic-pages";
+        let original_rows = (0..KNOWLEDGE_TABLE_ROW_WINDOW_MAX + 7)
+            .map(|index| json!({"reading": index as i64, "revision": "original"}))
+            .collect::<Vec<_>>();
+        let path = seed_knowledge_table_for_test(
+            root,
+            table_id,
+            "sensors",
+            "readings",
+            &original_rows,
+            None,
+        )?;
+        let snapshot = KnowledgeTableSnapshot::open(root, table_id)?;
+        let old_hash = snapshot.content_hash.clone();
+        let replacement_rows = vec![json!({"replacement": "shorter revision"})];
+        let mut pages = 0;
+        let all = collect_knowledge_table_rows(|offset| {
+            let page = snapshot.window(root, table_id, offset, KNOWLEDGE_TABLE_ROW_WINDOW_MAX)?;
+            pages += 1;
+            if offset == 0 {
+                let df = super::super::parquet_io::rows_to_df(&replacement_rows)?;
+                super::super::parquet_io::commit_parquet(&path, df)?;
+            }
+            Ok(page)
+        })?;
+        assert_eq!(pages, 2);
+        assert_eq!(
+            all.rows
+                .iter()
+                .map(|row| row["reading"].as_i64())
+                .collect::<Vec<_>>(),
+            (0..original_rows.len())
+                .map(|index| Some(index as i64))
+                .collect::<Vec<_>>()
+        );
+        assert!(all.rows.iter().all(|row| row["revision"] == "original"));
+        assert_eq!(all.row_count, original_rows.len() as i64);
+        assert_eq!(all.content_hash, old_hash);
+
+        // Hash, schema and rows remain pinned even for a page opened after rename.
+        let old_page = snapshot.window(root, table_id, 0, 1)?;
+        assert_eq!(old_page.rows[0]["reading"], 0);
+        assert_eq!(old_page.rows[0]["revision"], "original");
+        assert_eq!(old_page.content_hash, all.content_hash);
+        assert_eq!(old_page.schema_hash, all.schema_hash);
+        let fresh = knowledge_table_all_rows(root, table_id)?;
+        assert_eq!(fresh.rows.len(), 1);
+        assert_eq!(fresh.rows[0]["replacement"], "shorter revision");
+        assert_eq!(fresh.row_count, 1);
+        assert_ne!(fresh.content_hash, all.content_hash);
+        assert_ne!(fresh.schema_hash, all.schema_hash);
+        let empty = knowledge_table_row_window(root, table_id, 0, 0)?;
+        assert!(empty.rows.is_empty());
+        assert_eq!(empty.schema_hash, fresh.schema_hash);
+        assert_eq!(empty.content_hash, fresh.content_hash);
+        Ok(())
+    }
+
+    #[test]
     fn knowledge_table_active_tables_filter_domain_and_skip_archived() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let root = temp.path();
