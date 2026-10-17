@@ -475,3 +475,13 @@ Nicht zurückgenommen (bewusst): `customer-modules/outbound-lead-generation/modu
 ## Befund unter Last
 
 - Mail-QA `editor.undo-redo`: im parallelen Gate-Lauf fehlte der letzte getippte Buchstabe dauerhaft („…Kampagneninhal“), allein 2/2 grün. Verdacht: EasyEmail-`debounce(200)` verliert unter Last den letzten Tastendruck. Eigener Punkt nach Zug 16.
+
+## Nachport-Stand (Sa 17.10. 14:xx)
+
+- **news/threads b325ef17c „lesbare Thread-Titel statt IDs“**: in v4 bereits abgedeckt – `modules/threads/naming.js`
+  (`isIdentifier` filtert UUIDs, `cmd_`/`thread_`-IDs, Hashes; Name aus Aufgabe/Befehl/Projekt). Kein Nachport nötig.
+- **news/threads b325ef17c „Icon + Wort in Kopfleisten“ (workjet#801, `shared/pane-icon-labels.js`)**: 1:1-Port geprüft und
+  verworfen. Mit Kurzwörtern reichen die Kopfknöpfe in v4 unter den Knopfcluster des Fensters (G8 reservierte Zone, threads
+  900 px: 2 Knöpfe), die threads-Suche schrumpft auf 98 px (v4-api „linker Kopf“ rot), der Titel „Threads“ wird bei 420 px
+  abgeschnitten (G4); news v4-api 2 Tests im Zeitlimit. Braucht eine Gestaltungsentscheidung für v4-Kopfleisten (z. B. Wort
+  nur ab Fensterbreite X oder Überlaufmenü) – gilt dann für alle Apps, nicht nur news/threads.
