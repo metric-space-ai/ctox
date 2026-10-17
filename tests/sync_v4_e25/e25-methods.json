@@ -1195,7 +1195,7 @@
       "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
       "verification": "Native BOS/sync baseline green; removing the live native binding check makes revoked-enrollment admission red.",
       "productive": "not_run(peer)",
-      "gap": "Existing remote run terminal/restoration and remaining counterfactual custody require recovery after SSH255; do not duplicate the run.",
+      "gap": "GPU3 final result lost. GPU4 rerun stopped at compilation with ENOSPC before native execution; source restored and terminal result retained. Remaining counterfactuals and productive peer execution are unverified.",
       "component_source_sha256": "8fb469a5df3c611e063a68ee4e21ec79ee494f83aedb0178b021416e197c939f",
       "native_resolver": "devices::active_machine_enrollment; Platform borrows registered BOS reader; schema/feed unchanged; canonical command validation/idempotency retained; Platform::worker_grant rechecks source at consumption"
     },
@@ -1207,7 +1207,7 @@
       "verification": "Native baseline: admin-only unavailable response, no restart intent.",
       "productive": "not_run",
       "gap": "post-M7: native completion publication plus bounded service consumer",
-      "component_source_sha256": "728051911bb01ebb58f7c370f15a340aa88700f01840b26f4b2fb4864bac84e7",
+      "component_source_sha256": "8fb469a5df3c611e063a68ee4e21ec79ee494f83aedb0178b021416e197c939f",
       "capability_filter": {
         "entry": "Platform::filter_session_capabilities",
         "status": "native_component_verified",
