@@ -50,6 +50,7 @@ const CTOX_OUTBOUND_SELLIFY_LOOKUP_METHOD = 'ctox.outbound.sellify_lookup.v1';
 const MAX_PEER_SEND_QUEUE_FRAMES = 1024;
 const MAX_PEER_SEND_QUEUE_BYTES = 16 * 1024 * 1024;
 const FAIR_SEND_SCHEDULE = ['high', 'high', 'high', 'high', 'normal', 'normal', 'low'];
+const COMMAND_PLANE_WRITE_COLLECTIONS = new Set(['business_commands', 'ctox_queue_tasks']);
 // Hard wire invariant shared with the Rust peer (MAX_SERIALIZED_FRAME_BYTES in
 // connection_handler_rs.rs): a single serialized DataChannel message must stay
 // <= 16 KiB or browsers kill the channel. Chunks are budgeted by their
@@ -403,7 +404,11 @@ export class CtoxWebRtcNativePeer {
     this.incomingFrames.clear();
   }
 
-  send(remotePeerId, payload) {
+  // `hooks` (optional) lets request() observe the real wire hand-off:
+  // onSent() fires after channel.send (inline) or after the framed transfer
+  // completed, onSendFailed(error) when the frame never left this browser,
+  // and cancelled() drops an item whose request already gave up.
+  send(remotePeerId, payload, hooks = null) {
     const connection = this.connections.get(remotePeerId);
     if (!connection?.channel || connection.channel.readyState !== 'open') {
       return false;
@@ -414,6 +419,7 @@ export class CtoxWebRtcNativePeer {
       text,
       inline: encodedSize(text) <= MAX_INLINE_FRAME_BYTES,
       priority: classifySendPriority(payload, text),
+      hooks: hooks && typeof hooks === 'object' ? hooks : null,
     });
   }
 
@@ -473,6 +479,10 @@ export class CtoxWebRtcNativePeer {
       while (!this.closed && this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState === 'open') {
         const item = nextQueuedSend(connection.sendQueue);
         if (!item) break;
+        if (sendItemCancelled(item)) {
+          this.refreshSendQueueStatus(connection);
+          continue;
+        }
         this.refreshSendQueueStatus(connection);
         this.recordTransportStatus({
           sentScheduledFrames: this.transportStats.sentScheduledFrames + 1,
@@ -489,14 +499,18 @@ export class CtoxWebRtcNativePeer {
             connection.channel.send(item.text);
             this.recordSentInlineFrame(item.payload, connection.channel);
           } catch (error) {
+            notifySendItemFailed(item, error);
             this.removeConnection(connection.remotePeerId, 'send-queue-send-failed', null, { expectedConnection: connection });
             throw error;
           }
+          notifySendItemSent(item);
           continue;
         }
         try {
           await this.sendFramed(connection, item.text);
+          notifySendItemSent(item);
         } catch (error) {
+          notifySendItemFailed(item, error);
           const peerClosed = isPeerClosedError(error);
           if (this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState !== 'open') {
             this.removeConnection(connection.remotePeerId, 'frame-send-channel-closed', null, { expectedConnection: connection });
@@ -634,8 +648,15 @@ export class CtoxWebRtcNativePeer {
       const item = nextHighPriorityInlineSend(queue);
       if (!item) break;
       this.refreshSendQueueStatus(connection);
+      if (sendItemCancelled(item)) continue;
       await this.waitForSendBuffer(connection.channel, connection);
-      connection.channel.send(item.text);
+      try {
+        connection.channel.send(item.text);
+      } catch (error) {
+        notifySendItemFailed(item, error);
+        throw error;
+      }
+      notifySendItemSent(item);
       this.recordSentInlineFrame(item.payload, connection.channel);
       this.recordTransportStatus({
         sentScheduledFrames: this.transportStats.sentScheduledFrames + 1,
@@ -748,39 +769,84 @@ export class CtoxWebRtcNativePeer {
     const requestPeerId = String(remotePeerId || '');
     const requestConnection = this.connections.get(requestPeerId) || null;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      // Field incident 17.10.2026: the response deadline used to start at
+      // enqueue time, so time spent behind a bulk transfer in THIS browser's
+      // own send queue counted as "native did not answer"; a ctoxProtocol or
+      // token timeout then replaced the whole connection every 2-3 minutes and
+      // dropped every in-flight request. The response deadline now starts when
+      // the frame actually left the browser. A bounded queue wait still
+      // rejects the request (same retryable message), but never recycles the
+      // connection: local queueing is not evidence of a dead peer.
+      const entry = {
+        resolve, reject, timer: null, method, peerId: remotePeerId, sentAtMs: 0,
+      };
+      const queueWaitTimer = setTimeout(() => {
+        if (entry.sentAtMs || this.pending.get(id) !== entry) return;
         this.pending.delete(id);
-        const error = new Error(`Timed out waiting for WebRTC response ${method}`);
-        const peerId = requestPeerId;
-        const connection = this.connections.get(peerId);
+        const connection = this.connections.get(requestPeerId);
         if (connection && connection === requestConnection) {
-          this.recordConnectionEvent(connection, 'request-timeout', { method });
-          if (shouldRecycleConnectionAfterRequestTimeout(method)) {
-            this.forceInitiatorPeers.add(peerId);
-            this.removeConnection(peerId, `request-timeout-${method}`, null, { expectedConnection: connection });
-          }
+          this.recordConnectionEvent(connection, 'request-send-queue-timeout', { method });
         }
+        const error = new Error(`Timed out waiting for WebRTC response ${method} (request still queued locally)`);
+        error.code = 'ctox_webrtc_request_send_queue_timeout';
+        error.transient = true;
+        error.retryable = true;
         reject(error);
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer, method, peerId: remotePeerId });
+      entry.timer = queueWaitTimer;
+      const armResponseTimer = () => {
+        if (entry.sentAtMs || this.pending.get(id) !== entry) return;
+        entry.sentAtMs = Date.now();
+        clearTimeout(queueWaitTimer);
+        entry.timer = setTimeout(() => {
+          if (this.pending.get(id) !== entry) return;
+          this.pending.delete(id);
+          const error = new Error(`Timed out waiting for WebRTC response ${method}`);
+          const peerId = requestPeerId;
+          const connection = this.connections.get(peerId);
+          if (connection && connection === requestConnection) {
+            this.recordConnectionEvent(connection, 'request-timeout', { method });
+            if (shouldRecycleConnectionAfterRequestTimeout(method)) {
+              this.forceInitiatorPeers.add(peerId);
+              this.removeConnection(peerId, `request-timeout-${method}`, null, { expectedConnection: connection });
+            }
+          }
+          reject(error);
+        }, timeoutMs);
+      };
+      const hooks = {
+        onSent: armResponseTimer,
+        onSendFailed: (error) => {
+          if (this.pending.get(id) !== entry) return;
+          this.pending.delete(id);
+          clearTimeout(entry.timer);
+          reject(error instanceof Error ? error : new Error(String(error?.message || error)));
+        },
+        cancelled: () => this.pending.get(id) !== entry,
+      };
+      this.pending.set(id, entry);
       const frame = { id, method, params };
       if (collection) frame.collection = collection;
-      const sendPromise = (
+      const immediate = (
         method === 'ctox.browser.live.v1'
         || method === 'ctox.workjet.jour_fixe.speech.v1'
         || method === CTOX_OUTBOUND_SELLIFY_LOOKUP_METHOD
-      )
-        ? this.sendImmediateControlFrame(remotePeerId, frame)
-        : Promise.resolve(this.send(remotePeerId, frame));
+      );
+      const sendPromise = immediate
+        ? this.sendImmediateControlFrame(remotePeerId, frame).then((sent) => {
+          if (sent) armResponseTimer();
+          return sent;
+        })
+        : Promise.resolve(this.send(remotePeerId, frame, hooks));
       sendPromise.then((sent) => {
         if (sent) return;
         this.pending.delete(id);
-        clearTimeout(timer);
+        clearTimeout(entry.timer);
         this.scheduleReconnect(remotePeerId, `send-not-open-${method}`);
         reject(new Error(`WebRTC peer ${remotePeerId} is not open`));
       }).catch((error) => {
         this.pending.delete(id);
-        clearTimeout(timer);
+        clearTimeout(entry.timer);
         reject(error);
       });
     });
@@ -2882,6 +2948,7 @@ export const webrtcNativeTestInternals = Object.freeze({
   utf8ByteLength,
   recordReceivedFrame,
   classifySendPriority,
+  shouldRecycleConnectionAfterRequestTimeout,
   MAX_SERIALIZED_FRAME_BYTES,
   MAX_INCOMING_FRAME_TRANSFERS,
   MAX_INBOUND_REQUESTS,
@@ -2953,6 +3020,30 @@ function nextHighPriorityInlineSend(queue) {
   return item;
 }
 
+function sendItemCancelled(item) {
+  try {
+    return item?.hooks?.cancelled?.() === true;
+  } catch {
+    return false;
+  }
+}
+
+function notifySendItemSent(item) {
+  try {
+    item?.hooks?.onSent?.();
+  } catch {
+    // Observer failures never break the send worker.
+  }
+}
+
+function notifySendItemFailed(item, error) {
+  try {
+    item?.hooks?.onSendFailed?.(error);
+  } catch {
+    // Observer failures never break the send worker.
+  }
+}
+
 function shouldRecycleConnectionAfterRequestTimeout(method = '') {
   return ['ctoxProtocol', 'token'].includes(String(method || ''));
 }
@@ -2976,7 +3067,15 @@ function classifySendPriority(payload = {}, text = '') {
     'rxdb.file.cancel',
     'ctox.browser.live.v1',
   ].includes(method)) return 'high';
-  if (method === 'masterWrite' && encodedSize(text) > MAX_INLINE_FRAME_BYTES) return 'low';
+  if (method === 'masterWrite' && encodedSize(text) > MAX_INLINE_FRAME_BYTES) {
+    // Field incident 17.10.2026: a 60-100 KB research command sat in the same
+    // low FIFO as multi-hundred-KB lead batches (low gets 1 of 7 schedule
+    // slots) and missed its submit window. Command intents are user actions:
+    // a framed command/queue write keeps the normal lane regardless of size.
+    // The frame already carries its collection (request(..., collection)).
+    if (COMMAND_PLANE_WRITE_COLLECTIONS.has(String(payload?.collection || ''))) return 'normal';
+    return 'low';
+  }
   if (method === 'masterWrite') return 'high';
   if (payload?.id && (Object.prototype.hasOwnProperty.call(payload, 'result') || Object.prototype.hasOwnProperty.call(payload, 'error'))) {
     return 'high';
