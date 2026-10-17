@@ -207,11 +207,16 @@ export function createKernel(opts = {}) {
   }
   function makeLive(tags, compute) {
     const subs = new Set();
+    // Catalog changes can move an already open view to a new generation.
+    const depend = tag => {
+      if(tags.includes(tag))return;tags.push(tag);
+      if(subs.size){if(!tagIndex.has(tag))tagIndex.set(tag,new Set());tagIndex.get(tag).add(impl);}
+    };
     let last, has = false;
     const impl = {
       refresh() {
         if (!subs.size) return;
-        const v = deepFreeze(compute());
+        const v = deepFreeze(compute(depend));
         if (has && liveEqual(last, v)) return;
         last = v; has = true;
         for (const cb of [...subs]) { try { cb(v); } catch (e) { console.error('[ctox-kernel] subscriber', e); } }
@@ -219,13 +224,13 @@ export function createKernel(opts = {}) {
       dispose() { subs.clear(); for (const t of tags) tagIndex.get(t)?.delete(impl); },
     };
     return {
-      get: () => { guardAlive(); return deepFreeze(compute()); },
+      get: () => { guardAlive(); return deepFreeze(compute(depend)); },
       subscribe(cb) {
         if (typeof cb !== 'function') throw new CtoxError('invalid', 'subscribe braucht eine Funktion');
         if (closed || loggedOut) return () => {};
         if (!subs.size) { for (const t of tags) { if (!tagIndex.has(t)) tagIndex.set(t, new Set()); tagIndex.get(t).add(impl); } allLives.add(impl); }
         subs.add(cb);
-        last = deepFreeze(compute()); has = true;
+        last = deepFreeze(compute(depend)); has = true;
         try { cb(last); } catch (e) { console.error('[ctox-kernel] subscriber', e); }
         return () => {
           if (!subs.delete(cb) || subs.size) return;
@@ -1437,25 +1442,31 @@ export function createKernel(opts = {}) {
     // §16.13: known owners and declared foreign reads require both grants.
     // Published callers fail closed on undeclared names, even before the owner
     // manifest arrives. Only manifest-less contract/bootstrap names are local.
-    function assertReadableCollection(collection) {
+    function assertReadableCollection(collection, allowPending = false) {
       const c = collection.replace(/@g[1-9][0-9]*$/, '');
       if (c === PREFERENCE_COLLECTION) throw new CtoxError('forbidden','Use api.prefs',{path:'collection'});
       const callerManifest = readManifest(appId,app.ver);
       const foreign = callerManifest?.foreign_collections?.[c];
+      const owner = foreign?.owner_app ?? foreign?.app ?? foreign?.owner;
+      const ownerRow = owner && mirrorGet('business_apps',owner);
+      const ownerVersion = ownerRow?.base?.data?.active_ver;
+      const versionRow = owner && mirrorGet('business_app_versions',`${owner}@${ownerVersion}`);
+      // A declared read can wait for installation; absence is never authority to read rows.
+      if(allowPending && foreign?.ops?.includes('read') && owner && !ownerRow?.revoked && !ownerRow?.base?.deleted && !versionRow?.revoked && !versionRow?.base?.deleted && !currentManifest(owner))return;
       const owners = [...(mirror.get('business_app_versions')?.values() ?? [])]
         .filter(row => !row.revoked && !row.base?.deleted).map(row => row.base?.data).filter(Boolean).filter(v => v.app_id !== appId && v.manifest?.collections?.[c]);
       if ((foreign || owners.length || (SYSTEM_COLLECTIONS.has(c) && appId!=='ctox-platform') || (callerManifest && !callerManifest.collections?.[c])) && !readableNamespace(resolveNs(app, collection)))
         throw new CtoxError('forbidden', 'Foreign collection requires declaration and read export', {path:'collection'});
     }
     function readableLive(collection, tags, compute, empty) {
-      const live = makeLive([...tags,'c:business_apps','c:business_app_versions'], () => {
+      const live = makeLive([...tags,'c:business_apps','c:business_app_versions','activation'], depend => {
         try { assertReadableCollection(collection); }
         catch (error) { if (error.code === 'forbidden') return empty; throw error; }
-        return compute();
+        return compute(depend);
       });
       return {
-        get() { assertReadableCollection(collection); return live.get(); },
-        subscribe(cb) { assertReadableCollection(collection); return live.subscribe(cb); },
+        get() { assertReadableCollection(collection,true); return live.get(); },
+        subscribe(cb) { assertReadableCollection(collection,true); return live.subscribe(cb); },
       };
     }
     // E30: a CAS hash is not authority. Only canonical, still-readable rows
@@ -1664,12 +1675,13 @@ export function createKernel(opts = {}) {
       app,
       prefs: createPreferencesApi({appId,userId,read:id=>visible(mirrorGet(PREFERENCE_COLLECTION,id)),write:(op,id,body)=>localWrite(app,op,PREFERENCE_COLLECTION,id,body,false,{preference:true})}),
       query(collection, q = {}) {
-        assertReadableCollection(collection);
+        assertReadableCollection(collection,true);
         const cq = compileQuery(q);
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
         if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
-        return readableLive(collection, [`c:${ns}`, 'actor'], () => {
+        return readableLive(collection, [`c:${ns}`, 'actor'], depend => {
+          const ns=resolveNs(app,collection);depend(`c:${ns}`);lastUsed.set(ns,Date.now());
           const m = mirror.get(ns);
           if (!m) return [];
           const docs = [];
@@ -1678,11 +1690,11 @@ export function createKernel(opts = {}) {
         }, []);
       },
       get(collection, id) {
-        assertReadableCollection(collection);
+        assertReadableCollection(collection,true);
         const ns = resolveNs(app, collection);
         lastUsed.set(ns,Date.now());
         if(evicted.has(ns)){if(isLeader)track(subscribeCollection(ns,'P1'));else post({type:'subscribe',collection:ns});}
-        return readableLive(collection, [`c:${ns}`, 'actor'], () => ownRowOk(ns,id) ? readDocument(mirrorGet(ns,id),withDefaults(app,collection,visible(mirrorGet(ns,id)))) : null, null);
+        return readableLive(collection, [`c:${ns}`, 'actor'], depend => {const ns=resolveNs(app,collection);depend(`c:${ns}`);lastUsed.set(ns,Date.now());return ownRowOk(ns,id) ? readDocument(mirrorGet(ns,id),withDefaults(app,collection,visible(mirrorGet(ns,id)))) : null;}, null);
       },
       put(collection, doc) { return localWrite(app, 'put', collection, doc?.id, doc); },
       patch(collection, id, patch, options = {}) { return localWrite(app, 'patch', collection, id, patch, false, {expected_revision:options.expected_revision}); },
