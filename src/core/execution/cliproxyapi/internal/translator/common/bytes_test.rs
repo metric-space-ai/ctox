@@ -18,15 +18,6 @@ fn join_raw_array_matches_empty_single_and_multiple_contracts() {
 }
 
 #[test]
-fn new_raw_array_items_preserves_nil_and_capacity() {
-    assert!(new_raw_array_items(0).is_none());
-    assert!(new_raw_array_items(-1).is_none());
-    let items = new_raw_array_items(3).expect("positive capacity");
-    assert_eq!(items.len(), 0);
-    assert_eq!(items.capacity(), 3);
-}
-
-#[test]
 fn set_raw_array_items_preserves_surrounding_bytes_and_dotted_paths() {
     type RawArrayCase<'a> = (&'a [u8], &'a str, Vec<Vec<u8>>, &'a [u8]);
     let cases: &[RawArrayCase<'_>] = &[

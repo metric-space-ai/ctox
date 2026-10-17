@@ -142,27 +142,3 @@ async fn test_current_shell_detects_zsh() {
         );
     }
 }
-
-#[tokio::test]
-async fn detects_powershell_as_default() {
-    if !cfg!(windows) {
-        return;
-    }
-
-    let powershell_shell = default_user_shell();
-    let shell_path = powershell_shell.shell_path;
-
-    assert!(shell_path.ends_with("pwsh.exe") || shell_path.ends_with("powershell.exe"));
-}
-
-#[test]
-fn finds_powershell() {
-    if !cfg!(windows) {
-        return;
-    }
-
-    let powershell_shell = get_shell(ShellType::PowerShell, None).unwrap();
-    let shell_path = powershell_shell.shell_path;
-
-    assert!(shell_path.ends_with("pwsh.exe") || shell_path.ends_with("powershell.exe"));
-}

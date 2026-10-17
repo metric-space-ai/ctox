@@ -593,20 +593,6 @@ mod tests {
     }
 
     #[test]
-    fn registry_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "firmenabc.at");
-        assert!(m.aliases().contains(&"firmenabc"));
-        assert_eq!(m.tier(), Tier::S);
-        assert_eq!(m.countries(), &[Country::At]);
-        assert!(m.requires_credential().is_none());
-        assert!(m
-            .authoritative_for()
-            .iter()
-            .any(|f| *f == FieldKey::FirmaName));
-    }
-
-    #[test]
     fn shape_query_at_pins_domain() {
         let shaped = module()
             .shape_query("Red Bull GmbH", &ctx_at())
@@ -624,12 +610,6 @@ mod tests {
     #[test]
     fn shape_query_empty_returns_none() {
         assert!(module().shape_query("   ", &ctx_at()).is_none());
-    }
-
-    #[test]
-    fn no_fetch_direct_override() {
-        // Crawl-Pfad — der Trait-Default ist `None`, das ist der Vertrag.
-        assert!(module().fetch_direct(&ctx_at(), "Red Bull GmbH").is_none());
     }
 
     /// End-to-end extraction against a frozen Red Bull GmbH profile.

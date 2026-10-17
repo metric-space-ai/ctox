@@ -1,4 +1,4 @@
-import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { loadRxdbRuntime } from './rxdb-runtime.js?v=20261016-v2-push-resume-native-owned';
 
 const CTOX_RXDB_RUNTIME = Object.freeze({
   name: 'ctox-rxdb-js',

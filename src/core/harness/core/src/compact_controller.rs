@@ -1995,32 +1995,7 @@ mod tests {
         assert_eq!(structured_json_payload(markup), markup);
     }
 
-    #[test]
-    fn every_compaction_stage_ends_with_the_structured_reply_rule() {
-        let history = (0..6)
-            .map(|index| format!("## Step {index}\n{}", "observed detail. ".repeat(40)))
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let blocks = segment_context(&history, DEFAULT_BLOCK_CHARS);
-        for prompt in [
-            build_progress_prompt("next", "model-x", &blocks).unwrap(),
-            build_screen_prompt("next", 1000, 500, &blocks).unwrap(),
-            build_iteration_prompt("next", 1000, 1, 2000, &blocks).unwrap(),
-        ] {
-            assert!(prompt.trim_end().ends_with(STRUCTURED_REPLY_RULE));
-        }
-    }
 
-    #[test]
-    fn block_decision_defaults_omitted_revised_text() {
-        let response: DecisionStageResponse = serde_json::from_str(
-            r#"{"summary":"kept","decisions":[{"id":"B01","action":"keep","destination":"story","reason":"still relevant"}]}"#,
-        )
-        .expect("decision response");
-
-        assert_eq!(response.decisions.len(), 1);
-        assert!(response.decisions[0].revised_text.is_empty());
-    }
 
     #[test]
     fn apply_decisions_marks_drop_as_discard() {

@@ -1,3 +1,4 @@
+import { applyPaneIconLabels } from '../../shared/pane-icon-labels.js';
 import { loadModuleMessages } from '../../shared/i18n.js';
 import { renderHtmlIfChanged } from '../../shared/stable-dom.js';
 import {
@@ -10,6 +11,10 @@ import {
   buildAdapterCommand,
   buildAuthCommand,
   buildGenerateCommand,
+  digestActive,
+  digestOf,
+  withDigest,
+  issueWindow,
   buildScheduleCommand,
   categoryCounts,
   compactCount,
@@ -70,11 +75,20 @@ const labels = {
     linkCopied: 'Link kopiert',
     editorial: 'CTOX Redaktion',
     topicsFooter: '{0} Themen',
+    topicsFooterOne: '1 Thema',
     postsFooter: '{0} Beiträge · {1}',
     newTopic: 'Neues Thema',
     titleRequired: 'Gib dem Thema einen Namen.',
     deadlineRequired: 'Wähle einen Stichtag.',
     saveFailed: 'Speichern fehlgeschlagen',
+    drawerUndo: 'Rückgängig',
+    drawerUndone: 'Rückgängig gemacht',
+    createTopic: 'Thema anlegen',
+    savedSourceOn: '„{0}“ aktiviert',
+    savedSourceOff: '„{0}“ deaktiviert',
+    savedSourceRemoved: '„{0}“ entfernt',
+    savedSourcesAdded: 'Quellen hinzugefügt',
+    savedTopic: 'Gespeichert',
     commandFailed: 'Auftrag konnte nicht an CTOX übergeben werden',
     commandQueued: 'Auftrag an CTOX übergeben',
     deleteConfirm: 'Nochmal klicken: „{0}“ mit allen Ausgaben löschen',
@@ -113,6 +127,15 @@ const labels = {
     weekly: '{1} {0}',
     deadline: 'Stichtag {0}',
     manual: 'Manuell',
+    digestLabel: 'Wochenzusammenfassung',
+    digestHint: 'Fasst die Tagesausgaben der Woche zu Top-Meldungen und Trends zusammen, ohne neue Recherche.',
+    digestWeekday: 'Wochentag',
+    digestTime: 'Uhrzeit',
+    digestSavedOn: 'Wochenzusammenfassung {0} {1} gespeichert',
+    digestSavedOff: 'Wochenzusammenfassung ausgeschaltet',
+    undo: 'Rückgängig',
+    undone: 'Rückgängig gemacht',
+    digestCadence: '{0} · Woche {1}',
   },
   en: {
     topicsTitle: 'Topics',
@@ -141,11 +164,20 @@ const labels = {
     linkCopied: 'Link copied',
     editorial: 'CTOX Editorial',
     topicsFooter: '{0} topics',
+    topicsFooterOne: '1 topic',
     postsFooter: '{0} posts · {1}',
     newTopic: 'New topic',
     titleRequired: 'Give the topic a name.',
     deadlineRequired: 'Pick a deadline.',
     saveFailed: 'Saving failed',
+    drawerUndo: 'Undo',
+    drawerUndone: 'Undone',
+    createTopic: 'Create topic',
+    savedSourceOn: '“{0}” enabled',
+    savedSourceOff: '“{0}” disabled',
+    savedSourceRemoved: '“{0}” removed',
+    savedSourcesAdded: 'Sources added',
+    savedTopic: 'Saved',
     commandFailed: 'Could not hand the task to CTOX',
     commandQueued: 'Task handed to CTOX',
     deleteConfirm: 'Click again: delete “{0}” with all issues',
@@ -184,6 +216,15 @@ const labels = {
     weekly: '{1} {0}',
     deadline: 'Deadline {0}',
     manual: 'Manual',
+    digestLabel: 'Weekly digest',
+    digestHint: "Sums up the week's daily issues into top stories and trends, without new research.",
+    digestWeekday: 'Weekday',
+    digestTime: 'Time',
+    digestSavedOn: 'Weekly digest {0} {1} saved',
+    digestSavedOff: 'Weekly digest turned off',
+    undo: 'Undo',
+    undone: 'Undone',
+    digestCadence: '{0} · week {1}',
   },
 };
 
@@ -230,6 +271,7 @@ export async function mount(ctx) {
   ensureStyles();
   ctx.host.innerHTML = await loadModuleMarkup();
   bindElements(ctx.host);
+  applyPaneIconLabels(ctx.host, state.lang);
   wireEvents();
   await loadAll();
   subscribeAll();
@@ -386,6 +428,14 @@ function wireEvents() {
   els.host.addEventListener('click', onClick);
   els.form?.addEventListener('submit', (event) => { event.preventDefault(); saveTopic(); });
   els.form?.querySelector('[name="cadence"]')?.addEventListener('change', syncCadenceFields);
+  // Instant save: every committed field change of a saved topic persists.
+  els.form?.addEventListener('change', (event) => {
+    if (event.target.closest?.('[data-digest-input]')) { onDigestChange(); return; }
+    if (event.target?.dataset?.action === 'toggle-source') return;
+    if (event.target === els.newSourceKind || event.target === els.newSourceValue) return;
+    if (event.target?.closest?.('[data-digest-undo], [data-panel="digest"]')) return;
+    instantSave(t('savedTopic'));
+  });
   els.newSourceKind?.addEventListener('change', syncSourcePlaceholder);
   els.newSourceValue?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') { event.preventDefault(); addDraftSource(); }
@@ -424,6 +474,8 @@ function onClick(event) {
     'mobile-back': () => els.root?.classList.remove('is-detail'),
     'close-drawer': closeDrawer,
     'save-topic': saveTopic,
+    'drawer-undo': undoDrawerChange,
+    'digest-undo': undoDigest,
     'delete-topic': deleteTopic,
     'drawer-tab': () => setDrawerTab(target.dataset.tab),
     'add-source': addDraftSource,
@@ -434,7 +486,10 @@ function onClick(event) {
     'remove-source': () => removeDraftSource(target.dataset.sourceId),
     'source-adapter': () => runSourceCommand(target.dataset.sourceId, 'adapter'),
     'source-auth': () => runSourceCommand(target.dataset.sourceId, 'auth'),
-    'toggle-category': () => target.setAttribute('aria-pressed', String(target.getAttribute('aria-pressed') !== 'true')),
+    'toggle-category': () => {
+      target.setAttribute('aria-pressed', String(target.getAttribute('aria-pressed') !== 'true'));
+      instantSave(t('savedTopic'));
+    },
     'expand-post': () => toggleExpand(target.dataset.postId),
     'bookmark-post': () => toggleBookmark(target.dataset.postId),
     'copy-post-link': () => copyPostLink(target.dataset.postId),
@@ -471,6 +526,21 @@ function render() {
 }
 
 function cadenceLabel(topic) {
+  const base = baseCadenceLabel(topic);
+  if (!digestActive(topic)) return base;
+  const digest = digestOf(topic);
+  return t('digestCadence', base, `${weekdayShort(digest.weekday)} ${digest.run_time}`);
+}
+
+function weekdayShort(weekday) {
+  return new Date(2024, 0, 7 + (Number(weekday) || 0)).toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE', { weekday: 'short' }).replace('.', '');
+}
+
+function weekdayLong(weekday) {
+  return new Date(2024, 0, 7 + (Number(weekday) || 0)).toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE', { weekday: 'long' });
+}
+
+function baseCadenceLabel(topic) {
   if (topic.cadence === 'daily') return t('daily', topic.run_time);
   if (topic.cadence === 'weekly') {
     const day = new Date(2024, 0, 7 + (Number(topic.weekday) || 0)).toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE', { weekday: 'short' }).replace('.', '');
@@ -495,7 +565,7 @@ function renderLeft() {
   els.leftPane?.__ctoxPaneGrammar?.setCounts?.(counts);
   setCountsFallback(els.leftPane, counts);
   const topics = topicsForBand(state.topics, state.leftGrammar);
-  setFooter(els.leftPane, t('topicsFooter', topics.length));
+  setFooter(els.leftPane, topics.length === 1 ? t('topicsFooterOne') : t('topicsFooter', topics.length));
   if (!state.topics.length) {
     renderHtmlIfChanged(els.topicList, `
       <div class="ctox-empty news-empty">
@@ -825,7 +895,8 @@ async function generateIssue() {
     created_at_ms: now,
     updated_at_ms: now,
   };
-  const command = buildGenerateCommand(topic, state.sources, issue, previous);
+  const freshness = issueWindow(topic, state.issues, state.posts, now);
+  const command = buildGenerateCommand(topic, state.sources, issue, previous, freshness);
   issue.command_id = command.command_id;
   try {
     await issuesHandle.insert(issue);
@@ -894,7 +965,27 @@ function openDrawer(topic) {
   const migrated = migrateLegacyRedditSources(state.drawer.sources, draft.id);
   state.drawer.sources = migrated.sources;
   migrated.removedIds.forEach((id) => state.drawer.removed.add(id));
+  state.drawer.saved = drawerSnapshot();
   els.drawerTitle.textContent = persisted ? draft.title : t('newTopic');
+  syncDrawerFoot();
+  hideDrawerUndo();
+  fillDrawerForm(draft);
+  const deleteButton = els.host.querySelector('[data-action="delete-topic"]');
+  deleteButton.hidden = !persisted;
+  deleteButton.classList.remove('is-danger');
+  deleteButton.setAttribute('title', t('deleteTopic'));
+  deleteButton.setAttribute('aria-label', t('deleteTopic'));
+  renderDigestField();
+  syncCadenceFields();
+  syncSourcePlaceholder();
+  setDrawerTab('topic');
+  renderSourceGroups();
+  els.scrim.hidden = false;
+  els.drawer.hidden = false;
+  form.elements.title.focus();
+}
+
+function fillDrawerForm(draft) {
   const form = els.form;
   form.elements.title.value = draft.title || '';
   form.elements.prompt.value = draft.prompt || '';
@@ -908,21 +999,11 @@ function openDrawer(topic) {
   els.drawer.querySelectorAll('[data-category]').forEach((chip) => {
     chip.setAttribute('aria-pressed', String((draft.categories || CATEGORIES).includes(chip.dataset.category)));
   });
-  const deleteButton = els.host.querySelector('[data-action="delete-topic"]');
-  deleteButton.hidden = !persisted;
-  deleteButton.classList.remove('is-danger');
-  deleteButton.setAttribute('title', t('deleteTopic'));
-  deleteButton.setAttribute('aria-label', t('deleteTopic'));
   syncCadenceFields();
-  syncSourcePlaceholder();
-  setDrawerTab('topic');
-  renderSourceGroups();
-  els.scrim.hidden = false;
-  els.drawer.hidden = false;
-  form.elements.title.focus();
 }
 
 function closeDrawer() {
+  hideDrawerUndo();
   state.drawer = null;
   if (els.drawer) els.drawer.hidden = true;
   if (els.scrim) els.scrim.hidden = true;
@@ -947,6 +1028,108 @@ function syncCadenceFields() {
     deadline: cadence === 'deadline',
   };
   els.form?.querySelectorAll('[data-cadence-field]').forEach((field) => { field.hidden = !visible[field.dataset.cadenceField]; });
+  const digestField = els.form?.querySelector('[data-digest-field]');
+  if (digestField) digestField.hidden = cadence !== 'daily';
+}
+
+// --- Weekly digest (instant save + undo) ----------------------------------
+
+const DIGEST_UNDO_MS = 8000;
+
+function renderDigestField() {
+  const host = els.form?.querySelector('[data-digest-field]');
+  if (!host || !state.drawer) return;
+  const digest = digestOf(state.drawer.topic);
+  const days = [1, 2, 3, 4, 5, 6, 0]
+    .map((day) => `<option value="${day}"${day === digest.weekday ? ' selected' : ''}>${esc(weekdayLong(day))}</option>`)
+    .join('');
+  host.innerHTML = `
+    <label class="news-check"><input type="checkbox" data-digest-input="enabled"${digest.enabled ? ' checked' : ''} /> <span>${esc(t('digestLabel'))}</span></label>
+    <p class="news-digest-hint">${esc(t('digestHint'))}</p>
+    <div class="news-field-grid" data-digest-schedule${digest.enabled ? '' : ' hidden'}>
+      <div>
+        <label class="ctox-field-label" for="news-digest-weekday">${esc(t('digestWeekday'))}</label>
+        <select class="ctox-select" id="news-digest-weekday" data-digest-input="weekday">${days}</select>
+      </div>
+      <div>
+        <label class="ctox-field-label" for="news-digest-time">${esc(t('digestTime'))}</label>
+        <input class="ctox-input" id="news-digest-time" type="time" data-digest-input="run_time" value="${esc(digest.run_time)}" />
+      </div>
+    </div>
+    <div class="news-undo" data-digest-undo hidden>
+      <span data-digest-undo-text></span>
+      <button class="ctox-button" type="button" data-action="digest-undo">${esc(t('undo'))}</button>
+    </div>`;
+}
+
+function readDigestField() {
+  const host = els.form?.querySelector('[data-digest-field]');
+  return {
+    enabled: Boolean(host?.querySelector('[data-digest-input="enabled"]')?.checked),
+    weekday: Number(host?.querySelector('[data-digest-input="weekday"]')?.value ?? 5),
+    run_time: host?.querySelector('[data-digest-input="run_time"]')?.value || '17:00',
+  };
+}
+
+async function onDigestChange() {
+  if (!state.drawer) return;
+  const previous = digestOf(state.drawer.topic);
+  const next = readDigestField();
+  if (JSON.stringify(previous) === JSON.stringify(digestOf({ payload: { digest: next } }))) return;
+  const saved = await applyDigest(next);
+  if (!saved) return;
+  showDigestUndo(previous, next);
+}
+
+// Persisted topics save at once; a new topic keeps it in the draft until
+// the topic itself is created.
+async function applyDigest(digest) {
+  const drawer = state.drawer;
+  if (!drawer) return false;
+  drawer.topic = withDigest(drawer.topic, digest);
+  if (drawer.persisted) {
+    const topics = collection(COLLECTIONS.topics);
+    const stored = state.topics.find((item) => item.id === drawer.topic.id);
+    if (!topics || !stored) { notify('error', t('saveFailed')); return false; }
+    const topic = withDigest(stored, digest);
+    try {
+      await topics.upsert(topic);
+    } catch (error) {
+      notify('error', t('saveFailed'), error?.message);
+      return false;
+    }
+    dispatch(buildScheduleCommand(topic, { digest: true })).catch((error) => notify('error', t('commandFailed'), error?.message));
+  }
+  const schedule = els.form?.querySelector('[data-digest-schedule]');
+  if (schedule) schedule.hidden = !digestOf(drawer.topic).enabled;
+  return true;
+}
+
+function showDigestUndo(previous, next) {
+  const bar = els.form?.querySelector('[data-digest-undo]');
+  if (!bar || !state.drawer) return;
+  const text = next.enabled
+    ? t('digestSavedOn', weekdayLong(next.weekday), next.run_time)
+    : t('digestSavedOff');
+  bar.querySelector('[data-digest-undo-text]').textContent = text;
+  bar.hidden = false;
+  state.drawer.digestUndo = previous;
+  clearTimeout(state.digestUndoTimer);
+  state.digestUndoTimer = setTimeout(() => {
+    bar.hidden = true;
+    if (state.drawer) state.drawer.digestUndo = null;
+  }, DIGEST_UNDO_MS);
+}
+
+async function undoDigest() {
+  const previous = state.drawer?.digestUndo;
+  if (!previous) return;
+  clearTimeout(state.digestUndoTimer);
+  state.drawer.digestUndo = null;
+  if (await applyDigest(previous)) {
+    renderDigestField();
+    notify('success', t('undone'));
+  }
 }
 
 function syncSourcePlaceholder() {
@@ -1025,6 +1208,7 @@ function addDraftSource() {
   }
   els.newSourceValue.value = '';
   renderSourceGroups();
+  instantSave(t('savedSourcesAdded'));
 }
 
 function addPreset(kind) {
@@ -1033,24 +1217,29 @@ function addPreset(kind) {
     const merged = redditPresetSource(state.drawer.sources, state.drawer.topic.id);
     state.drawer.sources = [...state.drawer.sources.filter((source) => source.id !== merged.id), merged];
     renderSourceGroups();
+    instantSave(t('savedSourcesAdded'));
     return;
   }
   const preset = kind === 'lab' ? LAB_PRESET : COMMUNITY_PRESET;
   state.drawer.sources.push(...presetSources(state.drawer.topic.id, preset, kind, state.drawer.sources));
   renderSourceGroups();
+  instantSave(t('savedSourcesAdded'));
 }
 
 function toggleDraftSource(sourceId) {
   const source = state.drawer?.sources.find((item) => item.id === sourceId);
   if (!source) return;
   source.enabled = source.enabled === false;
+  instantSave(t(source.enabled ? 'savedSourceOn' : 'savedSourceOff', source.label));
 }
 
 function removeDraftSource(sourceId) {
   if (!state.drawer) return;
+  const label = state.drawer.sources.find((source) => source.id === sourceId)?.label || '';
   state.drawer.sources = state.drawer.sources.filter((source) => source.id !== sourceId);
   state.drawer.removed.add(sourceId);
   renderSourceGroups();
+  instantSave(t('savedSourceRemoved', label));
 }
 
 function readTopicForm() {
@@ -1083,32 +1272,126 @@ async function saveTopic() {
     els.form.elements.title.focus();
     return;
   }
+  if (!(await persistDrawer(topic))) return;
+  closeDrawer();
+  state.selectedTopicId = topic.id;
+}
+
+// Write the drawer state (topic + sources) and re-dispatch the schedule when
+// it changed. Shared by "Thema anlegen", instant save and undo.
+async function persistDrawer(topic, sourceList = state.drawer?.sources || [], removed = state.drawer?.removed || new Set()) {
   const topics = collection(COLLECTIONS.topics);
   const sources = collection(COLLECTIONS.sources);
-  if (!topics || !sources) return notify('error', t('saveFailed'));
+  if (!topics || !sources) {
+    notify('error', t('saveFailed'));
+    return false;
+  }
   const now = Date.now();
+  const previous = state.topics.find((item) => item.id === topic.id);
   try {
     await topics.upsert(topic);
-    for (const source of state.drawer.sources) {
+    for (const source of sourceList) {
       await sources.upsert({ ...source, topic_id: topic.id, updated_at_ms: now });
     }
-    for (const sourceId of state.drawer.removed) {
+    for (const sourceId of removed) {
       const doc = await sources.findOne(sourceId).exec();
       await doc?.remove();
     }
   } catch (error) {
     notify('error', t('saveFailed'), error?.message);
-    return;
+    return false;
   }
-  const previous = state.topics.find((item) => item.id === topic.id);
   const scheduleChanged = !previous
     || previous.cron_expr !== topic.cron_expr
     || previous.enabled !== topic.enabled
     || previous.title !== topic.title;
-  closeDrawer();
-  state.selectedTopicId = topic.id;
   if (scheduleChanged) {
     dispatch(buildScheduleCommand(topic)).catch((error) => notify('error', t('commandFailed'), error?.message));
+  }
+  // The digest follows the topic: only a daily, active topic keeps it.
+  if (digestActive(topic) !== Boolean(previous && digestActive(previous)) || (digestActive(topic) && !previous)) {
+    dispatch(buildScheduleCommand(topic, { digest: true })).catch((error) => notify('error', t('commandFailed'), error?.message));
+  }
+  return true;
+}
+
+// --- Instant save + undo (8 s), same pattern as the weekly digest ----------
+
+const DRAWER_UNDO_MS = 8000;
+
+function syncDrawerFoot() {
+  const foot = els.drawer?.querySelector('[data-drawer-create-foot]');
+  if (!foot) return;
+  foot.hidden = Boolean(state.drawer?.persisted);
+  const create = foot.querySelector('[data-action="save-topic"]');
+  if (create) create.textContent = t('createTopic');
+  const undo = els.drawer?.querySelector('[data-action="drawer-undo"]');
+  if (undo) undo.textContent = t('drawerUndo');
+}
+
+function drawerSnapshot() {
+  return {
+    topic: { ...state.drawer.topic },
+    sources: state.drawer.sources.map((source) => ({ ...source })),
+  };
+}
+
+async function instantSave(message) {
+  const drawer = state.drawer;
+  if (!drawer?.persisted) return; // a new topic is created once, with its name
+  const topic = readTopicForm();
+  if (validateTopic(topic)) return; // keep editing; nothing half-valid is stored
+  const before = drawer.saved || drawerSnapshot();
+  const removed = new Set(drawer.removed);
+  if (!(await persistDrawer(topic, drawer.sources, removed))) return;
+  if (state.drawer !== drawer) return;
+  drawer.removed.clear();
+  drawer.topic = topic;
+  drawer.saved = drawerSnapshot();
+  els.drawerTitle.textContent = topic.title;
+  showDrawerUndo(message, before);
+}
+
+function showDrawerUndo(message, before) {
+  const bar = els.drawer?.querySelector('[data-drawer-undo]');
+  if (!bar || !state.drawer) return;
+  bar.querySelector('[data-drawer-undo-text]').textContent = message;
+  bar.querySelector('[data-action="drawer-undo"]').hidden = false;
+  bar.hidden = false;
+  // Undo returns to the state before the first change of this burst.
+  if (!state.drawer.undo) state.drawer.undo = before;
+  clearTimeout(state.drawerUndoTimer);
+  state.drawerUndoTimer = setTimeout(hideDrawerUndo, DRAWER_UNDO_MS);
+}
+
+function hideDrawerUndo() {
+  clearTimeout(state.drawerUndoTimer);
+  const bar = els.drawer?.querySelector('[data-drawer-undo]');
+  if (bar) bar.hidden = true;
+  if (state.drawer) state.drawer.undo = null;
+}
+
+async function undoDrawerChange() {
+  const drawer = state.drawer;
+  const snapshot = drawer?.undo;
+  if (!snapshot) return;
+  const keep = new Set(snapshot.sources.map((source) => source.id));
+  const added = new Set(drawer.sources.filter((source) => !keep.has(source.id)).map((source) => source.id));
+  if (!(await persistDrawer(snapshot.topic, snapshot.sources, added))) return;
+  if (state.drawer !== drawer) return;
+  clearTimeout(state.drawerUndoTimer);
+  drawer.topic = { ...snapshot.topic };
+  drawer.sources = snapshot.sources.map((source) => ({ ...source }));
+  drawer.saved = drawerSnapshot();
+  drawer.undo = null;
+  drawer.removed.clear();
+  fillDrawerForm(drawer.topic);
+  renderSourceGroups();
+  const bar = els.drawer?.querySelector('[data-drawer-undo]');
+  if (bar) {
+    bar.querySelector('[data-drawer-undo-text]').textContent = t('drawerUndone');
+    bar.querySelector('[data-action="drawer-undo"]').hidden = true;
+    state.drawerUndoTimer = setTimeout(hideDrawerUndo, 2500);
   }
 }
 
@@ -1126,6 +1409,7 @@ async function deleteTopic() {
   }
   try {
     await dispatch(buildScheduleCommand(topic, { deleted: true }));
+    if (digestOf(topic).enabled) await dispatch(buildScheduleCommand(topic, { deleted: true, digest: true }));
   } catch (error) {
     notify('error', t('commandFailed'), error?.message);
     return;
@@ -1179,6 +1463,7 @@ function importTopics() {
         idMap.set(raw.id, topic.id);
         await topics.upsert(topic);
         dispatch(buildScheduleCommand(topic)).catch(() => {});
+        if (digestActive(topic)) dispatch(buildScheduleCommand(topic, { digest: true })).catch(() => {});
       }
       for (const raw of Array.isArray(data.sources) ? data.sources : []) {
         const topicId = idMap.get(raw.topic_id);

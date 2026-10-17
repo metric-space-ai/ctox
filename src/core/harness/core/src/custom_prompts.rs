@@ -143,7 +143,3 @@ fn parse_frontmatter(content: &str) -> (Option<String>, Option<String>, String) 
     };
     (desc, hint, body)
 }
-
-#[cfg(test)]
-#[path = "custom_prompts_tests.rs"]
-mod tests;

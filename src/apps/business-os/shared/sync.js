@@ -22,9 +22,9 @@ import {
   collectionTopic,
   nativeRxdbPeerReady,
   normalizeCollectionReadinessState,
-} from './sync-contract.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261014-shell-v2-query-checkpoint-readonly';
+} from './sync-contract.js?v=20261016-v2-push-resume-native-owned';
+import { getBusinessOsCapabilityToken } from './command-bus.js?v=20261016-v2-push-resume-native-owned';
+import { loadRxdbRuntime, RXDB_BUNDLE_URL } from './rxdb-runtime.js?v=20261016-v2-push-resume-native-owned';
 import { CTOX_COMMAND_LIFECYCLE_CAPABILITY } from './command-lifecycle.generated.js';
 
 const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
@@ -34,7 +34,7 @@ const CTOX_RXDB_PROTOCOL = 'ctox-rxdb-protocol-v1';
 // those builds made the new tab follow the old, failed bridge forever. The
 // release epoch isolates only the local BroadcastChannel/Web Lock; both builds
 // still replicate through the same server-authoritative WebRTC room.
-const MULTI_TAB_COORDINATOR_EPOCH = '20261014-shell-v2-query-checkpoint-readonly';
+const MULTI_TAB_COORDINATOR_EPOCH = '20261016-v2-push-resume-native-owned';
 const CTOX_BROWSER_CAPABILITIES = [
   'ctox-control-plane-v1',
   'ctox-role-bound-signaling-v1',
@@ -54,6 +54,25 @@ const NATIVE_PEER_OPEN_WATCHDOG_MS = 30000;
 // user-visible command failure.
 const NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS = 60000;
 const NATIVE_PEER_RESTART_STABLE_MS = 1000;
+// Incident 15.10.2026 (welsch, network switch): every WebRTC connection
+// dropped, the background repair restarted only the unhealthy collections and
+// re-registered them on the SAME shared room peer, which the still-registered
+// healthy collections kept alive. Its signaling socket / RTCPeerConnection
+// never reopened; user_thread_states waited 60 s, its individual retry another
+// 60 s, and the tab sat on "Daten werden synchronisiert" while a freshly
+// loaded tab was ready in ~11 s. The background repair cycle therefore gives
+// each individual attempt only this budget (attempt + retry ≈ 15 s) and then
+// escalates to a full transport re-bring-up. Explicit callers of
+// restartCollections keep the long cold-start budget above.
+const REPAIR_CYCLE_OPEN_TIMEOUT_MS = 7_500;
+// Full re-bring-up = the initial-load path: every bridge leaves the shared
+// room (refCount 0 closes signaling socket + RTCPeerConnection), then all
+// active collections register on a fresh room peer. It gets the full
+// cold-start budget. Failures 1 and 2 retry without extra delay; from the
+// third consecutive failure the delay grows exponentially.
+const TRANSPORT_REBRINGUP_BACKOFF_FREE_FAILURES = 2;
+const TRANSPORT_REBRINGUP_BACKOFF_BASE_MS = 2_000;
+const TRANSPORT_REBRINGUP_BACKOFF_MAX_MS = 60_000;
 const COMMAND_FOLLOWER_DIRECT_OPEN_TIMEOUT_MS = 25_000;
 const COMMAND_FOLLOWER_DIRECT_FLUSH_TIMEOUT_MS = 35_000;
 const COMMAND_FOLLOWER_BRIDGE_TIMEOUT_MS = 40_000;
@@ -162,7 +181,15 @@ export function createSyncRuntime({
   capabilityTokenProvider = getBusinessOsCapabilityToken,
   onNativeQueryReady = null,
   mayReadCollection = () => true,
+  // Test seam only: production always uses the module constants.
+  repairTimings = null,
 }) {
+  const timings = {
+    repairCycleOpenTimeoutMs: REPAIR_CYCLE_OPEN_TIMEOUT_MS,
+    transportRebringupOpenTimeoutMs: NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS,
+    transportRebringupBackoffBaseMs: TRANSPORT_REBRINGUP_BACKOFF_BASE_MS,
+    ...(repairTimings || {}),
+  };
   const bridges = new CollectionSyncRegistry();
   const activeCollections = new Set();
   // Direct shell/service consumers pin a bridge until they explicitly stop
@@ -184,6 +211,11 @@ export function createSyncRuntime({
   let globalRestartTimer = null;
   let unregisteredSweepTimer = null;
   let repairCycleInProgress = false;
+  // Single flight for the full transport re-bring-up plus its consecutive
+  // failure count (drives the backoff and makes the next repair cycle skip the
+  // pointless individual restart while the transport is known to be dead).
+  let transportRebringupInFlight = null;
+  let transportRebringupFailures = 0;
   // Collection starts used to hang off ONE promise chain: every collection
   // waited for the previous one to finish its bridge before it even began. At a
   // measured 600–1000 ms per bridge that put the whole boot on a serial track —
@@ -485,7 +517,24 @@ export function createSyncRuntime({
       repairCycleInProgress = true;
       try {
         if (collections.length) {
-          const stableBridges = await syncRuntime.restartCollections(collections);
+          let stableBridges;
+          if (transportRebringupFailures > 0) {
+            // The previous full re-bring-up already proved the shared room
+            // peer cannot be revived per collection; go straight to it.
+            stableBridges = await syncRuntime.rebringUpTransport(triggerCollection);
+          } else {
+            try {
+              stableBridges = await syncRuntime.restartCollections(collections, {
+                openTimeoutMs: timings.repairCycleOpenTimeoutMs,
+              });
+            } catch (individualError) {
+              if (!shouldEscalateToTransportRebringup(individualError)) throw individualError;
+              // Individual restart + individual retry found no open native
+              // peer: the shared transport itself is dead. Re-bring it up NOW
+              // instead of scheduling another deferred per-collection repair.
+              stableBridges = await syncRuntime.rebringUpTransport(triggerCollection);
+            }
+          }
           applyRoomRepairCycleOutcome(roomCircuit, { stableCount: stableBridges.length });
         }
       } catch (restartError) {
@@ -494,6 +543,10 @@ export function createSyncRuntime({
         // collection watchdogs only mark their own collection unhealthy and
         // cannot independently advance or reopen the room circuit.
         nextDelay = applyRoomRepairCycleOutcome(roomCircuit, { errors: [restartSerialized] }) || 0;
+        nextDelay = Math.max(nextDelay, transportRebringupBackoffMs(
+          transportRebringupFailures,
+          timings.transportRebringupBackoffBaseMs,
+        ));
         emitDiagnostic({ phase: 'failed', lastError: restartSerialized });
       } finally {
         repairCycleInProgress = false;
@@ -1018,8 +1071,11 @@ export function createSyncRuntime({
         pin: wasPinned && pinnedCollections.has(collection), requireOwner: hadOwner, repairRetirement,
       });
     },
-    async restartCollections(collections) {
+    async restartCollections(collections, options = {}) {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
+      const openTimeoutMs = Number(options?.openTimeoutMs) > 0
+        ? Number(options.openTimeoutMs)
+        : NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS;
       if (globalRestartTimer) clearTimeout(globalRestartTimer);
       globalRestartTimer = null;
       const requested = [...new Set((collections || [])
@@ -1075,6 +1131,17 @@ export function createSyncRuntime({
         preserveLeases: true,
         preservePin: true,
       })));
+      if (options?.fullTransport === true) {
+        // Full transport re-bring-up: the shared room peer (signaling socket +
+        // RTCPeerConnection) closes only when its LAST registration leaves.
+        // Any bridge left behind here would keep the dead transport alive and
+        // every restarted collection would re-attach to it. Leases and pins
+        // are preserved; nothing is restarted that was not restartable above.
+        await Promise.all([...bridges.keys()].map((collection) => this.stopCollection(collection, {
+          preserveLeases: true,
+          preservePin: true,
+        })));
+      }
       const startBatch = async (batchCollections) => {
         collectionStartLanes = createCollectionStartLanes();
         collectionStartLaneCursor = 0;
@@ -1100,14 +1167,14 @@ export function createSyncRuntime({
           if (!readyBridge?.state && readyBridge?.ready) {
             readyBridge = await withRejectingTimeout(
               () => readyBridge.ready,
-              NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS,
-              `Native peer bridge did not start for ${collection} within ${NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS}ms.`,
+              openTimeoutMs,
+              `Native peer bridge did not start for ${collection} within ${openTimeoutMs}ms.`,
             );
           }
           await waitForStableNativePeerOpenState(
             readyBridge?.state,
             collection,
-            NATIVE_PEER_RESTART_OPEN_TIMEOUT_MS,
+            openTimeoutMs,
             NATIVE_PEER_RESTART_STABLE_MS,
           );
           return readyBridge;
@@ -1158,6 +1225,59 @@ export function createSyncRuntime({
         throw retryError;
       }
       return stable.map(({ bridge }) => bridge);
+    },
+    // Complete transport re-bring-up, exactly the initial-load path: all
+    // bridges leave the shared room (new signaling socket, new
+    // RTCPeerConnection on the next registration) and every active collection
+    // starts again. Single flight; never reloads the page; local data,
+    // outbox, leases and pins stay untouched.
+    rebringUpTransport(triggerCollection = null) {
+      if (stopped) return Promise.reject(new Error('Business OS sync runtime has been stopped'));
+      if (transportRebringupInFlight) return transportRebringupInFlight;
+      const leased = bridges.leaseCounts()
+        .filter(([, count]) => count > 0)
+        .map(([collection]) => collection);
+      const collections = [...new Set([
+        ...activeCollections,
+        ...pinnedCollections,
+        ...bridges.keys(),
+        ...leased,
+        ...repairCandidateCollectionNames(activeCollections, diagnostics.collections),
+      ])].filter((collection) => !suspendedCollections.has(collection));
+      const attempt = transportRebringupFailures + 1;
+      diagnostics.transportRebringup = {
+        state: 'running',
+        attempt,
+        trigger: triggerCollection || null,
+        collections: collections.length,
+        startedAt: new Date().toISOString(),
+      };
+      emitDiagnostic({ phase: 'reconnecting' }, { immediate: true });
+      const run = this.restartCollections(collections, {
+        fullTransport: true,
+        openTimeoutMs: timings.transportRebringupOpenTimeoutMs,
+      }).then((stableBridges) => {
+        transportRebringupFailures = 0;
+        diagnostics.transportRebringup = {
+          ...diagnostics.transportRebringup, state: 'succeeded', finishedAt: new Date().toISOString(),
+        };
+        emitDiagnostic({ phase: 'collection-sync' });
+        return stableBridges;
+      }, (error) => {
+        transportRebringupFailures += 1;
+        diagnostics.transportRebringup = {
+          ...diagnostics.transportRebringup,
+          state: 'failed',
+          consecutiveFailures: transportRebringupFailures,
+          lastError: serializeError(error),
+          finishedAt: new Date().toISOString(),
+        };
+        throw error;
+      }).finally(() => {
+        if (transportRebringupInFlight === run) transportRebringupInFlight = null;
+      });
+      transportRebringupInFlight = run;
+      return run;
     },
     async suspendCollections(collections, reason = 'sync-suspended') {
       if (stopped) throw new Error('Business OS sync runtime has been stopped');
@@ -1563,6 +1683,27 @@ function applyRoomRepairCycleOutcome(roomCircuit, { stableCount = 0, errors = []
     options.now,
     options.random,
   );
+}
+
+// Escalate the background repair cycle to a full transport re-bring-up only
+// for the typed "no restarted collection reached an open native peer" verdict
+// of restartCollections. Terminal schema/auth/control-plane failures and
+// partial successes (some collection DID open, so the transport works) keep
+// the existing per-collection repair.
+function shouldEscalateToTransportRebringup(error) {
+  if (!error || typeof error !== 'object') return false;
+  return String(error.code || '') === 'peer_connect_timeout' && error.retryable !== false;
+}
+
+function transportRebringupBackoffMs(
+  consecutiveFailures,
+  baseMs = TRANSPORT_REBRINGUP_BACKOFF_BASE_MS,
+  maxMs = TRANSPORT_REBRINGUP_BACKOFF_MAX_MS,
+) {
+  const failures = Math.max(0, Math.floor(Number(consecutiveFailures) || 0));
+  if (failures <= TRANSPORT_REBRINGUP_BACKOFF_FREE_FAILURES) return 0;
+  const exponent = Math.min(16, failures - TRANSPORT_REBRINGUP_BACKOFF_FREE_FAILURES - 1);
+  return Math.min(maxMs, baseMs * (2 ** exponent));
 }
 
 function withTimeout(value, ms) {
@@ -3370,6 +3511,9 @@ export const __ctoxSyncTestHooks = {
   boundedCollectionStartQueueStep,
   repairRestartBatch,
   applyRoomRepairCycleOutcome,
+  shouldEscalateToTransportRebringup,
+  transportRebringupBackoffMs,
+  REPAIR_CYCLE_OPEN_TIMEOUT_MS,
   isStalledReconnectingCollection,
   repairCandidateCollectionNames,
   resetRoomCircuitState,

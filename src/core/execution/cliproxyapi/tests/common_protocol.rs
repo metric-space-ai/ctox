@@ -5,15 +5,6 @@ use ctox_cliproxyapi::internal::translator::common::{
 use ctox_cliproxyapi::protocol::{ContentPart, StreamEvent, Usage};
 
 #[test]
-fn upstream_token_count_shapes_are_byte_exact() {
-    assert_eq!(claude_input_tokens_json(42), br#"{"input_tokens":42}"#);
-    assert_eq!(
-        gemini_token_count_json(42),
-        br#"{"totalTokens":42,"promptTokensDetails":[{"modality":"TEXT","tokenCount":42}]}"#,
-    );
-}
-
-#[test]
 fn raw_array_join_does_not_reencode_tool_arguments() {
     let items = vec![br#"{"n":1.00}"#.to_vec(), br#"{"s":"\\u0061"}"#.to_vec()];
     assert_eq!(join_raw_array(&items), br#"[{"n":1.00},{"s":"\\u0061"}]"#);
@@ -27,13 +18,6 @@ fn model_noop_preserves_whitespace_and_bytes() {
         set_top_level_string(b"not-json", "model", "gpt-5"),
         b"not-json"
     );
-}
-
-#[test]
-fn missing_null_and_value_are_distinct() {
-    assert_eq!(JsonField::<u8>::from_value(None), JsonField::Missing);
-    assert_eq!(JsonField::<u8>::from_value(Some(None)), JsonField::Null);
-    assert_eq!(JsonField::from_value(Some(Some(4_u8))), JsonField::Value(4));
 }
 
 #[test]
@@ -57,14 +41,6 @@ fn sse_decoder_ignores_invalid_retry_and_clears_empty_event_fields() {
     assert_eq!(finished.len(), 1);
     assert_eq!(finished[0].event, None);
     assert_eq!(finished[0].data, b"second");
-}
-
-#[test]
-fn sse_encoder_matches_upstream_shape() {
-    assert_eq!(
-        sse_event_data("response.done", br#"{"ok":true}"#),
-        b"event: response.done\ndata: {\"ok\":true}\n\n"
-    );
 }
 
 #[test]

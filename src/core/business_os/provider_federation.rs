@@ -236,8 +236,10 @@ pub(super) fn handle_command(
     actor: &str,
     admission: Option<&DomainEffectAdmission>,
 ) -> Result<Value> {
+    // The browser command bus stores a missing record_id as "" (see
+    // shared/command-bus.js), so an empty id means "no record" here.
     ensure!(
-        command.record_id.is_none(),
+        command.record_id.as_deref().is_none_or(str::is_empty),
         "provider commands do not accept record_id"
     );
     if account_controls::supports(&command.command_type) {

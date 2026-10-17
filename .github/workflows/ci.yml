@@ -490,12 +490,48 @@ jobs:
           path: runtime/build/deployment-audit/windows-secret-store-acceptance.json
           if-no-files-found: error
 
+      - name: Prepare nonempty Harness test gate
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ctox-filtered-harness-test" <<'HARNESS_TEST_RUNNER'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec bash "${GITHUB_WORKSPACE:?}/scripts/sync-v4/gate-harness.sh" "$@"
+          HARNESS_TEST_RUNNER
+          chmod +x "$RUNNER_TEMP/ctox-filtered-harness-test"
+
       - name: Harness core tests
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo test --locked --manifest-path src/core/harness/Cargo.toml -p ctox-core compact_controller --quiet
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/ctox-filtered-harness-test" ctox-core compact_controller
 
       - name: Harness spawn liveness proof
         if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
         run: |
-          cargo test --locked --manifest-path src/core/harness/Cargo.toml -p ctox-core harness_subagent_spawn_model_is_bounded_and_leaf_only --quiet
+          set -euo pipefail
+          "$RUNNER_TEMP/ctox-filtered-harness-test" ctox-core harness_subagent_spawn_model_forbids_free_subagents
           cargo run --locked -- process-mining spawn-liveness
+
+      - name: Harness interrupt terminal ownership
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_name in \
+            exact_turn_interrupt_and_completion_have_one_atomic_terminal_winner \
+            exact_turn_interrupt_receipt_waits_for_its_own_stop \
+            exact_turn_interrupt_rejects_delayed_request_after_replacement \
+            exact_turn_interrupt_rejects_unknown_empty_and_finished_turns \
+            exact_turn_interrupt_removes_cancelled_and_failed_receipts \
+            exact_turn_interrupt_session_exit_rejects_unprocessed_request \
+            abort_regular_task_emits_turn_aborted_only
+          do
+            "$RUNNER_TEMP/ctox-filtered-harness-test" ctox-core "$test_name"
+          done
+          "$RUNNER_TEMP/ctox-filtered-harness-test" ctox-app-server exact_turn_interrupt_rpc_preserves_identity_and_successor
+          "$RUNNER_TEMP/ctox-filtered-harness-test" ctox-app-server test_handle_turn_interrupted_emits_interrupted_with_error
+          "$RUNNER_TEMP/ctox-filtered-harness-test" ctox-app-server-protocol late_turn_complete_does_not_close_active_turn

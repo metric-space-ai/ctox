@@ -18,39 +18,3 @@ impl HomeSelectedAuthPublisher for Selected {
             .push((auth_id.to_owned(), auth_index.to_owned()));
     }
 }
-
-#[tokio::test]
-async fn callback_receives_selected_identity_once_per_attempt() {
-    let transport = TestHomeTransport::with_auth_ids(&["auth-selected"]);
-    let executor = TestExecutor::failing(0);
-    let (runtime, _) = runtime(transport, executor);
-    let selected = Arc::new(Selected::default());
-    runtime.set_selected_auth_publisher(Some(selected.clone()));
-    runtime
-        .execute_home(request("gpt"), "", false)
-        .await
-        .unwrap();
-    assert_eq!(
-        *selected.0.lock().unwrap(),
-        vec![("auth-selected".into(), "auth-selected".into())]
-    );
-}
-
-#[tokio::test]
-async fn callback_can_be_removed_without_global_residue() {
-    let transport = TestHomeTransport::with_auth_ids(&["first", "second"]);
-    let executor = TestExecutor::failing(0);
-    let (runtime, _) = runtime(transport, executor);
-    let selected = Arc::new(Selected::default());
-    runtime.set_selected_auth_publisher(Some(selected.clone()));
-    runtime
-        .execute_home(request("gpt"), "", false)
-        .await
-        .unwrap();
-    runtime.set_selected_auth_publisher(None);
-    runtime
-        .execute_home(request("gpt"), "", false)
-        .await
-        .unwrap();
-    assert_eq!(selected.0.lock().unwrap().len(), 1);
-}

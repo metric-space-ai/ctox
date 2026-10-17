@@ -1186,6 +1186,16 @@ var CtoxRecoveryJournal = class {
     await this.publishStatus();
     return record;
   }
+  // A refused write that the replication re-applied on the current master as
+  // a fresh local write (native-owned rebase). The new write is journaled as
+  // an ordinary batch; this entry is closed, not deleted, and is reclaimed by
+  // gcConflicts like any resolved entry.
+  async markConflictReplayed(conflictId) {
+    if (!conflictId) return false;
+    const updated = await updateRecord(this.db, CONFLICT_STORE, conflictId, (current) => current.state === "pending" ? { ...current, state: "resolved", resolution: "replayed_on_master", resolvedAtMs: Date.now() } : null);
+    await this.publishStatus();
+    return Boolean(updated);
+  }
   async listConflicts() {
     return getAllRecords(this.db, CONFLICT_STORE).then((rows) => rows.filter((row) => row.state === "pending"));
   }
@@ -10467,6 +10477,89 @@ function createPresenceRegistry(options = {}) {
   return new PresenceRegistry(options);
 }
 
+// src/apps/business-os/rxdb/src/native-owned-fields.mjs
+var NATIVE_OWNED_FIELD_COLLECTIONS = /* @__PURE__ */ new Set(["outbound_lead_generation_leads"]);
+var RESEARCHED_STATUSES = /* @__PURE__ */ new Set(["needs_review", "completed"]);
+function collectionHasNativeOwnedFields(collectionName) {
+  return NATIVE_OWNED_FIELD_COLLECTIONS.has(String(collectionName || ""));
+}
+function isNativeOwnedRejectionMessage(message) {
+  return /cannot change native-owned/i.test(String(message || ""));
+}
+function stamped(status) {
+  return Boolean(status && typeof status === "object" && !Array.isArray(status) && ["revision", "review"].some((key) => status[key] !== void 0 && status[key] !== null));
+}
+function plainObject(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function clone(value) {
+  return value === void 0 ? void 0 : JSON.parse(JSON.stringify(value));
+}
+function rebaseStatusMap(local, master) {
+  const localMap = plainObject(local);
+  const masterMap = plainObject(master);
+  if (!localMap && !masterMap) return local;
+  const result = {};
+  for (const [field, status] of Object.entries(localMap || {})) {
+    if (!stamped(status)) {
+      result[field] = status;
+    } else if (masterMap && Object.prototype.hasOwnProperty.call(masterMap, field) && !stamped(masterMap[field])) {
+      result[field] = clone(masterMap[field]);
+    }
+  }
+  for (const [field, status] of Object.entries(masterMap || {})) {
+    if (stamped(status)) result[field] = clone(status);
+  }
+  if (!localMap && !Object.keys(result).length) return local;
+  return result;
+}
+function contactsByPersonKey(contacts) {
+  const byKey = /* @__PURE__ */ new Map();
+  for (const contact of Array.isArray(contacts) ? contacts : []) {
+    const key = typeof contact?.person_key === "string" ? contact.person_key : "";
+    if (!key) continue;
+    byKey.set(key, byKey.has(key) ? null : contact);
+  }
+  return byKey;
+}
+function rebaseNativeOwnedFields(collectionName, local, master) {
+  if (!collectionHasNativeOwnedFields(collectionName)) return local;
+  if (!plainObject(local) || !plainObject(master) || local._deleted) return local;
+  const next = { ...local };
+  const rebasedLead = rebaseStatusMap(local.field_status, master.field_status);
+  if (rebasedLead !== void 0) next.field_status = rebasedLead;
+  const localPeople = plainObject(local.person_field_status);
+  const masterPeople = plainObject(master.person_field_status);
+  if (localPeople || masterPeople) {
+    const people = {};
+    for (const [person, statuses] of Object.entries(localPeople || {})) {
+      people[person] = rebaseStatusMap(statuses, masterPeople?.[person]);
+    }
+    for (const [person, statuses] of Object.entries(masterPeople || {})) {
+      if (Object.prototype.hasOwnProperty.call(people, person)) continue;
+      if (Object.values(plainObject(statuses) || {}).some(stamped)) {
+        people[person] = rebaseStatusMap(void 0, statuses);
+      }
+    }
+    next.person_field_status = people;
+  }
+  if (Array.isArray(local.contacts)) {
+    const masterContacts = contactsByPersonKey(master.contacts);
+    next.contacts = local.contacts.map((contact) => {
+      if (!plainObject(contact)) return contact;
+      const key = typeof contact.person_key === "string" ? contact.person_key : "";
+      const masterContact = key ? masterContacts.get(key) : null;
+      const statuses = rebaseStatusMap(contact.field_status, masterContact?.field_status);
+      if (statuses === contact.field_status) return contact;
+      return { ...contact, field_status: statuses };
+    });
+  }
+  if (local.research_status === "failed" && RESEARCHED_STATUSES.has(master.research_status)) {
+    next.research_status = master.research_status;
+  }
+  return next;
+}
+
 // src/apps/business-os/rxdb/src/v1_5_status.mjs
 var V1_5_QUERY_FETCH_CAPABILITY = CTOX_QUERY_FETCH_CAPABILITY;
 var V1_5_QUERY_RPC = CTOX_QUERY_RPC;
@@ -10934,6 +11027,8 @@ var replicationWebRtcTestInternals = Object.freeze({
   localCheckpointValidityKey,
   localCheckpointStillCovers,
   remoteCheckpointStillCovers,
+  remotePushCheckpointStillCovers,
+  localPushCheckpointStillCovers,
   // Eager replicas are never evicted by the demand sidecar.
   demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
@@ -11755,6 +11850,8 @@ var CtoxWebRtcReplicationState = class {
     this.cancelled = false;
     this.pullCheckpointsByPeer = /* @__PURE__ */ new Map();
     this.pushCheckpointsByPeer = /* @__PURE__ */ new Map();
+    this.nativeOwnedRebaseStats = { accepted: 0, denied: 0, replayed: 0 };
+    this.nativeOwnedReplayDone = false;
     this.changeSubscription = null;
     this.periodicPullTimer = null;
     this.periodicPushTimer = null;
@@ -12061,8 +12158,17 @@ var CtoxWebRtcReplicationState = class {
       } else {
         this.firstPullCompletedAtMs = 0;
         this.publishLocalReplicaCoverage();
-        this.retainedCheckpoints = null;
-        clearPersistentCheckpoints(this.checkpointStorageKey);
+        const keepPush = Boolean(retained.push) && remotePushCheckpointStillCovers(retained, validityKey) && localPushCheckpointStillCovers(retained.localValidityKey, localValidityKey) && readPermissionDigestMatches(retained.permissionDigest, readPermissionDigest);
+        if (keepPush) {
+          if (!this.pushCheckpointsByPeer.has(peerId)) {
+            this.pushCheckpointsByPeer.set(peerId, retained.push);
+          }
+          this.retainedCheckpoints = { ...retained, pull: null, firstPullCompletedAtMs: null };
+          writePersistentCheckpoints(this.checkpointStorageKey, this.retainedCheckpoints);
+        } else {
+          this.retainedCheckpoints = null;
+          clearPersistentCheckpoints(this.checkpointStorageKey);
+        }
       }
     }
     const peerStates = new Map(this.peerStates$.getValue() || /* @__PURE__ */ new Map());
@@ -12304,6 +12410,14 @@ var CtoxWebRtcReplicationState = class {
   }
   async pushToPeer(peerId) {
     if (!this.push || this.cancelled) return;
+    if (!this.nativeOwnedReplayDone && collectionHasNativeOwnedFields(this.collection?.name)) {
+      try {
+        await this.replayNativeOwnedRejections();
+      } catch (error) {
+        this.error$?.next?.(error);
+      }
+      if (this.cancelled) return;
+    }
     const batchSize = Number(this.push?.batchSize || 10);
     let checkpoint = this.pushCheckpointsByPeer.get(peerId) || null;
     while (!this.cancelled) {
@@ -12335,7 +12449,9 @@ var CtoxWebRtcReplicationState = class {
       }
       const rejectedIds = /* @__PURE__ */ new Set();
       for (const slice of boundedDirectPushBatches(documents)) {
-        let rows = slice.map((doc) => ({
+        const outgoing = collectionHasNativeOwnedFields(this.collection?.name) ? await this.rebaseOnKnownMasterState(slice) : slice;
+        if (this.cancelled) return;
+        let rows = outgoing.map((doc) => ({
           newDocumentState: doc,
           assumedMasterState: null
         }));
@@ -12378,13 +12494,19 @@ var CtoxWebRtcReplicationState = class {
             rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
             if (!rows.length) break;
           }
-          rows = await this.absorbMasterStateIntoConflictRows(rows);
+          rows = rebaseRowsOnAssumedMasterState(this.collection?.name, await this.absorbMasterStateIntoConflictRows(rows));
         }
         if (this.cancelled) return;
-        if (terminalRejection) {
-          await this.reconcileTerminalPushRejection(slice, peerId, terminalRejection);
+        let deniedDocuments = slice;
+        if (terminalRejection && this.nativeOwnedRebaseApplies(terminalRejection)) {
+          deniedDocuments = await this.retryNativeOwnedRejection(peerId, slice);
           if (this.cancelled) return;
-          for (const document2 of slice) {
+          if (!deniedDocuments.length) terminalRejection = null;
+        }
+        if (terminalRejection) {
+          await this.reconcileTerminalPushRejection(deniedDocuments, peerId, terminalRejection);
+          if (this.cancelled) return;
+          for (const document2 of deniedDocuments) {
             const id = primaryValue(document2, this.collection.schema.primaryPath);
             if (id) rejectedIds.add(id);
           }
@@ -12411,8 +12533,9 @@ var CtoxWebRtcReplicationState = class {
       if (documents.length < batchSize) break;
     }
   }
-  async writeDocumentsToPeer(peerId, documents) {
-    let rows = documents.map((doc) => ({
+  async writeDocumentsToPeer(peerId, documents, { nativeOwnedRecovery = true } = {}) {
+    const outgoing = collectionHasNativeOwnedFields(this.collection?.name) ? await this.rebaseOnKnownMasterState(documents) : documents;
+    let rows = outgoing.map((doc) => ({
       newDocumentState: doc,
       assumedMasterState: null
     }));
@@ -12426,6 +12549,10 @@ var CtoxWebRtcReplicationState = class {
       );
       const terminalRejection = terminalPushRejection(conflicts);
       if (terminalRejection) {
+        if (nativeOwnedRecovery && this.nativeOwnedRebaseApplies(terminalRejection)) {
+          const denied = await this.retryNativeOwnedRejection(peerId, documents);
+          if (!denied.length) return;
+        }
         throw terminalPushRejectionError(terminalRejection, this.collection.name);
       }
       if (replicationErrorResult(conflicts)) {
@@ -12450,7 +12577,7 @@ var CtoxWebRtcReplicationState = class {
         rows = await this.resolveWholeDocumentLwwConflicts(rows, peerId);
         if (!rows.length) break;
       }
-      rows = await this.absorbMasterStateIntoConflictRows(rows);
+      rows = rebaseRowsOnAssumedMasterState(this.collection?.name, await this.absorbMasterStateIntoConflictRows(rows));
     }
     if (rows.length) {
       rows = await this.absorbAuthoritativeCommandConflicts(rows, peerId);
@@ -12458,6 +12585,166 @@ var CtoxWebRtcReplicationState = class {
     if (rows.length) {
       throw new Error(`masterWrite conflicts remained for ${this.collection.name}`);
     }
+  }
+  // ----- native-owned fields (see native-owned-fields.mjs) -----
+  nativeOwnedRebaseApplies(rejection) {
+    return rejection?.kind === "authz" && collectionHasNativeOwnedFields(this.collection?.name) && isNativeOwnedRejectionMessage(rejection?.message);
+  }
+  // The latest master state this browser knows for a pending local row: the
+  // stored merge base (field-merge collections keep it across local writes).
+  // Whole-document LWW rows carry no base; their exact master arrives as the
+  // conflict row or through fetchMasterDocumentsById after a refusal.
+  async rebaseOnKnownMasterState(documents = []) {
+    const storage = this.collection?.storageCollection;
+    if (!collectionHasNativeOwnedFields(this.collection?.name) || typeof storage?.getStoredRecord !== "function") {
+      return documents;
+    }
+    const primaryPath = this.collection.schema.primaryPath;
+    const rebased = [];
+    for (const document2 of documents) {
+      let master = null;
+      try {
+        const record = await storage.getStoredRecord(primaryValue(document2, primaryPath));
+        master = record?.replicationOriginRole ? null : record?.base || null;
+      } catch {
+      }
+      rebased.push(master ? rebaseNativeOwnedFields(this.collection.name, document2, master) : document2);
+    }
+    return rebased;
+  }
+  // Exact master rows by primary key through the demand query channel (the
+  // same authorized native read the collection's query loader uses). Returns
+  // an empty map when no demand transport is attached or the read fails; the
+  // caller then keeps the existing reconcile-and-journal behaviour.
+  async fetchMasterDocumentsById(ids = []) {
+    const transport = this.shared?.demandTransport;
+    const unique = [...new Set(ids.filter(Boolean).map(String))];
+    if (!unique.length || typeof transport?.requestQueryFetch !== "function") return /* @__PURE__ */ new Map();
+    const primaryPath = this.collection.schema.primaryPath;
+    const byId = /* @__PURE__ */ new Map();
+    for (let offset = 0; offset < unique.length; offset += NATIVE_OWNED_MASTER_FETCH_LIMIT) {
+      const chunk = unique.slice(offset, offset + NATIVE_OWNED_MASTER_FETCH_LIMIT);
+      const selector = { [primaryPath]: { $in: chunk } };
+      const window2 = { offset: 0, limit: chunk.length };
+      const schemaVersion = this.collection.schema?.version ?? 0;
+      let timer = null;
+      try {
+        const fingerprint = await queryFingerprint({
+          collection: this.collection.name,
+          schemaVersion,
+          selector,
+          sort: [],
+          limit: chunk.length,
+          skip: 0,
+          window: window2
+        });
+        const result = await Promise.race([
+          transport.requestQueryFetch({
+            requestId: `native-owned-${createBrowserPeerSessionId()}`,
+            databaseName: this.collection.storageCollection?.databaseName ?? null,
+            collectionName: this.collection.name,
+            schemaVersion,
+            queryFingerprint: fingerprint,
+            query: { selector, sort: [], limit: chunk.length, skip: 0 },
+            window: window2
+          }),
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("native-owned master fetch timed out")), NATIVE_OWNED_MASTER_FETCH_TIMEOUT_MS);
+          })
+        ]);
+        for (const document2 of Array.isArray(result?.documents) ? result.documents : []) {
+          const id = primaryValue(document2, primaryPath);
+          if (id && chunk.includes(id)) byId.set(id, document2);
+        }
+      } catch (error) {
+        this.error$.next({
+          code: "ctox_native_owned_master_fetch_failed",
+          phase: "replication-io",
+          direction: "push",
+          collection: this.collection.name,
+          message: error?.message || String(error)
+        });
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    }
+    return byId;
+  }
+  // Rebase each refused row on the fetched master and write it alone, so one
+  // stale row no longer takes its slice neighbours down with it. Returns the
+  // rows the native peer still refuses (their own reason is not stale
+  // native-owned state); those keep the reconcile-and-journal behaviour.
+  // Transport errors propagate so the push retry and checkpoint stay intact.
+  async retryNativeOwnedRejection(peerId, documents = []) {
+    const primaryPath = this.collection.schema.primaryPath;
+    const masters = await this.fetchMasterDocumentsById(documents.map((doc) => primaryValue(doc, primaryPath)));
+    const denied = [];
+    for (const document2 of documents) {
+      if (this.cancelled) return denied;
+      const master = masters.get(primaryValue(document2, primaryPath));
+      const rebased = master ? rebaseNativeOwnedFields(this.collection.name, document2, master) : null;
+      if (documents.length === 1 && (!rebased || JSON.stringify(rebased) === JSON.stringify(document2))) {
+        this.nativeOwnedRebaseStats.denied += 1;
+        denied.push(document2);
+        continue;
+      }
+      try {
+        await this.writeDocumentsToPeer(peerId, [rebased || document2], { nativeOwnedRecovery: false });
+        this.nativeOwnedRebaseStats.accepted += 1;
+      } catch (error) {
+        if (error?.code !== "ctox_replication_push_rejected") throw error;
+        this.nativeOwnedRebaseStats.denied += 1;
+        denied.push(document2);
+      }
+    }
+    return denied;
+  }
+  // Recovery for writes refused before this fix: every pending authz_rejected
+  // journal entry with the native-owned reason is the user's change, rolled
+  // back locally and kept only in the recovery journal. Re-apply it on the
+  // current master as a fresh local write (the push above then rebases it)
+  // and close the entry. The native stale-regression guard (index_mod.rs,
+  // updated_at_ms older than the master by more than an hour) would refuse
+  // such a write as a regression; those entries stay pending for the user.
+  async replayNativeOwnedRejections() {
+    if (this.nativeOwnedReplayDone || !collectionHasNativeOwnedFields(this.collection?.name)) return 0;
+    const storage = this.collection?.storageCollection;
+    const journal = storage?.recoveryJournal;
+    if (typeof journal?.listConflicts !== "function" || typeof journal?.markConflictReplayed !== "function" || typeof storage?.bulkWrite !== "function") {
+      this.nativeOwnedReplayDone = true;
+      return 0;
+    }
+    const primaryPath = this.collection.schema.primaryPath;
+    const entries = (await journal.listConflicts()).filter((entry) => entry?.collection === this.collection.name && entry?.conflictType === "authz_rejected" && isNativeOwnedRejectionMessage(entry?.message) && primaryValue(entry?.local, primaryPath)).sort((left, right) => Number(left.createdAtMs || 0) - Number(right.createdAtMs || 0));
+    if (!entries.length) {
+      this.nativeOwnedReplayDone = true;
+      return 0;
+    }
+    const masters = await this.fetchMasterDocumentsById(entries.map((entry) => primaryValue(entry.local, primaryPath)));
+    const replayed = /* @__PURE__ */ new Map();
+    const closed = [];
+    for (const entry of entries) {
+      const id = primaryValue(entry.local, primaryPath);
+      const master = masters.get(id) || null;
+      if (!master) continue;
+      if (staleRegressionAgainstMaster(entry.local, master)) continue;
+      const reference = entry.base || master;
+      const current = replayed.get(id) || stripReplicationMeta(master);
+      const next = { ...current };
+      for (const [key, value] of Object.entries(entry.local)) {
+        if (REPLAY_SKIPPED_KEYS.has(key)) continue;
+        if (JSON.stringify(value) !== JSON.stringify(reference[key])) next[key] = value;
+      }
+      replayed.set(id, rebaseNativeOwnedFields(this.collection.name, next, master));
+      closed.push(entry.conflictId);
+    }
+    if (replayed.size) {
+      await storage.bulkWrite([...replayed.values()]);
+    }
+    for (const conflictId of closed) await journal.markConflictReplayed(conflictId);
+    this.nativeOwnedRebaseStats.replayed += replayed.size;
+    this.nativeOwnedReplayDone = masters.size > 0 || !entries.length;
+    return replayed.size;
   }
   async resolveWholeDocumentLwwConflicts(rows, peerId) {
     const retryRows = [];
@@ -13201,6 +13488,23 @@ function remoteCheckpointStillCovers(retained, currentKey, remoteProtocol) {
   const remoteHeadLwt = Number(remoteProtocol?.checkpoint?.latestLwt);
   return Number.isFinite(retainedLwt) && Number.isFinite(remoteHeadLwt) && remoteHeadLwt >= retainedLwt;
 }
+function remotePushCheckpointStillCovers(retained, currentKey) {
+  const retainedKey = retained?.validityKey;
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const before = String(retainedKey).split("|");
+  const now = String(currentKey).split("|");
+  if (before.length !== 4 || now.length !== 4) return false;
+  return before[0] === now[0] && before[1] === now[1] && before[2] === now[2];
+}
+function localPushCheckpointStillCovers(retainedKey, currentKey) {
+  if (!retainedKey || !currentKey) return false;
+  if (retainedKey === currentKey) return true;
+  const retained = parseBrowserLocalCheckpointKey(retainedKey);
+  const current = parseBrowserLocalCheckpointKey(currentKey);
+  if (!retained || !current) return false;
+  return retained.collection === current.collection && retained.schemaHash === current.schemaHash && retained.storeGeneration === current.storeGeneration && Number.isFinite(retained.latestLwt) && Number.isFinite(current.latestLwt) && current.latestLwt >= retained.latestLwt;
+}
 function localCheckpointValidityKey(checkpoint) {
   if (!checkpoint || typeof checkpoint !== "object") return "";
   const epoch = typeof checkpoint.epoch === "string" ? checkpoint.epoch.trim() : "";
@@ -13298,6 +13602,29 @@ function hashString(value) {
     hash = Math.imul(hash, 16777619);
   }
   return (hash >>> 0).toString(36);
+}
+var NATIVE_OWNED_MASTER_FETCH_LIMIT = 50;
+var NATIVE_OWNED_MASTER_FETCH_TIMEOUT_MS = 1e4;
+var NATIVE_STALE_REGRESSION_THRESHOLD_MS = 60 * 60 * 1e3;
+var REPLAY_SKIPPED_KEYS = /* @__PURE__ */ new Set(["_meta", "_rev", "_attachments"]);
+function rebaseRowsOnAssumedMasterState(collectionName, rows = []) {
+  if (!collectionHasNativeOwnedFields(collectionName)) return rows;
+  return rows.map((row) => row?.assumedMasterState ? { ...row, newDocumentState: rebaseNativeOwnedFields(collectionName, row.newDocumentState, row.assumedMasterState) } : row);
+}
+function staleRegressionAgainstMaster(local, master) {
+  const read = (doc) => {
+    const value = Number(doc?.updated_at_ms);
+    return Number.isInteger(value) && value > 0 ? value : null;
+  };
+  const incoming = read(local);
+  const stored = read(master);
+  return incoming !== null && stored !== null && incoming + NATIVE_STALE_REGRESSION_THRESHOLD_MS < stored;
+}
+function stripReplicationMeta(document2) {
+  const copy = JSON.parse(JSON.stringify(document2 || {}));
+  delete copy._meta;
+  delete copy._rev;
+  return copy;
 }
 function documentsByPrimaryPath(documents, primaryPath = "id", collection = "") {
   if (!Array.isArray(documents)) {

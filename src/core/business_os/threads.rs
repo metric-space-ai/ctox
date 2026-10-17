@@ -3554,6 +3554,12 @@ fn upsert_thread(
         );
         metadata["workjet_supervisor_contract"] =
             json!(super::project_chats::supervisor_binding::CONTRACT);
+        metadata["failed_step_id"] = json!(super::project_chats::plan_state::failed(
+            root,
+            &owner,
+            &binding.project_id,
+            &binding.thread_key
+        )?);
         metadata["workjet_supervisor"] = serde_json::to_value(binding)?;
     }
     let record = json!({

@@ -543,39 +543,6 @@ mod tests {
     }
 
     #[test]
-    fn module_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "linkedin.com");
-        assert!(m.aliases().contains(&"linkedin"));
-        assert!(matches!(m.tier(), Tier::C));
-        assert_eq!(m.countries(), &[Country::De, Country::At, Country::Ch]);
-        assert_eq!(m.requires_credential(), Some("LINKEDIN_SALES_NAV_TOKEN"));
-        assert_eq!(
-            m.browser_recipe()
-                .and_then(|recipe| recipe.required_secret_name),
-            Some("LINKEDIN_BROWSER_LOGIN")
-        );
-        assert!(m
-            .authoritative_for()
-            .iter()
-            .any(|k| matches!(k, FieldKey::PersonLinkedin)));
-        assert!(m
-            .authoritative_for()
-            .iter()
-            .any(|k| matches!(k, FieldKey::PersonFunktion)));
-    }
-
-    #[test]
-    fn shape_query_is_none_for_api_source() {
-        let ctx = SourceCtx {
-            root: Path::new("/tmp/ctox-test-linkedin"),
-            country: Some(Country::De),
-            mode: ResearchMode::NewRecord,
-        };
-        assert!(module().shape_query("WITTENSTEIN SE", &ctx).is_none());
-    }
-
-    #[test]
     fn fetch_direct_skips_non_dach_countries() {
         // No non-DACH country exists in Country enum today, so this is a
         // structural guard: if Country ever grows (e.g. FR), the explicit

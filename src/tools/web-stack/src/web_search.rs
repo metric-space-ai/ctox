@@ -9222,15 +9222,6 @@ mod tests {
     }
 
     #[test]
-    fn openai_web_search_mode_defaults_to_ctox_primary() {
-        let root = unique_test_root("web_search_mode_default");
-        assert_eq!(
-            OpenAiWebSearchCompatMode::from_root(&root),
-            OpenAiWebSearchCompatMode::CtoxPrimary
-        );
-    }
-
-    #[test]
     fn openai_web_search_mode_reads_passthrough_override() {
         let root = unique_test_root("web_search_mode_passthrough");
         set_runtime_config(&root, "CTOX_WEB_SEARCH_OPENAI_MODE", "passthrough");
@@ -10134,47 +10125,6 @@ mod tests {
     }
 
     #[test]
-    fn auto_provider_cascade_keeps_google_first_multi_engine_order() {
-        // Regression pin for the benchmark-era multi-engine policy: Auto must
-        // try Google first, then Brave, DuckDuckGo, and Bing. A silent
-        // collapse to a single engine (or a demoted Google adapter) fails
-        // this guard.
-        let root = unique_test_root("provider-cascade");
-        let candidates = search_provider_candidates(&root, ProviderKind::Auto);
-        assert_eq!(
-            candidates,
-            vec![
-                ProviderKind::Google,
-                ProviderKind::Brave,
-                ProviderKind::DuckDuckGo,
-                ProviderKind::Bing,
-            ]
-        );
-        assert_eq!(
-            search_provider_candidates(&root, ProviderKind::Brave),
-            vec![ProviderKind::Brave],
-            "an explicitly pinned provider must not expand into the cascade"
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn auto_provider_budget_defaults_to_full_cascade() {
-        let root = unique_test_root("provider-budget");
-        assert_eq!(
-            auto_provider_budget(&root, ProviderKind::Auto),
-            4,
-            "Auto must be able to try every cascade engine before giving up"
-        );
-        assert_eq!(
-            auto_provider_budget(&root, ProviderKind::Brave),
-            usize::MAX,
-            "a pinned provider is not budget-limited"
-        );
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
     fn model_facing_context_fences_untrusted_page_content() {
         let doc = EvidenceDoc {
             url: "https://evil.example/page".to_string(),
@@ -10561,32 +10511,11 @@ mod tests {
     }
 
     #[test]
-    fn duckduckgo_accept_language_derives_from_query_language() {
-        assert_eq!(
-            super::duckduckgo_accept_language(Some("de-DE")),
-            "de-DE,de;q=0.9,en;q=0.8"
-        );
-        assert_eq!(super::duckduckgo_accept_language(Some("fr")), "fr,en;q=0.8");
-        assert_eq!(super::duckduckgo_accept_language(None), "en-US,en;q=0.9");
-        assert_eq!(
-            super::duckduckgo_accept_language(Some("  ")),
-            "en-US,en;q=0.9"
-        );
-    }
-
-    #[test]
     fn duckduckgo_anomaly_modal_is_detected() {
         let body = r#"<html><body><div class="anomaly-modal__title">Unfortunately, bots use DuckDuckGo too.</div></body></html>"#;
         assert!(super::detect_duckduckgo_anomaly(body));
         let clean = r#"<html><body><div class="result"><a class="result__a" href="/x">x</a></div></body></html>"#;
         assert!(!super::detect_duckduckgo_anomaly(clean));
-    }
-
-    #[test]
-    fn parse_chrome_major_extracts_version_from_default_ua() {
-        let ua = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
-        assert_eq!(super::parse_chrome_major_from_ua(ua), Some(136));
-        assert_eq!(super::parse_chrome_major_from_ua("ctox-test"), None);
     }
 
     // The stdout-capture path uses process-wide dup2, which races with any

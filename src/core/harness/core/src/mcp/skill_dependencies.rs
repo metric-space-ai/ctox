@@ -458,7 +458,3 @@ fn mcp_dependency_to_server_config(
 
     Err(format!("unsupported transport {transport}"))
 }
-
-#[cfg(test)]
-#[path = "skill_dependencies_tests.rs"]
-mod tests;

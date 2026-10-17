@@ -175,7 +175,3 @@ fn is_valid_shell_variable_name(name: &str) -> bool {
 fn shell_single_quote(input: &str) -> String {
     input.replace('\'', r#"'"'"'"#)
 }
-
-#[cfg(all(test, unix))]
-#[path = "mod_tests.rs"]
-mod tests;

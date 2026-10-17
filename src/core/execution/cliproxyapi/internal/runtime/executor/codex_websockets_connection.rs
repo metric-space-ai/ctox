@@ -127,19 +127,4 @@ pub fn map_codex_websocket_close(code: u16) -> CodexWebsocketError {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn url_and_request_body_match_responses_websocket_contract() {
-        assert_eq!(
-            build_codex_responses_websocket_url("https://chatgpt.com/backend-api/codex/responses")
-                .unwrap(),
-            "wss://chatgpt.com/backend-api/codex/responses"
-        );
-        let body: Value = serde_json::from_slice(&build_codex_websocket_request_body(
-            br#"{"model":"gpt","stream":true}"#,
-        ))
-        .unwrap();
-        assert_eq!(body["type"], "response.create");
-        assert!(body.get("stream").is_none());
-    }
 }

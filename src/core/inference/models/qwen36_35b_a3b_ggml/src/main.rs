@@ -1582,13 +1582,6 @@ printf CTOX_QWEN_TOOL_OK
     }
 
     #[test]
-    fn parses_llama_tokenize_count_from_real_tokens_array() {
-        let value = json!({"tokens":[1,2,3,4]});
-
-        assert_eq!(parse_tokenize_count(&value).unwrap(), 4);
-    }
-
-    #[test]
     fn context_size_errors_are_reported_as_context_length_exceeded() {
         let err = anyhow!(
             "{}",

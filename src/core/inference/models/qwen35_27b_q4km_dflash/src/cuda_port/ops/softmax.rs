@@ -134,11 +134,7 @@ pub fn ggml_cuda_op_soft_max(
     }
 
     let block_dims = (nth as u32, 1u32, 1u32);
-    let grid_dims = (
-        params.ne01 as u32,
-        params.ne02 as u32,
-        params.ne03 as u32,
-    );
+    let grid_dims = (params.ne01 as u32, params.ne02 as u32, params.ne03 as u32);
 
     // shared-mem budget: PAD(ncols, WARP_SIZE) + WARP_SIZE floats.
     let padded = (ncols_x + WARP_SIZE - 1) & !(WARP_SIZE - 1);
@@ -183,10 +179,14 @@ mod tests {
 
     /// `soft_max_params` must have the exact C layout the kernel
     /// expects. Spot-check size + offsets against the C struct
-    /// (18 scalars; 12 × i64 + 4 × f32 + 1 × u32 + 1 × u32 pad =
-    /// 12*8 + 4*4 + 2*4 = 96 + 16 + 8 = 120 bytes on x86_64 Linux).
+    /// (13 × i64 + 4 × f32 + 1 × u32 + 1 × u32 pad = 128 bytes).
+    /// nheads plus ncols..ne13 are thirteen i64 fields in softmax.cu.
     #[test]
     fn params_size_matches_upstream() {
-        assert_eq!(std::mem::size_of::<SoftMaxParams>(), 120);
+        assert_eq!(std::mem::size_of::<SoftMaxParams>(), 128);
+        assert_eq!(std::mem::offset_of!(SoftMaxParams, ncols), 16);
+        assert_eq!(std::mem::offset_of!(SoftMaxParams, ne13), 104);
+        assert_eq!(std::mem::offset_of!(SoftMaxParams, scale), 112);
+        assert_eq!(std::mem::offset_of!(SoftMaxParams, m1), 124);
     }
 }

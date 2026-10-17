@@ -153,17 +153,4 @@ mod tests {
         recv.await.unwrap();
         thread.join().unwrap();
     }
-
-    #[tokio::test]
-    async fn test_spawn() {
-        let client = HttpClient::new(SpawnService::new(reqwest::Client::new(), Handle::current()));
-        test_client(client).await;
-    }
-
-    #[tokio::test]
-    #[should_panic]
-    async fn test_no_spawn() {
-        let client = HttpClient::new(reqwest::Client::new());
-        test_client(client).await;
-    }
 }

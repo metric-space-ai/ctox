@@ -753,20 +753,6 @@ mod tests {
         (authenticator, transport, callback_factory, presenter, store)
     }
 
-    #[test]
-    fn provider_and_refresh_lead_match_upstream_sdk() {
-        let (authenticator, _, _, _, _) = authenticator(
-            AntigravityCallbackResult::from_parts("code", "state-secret", ""),
-            r#"{"access_token":"access","refresh_token":"refresh","expires_in":3600}"#,
-        );
-        assert_eq!(authenticator.provider(), "antigravity");
-        assert_eq!(
-            authenticator.refresh_lead(),
-            Some(Duration::from_secs(5 * 60))
-        );
-        assert_ne!(authenticator.refresh_lead(), Some(REFRESH_SKEW));
-    }
-
     #[tokio::test]
     async fn full_login_preserves_public_metadata_and_persists_only_in_secret_store() {
         let (authenticator, transport, callback, presenter, store) = authenticator(

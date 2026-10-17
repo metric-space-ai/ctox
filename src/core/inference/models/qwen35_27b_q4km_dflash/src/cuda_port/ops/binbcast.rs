@@ -435,12 +435,18 @@ mod tests {
 
     /// Reference values from a direct CPU run of
     /// `init_fastdiv_values` in the vendored common.cuh: d=256 →
-    /// (mp, L, d) = (0, 8, 256).
+    /// (mp, L, d) = (1, 8, 256).
     #[test]
     fn fastdiv_power_of_two() {
-        assert_eq!(init_fastdiv_values(256), [0, 8, 256]);
-        assert_eq!(init_fastdiv_values(1), [0, 0, 1]);
-        assert_eq!(init_fastdiv_values(2), [0, 1, 2]);
+        // common.cuh uses +1 even when (2^L - d) is zero.
+        for (d, shift) in [(1u64, 0), (2, 1), (256, 8)] {
+            let [mp, l, divisor] = init_fastdiv_values(d);
+            assert_eq!([mp, l, divisor], [1, shift, d as u32]);
+            for n in [0u32, 1, 255, 256, 257, u32::MAX] {
+                let hi = ((u64::from(n) * u64::from(mp)) >> 32) as u32;
+                assert_eq!((hi + n) >> l, n / divisor);
+            }
+        }
     }
 
     #[test]

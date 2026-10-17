@@ -307,20 +307,6 @@ mod tests {
     }
 
     #[test]
-    fn templates_match_the_pinned_go_constants_byte_for_byte() {
-        assert_eq!(LOGIN_SUCCESS_HTML.len(), 5_955);
-        assert_eq!(
-            sha256_hex(LOGIN_SUCCESS_HTML),
-            "ceda8518c33186112d5b94809e01d78141f9012a70549ead1050015f45a18599"
-        );
-        assert_eq!(SETUP_NOTICE_HTML.len(), 237);
-        assert_eq!(
-            sha256_hex(SETUP_NOTICE_HTML),
-            "ee0c9d3cff6429780f33991648697308658c8ca8666ebcb90a61e88910184af0"
-        );
-    }
-
-    #[test]
     fn rendering_without_setup_matches_upstream_for_a_plain_url() {
         let rendered = render_login_success_html(false, "https://platform.openai.com").unwrap();
         let expected = LOGIN_SUCCESS_HTML

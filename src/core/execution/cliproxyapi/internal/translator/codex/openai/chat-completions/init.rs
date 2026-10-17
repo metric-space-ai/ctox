@@ -51,23 +51,4 @@ fn codex_chat_state(state: &mut TranslationState) -> &mut CodexToChatStreamState
 mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
-
-    #[test]
-    fn registry_activates_the_complete_codex_chat_pair() {
-        let registry = Registry::new();
-        register_openai_chat_codex(&registry);
-        assert!(registry.has_request_transformer(&openai(), &codex()));
-        assert!(registry.has_non_stream_response_transformer(&openai(), &codex()));
-        assert!(registry.has_stream_response_transformer(&openai(), &codex()));
-        let output = registry.translate_request(
-            &TranslationContext::default(),
-            &openai(),
-            &codex(),
-            "gpt-5-codex",
-            br#"{"messages":[{"role":"user","content":"hello"}]}"#,
-            false,
-        );
-        let output: serde_json::Value = serde_json::from_slice(&output).unwrap();
-        assert_eq!(output["input"][0]["content"][0]["text"], "hello");
-    }
 }

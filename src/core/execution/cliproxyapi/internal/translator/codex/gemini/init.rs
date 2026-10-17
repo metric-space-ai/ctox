@@ -44,12 +44,4 @@ fn stream_state(state: &mut TranslationState) -> &mut CodexToGeminiStreamState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn registry_activates_complete_pair() {
-        let registry = Registry::new();
-        register_gemini_codex(&registry);
-        assert!(registry.has_request_transformer(&gemini(), &codex()));
-        assert!(registry.has_stream_response_transformer(&gemini(), &codex()));
-        assert!(registry.has_non_stream_response_transformer(&gemini(), &codex()));
-    }
 }

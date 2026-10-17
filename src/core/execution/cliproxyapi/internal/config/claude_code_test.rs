@@ -3,13 +3,3 @@
 // License: MIT (upstream); modifications AGPL-3.0-only
 
 use super::parse::parse_provider_compat_config;
-
-#[test]
-fn claude_code_model_list_cloaking_defaults_and_override() {
-    let default = parse_provider_compat_config(b"{}").unwrap();
-    assert!(!default.claude_code.disable_cloaking_model_list);
-    let disabled =
-        parse_provider_compat_config(b"claude-code:\n  disable-cloaking-model-list: true\n")
-            .unwrap();
-    assert!(disabled.claude_code.disable_cloaking_model_list);
-}

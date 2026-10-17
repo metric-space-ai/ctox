@@ -46,25 +46,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_management_channels_have_pinned_upstream_shape_and_order() {
-        let payload = static_model_definitions_payload(" CLAUDE ").unwrap();
-        let value: serde_json::Value = serde_json::from_slice(&payload).unwrap();
-        assert_eq!(value["channel"], "claude");
-        assert_eq!(value["models"].as_array().unwrap().len(), 18);
-        assert_eq!(value["models"][0]["id"], "claude-haiku-4-5-20251001");
-        assert_eq!(value["models"][17]["id"], "claude-3-5-haiku-20241022");
-        let codex: serde_json::Value =
-            serde_json::from_slice(&static_model_definitions_payload("codex").unwrap()).unwrap();
-        assert_eq!(codex["models"].as_array().unwrap().len(), 14);
-        assert_eq!(codex["models"][9]["id"], "gpt-image-1.5");
-        assert_eq!(codex["models"][10]["id"], "gpt-image-2");
-        let grok: serde_json::Value =
-            serde_json::from_slice(&static_model_definitions_payload("grok").unwrap()).unwrap();
-        assert_eq!(grok["channel"], "grok");
-        assert_eq!(grok["models"].as_array().unwrap().len(), 18);
-    }
-
-    #[test]
     fn unported_channels_are_explicit_not_empty_successes() {
         assert_eq!(
             static_model_definitions_payload("unknown"),

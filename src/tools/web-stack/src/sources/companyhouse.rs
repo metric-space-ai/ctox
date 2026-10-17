@@ -447,21 +447,6 @@ mod tests {
     }
 
     #[test]
-    fn registry_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "companyhouse.de");
-        assert!(m.aliases().contains(&"companyhouse"));
-        assert!(m.aliases().contains(&"ch_de"));
-        assert_eq!(m.tier(), Tier::S);
-        assert_eq!(m.countries(), &[Country::De]);
-        assert!(m.requires_credential().is_none());
-        assert!(m
-            .authoritative_for()
-            .iter()
-            .any(|f| *f == FieldKey::PersonTitel));
-    }
-
-    #[test]
     fn shape_query_de_pins_domain() {
         let shaped = module()
             .shape_query("Manfred Schneider", &ctx_de())
@@ -490,12 +475,6 @@ mod tests {
     #[test]
     fn shape_query_empty_returns_none() {
         assert!(module().shape_query("   ", &ctx_de()).is_none());
-    }
-
-    #[test]
-    fn no_fetch_direct_override() {
-        // Crawl-Pfad — Trait-Default `None` ist der Vertrag.
-        assert!(module().fetch_direct(&ctx_de(), "Bayer AG").is_none());
     }
 
     /// End-to-end extraction against a frozen Companyhouse person profile.

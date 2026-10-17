@@ -464,7 +464,7 @@ fn fixture_for_owner(owner: &str) -> anyhow::Result<TempDir> {
     )?;
     ensure!(
         bound["result"]["binding"]["thread_id"] == THREAD,
-        "native binding fixture failed"
+        "native binding fixture failed: {bound}"
     );
     Ok(root)
 }

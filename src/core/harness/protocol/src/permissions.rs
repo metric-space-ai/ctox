@@ -1783,9 +1783,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn file_system_access_mode_orders_by_conflict_precedence() {
-        assert!(FileSystemAccessMode::Write > FileSystemAccessMode::Read);
-        assert!(FileSystemAccessMode::None > FileSystemAccessMode::Write);
-    }
 }

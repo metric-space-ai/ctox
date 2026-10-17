@@ -527,3 +527,15 @@ fn api_adoption_keeps_unowned_and_foreign_accounts_private_and_replay_stable() -
     );
     Ok(())
 }
+
+#[test]
+fn provider_list_treats_empty_record_id_from_command_bus_as_absent() -> Result<()> {
+    let f = Fixture::new()?;
+    let mut empty = command("ctox.workjet.providers.list", json!({}));
+    empty.record_id = Some(String::new());
+    assert!(handle_command(f.root.path(), &empty, "owner", None).is_ok());
+    let mut scoped = command("ctox.workjet.providers.list", json!({}));
+    scoped.record_id = Some("acc_1".into());
+    assert!(handle_command(f.root.path(), &scoped, "owner", None).is_err());
+    Ok(())
+}

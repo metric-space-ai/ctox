@@ -361,6 +361,55 @@ pub struct Worker {
     storage: Option<Arc<dyn StorageResolver>>,
 }
 
+impl Drop for Worker {
+    fn drop(&mut self) {
+        // A fork or duplicated descriptor can retain this open file description.
+        // Closing only our descriptor would leave its flock held and prevent
+        // recovery by the next owner after this worker has finished.
+        let _ = FileExt::unlock(&self._lease);
+    }
+}
+
+#[cfg(all(test, unix))]
+mod worker_lease_tests {
+    use super::*;
+
+    #[test]
+    fn worker_release_does_not_wait_for_a_duplicated_descriptor() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = Store::open(
+            temp.path().join("state.sqlite"),
+            temp.path().join("artifacts"),
+        )
+        .unwrap();
+        let worker = store.worker().unwrap();
+        let inherited = worker._lease.try_clone().unwrap();
+        assert!(
+            store.worker().is_err(),
+            "a live worker must remain exclusive"
+        );
+        drop(worker);
+        let replacement = store
+            .worker()
+            .expect("a retained descriptor must not prevent worker restart");
+        assert!(
+            inherited.metadata().is_ok(),
+            "the old descriptor is still open"
+        );
+        assert!(
+            store.worker().is_err(),
+            "the replacement must own the lease"
+        );
+        drop(inherited);
+        assert!(
+            store.worker().is_err(),
+            "closing the old descriptor cannot release the new owner's lease"
+        );
+        drop(replacement);
+        assert!(store.worker().is_ok());
+    }
+}
+
 enum SourceOutcome {
     Ready(PathBuf),
     Interrupted,

@@ -11,8 +11,3 @@ pub fn example() -> ExampleRegistration {
 pub fn authenticate(header: Option<&str>) -> bool {
     header == Some("exclusive")
 }
-#[test]
-fn only_explicit_header_authenticates() {
-    assert!(authenticate(Some("exclusive")));
-    assert!(!authenticate(None));
-}

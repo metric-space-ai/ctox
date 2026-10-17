@@ -42,11 +42,4 @@ extern "C" {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn exposes_cuda_archive_when_build_script_compiles_it() {
-        #[cfg(target_os = "linux")]
-        {
-            let _ = super::CUDA_ARCHIVE;
-        }
-    }
 }

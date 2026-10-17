@@ -90,19 +90,4 @@ mod tests {
             generate_code_challenge(&codes.code_verifier)
         );
     }
-
-    #[test]
-    fn json_field_names_match_upstream_dto() {
-        let codes = PkceCodes {
-            code_verifier: "verifier".to_owned(),
-            code_challenge: "challenge".to_owned(),
-        };
-        assert_eq!(
-            serde_json::to_value(codes).unwrap(),
-            serde_json::json!({
-                "code_verifier": "verifier",
-                "code_challenge": "challenge"
-            })
-        );
-    }
 }

@@ -1,5 +1,5 @@
 /* One module graph per page: all database and sync consumers share this promise. */
-export const RXDB_BUNDLE_URL = "../rxdb/dist/ctox-rxdb-js.mjs?v=20261014-shell-v2-query-checkpoint-readonly";
+export const RXDB_BUNDLE_URL = "../rxdb/dist/ctox-rxdb-js.mjs?v=20261016-v2-push-resume-native-owned";
 let runtimePromise;
 export function loadRxdbRuntime() {
   return runtimePromise ??= import(RXDB_BUNDLE_URL).catch((error) => {

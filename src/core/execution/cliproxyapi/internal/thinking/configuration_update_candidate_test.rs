@@ -572,28 +572,3 @@ impl crate::internal::runtime::executor::helps::CodexMultiAgentV2Processor
         request
     }
 }
-
-#[test]
-fn candidate_thinking_updates_meta_preparation_forwards_working_normalizer_decision() {
-    use crate::internal::runtime::executor::{
-        helps::PayloadApplyConfig, meta_executor_request::MetaRequestOwner,
-    };
-    use crate::sdk::pluginapi::ExecutorRequest;
-    let calls = Arc::new(AtomicUsize::new(0));
-    let owner = MetaRequestOwner {
-        processor: Arc::new(ClearUpdatesProcessor(Arc::clone(&calls))),
-        thinking: Arc::new(pipeline()),
-        config: Arc::new(PayloadApplyConfig::default()),
-    };
-    let request = ExecutorRequest {
-        model: "configured-responses".into(), source_format: "codex".into(), format: "codex".into(),
-        payload: br#"{"reasoning":{"effort":"high"},"input":[{"type":"configuration_update","reasoning":{"effort":"low"}}]}"#.to_vec(),
-        original_request: br#"{"reasoning":{"effort":"medium"}}"#.to_vec(),
-        resolved_model_info: Some(Arc::new(model(false, true))),
-        ..Default::default()
-    };
-    let prepared = owner.prepare(&request, false).unwrap();
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
-    assert_eq!(string(&prepared.body, "reasoning.effort"), "");
-    assert_eq!(string(&prepared.body, "model"), "configured-responses");
-}

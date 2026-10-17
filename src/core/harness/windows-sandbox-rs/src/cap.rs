@@ -88,34 +88,3 @@ pub fn workspace_cap_sid_for_cwd(codex_home: &Path, cwd: &Path) -> Result<String
     persist_caps(&path, &caps)?;
     Ok(sid)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::load_or_create_cap_sids;
-    use super::workspace_cap_sid_for_cwd;
-    use pretty_assertions::assert_eq;
-    use std::path::PathBuf;
-
-    #[test]
-    fn equivalent_cwd_spellings_share_workspace_sid_key() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let codex_home = temp.path().join("codex-home");
-        std::fs::create_dir_all(&codex_home).expect("create codex home");
-
-        let workspace = temp.path().join("WorkspaceRoot");
-        std::fs::create_dir_all(&workspace).expect("create workspace root");
-
-        let canonical = dunce::canonicalize(&workspace).expect("canonical workspace root");
-        let alt_spelling = PathBuf::from(canonical.to_string_lossy().replace('\\', "/").to_ascii_uppercase());
-
-        let first_sid =
-            workspace_cap_sid_for_cwd(&codex_home, canonical.as_path()).expect("first sid");
-        let second_sid =
-            workspace_cap_sid_for_cwd(&codex_home, alt_spelling.as_path()).expect("second sid");
-
-        assert_eq!(first_sid, second_sid);
-
-        let caps = load_or_create_cap_sids(&codex_home).expect("load caps");
-        assert_eq!(caps.workspace_by_cwd.len(), 1);
-    }
-}

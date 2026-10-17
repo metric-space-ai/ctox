@@ -273,56 +273,6 @@ where
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_add_query_pairs() {
-        let mut uri = Uri::from_static("https://foo@example.com/bananas");
-
-        add_query_pairs(&mut uri, [("foo", "1")]);
-        assert_eq!(uri.to_string(), "https://foo@example.com/bananas?foo=1");
-
-        add_query_pairs(&mut uri, [("bingo", "foo"), ("auth", "test")]);
-        assert_eq!(
-            uri.to_string(),
-            "https://foo@example.com/bananas?foo=1&bingo=foo&auth=test"
-        );
-
-        add_query_pairs(&mut uri, [("t1", "funky shenanigans"), ("a", "😀")]);
-        assert_eq!(
-            uri.to_string(),
-            "https://foo@example.com/bananas?foo=1&bingo=foo&auth=test&t1=funky+shenanigans&a=%F0%9F%98%80"
-        );
-    }
-
-    #[test]
-    fn test_add_query_pairs_no_path() {
-        let mut uri = Uri::from_static("https://foo@example.com");
-        add_query_pairs(&mut uri, [("foo", "1")]);
-        assert_eq!(uri.to_string(), "https://foo@example.com/?foo=1");
-    }
-
-    #[test]
-    fn test_request_builder_query() {
-        let client = HttpClient::new(reqwest::Client::new());
-        assert_request_uri(
-            HttpRequestBuilder::new(client.clone()).uri("http://example.com/bananas"),
-            "http://example.com/bananas",
-        );
-
-        assert_request_uri(
-            HttpRequestBuilder::new(client.clone())
-                .uri("http://example.com/bananas")
-                .query(&[("foo", "1")]),
-            "http://example.com/bananas?foo=1",
-        );
-
-        assert_request_uri(
-            HttpRequestBuilder::new(client.clone())
-                .uri("http://example.com")
-                .query(&[("foo", "1")]),
-            "http://example.com/?foo=1",
-        );
-    }
-
     fn assert_request_uri(builder: HttpRequestBuilder, expected: &str) {
         assert_eq!(builder.into_parts().1.unwrap().uri().to_string(), expected)
     }

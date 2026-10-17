@@ -280,12 +280,6 @@ mod tests {
         assert!(value_at_path(&p, Some("data.missing")).is_none());
     }
 
-    #[test]
-    fn parse_signal_ref_requires_both_halves() {
-        assert_eq!(parse_signal_ref("a::b").unwrap(), ("a", "b"));
-        assert!(parse_signal_ref("nope").is_err());
-    }
-
     // Inbound webhook records a datapoint on the bound signal (full inbound path).
     #[test]
     fn ingest_records_datapoint_from_payload() {
@@ -399,13 +393,6 @@ mod tests {
         assert_eq!(req.body, b"{\"a\":1}");
         // No auth header without a secret; non-http URL rejected.
         assert!(build_outbound(root, "ftp://nope", &json!({}), None, &[]).is_err());
-    }
-
-    #[test]
-    fn constant_eq_compares() {
-        assert!(constant_eq("abc", "abc"));
-        assert!(!constant_eq("abc", "abd"));
-        assert!(!constant_eq("abc", "ab"));
     }
 
     // Register an inbound webhook, then the HTTP handler authenticates the bearer

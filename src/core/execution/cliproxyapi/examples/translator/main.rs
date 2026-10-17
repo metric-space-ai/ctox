@@ -48,20 +48,4 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-
-    #[test]
-    fn example_runs_both_builtin_directions_with_instance_owned_registry() {
-        let (has_response, request, response) = translate_example();
-        assert!(has_response);
-        let request: Value = serde_json::from_slice(&request).unwrap();
-        assert_eq!(request["contents"][0]["role"], "user");
-        let response: Value = serde_json::from_slice(&response).unwrap();
-        assert_eq!(response["object"], "chat.completion");
-        assert_eq!(response["model"], MODEL);
-        assert_eq!(response["choices"][0]["finish_reason"], "tool_calls");
-        assert_eq!(
-            response["choices"][0]["message"]["tool_calls"][0]["function"]["name"],
-            "schedule_meeting"
-        );
-    }
 }

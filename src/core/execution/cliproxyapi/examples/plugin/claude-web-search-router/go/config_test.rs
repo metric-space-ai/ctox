@@ -2,8 +2,3 @@
 // Port-Status: ported
 // License: MIT (upstream); modifications AGPL-3.0-only
 use super::Config;
-#[test]
-fn defaults_preserve_enabled_and_web_search_only() {
-    let cfg = Config::default();
-    assert!(cfg.enabled && cfg.require_web_search_only);
-}

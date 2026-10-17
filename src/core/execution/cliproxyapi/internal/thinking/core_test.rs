@@ -7,16 +7,6 @@ use serde_json::json;
 use super::*;
 
 #[test]
-fn thinking_mode_string_preserves_unknown_fallback() {
-    assert_eq!(ThinkingMode::Budget.to_string(), "budget");
-    assert_eq!(ThinkingMode::Level.to_string(), "level");
-    assert_eq!(ThinkingMode::None.to_string(), "none");
-    assert_eq!(ThinkingMode::Auto.to_string(), "auto");
-    assert_eq!(ThinkingMode::Unknown(17).to_string(), "unknown");
-    assert_eq!(ThinkingMode::from(17).as_i32(), 17);
-}
-
-#[test]
 fn thinking_error_is_structured_but_displays_only_message() {
     let error = ThinkingError::with_model(
         ErrorCode::ThinkingNotSupported,

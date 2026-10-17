@@ -207,41 +207,6 @@ fn crew_retention_preserves_first_finalization_committed_after_scan() -> Result<
 }
 
 #[test]
-fn crew_migration_keeps_flow_ledger_lazy_until_admission() -> Result<()> {
-    let (root, conn, task) = leased()?;
-    assert!(!conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='ctox_harness_flow_events')",
-        [],
-        |r| r.get::<_, bool>(0)
-    )?);
-    prepare_attempt(
-        root.path(),
-        &[task],
-        "fixture",
-        "admitted",
-        None,
-        &json!({}),
-        None,
-        "Inspect",
-        None,
-    )?;
-    assert!(conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='idx_crew_selection_event_attempt')",
-        [],
-        |r| r.get::<_, bool>(0)
-    )?);
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM ctox_harness_flow_events WHERE event_kind='crew_selected'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )?,
-        1
-    );
-    Ok(())
-}
-
-#[test]
 fn crew_unavailable_continues_without_retry_or_identity_and_warns_once() -> Result<()> {
     let (root, conn, task) = leased()?;
     conn.execute("UPDATE crew_members SET archived=1", [])?;

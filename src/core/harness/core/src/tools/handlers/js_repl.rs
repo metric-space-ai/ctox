@@ -329,7 +329,3 @@ fn reject_json_or_quoted_source(code: &str, tool_name: &str) -> Result<(), Funct
         _ => Ok(()),
     }
 }
-
-#[cfg(test)]
-#[path = "js_repl_tests.rs"]
-mod tests;

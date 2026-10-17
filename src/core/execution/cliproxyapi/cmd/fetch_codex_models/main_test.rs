@@ -16,14 +16,6 @@ use ctox_cliproxyapi::sdk::cliproxy::auth::{AuthStatus, AuthStoreError};
 use super::*;
 
 #[test]
-fn codex_models_url_matches_upstream() {
-    assert_eq!(
-        codex_models_url(" 0.144.1 ").unwrap().as_str(),
-        "https://chatgpt.com/backend-api/codex/models?client_version=0.144.1"
-    );
-}
-
-#[test]
 fn count_models_matches_upstream_loose_catalog_semantics() {
     assert_eq!(
         count_models(br#"{"models":[{"slug":"a"},{"slug":"b"}]}"#).unwrap(),

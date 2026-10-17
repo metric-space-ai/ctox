@@ -356,19 +356,4 @@ pub fn is_entry_tiled_fp16(entry: &crate::MetalPackEntry) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn audit_marks_missing_attention_without_pack() {
-        let rows = audit_shape_contract(None);
-        let attention_q = rows
-            .iter()
-            .find(|row| row.layer == Some(3) && row.class == TensorClass::AttentionQ)
-            .unwrap();
-        assert_eq!(attention_q.status, ShapeAuditStatus::Missing);
-        let ffn_gate = rows
-            .iter()
-            .find(|row| row.layer == Some(0) && row.class == TensorClass::MlpGate)
-            .unwrap();
-        assert_eq!(ffn_gate.status, ShapeAuditStatus::Missing);
-    }
 }

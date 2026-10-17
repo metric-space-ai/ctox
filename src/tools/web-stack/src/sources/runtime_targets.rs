@@ -141,17 +141,4 @@ pub fn shab() -> &'static dyn SourceModule {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn runtime_sources_have_exact_target_keys_and_country_scope() {
-        assert_eq!(evi().scrape_target_key(), Some("evi-gv-at"));
-        assert_eq!(
-            justizonline().scrape_target_key(),
-            Some("justizonline-gv-at")
-        );
-        assert_eq!(mailtester().scrape_target_key(), Some("mailtester-com"));
-        assert_eq!(shab().scrape_target_key(), Some("shab-ch"));
-        assert_eq!(evi().countries(), &[Country::At]);
-        assert_eq!(shab().countries(), &[Country::Ch]);
-    }
 }

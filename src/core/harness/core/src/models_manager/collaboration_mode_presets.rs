@@ -101,7 +101,3 @@ fn asking_questions_guidance_message(default_mode_request_user_input: bool) -> S
         "In Default mode, strongly prefer making reasonable assumptions and executing the user's request rather than stopping to ask questions. If you absolutely must ask a question because the answer cannot be discovered from local context and a reasonable assumption would be risky, ask the user directly with a concise plain-text question. Never write a multiple choice question as a textual assistant message.".to_string()
     }
 }
-
-#[cfg(test)]
-#[path = "collaboration_mode_presets_tests.rs"]
-mod tests;

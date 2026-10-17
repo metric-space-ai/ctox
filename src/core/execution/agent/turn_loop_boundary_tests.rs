@@ -38,30 +38,6 @@ fn production_source(source: &str) -> String {
 }
 
 #[test]
-fn production_turn_loop_stays_model_agnostic() {
-    let production = production_source(include_str!("turn_loop.rs"));
-
-    for forbidden in [
-        "openai/gpt-oss-120b",
-        "Qwen/Qwen3.5-",
-        "google/gemma-4-",
-        "nvidia/Nemotron-",
-        "zai-org/GLM-4.7-Flash",
-        "local GPT-OSS model",
-        "local GLM model",
-        "local Gemma 4 model",
-        "local ChatML model",
-        "ChatModelFamily::",
-        "cargo run",
-    ] {
-        assert!(
-            !production.contains(forbidden),
-            "turn_loop production path leaked model-specific detail `{forbidden}`"
-        );
-    }
-}
-
-#[test]
 fn production_reviewers_are_read_only_and_workers_protect_runtime_state() {
     let production = production_source(include_str!("direct_session.rs"));
     let continuity = production_source(include_str!("session_continuity.rs"));

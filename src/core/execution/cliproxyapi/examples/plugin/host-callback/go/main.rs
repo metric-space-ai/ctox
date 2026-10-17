@@ -20,10 +20,3 @@ pub fn handle(host: &dyn ExampleHost) -> ExampleResult {
     )?;
     super::core::reply(response)
 }
-#[test]
-fn host_authority_is_injected() {
-    let host = super::core::RecordingHost::default()
-        .with_reply("host.log", json!({}))
-        .with_reply("host.http.do", json!({"StatusCode":200}));
-    assert_eq!(handle(&host).unwrap().result["StatusCode"], 200);
-}

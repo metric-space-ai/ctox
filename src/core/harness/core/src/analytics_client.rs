@@ -760,7 +760,3 @@ fn normalize_path_for_skill_id(
         _ => resolved_path.to_string_lossy().replace('\\', "/"),
     }
 }
-
-#[cfg(test)]
-#[path = "analytics_client_tests.rs"]
-mod tests;

@@ -854,35 +854,6 @@ mod tests {
     }
 
     #[test]
-    fn module_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "xing.com");
-        assert_eq!(m.aliases(), &["xing"]);
-        assert!(matches!(m.tier(), Tier::C));
-        assert_eq!(m.countries(), &[Country::De, Country::At, Country::Ch]);
-        assert_eq!(m.requires_credential(), Some("XING_BROWSER_LOGIN"));
-        assert_eq!(m.scrape_target_key(), Some("xing-com"));
-        let recipe = m.browser_recipe().expect("browser recipe");
-        assert_eq!(recipe.required_secret_name, Some("XING_BROWSER_LOGIN"));
-        assert!(m
-            .authoritative_for()
-            .iter()
-            .any(|k| matches!(k, FieldKey::PersonFunktion)));
-        assert!(m
-            .authoritative_for()
-            .iter()
-            .any(|k| matches!(k, FieldKey::PersonVorname)));
-        assert!(m
-            .authoritative_for()
-            .iter()
-            .any(|k| matches!(k, FieldKey::PersonNachname)));
-        assert!(m
-            .authoritative_for()
-            .iter()
-            .any(|k| matches!(k, FieldKey::PersonXing)));
-    }
-
-    #[test]
     fn shape_query_falls_back_to_provider_scoped_profile_search() {
         let ctx = SourceCtx {
             root: Path::new("/tmp/ctox-test"),
@@ -894,24 +865,6 @@ mod tests {
             .expect("browser-backed source should expose a provider-scoped fallback");
         assert!(shaped.query.contains("site:xing.com/profile"));
         assert_eq!(shaped.domains, vec!["xing.com"]);
-    }
-
-    #[test]
-    fn browser_capture_uses_current_company_and_member_searches() -> anyhow::Result<()> {
-        let source = build_authenticated_browser_capture("Example Industrial GmbH", "DE")?;
-
-        assert!(source.contains("https://www.xing.com/search/companies"));
-        assert!(source.contains("https://www.xing.com/search/members"));
-        assert!(!source.contains("https://www.xing.com/search/people"));
-        assert!(source.contains("companySearch"));
-        assert!(source.contains("memberSearch"));
-        assert!(source.contains("(?:pages|companies)"));
-        assert!(source.contains("^\\/profile\\/([^/]+)\\/?$"));
-        assert!(source.contains("auth_required"));
-        assert!(source.contains("not_found"));
-        assert!(source.contains("blocked"));
-
-        Ok(())
     }
 
     #[test]

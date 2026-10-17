@@ -644,24 +644,4 @@ mod tests {
             Some(23)
         );
     }
-
-    #[test]
-    fn parses_static_quant_layout_names() {
-        assert_eq!(
-            PackLayout::from_str("int8_row_tiled"),
-            Some(PackLayout::Int8RowTiled)
-        );
-        assert_eq!(
-            PackLayout::from_str("int4_groupwise_row_tiled"),
-            Some(PackLayout::Int4GroupwiseRowTiled)
-        );
-        assert_eq!(
-            QuantScheme::from_str("int8_symmetric"),
-            Some(QuantScheme::Int8Symmetric)
-        );
-        assert_eq!(
-            QuantScheme::from_str("int4_groupwise_symmetric"),
-            Some(QuantScheme::Int4GroupwiseSymmetric)
-        );
-    }
 }

@@ -1,11 +1,11 @@
 import { showBusinessAlert, showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
 import { renderListOrState } from '../../shared/list-state.js';
-import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { crewCreatureHtml, syncCrewProceduralMotion, crewMemberExpression, crewMemberExpressionTtlMs } from '../../shared/business-chat.js?v=20261016-v2-push-resume-native-owned';
 import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
 import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-truth-v7';
 import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-truth-v7';
 import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
-import { subscribeTaskHistoryChanges } from '../../shared/task-history-native-changes.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { subscribeTaskHistoryChanges } from '../../shared/task-history-native-changes.js?v=20261016-v2-push-resume-native-owned';
 
 const FLOW_WIDTH = 1760;
 const FLOW_HEIGHT = 1050;
@@ -31,7 +31,7 @@ const HARNESS_ACTIVE_STATUSES = new Set(['running', 'leased', 'review', 'draftin
 const HARNESS_TERMINAL_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy', 'handled', 'cancelled', 'failed', 'blocked']);
 const HARNESS_SUCCESS_STATUSES = new Set(['completed', 'done', 'sent', 'approved', 'healthy']);
 const HARNESS_PROBLEM_TERMINAL_STATUSES = new Set(['handled', 'cancelled', 'failed', 'blocked']);
-const CTOX_STYLE_BUILD = '20261014-shell-v2-query-checkpoint-readonly';
+const CTOX_STYLE_BUILD = '20261016-v2-push-resume-native-owned';
 // Replicated collections whose rows feed the task list (via
 // mergeBundleWithCommands). The data-driven empty branch is gated on their
 // combined readiness so an initial sync never reads as "no work".
@@ -164,6 +164,12 @@ const labels = {
     blockReasonDefault: "Vom Nutzer blockiert",
     pauseReasonDefault: "Vom Nutzer pausiert",
     controlApplied: "Übernommen.",
+    retryResubmitted: 'Neu gestartet: Die Aufgabe läuft als neuer Lauf.',
+    taskActionRejected: 'Abgelehnt: {reason}',
+    rejectNotFailed: 'Nur fehlgeschlagene oder blockierte Aufgaben lassen sich wiederholen.',
+    rejectLeased: 'Die Aufgabe wird gerade bearbeitet. Warte, bis der Lauf endet.',
+    rejectNotFound: 'Die Aufgabe gibt es nicht mehr.',
+    rejectTimeout: 'Keine Antwort erhalten. Ob die Aktion übernommen wurde, ist unklar.',
     harnessRunning: "Läuft",
     harnessPaused: "Pausiert",
     harnessStopped: "Gestoppt",
@@ -186,7 +192,6 @@ const labels = {
     failedWord: "Gescheitert",
     blockedWord: "Blockiert",
     waitsFor: "wartet auf",
-    retryAt: "Wiederholung um",
     retryPending: "Wiederholung steht aus",
     attemptOne: "Versuch",
     attemptMany: "Versuche",
@@ -459,6 +464,12 @@ const labels = {
     blockReasonDefault: "Blocked by owner",
     pauseReasonDefault: "Paused by owner",
     controlApplied: "Applied.",
+    retryResubmitted: 'Restarted: the task runs again as a new run.',
+    taskActionRejected: 'Rejected: {reason}',
+    rejectNotFailed: 'Only failed or blocked tasks can be retried.',
+    rejectLeased: 'The task is being worked on right now. Wait until the run ends.',
+    rejectNotFound: 'This task no longer exists.',
+    rejectTimeout: 'No answer received. It is unclear whether the action was applied.',
     harnessRunning: "Running",
     harnessPaused: "Paused",
     harnessStopped: "Stopped",
@@ -481,7 +492,6 @@ const labels = {
     failedWord: "Failed",
     blockedWord: "Blocked",
     waitsFor: "waits for",
-    retryAt: "retry at",
     retryPending: "retry pending",
     attemptOne: "attempt",
     attemptMany: "attempts",
@@ -4265,6 +4275,9 @@ async function dispatchCtoxTaskMutation(state, { commandType, payload, commandPa
     throw new Error('Die Verbindung zur Crew ist nicht verfügbar.');
   }
   const commandId = `cmd_${commandType.replace(/[^a-z0-9]+/gi, '_')}_${crypto.randomUUID()}`;
+  // Wait for the native outcome: "accepted" resolves as soon as the intent is
+  // replicated, so a rejected retry used to report "Übernommen." and then do
+  // nothing (Welsch, 15.10.2026).
   return state.ctx.commandBus.dispatch({
     id: commandId,
     module: 'ctox',
@@ -4277,7 +4290,7 @@ async function dispatchCtoxTaskMutation(state, { commandType, payload, commandPa
       command_path: commandPath,
       actor: state.ctx.session?.user || {},
     },
-  });
+  }, { until: 'terminal' });
 }
 
 function nativeTaskId(task) {
@@ -4307,7 +4320,18 @@ function removeTaskFromModel(state, taskId) {
 function humanTaskActionError(error, t) {
   const message = String(error?.message || error || '');
   if (message.includes('403') || /chef|admin/i.test(message)) return t.chefAdminOnly;
-  return t.taskActionFailed;
+  return taskRejectionReason(message, error?.code, t) || t.taskActionFailed;
+}
+
+// Name why native refused a task control instead of a bare "failed".
+function taskRejectionReason(message, code, t) {
+  if (/retry requires a failed or blocked task/i.test(message)) return t.rejectNotFailed;
+  if (/active leases must finish/i.test(message)) return t.rejectLeased;
+  if (/queue task not found/i.test(message)) return t.rejectNotFound;
+  if (code === 'timeout' || /timed? ?out/i.test(message)) return t.rejectTimeout;
+  const reason = message.replace(/^Error:\s*/, '').trim();
+  if (!reason) return '';
+  return t.taskActionRejected.replace('{reason}', reason.length > 200 ? `${reason.slice(0, 199)}…` : reason);
 }
 
 function flowNodeDrawer(node, task, state) {
@@ -6444,7 +6468,12 @@ async function runTaskControl(state, task, control, body, extra = {}) {
     } else if (control === 'release') {
       await dispatchCtoxTaskMutation(state, { commandType: 'ctox.queue.release', payload: { task_id: taskId }, commandPath: 'ctox_queue_release' });
     } else if (control === 'retry') {
-      await dispatchCtoxTaskMutation(state, { commandType: 'ctox.queue.retry', payload: { task_id: taskId }, commandPath: 'ctox_queue_retry' });
+      const receipt = await dispatchCtoxTaskMutation(state, { commandType: 'ctox.queue.retry', payload: { task_id: taskId }, commandPath: 'ctox_queue_retry' });
+      if (receipt?.result?.resubmitted) {
+        if (status) status.textContent = t.retryResubmitted;
+        refresh(state).catch(() => {});
+        return;
+      }
     } else if (control === 'assign') {
       if (!extra.memberId) return;
       await dispatchCtoxTaskMutation(state, { commandType: 'ctox.crew.assign', payload: { task_id: taskId, member_id: extra.memberId }, commandPath: 'ctox_crew_assign' });

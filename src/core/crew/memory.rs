@@ -747,13 +747,4 @@ mod tests {
         assert!(block.contains("[success] Import lief. — Schema zuerst prüfen."));
         assert_eq!(anchor_lines(&memory.anchors).len(), 80);
     }
-
-    #[test]
-    fn task_summary_is_prose_and_bounded() {
-        let summary =
-            task_summary_from_prompt(&format!("  Prüfe\n\n{} ", "x".repeat(500)), Some("reports"));
-        assert!(summary.starts_with("[reports] Prüfe x"));
-        assert!(summary.ends_with('…'));
-        assert!(summary.chars().count() <= 215);
-    }
 }

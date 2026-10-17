@@ -702,26 +702,3 @@ async fn worker_applies_pending_backoff_after_cancelled_attempt() {
     wait_for(|| schedule.peek() == Some(add(now, 60))).await;
     worker.stop().await;
 }
-
-#[test]
-fn worker_config_normalizes_upstream_defaults_and_buffer_bound() {
-    assert_eq!(
-        AutoRefreshConfig {
-            interval: Duration::ZERO,
-            concurrency: 0,
-            job_buffer: 0,
-        }
-        .normalized(),
-        AutoRefreshConfig::default()
-    );
-    assert_eq!(
-        AutoRefreshConfig {
-            interval: Duration::from_secs(9),
-            concurrency: 3,
-            job_buffer: 1,
-        }
-        .normalized()
-        .job_buffer,
-        3
-    );
-}

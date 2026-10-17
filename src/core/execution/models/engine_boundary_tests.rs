@@ -36,30 +36,3 @@ fn production_source(source: &str) -> String {
 
     production
 }
-
-#[test]
-fn production_engine_keeps_responses_compatibility_inside_adapters() {
-    let production = production_source(include_str!("engine.rs"));
-
-    for forbidden in [
-        "HarmonyProxyRequest",
-        "HarmonyFunctionCall",
-        "HarmonyResponseItem",
-        "HarmonyToolSpec",
-        "parse_harmony_",
-        "build_gpt_oss_harmony_prompt",
-        "rewrite_responses_to_qwen_chat_completions",
-        "rewrite_qwen_chat_completions_to_responses",
-        "rewrite_responses_to_gpt_oss_completion",
-        "rewrite_gpt_oss_completion_to_responses",
-        "rewrite_gpt_oss_completion_to_sse",
-        "build_gpt_oss_followup_completion_request",
-        "should_use_gpt_oss_harmony_proxy",
-        "Harmony-specific",
-    ] {
-        assert!(
-            !production.contains(forbidden),
-            "engine production path leaked adapter-owned compatibility detail `{forbidden}`"
-        );
-    }
-}

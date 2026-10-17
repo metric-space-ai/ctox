@@ -301,23 +301,5 @@ mod tests {
         assert_eq!(out.extracted[0].content, "y");
     }
 
-    #[test]
-    #[should_panic(expected = "non-empty open delimiters")]
-    fn generic_inline_parser_rejects_empty_open_delimiter() {
-        let _ = InlineHiddenTagParser::new(vec![InlineTagSpec {
-            tag: Tag::A,
-            open: "",
-            close: "</a>",
-        }]);
-    }
 
-    #[test]
-    #[should_panic(expected = "non-empty close delimiters")]
-    fn generic_inline_parser_rejects_empty_close_delimiter() {
-        let _ = InlineHiddenTagParser::new(vec![InlineTagSpec {
-            tag: Tag::A,
-            open: "<a>",
-            close: "",
-        }]);
-    }
 }

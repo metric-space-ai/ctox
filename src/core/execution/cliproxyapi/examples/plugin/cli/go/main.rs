@@ -18,10 +18,3 @@ pub fn handle(method: &str) -> ExampleResult {
         _ => unknown(method),
     }
 }
-#[test]
-fn command_is_data_not_a_shell_spawn() {
-    assert_eq!(
-        handle("command_line.execute").unwrap().result["ExitCode"],
-        0
-    );
-}

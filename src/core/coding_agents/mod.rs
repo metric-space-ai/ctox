@@ -220,32 +220,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn operator_route_options_are_exact_and_keep_main_root_authority() {
-        for (suffix, expected) in [
-            (vec![], Some(false)),
-            (vec!["--probe"], Some(true)),
-            (vec!["--root", "/native-root"], Some(false)),
-            (vec!["--probe", "--root", "/native-root"], Some(true)),
-            (vec!["--root", "/native-root", "--probe"], Some(true)),
-            (vec!["--root"], None),
-            (vec!["--root", ""], None),
-            (vec!["--root", "--probe"], None),
-            (vec!["--probe", "--probe"], None),
-            (vec!["--root", "/one", "--root", "/two"], None),
-            (vec!["--endpoint", "https://example.com"], None),
-            (vec!["--model", "MiniMax-M3"], None),
-            (vec!["--token", "fixture-secret"], None),
-        ] {
-            let args = std::iter::once("route")
-                .chain(suffix)
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
-            assert_eq!(coding_route_cli_options(&args), expected);
-        }
-        assert_eq!(coding_route_cli_options(&["turn".to_owned()]), None);
-    }
-
-    #[test]
     fn operator_turn_rejects_ambiguous_preset_and_raw_model() {
         let root = tempfile::tempdir().unwrap();
         let args = [

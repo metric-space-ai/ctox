@@ -162,7 +162,9 @@ fn align_up(n: c_int, k: c_int) -> c_int {
 ///
 /// ref: test_dflash.cpp:501-564
 #[allow(clippy::too_many_arguments)]
-pub fn build_target_step(
+/// # Safety
+/// All raw handles must remain valid and belong to the live ggml backend.
+pub unsafe fn build_target_step(
     sg: &mut StepGraph,
     w: &TargetWeights,
     cache: &mut TargetCache,
@@ -270,7 +272,9 @@ pub fn build_target_step(
 ///     the spec loop relies on per-step intermediates for rollback.
 ///
 /// ref: test_dflash.cpp:574-635
-pub fn build_target_step_tree(
+/// # Safety
+/// All raw handles must remain valid and belong to the live ggml backend.
+pub unsafe fn build_target_step_tree(
     sg: &mut StepGraph,
     w: &TargetWeights,
     cache: &mut TargetCache,
@@ -370,7 +374,9 @@ pub fn build_target_step_tree(
 /// target positions the draft cross-attends over (already <= DRAFT_CTX_MAX).
 ///
 /// ref: test_dflash.cpp:637-696
-pub fn build_draft_step(
+/// # Safety
+/// All raw handles must remain valid and belong to the live ggml backend.
+pub unsafe fn build_draft_step(
     sg: &mut StepGraph,
     dw: &crate::model::DraftWeights,
     tw: &TargetWeights,
@@ -582,7 +588,9 @@ impl Default for GenConfig {
 ///
 /// ref: test_dflash.cpp:870-1758
 #[allow(clippy::too_many_arguments)]
-pub fn run_dflash_gen_loop(
+/// # Safety
+/// All raw handles must remain valid and belong to the live ggml backend.
+pub unsafe fn run_dflash_gen_loop(
     w: &TargetWeights,
     dw: &crate::model::DraftWeights,
     cache: &mut TargetCache,
@@ -696,7 +704,7 @@ pub fn run_dflash_gen_loop(
         pf_pos_buf.resize(pf_pos_elems, 0);
         for i in 0..n_tokens as usize {
             let p = start + (i as c_int);
-            pf_pos_buf[0 * (n_tokens as usize) + i] = p;
+            pf_pos_buf[i] = p;
             pf_pos_buf[1 * (n_tokens as usize) + i] = p;
             pf_pos_buf[2 * (n_tokens as usize) + i] = p;
             pf_pos_buf[3 * (n_tokens as usize) + i] = 0;
@@ -996,7 +1004,7 @@ pub fn run_dflash_gen_loop(
             let tp = &mut tree_pos4[..pos_elems];
             for i in 0..n_us {
                 let p = committed + if i == 0 { 0 } else { tree.depths[i - 1] };
-                tp[0 * n_us + i] = p;
+                tp[i] = p;
                 tp[1 * n_us + i] = p;
                 tp[2 * n_us + i] = p;
                 tp[3 * n_us + i] = 0;
@@ -1332,7 +1340,7 @@ pub fn run_dflash_gen_loop(
         // Positions (same 4-axis pattern as prefill). ref: lines 1482-1489
         for i in 0..q_len as usize {
             let p = committed + (i as c_int);
-            pos4_buf[0 * (q_len as usize) + i] = p;
+            pos4_buf[i] = p;
             pos4_buf[1 * (q_len as usize) + i] = p;
             pos4_buf[2 * (q_len as usize) + i] = p;
             pos4_buf[3 * (q_len as usize) + i] = 0;
@@ -1572,7 +1580,7 @@ pub fn run_dflash_gen_loop(
             let rp = &mut replay_pos[..replay_pos_elems];
             for i in 0..commit_n as usize {
                 let p = committed + (i as c_int);
-                rp[0 * (commit_n as usize) + i] = p;
+                rp[i] = p;
                 rp[1 * (commit_n as usize) + i] = p;
                 rp[2 * (commit_n as usize) + i] = p;
                 rp[3 * (commit_n as usize) + i] = 0;

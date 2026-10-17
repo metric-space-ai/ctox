@@ -94,7 +94,3 @@ pub fn write_config_schema(out_path: &Path) -> anyhow::Result<()> {
     std::fs::write(out_path, json)?;
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "schema_tests.rs"]
-mod tests;

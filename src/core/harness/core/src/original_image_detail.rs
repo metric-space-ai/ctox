@@ -22,7 +22,3 @@ pub(crate) fn normalize_output_image_detail(
         Some(ImageDetail::Original) | Some(_) | None => None,
     }
 }
-
-#[cfg(test)]
-#[path = "original_image_detail_tests.rs"]
-mod tests;

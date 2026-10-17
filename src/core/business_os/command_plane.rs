@@ -286,7 +286,7 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 145] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 149] = [
     "news.topic.schedule",
     "news.source.auth_assist",
     "ctox.crew.member.create",
@@ -296,6 +296,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 145] = [
     "ctox.crew.learning.update",
     "ctox.crew.learning.delete",
     "ctox.crew.assign",
+    "ctox.plan.step.retry",
     "ctox.queue.release",
     "ctox.queue.block",
     "ctox.queue.retry",
@@ -349,6 +350,9 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 145] = [
     "ctox.secret.delete",
     "ctox.secret.list",
     "ctox.secret.put",
+    "ctox.secret.request.decline",
+    "ctox.secret.request.fulfill",
+    "ctox.secret.request.list",
     "ctox.source.commit",
     "ctox.source.diff",
     "ctox.source.list_snapshots",
@@ -1271,7 +1275,10 @@ impl CentralCommandPolicyRequirement {
                 BusinessOsPermission::CrewManage,
                 super::policy::BusinessOsScope::record(command_type),
             ))
-        } else if matches!(command_type, "ctox.queue.capacity" | "ctox.queue.pause") {
+        } else if matches!(
+            command_type,
+            "ctox.queue.capacity" | "ctox.queue.pause" | "ctox.plan.step.retry"
+        ) {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::CtoxTaskManage,
             ))
@@ -1699,7 +1706,8 @@ fn dispatch_business_command(
         | "ctox.queue.retry"
         | "ctox.queue.capacity"
         | "ctox.queue.pause"
-        | "ctox.queue.abort_turn" => {
+        | "ctox.queue.abort_turn"
+        | "ctox.plan.step.retry" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
             // Finish the durable control claim and replicate its outcome. The
             // target queue task is not an execution task of this control command.
@@ -2118,6 +2126,12 @@ fn dispatch_business_command(
                     error,
                 )),
             }
+        }
+        "ctox.secret.request.list"
+        | "ctox.secret.request.fulfill"
+        | "ctox.secret.request.decline" => {
+            super::store_secret_request_commands::handle_secret_request_command(root, command)
+                .map(BusinessCommandDispatchOutcome::Returned)
         }
         "ctox.secret.list"
         | "ctox.secret.put"

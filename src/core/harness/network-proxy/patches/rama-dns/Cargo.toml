@@ -85,12 +85,6 @@ features = [
     "net",
 ]
 
-[dev-dependencies.serde_html_form]
-version = "0.3"
-
-[dev-dependencies.serde_json]
-version = "1.0"
-
 [lints.clippy]
 await_holding_lock = "warn"
 empty_enum = "warn"

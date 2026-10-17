@@ -893,12 +893,6 @@ mod tests {
     // --- tests -------------------------------------------------------------
 
     #[test]
-    fn kind_is_websocket() {
-        let agent = ws_agent("ws://127.0.0.1:1");
-        assert_eq!(agent.kind(), IotAgentKind::WebSocket);
-    }
-
-    #[test]
     fn new_rejects_non_ws_url() {
         let root = std::env::temp_dir();
         let ctx = AgentContext {

@@ -16,6 +16,13 @@ import {
   compactCount,
   cronForTopic,
   issueLabel,
+  issueWindow,
+  digestOf,
+  withDigest,
+  digestActive,
+  cronForDigest,
+  issueNodeLabel,
+  normalizeStoryUrl,
   issuesForTopic,
   mergeIntoAccountSource,
   newSource,
@@ -222,4 +229,48 @@ test('legacy subreddit scrape targets fold into one Reddit account source', asyn
   assert.ok(sources.includes(hn));
   const again = model.migrateLegacyRedditSources(sources, 't');
   assert.deepEqual(again.removedIds, []);
+});
+
+test('issue window runs since the previous issue and lists covered links', () => {
+  const now = Date.parse('2026-10-15T07:00:00Z');
+  const topic = { id: 't1', cadence: 'daily' };
+  const issues = [
+    { id: 'i1', topic_id: 't1', status: 'ready', generated_at_ms: now - 9 * 3_600_000 },
+    { id: 'i2', topic_id: 't1', status: 'failed', generated_at_ms: now - 3_600_000 },
+  ];
+  const posts = [{ issue_id: 'i1', link_card: { url: 'https://www.Cohere.com/blog/new/' },
+    sources: [{ url: 'https://news.ycombinator.com/item?id=1', kind: 'discussion' }] }];
+  const window = issueWindow(topic, issues, posts, now);
+  assert.equal(window.startMs, now - 9 * 3_600_000);
+  assert.equal(window.previousIssueId, 'i1');
+  assert.deepEqual(window.coveredUrls, ['cohere.com/blog/new']);
+  assert.equal(issueWindow(topic, [], [], now).startMs, now - 24 * 3_600_000);
+  assert.equal(issueWindow({ id: 't1', cadence: 'weekly' }, [], [], now).startMs, now - 7 * 24 * 3_600_000);
+  assert.equal(normalizeStoryUrl('https://x.ai/news#a'), 'x.ai/news');
+  const command = buildGenerateCommand({ ...normalizeTopic({ id: 't1', title: 'KI', cadence: 'daily' }) }, [], { id: 'i3', issue_date: '2026-10-15' }, issues[0], window);
+  assert.equal(command.payload.window_start_ms, window.startMs);
+  assert.deepEqual(command.payload.covered_urls, ['cohere.com/blog/new']);
+  assert.match(command.payload.instruction, /Zeitfenster: nur Meldungen/);
+});
+
+test('weekly digest rides on a daily topic with its own schedule', () => {
+  const topic = normalizeTopic({ id: 't1', title: 'KI', cadence: 'daily', run_time: '07:00' });
+  assert.deepEqual(digestOf(topic), { enabled: false, weekday: 5, run_time: '17:00' });
+  const on = withDigest(topic, { enabled: true, weekday: 0, run_time: '18:30' });
+  assert.equal(digestActive(on), true);
+  assert.equal(cronForDigest(on), '30 18 * * 0');
+  assert.equal(digestActive({ ...on, cadence: 'weekly' }), false);
+  assert.equal(digestActive({ ...on, enabled: false }), false);
+  const command = buildScheduleCommand(on, { digest: true });
+  assert.equal(command.payload.mode, 'digest');
+  assert.equal(command.payload.cron_expr, '30 18 * * 0');
+  assert.equal(command.payload.enabled, true);
+  assert.equal(buildScheduleCommand(on).payload.cron_expr, '0 7 * * *');
+  assert.equal(buildScheduleCommand(on).payload.mode, undefined);
+  const off = buildScheduleCommand(withDigest(on, { enabled: false }), { digest: true });
+  assert.equal(off.payload.enabled, false);
+  const today = new Date('2026-10-16T12:00:00Z');
+  const digestIssue = { issue_date: '2026-10-16', payload: { kind: 'weekly_digest' } };
+  assert.match(issueNodeLabel(digestIssue, [digestIssue], 'de', today), /^Woche · /);
+  assert.match(issueNodeLabel(digestIssue, [digestIssue], 'en', today), /^Week · /);
 });

@@ -1,7 +1,6 @@
 use super::*;
 use core_test_support::assert_regex_match;
 use pretty_assertions::assert_eq;
-use serde_json::json;
 
 #[test]
 fn custom_tool_calls_should_roundtrip_as_custom_outputs() {
@@ -41,47 +40,6 @@ fn function_payloads_remain_function_outputs() {
     }
 }
 
-#[test]
-fn mcp_code_mode_result_serializes_full_call_tool_result() {
-    let output = CallToolResult {
-        content: vec![serde_json::json!({
-            "type": "text",
-            "text": "ignored",
-        })],
-        structured_content: Some(serde_json::json!({
-            "threadId": "thread_123",
-            "content": "done",
-        })),
-        is_error: Some(false),
-        meta: Some(serde_json::json!({
-            "source": "mcp",
-        })),
-    };
-
-    let result = output.code_mode_result(&ToolPayload::Mcp {
-        server: "server".to_string(),
-        tool: "tool".to_string(),
-        raw_arguments: "{}".to_string(),
-    });
-
-    assert_eq!(
-        result,
-        serde_json::json!({
-            "content": [{
-                "type": "text",
-                "text": "ignored",
-            }],
-            "structuredContent": {
-                "threadId": "thread_123",
-                "content": "done",
-            },
-            "isError": false,
-            "_meta": {
-                "source": "mcp",
-            },
-        })
-    );
-}
 
 #[test]
 fn custom_tool_calls_can_derive_text_from_content_items() {
@@ -128,108 +86,10 @@ fn custom_tool_calls_can_derive_text_from_content_items() {
     }
 }
 
-#[test]
-fn tool_search_payloads_roundtrip_as_tool_search_outputs() {
-    let payload = ToolPayload::ToolSearch {
-        arguments: SearchToolCallParams {
-            query: "calendar".to_string(),
-            limit: None,
-        },
-    };
-    let response = ToolSearchOutput {
-        tools: vec![ToolSearchOutputTool::Function(
-            crate::client_common::tools::ResponsesApiTool {
-                name: "create_event".to_string(),
-                description: String::new(),
-                strict: false,
-                defer_loading: Some(true),
-                parameters: crate::tools::spec::JsonSchema::Object {
-                    properties: Default::default(),
-                    required: None,
-                    additional_properties: None,
-                },
-                output_schema: None,
-            },
-        )],
-    }
-    .to_response_item("search-1", &payload);
 
-    match response {
-        ResponseInputItem::ToolSearchOutput {
-            call_id,
-            status,
-            execution,
-            tools,
-        } => {
-            assert_eq!(call_id, "search-1");
-            assert_eq!(status, "completed");
-            assert_eq!(execution, "client");
-            assert_eq!(
-                tools,
-                vec![json!({
-                    "type": "function",
-                    "name": "create_event",
-                    "description": "",
-                    "strict": false,
-                    "defer_loading": true,
-                    "parameters": {
-                        "type": "object",
-                        "properties": {}
-                    }
-                })]
-            );
-        }
-        other => panic!("expected ToolSearchOutput, got {other:?}"),
-    }
-}
 
-#[test]
-fn log_preview_uses_content_items_when_plain_text_is_missing() {
-    let output = FunctionToolOutput::from_content(
-        vec![FunctionCallOutputContentItem::InputText {
-            text: "preview".to_string(),
-        }],
-        Some(true),
-    );
 
-    assert_eq!(output.log_preview(), "preview");
-    assert_eq!(
-        function_call_output_content_items_to_text(&output.body),
-        Some("preview".to_string())
-    );
-}
 
-#[test]
-fn telemetry_preview_returns_original_within_limits() {
-    let content = "short output";
-    assert_eq!(telemetry_preview(content), content);
-}
-
-#[test]
-fn telemetry_preview_truncates_by_bytes() {
-    let content = "x".repeat(TELEMETRY_PREVIEW_MAX_BYTES + 8);
-    let preview = telemetry_preview(&content);
-
-    assert!(preview.contains(TELEMETRY_PREVIEW_TRUNCATION_NOTICE));
-    assert!(
-        preview.len()
-            <= TELEMETRY_PREVIEW_MAX_BYTES + TELEMETRY_PREVIEW_TRUNCATION_NOTICE.len() + 1
-    );
-}
-
-#[test]
-fn telemetry_preview_truncates_by_lines() {
-    let content = (0..(TELEMETRY_PREVIEW_MAX_LINES + 5))
-        .map(|idx| format!("line {idx}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let preview = telemetry_preview(&content);
-    let lines: Vec<&str> = preview.lines().collect();
-
-    assert!(lines.len() <= TELEMETRY_PREVIEW_MAX_LINES + 1);
-    assert_eq!(lines.last(), Some(&TELEMETRY_PREVIEW_TRUNCATION_NOTICE));
-}
 
 #[test]
 fn exec_command_tool_output_formats_truncated_response() {

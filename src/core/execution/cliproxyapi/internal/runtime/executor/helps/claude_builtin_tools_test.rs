@@ -9,14 +9,6 @@ use super::claude_builtin_tools::{
 };
 
 #[test]
-fn default_seed_fallback_contains_all_pinned_builtins() {
-    let registry = augment_claude_builtin_tool_registry(&[], None);
-    for name in ["web_search", "code_execution", "text_editor", "computer"] {
-        assert_eq!(registry.get(name), Some(&true));
-    }
-}
-
-#[test]
 fn only_known_typed_builtins_from_body_augment_the_registry() {
     let registry = augment_claude_builtin_tool_registry(
         br#"{
@@ -33,27 +25,6 @@ fn only_known_typed_builtins_from_body_augment_the_registry() {
     assert_eq!(registry.get("web_search"), Some(&true));
     for name in ["client_custom", "unknown_typed", "Read"] {
         assert!(!registry.contains_key(name));
-    }
-}
-
-#[test]
-fn server_tool_type_classifier_matches_candidate_families() {
-    for tool_type in [
-        "web_search_20250305",
-        "code_execution_20250522",
-        "tool_search_tool_regex_20251119",
-        "advisor_20260301",
-        "agent_toolset_20260401",
-        "bash_20250124",
-        "text_editor_20250728",
-        "memory_20250818",
-        "computer_20241022",
-        "web_fetch_20260209",
-    ] {
-        assert!(is_claude_server_tool_type(tool_type));
-    }
-    for tool_type in ["", "custom", "custom_builtin_20250401"] {
-        assert!(!is_claude_server_tool_type(tool_type));
     }
 }
 

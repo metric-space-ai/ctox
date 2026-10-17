@@ -1523,15 +1523,6 @@ fn load_startup_cached_codex_apps_tools_snapshot(
     }
 }
 
-#[cfg(test)]
-fn read_cached_codex_apps_tools(
-    cache_context: &CodexAppsToolsCacheContext,
-) -> Option<Vec<ToolInfo>> {
-    match load_cached_codex_apps_tools(cache_context) {
-        CachedCodexAppsToolsLoad::Hit(tools) => Some(tools),
-        CachedCodexAppsToolsLoad::Missing | CachedCodexAppsToolsLoad::Invalid => None,
-    }
-}
 
 fn load_cached_codex_apps_tools(
     cache_context: &CodexAppsToolsCacheContext,
