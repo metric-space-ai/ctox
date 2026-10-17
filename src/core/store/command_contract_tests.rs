@@ -426,7 +426,10 @@ async fn e25_kernel_command_to_native_completion() {
     kernel_component(true).await;
 }
 async fn kernel_component(e25: bool) {
-    use crate::change_log::subscription::{protocol::ClientMessage, Subscription, SubscriptionKey};
+    use crate::change_log::subscription::{
+        protocol::{ClientMessage, InstanceSigner},
+        Subscription, SubscriptionKey,
+    };
     use std::io::{BufRead, BufReader, Write as IoWrite};
     use std::process::Stdio;
     let (_dir, writer, readers) = runtime().await;
@@ -487,7 +490,31 @@ async fn kernel_component(e25: bool) {
         .await
         .unwrap();
     let ingress = OrderedWriter::new(writer.clone(), Arc::new(Policy));
-    let signer = crate::change_log::subscription::tests::TestInstanceKey::new();
+    struct TimedSigner {
+        key: crate::change_log::subscription::tests::TestInstanceKey,
+        elapsed_us: std::sync::atomic::AtomicU64,
+    }
+    impl InstanceSigner for TimedSigner {
+        fn instance_id(&self) -> &str {
+            self.key.instance_id()
+        }
+        fn key_id(&self) -> &str {
+            self.key.key_id()
+        }
+        fn sign(&self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+            let started = std::time::Instant::now();
+            let result = self.key.sign(bytes);
+            self.elapsed_us.fetch_add(
+                started.elapsed().as_micros() as u64,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            result
+        }
+    }
+    let signer = TimedSigner {
+        key: crate::change_log::subscription::tests::TestInstanceKey::new(),
+        elapsed_us: std::sync::atomic::AtomicU64::new(0),
+    };
     let key = SubscriptionKey {
         participant: "alice".into(),
         collection: "business_commands".into(),
@@ -748,11 +775,16 @@ async fn kernel_component(e25: bool) {
                     );
                     assert!(receipt.requires_page);
                 }
+                stages["projection_ready_us"] = json!(stage_start.elapsed().as_micros() as u64);
+                let sign_before = signer.elapsed_us.load(std::sync::atomic::Ordering::Relaxed);
                 let page = live
                     .next_page(100, Arc::new(Policy), &signer, || now)
                     .await
                     .unwrap();
                 stages["page_ready_us"] = json!(stage_start.elapsed().as_micros() as u64);
+                stages["page_sign_us"] = json!(
+                    signer.elapsed_us.load(std::sync::atomic::Ordering::Relaxed) - sign_before
+                );
                 stage_trace.push(stages.clone());
                 json!({"receipt":CoreMessage::WriteResult(receipt),"page":page,"completion_lane":completion_lane,"core_stages":stages})
             }
