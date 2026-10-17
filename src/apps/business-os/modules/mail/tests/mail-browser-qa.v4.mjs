@@ -435,8 +435,14 @@ mailQa: try {
     // CI-Runner kam „redo“ nach 300 ms vor dem fertigen „undo“ an (17.10.2026, Inhalt blieb bei „…Echter“).
     const editableText = () => editorFrame.locator('[contenteditable="true"]:visible').first().innerText();
     const before = await editableText();
-    await page.locator('[data-mail-editor-history="undo"]').click();
-    await expectEventually(async () => (await editableText()) !== before, 'undo ändert den Inhalt');
+    // Der Formularverlauf von EasyEmail übernimmt das Getippte asynchron; ein undo, das davor ankommt, ist ein Leerlauf
+    // (CI 17.10.: Inhalt blieb 10 s unverändert). Deshalb undo wiederholen, bis es wirkt – höchstens 5 Versuche.
+    let undone = false;
+    for (let attempt = 0; attempt < 5 && !undone; attempt++) {
+      await page.locator('[data-mail-editor-history="undo"]').click();
+      undone = await expectEventually(async () => (await editableText()) !== before, 'undo ändert den Inhalt', 3000).then(() => true, () => false);
+    }
+    assert.ok(undone, `undo ändert den Inhalt nicht (vorher: ${JSON.stringify(before.slice(0, 80))})`);
     await page.locator('[data-mail-editor-history="redo"]').click();
     await expectEventually(async () => (await editableText()) === before, 'redo stellt den Inhalt wieder her');
     await visibleContent.waitFor({ state: 'visible' });
