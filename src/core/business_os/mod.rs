@@ -14,12 +14,14 @@ pub(crate) mod build_remote;
 pub(crate) mod build_ssh;
 mod capability;
 mod command_plane;
+pub(crate) use command_plane::app_platform;
 mod contact_email_validation;
 mod control_command_types;
 mod crew_commands;
 mod customer_apps;
 pub mod decision_hub;
 mod desktop_files;
+pub(crate) mod devices;
 mod domain_effect;
 mod external_sql_sync;
 mod guest_commands;
@@ -45,6 +47,9 @@ mod importer;
 mod inventory_drift_tests;
 mod invoices;
 mod iot_supervision;
+pub(crate) mod device_invite_v4;
+pub(crate) mod launch_context_v4;
+pub(crate) mod machine_enrollment;
 pub mod mcp_channel;
 pub(crate) mod meeting_report;
 pub mod mobile_invites;
@@ -86,6 +91,7 @@ pub mod computer_endpoints;
 pub(crate) mod consumer_authority;
 pub(crate) mod provider_federation;
 mod rxdb_peer;
+pub(crate) use rxdb_peer::{migrate_cutover_document, register_v4_native_command_handlers};
 mod rxdb_peer_browser;
 mod rxdb_peer_business_data;
 mod rxdb_peer_business_data_source;
@@ -111,6 +117,7 @@ mod rxdb_peer_dictation;
 mod rxdb_peer_grok;
 mod rxdb_peer_jour_fixe_speech;
 mod rxdb_peer_workjet_devices;
+pub(crate) mod browser_bootstrap;
 pub mod server;
 mod session;
 mod session_handoff_gate;
@@ -200,6 +207,12 @@ pub use rxdb_peer::sync_desktop_file_from_path;
 pub use rxdb_peer::sync_desktop_files_from_workspace_root;
 pub(crate) use rxdb_peer::sync_knowledge_tables;
 pub use rxdb_peer::{ensure_native_peer, native_peer_maintenance_health, restart_native_peer};
+/// §16.46 Core-authorized internal browser entry (app capabilities only).
+pub(crate) use rxdb_peer_browser::{
+    apply_core_browser_command, core_browser_gate, resolve_browser_command_owner,
+    CoreBrowserBinding,
+};
+pub(crate) use server::resolve_business_os_app_root;
 pub use server::serve_business_os;
 pub use server::BusinessOsServeOptions;
 #[cfg(unix)]

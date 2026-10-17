@@ -164,3 +164,62 @@ fn concurrent_receipt_replay_applies_only_once() -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn core_lookup_receipts_use_one_snapshot_and_preserve_exclusive_authority(
+) -> anyhow::Result<()> {
+    let root = tempfile::tempdir()?;
+    let path = crate::paths::core_db(root.path());
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let (writer, readers) = ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&path)?)
+        .await?
+        .into_parts();
+    let adapter =
+        crate::lcm::owner_adapter::OwnerAdapter::attach(&path, writer.clone(), readers.clone())
+            .await?;
+    writer.submit(ctox_store::WriteJob::new(Default::default(), |tx| {
+        tx.execute_batch(SCHEMA)?;
+        tx.execute_batch("INSERT INTO business_command_domain_effects VALUES('command','hash','owner','{}');
+          CREATE TEMP TABLE business_command_domain_effects AS SELECT * FROM main.business_command_domain_effects;
+          UPDATE temp.business_command_domain_effects SET payload_hash='writer-shadow';")?;
+        Ok(())
+    }))?.await?;
+    let work = root.path().to_owned();
+    crate::persistence::run_core_sync(move || {
+        let policy = database(&work.join("policy-fixture.sqlite"))?;
+        let result =
+            identity_at_root(&work, &policy, "command")?.context("Core receipt missing")?;
+        assert_eq!(
+            result.payload_hash, "hash",
+            "Core lookup used writer-local state"
+        );
+        assert_eq!(result.actor_user_id, "owner");
+        policy.execute(
+            "INSERT INTO business_command_domain_effects VALUES('command','hash','owner','{}')",
+            [],
+        )?;
+        let error = identity_at_root(&work, &policy, "command")
+            .err()
+            .expect("two authority stores must remain an error");
+        assert!(
+            error.to_string().contains("two authority stores"),
+            "{error:#}"
+        );
+        Ok(())
+    })
+    .await?;
+    drop(adapter);
+    let work = root.path().to_owned();
+    crate::persistence::run_core_sync(move || {
+        let policy = database(&work.join("empty-policy-fixture.sqlite"))?;
+        assert!(
+            identity_at_root(&work, &policy, "command").is_err(),
+            "Core receipt read opened a second live Core connection"
+        );
+        Ok(())
+    })
+    .await?;
+    readers.shutdown().await?;
+    writer.shutdown().await?;
+    Ok(())
+}

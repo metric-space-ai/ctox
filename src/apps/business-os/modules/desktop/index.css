@@ -1,4 +1,4 @@
-.desktop-module {
+[data-app="desktop"] .desktop-module {
   position: relative;
   display: block;
   width: 100%;
@@ -22,7 +22,7 @@
 /* The HUD pixel-grid overlay and its light-theme variant are gone with the
    mesh wallpaper: on a flat ground it read as screen dirt. The pseudo element
    stays declared so the isolate/z-index stacking below is unchanged. */
-.desktop-module::before {
+[data-app="desktop"] .desktop-module::before {
   content: '';
   position: absolute;
   inset: 0;
@@ -30,7 +30,7 @@
   z-index: 0;
 }
 
-.desktop-surface {
+[data-app="desktop"] .desktop-surface {
   position: relative;
   width: 100%;
   height: 100%;
@@ -39,7 +39,7 @@
   z-index: 1;
 }
 
-.desktop-icons {
+[data-app="desktop"] .desktop-icons {
   position: absolute;
   inset: 0;
   padding: var(--desktop-icon-padding);
@@ -58,7 +58,7 @@
 }
 
 /* The shell-v2 launcher uses the same 80px artwork as its window corner. */
-.desktop-icon {
+[data-app="desktop"] .desktop-icon {
   position: absolute;
   width: 112px;
   /* Two-line labels need headroom for descenders. The 140px grid cell leaves
@@ -82,18 +82,18 @@
   transform-origin: center bottom;
 }
 
-.desktop-icon:hover {
+[data-app="desktop"] .desktop-icon:hover {
   background: transparent;
   transform: translateY(-2px);
   box-shadow: none;
 }
 
-.desktop-icon.selected {
+[data-app="desktop"] .desktop-icon.selected {
   background: transparent;
   box-shadow: none;
 }
 
-.desktop-icon.dragging {
+[data-app="desktop"] .desktop-icon.dragging {
   opacity: 0.85;
   background: transparent;
   transform: scale(0.96) rotate(-2deg) !important;
@@ -102,7 +102,7 @@
 }
 
 /* App artwork is the icon. Do not wrap it in a second glass/card surface. */
-.desktop-icon .desktop-icon-glyph {
+[data-app="desktop"] .desktop-icon .desktop-icon-glyph {
   width: 80px;
   height: 80px;
   display: grid;
@@ -119,20 +119,20 @@
   color: var(--text);
 }
 
-.desktop-icon:hover .desktop-icon-glyph {
+[data-app="desktop"] .desktop-icon:hover .desktop-icon-glyph {
   background: transparent !important;
   transform: scale(1.06) !important;
   filter: drop-shadow(0 8px 12px rgba(0, 0, 0, 0.18));
   box-shadow: none !important;
 }
 
-.desktop-icon.selected .desktop-icon-glyph,
-.desktop-icon:focus-visible .desktop-icon-glyph {
+[data-app="desktop"] .desktop-icon.selected .desktop-icon-glyph,
+[data-app="desktop"] .desktop-icon:focus-visible .desktop-icon-glyph {
   outline-width: 2px;
   outline-color: color-mix(in srgb, var(--accent) 78%, white 12%);
 }
 
-.desktop-icon .desktop-icon-glyph > svg {
+[data-app="desktop"] .desktop-icon .desktop-icon-glyph > svg {
   width: 72px;
   height: 72px;
   max-width: 100%;
@@ -140,7 +140,7 @@
 }
 
 /* Elegant Label Typography - prevents ugly wrapping by increasing spacing */
-.desktop-icon .desktop-icon-label {
+[data-app="desktop"] .desktop-icon .desktop-icon-label {
   font-size: 11px;
   font-weight: 600;
   text-align: center;
@@ -172,9 +172,9 @@
   transition: color 200ms ease, background-color 200ms ease, border-color 200ms ease;
 }
 
-.desktop-icon.selected .desktop-icon-label { background: transparent; border-color: transparent; }
+[data-app="desktop"] .desktop-icon.selected .desktop-icon-label { background: transparent; border-color: transparent; }
 
-.desktop-icon-empty {
+[data-app="desktop"] .desktop-icon-empty {
   position: absolute;
   top: 32px;
   left: 32px;
@@ -184,7 +184,7 @@
 }
 
 /* Floating Glassmorphic Clock & Platform Status Widget */
-.desktop-widget-container {
+[data-app="desktop"] .desktop-widget-container {
   position: absolute;
   top: 20px;
   right: 20px;
@@ -204,7 +204,7 @@
   }
 }
 
-.desktop-hero-widget {
+[data-app="desktop"] .desktop-hero-widget {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--surface-radius);
@@ -224,14 +224,14 @@
     background-color 300ms ease;
 }
 
-.desktop-hero-widget:hover {
+[data-app="desktop"] .desktop-hero-widget:hover {
   transform: none;
   border-color: color-mix(in srgb, var(--accent) 25%, transparent);
   background: color-mix(in srgb, var(--surface) 40%, transparent);
   box-shadow: none;
 }
 
-.widget-time {
+[data-app="desktop"] .widget-time {
   font-size: 32px;
   font-weight: 800;
   letter-spacing: 0;
@@ -243,7 +243,7 @@
   margin-bottom: 2px;
 }
 
-.widget-date {
+[data-app="desktop"] .widget-date {
   font-size: 12px;
   font-weight: 700;
   color: var(--muted);
@@ -253,7 +253,7 @@
   min-height: 16px;
 }
 
-.widget-status {
+[data-app="desktop"] .widget-status {
   display: flex;
   align-items: center;
   align-self: center;
@@ -265,12 +265,12 @@
   transition: background-color 200ms ease, border-color 200ms ease;
 }
 
-.desktop-hero-widget:hover .widget-status {
+[data-app="desktop"] .desktop-hero-widget:hover .widget-status {
   background: color-mix(in srgb, var(--accent-soft) 80%, rgba(0,0,0,0.08));
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
 }
 
-.status-pulse {
+[data-app="desktop"] .status-pulse {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -278,7 +278,7 @@
   position: relative;
 }
 
-.status-pulse::after {
+[data-app="desktop"] .status-pulse::after {
   content: '';
   position: absolute;
   top: 0;
@@ -297,7 +297,7 @@
   }
 }
 
-.status-text {
+[data-app="desktop"] .status-text {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0;
@@ -306,7 +306,7 @@
   min-height: 13px;
 }
 
-.widget-sync {
+[data-app="desktop"] .widget-sync {
   margin-top: 7px;
   padding-top: 8px;
   border-top: 1px solid color-mix(in srgb, var(--line) 24%, transparent);
@@ -323,28 +323,28 @@
 }
 
 @container (max-width: 1320px) {
-  .desktop-widget-container {
+  [data-app="desktop"] .desktop-widget-container {
     display: none;
   }
 }
 
-.widget-sync[hidden],
-.widget-sync[data-state="idle"] {
+[data-app="desktop"] .widget-sync[hidden],
+[data-app="desktop"] .widget-sync[data-state="idle"] {
   display: none;
 }
 
-.widget-sync-head {
+[data-app="desktop"] .widget-sync-head {
   display: contents;
 }
 
-.widget-sync-title,
-.widget-sync-count,
-.widget-sync-detail,
-.widget-sync-bar {
+[data-app="desktop"] .widget-sync-title,
+[data-app="desktop"] .widget-sync-count,
+[data-app="desktop"] .widget-sync-detail,
+[data-app="desktop"] .widget-sync-bar {
   min-width: 0;
 }
 
-.widget-sync-title {
+[data-app="desktop"] .widget-sync-title {
   grid-area: title;
   color: var(--text);
   font-size: 12px;
@@ -357,7 +357,7 @@
   white-space: nowrap;
 }
 
-.widget-sync-count {
+[data-app="desktop"] .widget-sync-count {
   grid-area: count;
   color: var(--muted);
   font-size: 12px;
@@ -367,7 +367,7 @@
   white-space: nowrap;
 }
 
-.widget-sync-detail {
+[data-app="desktop"] .widget-sync-detail {
   grid-area: detail;
   color: var(--muted);
   font-size: 11px;
@@ -381,7 +381,7 @@
   white-space: nowrap;
 }
 
-.widget-sync-bar {
+[data-app="desktop"] .widget-sync-bar {
   grid-area: bar;
   height: 6px;
   overflow: hidden;
@@ -389,7 +389,7 @@
   background: color-mix(in srgb, var(--line) 32%, transparent);
 }
 
-.widget-sync-bar > i {
+[data-app="desktop"] .widget-sync-bar > i {
   display: block;
   width: 0;
   height: 100%;
@@ -398,43 +398,46 @@
   transition: width 220ms ease-out, background-color 180ms ease;
 }
 
-.widget-sync[data-state="ready"] .widget-sync-bar > i {
+[data-app="desktop"] .widget-sync[data-state="ready"] .widget-sync-bar > i {
   background: var(--accent);
 }
 
-.widget-sync[data-state="syncing"] .widget-sync-bar > i,
-.widget-sync[data-state="starting"] .widget-sync-bar > i {
+[data-app="desktop"] .widget-sync[data-state="syncing"] .widget-sync-bar > i,
+[data-app="desktop"] .widget-sync[data-state="starting"] .widget-sync-bar > i {
   background: color-mix(in srgb, var(--accent) 72%, var(--accent-soft));
 }
 
-.widget-sync[data-state="issue"] .widget-sync-title,
-.widget-sync[data-state="issue"] .widget-sync-count {
+[data-app="desktop"] .widget-sync[data-state="issue"] .widget-sync-title,
+[data-app="desktop"] .widget-sync[data-state="issue"] .widget-sync-count {
   color: var(--danger);
 }
 
-.widget-sync[data-state="issue"] .widget-sync-bar > i {
+[data-app="desktop"] .widget-sync[data-state="issue"] .widget-sync-bar > i {
   background: var(--danger);
 }
 
-.widget-time:empty,
-.widget-date:empty,
-.status-text:empty,
-.widget-sync-title:empty,
-.widget-sync-detail:empty {
+[data-app="desktop"] .widget-time:empty,
+[data-app="desktop"] .widget-date:empty,
+[data-app="desktop"] .status-text:empty,
+[data-app="desktop"] .widget-sync-title:empty,
+[data-app="desktop"] .widget-sync-detail:empty {
   visibility: hidden;
 }
 
-/* Compact touch grid — the shell-wide mobile boundary is 767px. Icons become
-   in-flow grid cells (JS drag positions are ignored via !important and the JS
-   side skips drag wiring in compact mode) and the layer scrolls vertically. */
-@media (max-width: 767px) {
-  .desktop-module {
+/* Compact touch grid — follows the window width (container .desktop-module,
+   ≤ 767px, same threshold as currentGrid() in index.js), not the viewport.
+   Icons become in-flow grid cells (JS drag positions are ignored via
+   !important and the JS side skips drag wiring in compact mode) and the layer
+   scrolls vertically. The compact cell variables live on .desktop-icons: a
+   container query cannot restyle the container element itself. */
+@container (max-width: 767px) {
+  [data-app="desktop"] .desktop-icons {
     --desktop-icon-cell-w: 88px;
     --desktop-icon-cell-h: 132px;
     --desktop-icon-padding: 12px;
   }
 
-  .desktop-icon {
+  [data-app="desktop"] .desktop-icon {
     position: relative;
     left: auto !important;
     top: auto !important;
@@ -445,7 +448,7 @@
     border-radius: 12px;
   }
 
-  .desktop-icons {
+  [data-app="desktop"] .desktop-icons {
     position: absolute;
     inset: 0;
     display: grid;
@@ -463,18 +466,18 @@
     -webkit-overflow-scrolling: touch;
   }
 
-  .desktop-icon .desktop-icon-glyph {
+  [data-app="desktop"] .desktop-icon .desktop-icon-glyph {
     width: 64px;
     height: 64px;
     border-radius: 16px;
   }
 
-  .desktop-icon .desktop-icon-glyph > svg {
+  [data-app="desktop"] .desktop-icon .desktop-icon-glyph > svg {
     width: 56px;
     height: 56px;
   }
 
-  .desktop-icon .desktop-icon-label {
+  [data-app="desktop"] .desktop-icon .desktop-icon-label {
     font-size: 10px;
     line-height: 1.25;
     padding: 2px;
@@ -482,11 +485,11 @@
     max-height: calc(2 * 1.25em + 2px);
   }
 
-  .desktop-widget-container {
+  [data-app="desktop"] .desktop-widget-container {
     display: none;
   }
 
-  .desktop-icon-empty {
+  [data-app="desktop"] .desktop-icon-empty {
     top: 20px;
     left: 20px;
     right: 20px;
@@ -494,7 +497,7 @@
 }
 
 @media (max-height: 620px) {
-  .desktop-widget-container {
+  [data-app="desktop"] .desktop-widget-container {
     display: none;
   }
 }
@@ -504,7 +507,7 @@
 /* ------------------------------------------------------------- */
 
 /* 1. Desktop-scoped shell topbar glassmorphism */
-body[data-active-module="desktop"] .topbar {
+[data-app="desktop"][data-active-module="desktop"] .topbar {
   backdrop-filter: blur(20px) saturate(160%) !important;
   -webkit-backdrop-filter: blur(20px) saturate(160%) !important;
   background: color-mix(in srgb, var(--surface) 40%, transparent) !important;
@@ -528,14 +531,14 @@ body[data-active-module="desktop"] .topbar {
    genuinely specific to this shell style.
    ========================================================================== */
 
-:root[data-shell-style="ctox"] .desktop-hero-widget {
+[data-app="desktop"][data-shell-style="ctox"] .desktop-hero-widget {
   border-radius: var(--panel-radius);
   border: 1px solid var(--hairline, var(--line));
   background: var(--surface);
   box-shadow: none;
 }
 
-:root[data-shell-style="ctox"] .desktop-hero-widget:hover {
+[data-app="desktop"][data-shell-style="ctox"] .desktop-hero-widget:hover {
   border-color: var(--line);
 }
 
@@ -543,7 +546,7 @@ body[data-active-module="desktop"] .topbar {
    neutral in both themes. Category color is reserved for a selected/focused
    icon or a live status indicator, so a populated desktop does not become a
    rainbow of persistent module accents. */
-body[data-active-module="desktop"] .topbar {
+[data-app="desktop"][data-active-module="desktop"] .topbar {
   backdrop-filter: none !important;
   -webkit-backdrop-filter: none !important;
   background: var(--surface) !important;
@@ -551,21 +554,21 @@ body[data-active-module="desktop"] .topbar {
   box-shadow: none !important;
 }
 
-.desktop-icon[data-workjet-category]:is(.selected, :focus-visible) .desktop-icon-glyph {
+[data-app="desktop"] .desktop-icon[data-workjet-category]:is(.selected, :focus-visible) .desktop-icon-glyph {
   border-color: var(--shell-category-accent) !important;
   color: var(--shell-category-accent);
 }
 
-.desktop-icon[data-workjet-category]:is(.selected, :focus-visible) .desktop-icon-label {
+[data-app="desktop"] .desktop-icon[data-workjet-category]:is(.selected, :focus-visible) .desktop-icon-label {
   color: var(--shell-category-accent);
 }
 
-.desktop-module[data-workjet-category] .widget-status {
+[data-app="desktop"] .desktop-module[data-workjet-category] .widget-status {
   border-color: color-mix(in srgb, var(--shell-category-accent) 34%, var(--line));
   background: color-mix(in srgb, var(--shell-category-soft) 76%, var(--surface));
 }
 
-.desktop-module[data-workjet-category] .status-pulse,
-.desktop-module[data-workjet-category] .status-pulse::after {
+[data-app="desktop"] .desktop-module[data-workjet-category] .status-pulse,
+[data-app="desktop"] .desktop-module[data-workjet-category] .status-pulse::after {
   background: var(--shell-category-accent);
 }

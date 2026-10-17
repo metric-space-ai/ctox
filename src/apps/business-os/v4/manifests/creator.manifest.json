@@ -1,0 +1,129 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/creator/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/creator/index.html",
+  "_rust_basis": "~0,1k (`store.rs` `ensure_app_create_actor_lifecycle_assignment` `:10984`, `retry_failed_app_create_command` `:26636`; 16 Treffer `\"creator\"`), App-Erzeugung selbst ist Plattform.",
+  "_source_dir": "src/apps/business-os/modules/creator",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "creator",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {},
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {},
+  "files": {
+    "V4-HANDLERS.md": "02ae2e2cb4a869dc38b178af31652a10dab75049c3405fe76a36d5f01f4c25dd",
+    "V4-PORT.md": "0895d28e4c80f874d8f551348afd21ea974c8d8706b943e1033b76ce4a637cdd",
+    "assets/icon.png": "40f41ca5bf71d772cb7418ab01ed4c1e5974e6ec4e4877c92b85e4e0827568a9",
+    "assets/icon@512.png": "acb089e621a25ecdd20a6fe10f289d61f340938326c2dae1252ded10af0e0fb3",
+    "collections.schema.json": "598f5b95c707d4bcea13f662839a4f2f47a094cef29fd64a960c00154802b341",
+    "icon.svg": "de0aa6e8b76d219f047f44a4b0a40ea8b95cf6f9665f7f0986be680944c1e527",
+    "index.css": "91fc512850093cabdc5bca133ae3fe72a8a6cd7a08ddf325d3562deef7f0f69f",
+    "index.html": "52692e05ee78590c3ab750ed00cb1afb8423adb28535eac1014507a7be56176c",
+    "index.js": "c6f4e90e4a570aa1f9b68739decbc0a1b940c0c4267f3408a1042884ea7afbbe",
+    "locales/de.json": "0e4929dbfc4407aca26774a848d3748b4951578e598b41b25e17ca0b7e1cf2d0",
+    "locales/en.json": "95f6638b9822a5443ef52ce34ff1aad5d210fe74b3b6aeafa75ec341dc1f6036",
+    "module.json": "0b4075f3cc27c3bb18f7a8e6e8fe35b3365b2025234acac9fc4d73584d15804d",
+    "v4-manifest.json": "8d9043e859d3d58ed3312b2d56f9329fd53713c0b5435ff912afdc5fb09dcc37"
+  },
+  "foreign_collections": {
+    "business_apps": {
+      "_evidence": {
+        "code_read": [
+          "index.js:167",
+          "index.js:322",
+          "index.js:323"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "index.js:322",
+          "index.js:327"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_replaced": {
+      "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/creator.png"
+    },
+    "_icon_asset_source": "shared/assets/workjet-icons/grok-shell-v1/creator.png (shared/grok-shell-icon-selection.js, sha256 acb089e621a2…, 512 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Development",
+    "default_height": 800,
+    "default_width": 1200,
+    "icon_asset": "assets/icon.png",
+    "icon_asset_srcset": "assets/icon.png 1x, assets/icon@512.png 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-creator\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-creator\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#8b5cf6\" /><stop offset=\"100%\" stop-color=\"#2563eb\" /></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"4\" fill=\"url(#grad-creator)\" fill-opacity=\"0.12\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linejoin=\"round\"></rect><path d=\"M12 7v10M7 12h10\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M16.5 5.5l2 2\" stroke=\"url(#grad-creator)\" stroke-width=\"2\" stroke-linecap=\"round\"></path></svg>",
+    "min_height": 480,
+    "min_width": 640,
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 800,
+        "width": 1200
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "d5a5df7a4ed72b8ee4e6e2085c5622082ddf004b32989abb8d45fc907c35fa52",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "App Creator",
+  "triggers": [],
+  "version": "1.0.0"
+}

@@ -12,6 +12,11 @@
 mod frame_contract_generated;
 #[path = "handshake_status.rs"]
 mod handshake_status;
+#[path = "log_bridge.rs"]
+pub mod log_bridge;
+#[path = "send_result.rs"]
+pub mod send_result;
+use send_result::{send_text_checked, transport_diagnostics, MessageClass};
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::net::UdpSocket;
@@ -53,13 +58,6 @@ use frame_contract_generated::{
 
 const FRAME_ACK_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_RESUME_TIMEOUT: Duration = Duration::from_secs(1);
-const SEND_FRAME_PAUSE: Duration = Duration::from_millis(1);
-/// ACK windows a framed transfer keeps in flight (each FRAME_ACK_WINDOW chunks).
-/// 24 windows are ~1 MB, just under DATA_CHANNEL_BUFFERED_HIGH_WATER. Browsers
-/// that reach the peer through a TURN relay over a slow UDP path showed
-/// 400-900 ms RTT (06.10.2026); with 8 windows (~320 KB) such a link capped
-/// framed throughput at well under 1 MB/s regardless of bandwidth.
-const FRAME_PIPELINE_WINDOWS: usize = 24;
 /// Browser capability: accepts `start.encoding = FRAME_ENCODING_DEFLATE_BASE64`.
 pub const CTOX_FRAME_DEFLATE_CAPABILITY: &str = "ctox-rxdb-frame-deflate-v1";
 /// Framed payload encoding: raw deflate of the UTF-8 text, base64 encoded.
@@ -73,11 +71,11 @@ static AUXILIARY_TRANSFER_COUNTER: AtomicU64 = AtomicU64::new(1);
 // driven off these thresholds. Never overrunning the SCTP send buffer is what
 // keeps the channel real-time and stops the browser from killing the
 // DataChannel when a large transfer (e.g. documents + blob chunks) is sent.
-const DATA_CHANNEL_BUFFERED_HIGH_WATER: u32 = 1024 * 1024; // 1 MiB
-const DATA_CHANNEL_BUFFERED_LOW_WATER: u32 = 256 * 1024; // 256 KiB
-                                                         // Upper bound on how long a sender waits for the buffer to drain below the low
-                                                         // watermark before giving up (matches the ack timeout so a wedged peer fails
-                                                         // rather than hanging forever).
+const DATA_CHANNEL_BUFFERED_HIGH_WATER: u32 = 112 * 1024; // reserve one 16-KiB handoff below 128 KiB
+const DATA_CHANNEL_BUFFERED_LOW_WATER: u32 = 32 * 1024; // legacy channel; V4 uses per-channel zero fences
+                                                        // Upper bound on how long a sender waits for the buffer to drain below the low
+                                                        // watermark before giving up (matches the ack timeout so a wedged peer fails
+                                                        // rather than hanging forever).
 const SEND_CAPACITY_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 const SEND_BUFFER_STALLED_ERROR_CODE: &str = "ctox_webrtc_send_buffer_stalled";
 const MAX_PEER_SEND_QUEUE_FRAMES: usize = 1024;
@@ -909,7 +907,7 @@ where
 }
 
 /// Poll physical IO only while the native mutation fence is held.
-async fn send_under_publication<T, F>(
+pub(super) async fn send_under_publication<T, F>(
     publication: Option<&Arc<dyn WebRTCPublicationGuard>>,
     sending: F,
 ) -> RxResult<T>
@@ -1200,6 +1198,7 @@ impl WebRTCPublicationGuard for PeerPublicationGuard {
 pub struct WebRTCRsConnectionHandler {
     peer_role: super::NativePeerRole,
     data_client: bool,
+    v4_router: Mutex<Option<Arc<super::index_mod::v4_router::V4ConnectionRouter>>>,
     local_session_provider: Mutex<Option<super::LocalSessionProvider<WebRTCRsConnection>>>,
     connect_subject: RxSubject<WebRTCRsConnection>,
     disconnect_subject: RxSubject<WebRTCRsConnection>,
@@ -1264,6 +1263,9 @@ pub struct WebRTCRsConnectionHandler {
     pending_offers: Mutex<HashMap<(PeerId, u64), PendingOfferPeer>>,
     /// Phase 1: per-peer send-buffer backpressure (see `PeerBackpressure`).
     backpressure: Arc<Mutex<HashMap<WebRTCRsPeer, Arc<PeerBackpressure>>>>,
+    v4_senders: Mutex<
+        HashMap<WebRTCRsConnection, Option<super::index_mod::scheduler::NativeSendScheduler>>,
+    >,
     /// #12c per-collection sync read-authz. When `collection_authz` is set,
     /// `is_collection_authorized_for_peer` consults it with the capability token
     /// the peer presented at handshake (captured into `peer_capability_tokens`).
@@ -1280,6 +1282,121 @@ pub struct WebRTCRsConnectionHandler {
 }
 
 impl WebRTCRsConnectionHandler {
+    /// Install before any peer exists. Missing host authority never opts into V4.
+    pub fn configure_v4(
+        &self,
+        config: super::index_mod::v4_router::V4RouterConfig,
+    ) -> RxResult<()> {
+        let _lifecycle = self.peer_lifecycle.lock();
+        if !self.peers.lock().is_empty() {
+            return Err(new_rx_error("ctox_v4_configuration_after_connect", None));
+        }
+        let mut router = self.v4_router.lock();
+        if router.is_some() {
+            return Err(new_rx_error("ctox_v4_already_configured", None));
+        }
+        *router = Some(Arc::new(
+            super::index_mod::v4_router::V4ConnectionRouter::new(config)?,
+        ));
+        Ok(())
+    }
+    /// E50's dedicated browser listener. Existing configure_v4/native challenge
+    /// configuration is unchanged; a ticket callback is required explicitly.
+    pub fn configure_v4_browser(
+        &self,
+        config: super::index_mod::v4_router::V4RouterConfig,
+    ) -> RxResult<()> {
+        let _lifecycle = self.peer_lifecycle.lock();
+        if !self.peers.lock().is_empty() {
+            return Err(new_rx_error("ctox_v4_configuration_after_connect", None));
+        }
+        let mut router = self.v4_router.lock();
+        if router.is_some() {
+            return Err(new_rx_error("ctox_v4_already_configured", None));
+        }
+        *router = Some(Arc::new(
+            super::index_mod::v4_router::V4ConnectionRouter::new_browser(config)?,
+        ));
+        Ok(())
+    }
+    fn v4_router(&self) -> Option<Arc<super::index_mod::v4_router::V4ConnectionRouter>> {
+        self.v4_router.lock().clone()
+    }
+    pub fn v4_snapshot(
+        &self,
+        peer: &WebRTCRsConnection,
+    ) -> Option<super::index_mod::connection_lifecycle::ConnectionSnapshot> {
+        self.v4_router().and_then(|router| router.snapshot(peer))
+    }
+    pub(crate) fn publish_v4_error(&self, error: RxError) {
+        self.error_subject.next(error);
+    }
+    pub(crate) fn publish_v4_connected(&self, peer: WebRTCRsConnection) {
+        if self.is_peer_current(&peer) {
+            self.connect_subject.next(peer);
+        }
+    }
+    pub(crate) fn track_v4_task(
+        &self,
+        peer: &WebRTCRsConnection,
+        task: tokio::task::JoinHandle<()>,
+    ) {
+        let mut peers = self.peers.lock();
+        if let Some(entry) = peers
+            .get_mut(peer.peer_id())
+            .filter(|e| e.generation == peer.generation())
+        {
+            entry.tasks.push(task);
+        } else {
+            task.abort();
+        }
+    }
+    pub(crate) async fn send_v4_control(
+        &self,
+        peer: &WebRTCRsConnection,
+        frame: &super::index_mod::hello::HelloFrame,
+    ) -> RxResult<()> {
+        let bytes = frame
+            .encode()
+            .map_err(|_| new_rx_error("ctox_v4_invalid_hello", None))?;
+        self.send_v4_bootstrap_bytes(peer, &bytes).await
+    }
+    /// Router-only hello extension. Application data never uses the bootstrap channel.
+    pub(crate) async fn send_v4_bootstrap_bytes(
+        &self,
+        peer: &WebRTCRsConnection,
+        bytes: &[u8],
+    ) -> RxResult<()> {
+        if bytes.len() > super::index_mod::hello::MAX_HELLO_BYTES {
+            return Err(new_rx_error("ctox_v4_invalid_hello", None));
+        }
+        let data_channel = {
+            let _lifecycle = self.peer_lifecycle.lock();
+            self.peers
+                .lock()
+                .get(peer.peer_id())
+                .filter(|e| e.generation == peer.generation() && e.data_channel_open)
+                .and_then(|e| e.data_channel.clone())
+                .ok_or_else(|| {
+                    transport_diagnostics().reject_not_ready(0);
+                    stale_connection_error(peer)
+                })?
+        };
+
+        let text =
+            std::str::from_utf8(&bytes).map_err(|_| new_rx_error("ctox_v4_invalid_hello", None))?;
+        send_text_checked(&data_channel, text)
+            .await
+            .map_err(|e| webrtc_error("send V4 control", e))
+    }
+    fn require_v4_live(&self, peer: &WebRTCRsConnection) -> RxResult<()> {
+        if self.v4_router().is_some_and(|router| !router.is_live(peer)) {
+            transport_diagnostics().reject_not_ready(0);
+            return Err(new_rx_error("ctox_v4_hello_required", None));
+        }
+        Ok(())
+    }
+
     /// Empty handler useful for unit tests or callers that install peers later.
     pub fn new() -> Arc<Self> {
         Arc::new(Self::empty(None, Vec::new(), "rxdb", DEFAULT_UDP_BIND_ADDR))
@@ -1415,6 +1532,7 @@ impl WebRTCRsConnectionHandler {
             connect_subject: RxSubject::new(),
             peer_role: super::NativePeerRole::CtoxInstance,
             data_client: false,
+            v4_router: Mutex::new(None),
             disconnect_subject: RxSubject::new(),
             message_subject: RxSubject::new(),
             response_subject: RxSubject::new(),
@@ -1445,6 +1563,7 @@ impl WebRTCRsConnectionHandler {
             accepted_offers: Mutex::new(VecDeque::new()),
             pending_offers: Mutex::new(HashMap::new()),
             backpressure: Arc::new(Mutex::new(HashMap::new())),
+            v4_senders: Mutex::new(HashMap::new()),
             collection_authz: Arc::new(Mutex::new(None)),
             collection_authz_result: Arc::new(Mutex::new(None)),
             collection_eager_pull: Arc::new(Mutex::new(None)),
@@ -1848,13 +1967,18 @@ impl WebRTCRsConnectionHandler {
             .signaling
             .as_ref()
             .is_some_and(|signaling| signaling.join_accepted());
-        status.turn_configured = self.ice_servers.iter().any(|server| {
+        let ice_servers = self
+            .signaling
+            .as_ref()
+            .map(|s| s.ice_servers(&self.ice_servers))
+            .unwrap_or_else(|| self.ice_servers.clone());
+        status.turn_configured = ice_servers.iter().any(|server| {
             server
                 .urls
                 .iter()
                 .any(|url| url.starts_with("turn:") || url.starts_with("turns:"))
         });
-        status.credentialed_turn_ready = self.ice_servers.iter().any(|server| {
+        status.credentialed_turn_ready = ice_servers.iter().any(|server| {
             server
                 .urls
                 .iter()
@@ -1930,6 +2054,8 @@ impl WebRTCRsConnectionHandler {
             "signalingJoinAccepted": status.signaling_join_accepted,
             "handshake": self.handshake_status.lock().json(
                 self.signaling.as_ref().and_then(|client| client.own_peer_id()).as_deref()),
+            "iceConfiguration": self.signaling.as_ref().map(|s| s.ice_configuration_status()),
+            "turnCredentialExpiresAtMs": self.signaling.as_ref().map(|s| s.ice_configuration_status()["turnCredentialExpiresAtMs"].clone()).unwrap_or(Value::Null),
             "turnConfigured": status.turn_configured,
             "credentialedTurnReady": status.credentialed_turn_ready,
             "lastSendPriority": status.last_send_priority,
@@ -2454,6 +2580,26 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         label: &str,
         frame: WebRTCWireFrame,
     ) -> Result<(), RxError> {
+        self.require_v4_live(peer)?;
+        if let Some(sender) = self.v4_send_path(peer)? {
+            let bytes = serde_json::to_vec(&frame)
+                .map_err(|e| webrtc_error("serialize V4 auxiliary frame", e))?;
+            let lane = match label {
+                "ctox-browser-live-v1" => super::index_mod::lanes::Lane::Live,
+                "ctox.workjet.device.v1" => super::index_mod::lanes::Lane::Control,
+                _ => super::index_mod::lanes::Lane::Transfer,
+            };
+            return sender
+                .send(
+                    lane,
+                    super::index_mod::hello::WireSeq(
+                        self.frame_counter.fetch_add(1, Ordering::Relaxed),
+                    ),
+                    &bytes,
+                    None,
+                )
+                .await;
+        }
         let data_channel = {
             let _lifecycle = self.peer_lifecycle.lock();
             self.peers
@@ -2462,6 +2608,7 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
                 .filter(|entry| entry.generation == peer.generation && entry.data_channel_open)
                 .and_then(|entry| entry.auxiliary_data_channels.get(label).cloned())
                 .ok_or_else(|| {
+                    transport_diagnostics().reject_not_ready(0);
                     new_rx_error(
                         "RC_WEBRTC_PEER",
                         Some(serde_json::json!({
@@ -2478,6 +2625,9 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
     }
 
     async fn close(&self) -> Result<(), RxError> {
+        if let Some(router) = self.v4_router() {
+            router.drain().await;
+        }
         // Commit takes pending_offers before peer_lifecycle. Use the same
         // order here so close either observes and retires the committed peer,
         // or makes a later candidate commit fail without touching old state.
@@ -2516,6 +2666,13 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         }
         self.accepted_offers.lock().clear();
         self.send_queues.lock().clear();
+        {
+            let mut senders = self.v4_senders.lock();
+            for sender in senders.values().flatten() {
+                sender.close_now();
+            }
+            senders.clear();
+        }
         self.backpressure.lock().clear();
         self.pending_frame_acks.lock().clear();
         self.incoming_frames.lock().clear();
@@ -2535,9 +2692,14 @@ impl WebRTCConnectionHandler for WebRTCRsConnectionHandler {
         if !self.is_current_connection(peer) {
             return 0;
         }
+        if self.v4_senders.lock().contains_key(peer) {
+            // V4 admission is per lane and owned by the association scheduler;
+            // the legacy synthetic 1-MiB lead sentinel is not a second gate.
+            return 0;
+        }
         let peer = &peer.peer_id;
         match self.backpressure.lock().get(peer) {
-            Some(bp) if bp.is_high() => DATA_CHANNEL_BUFFERED_HIGH_WATER as usize + 1,
+            Some(bp) if bp.is_high() => super::webrtc_types::WEBRTC_BUFFERED_HIGH_WATER + 1,
             _ => 0,
         }
     }
@@ -2976,12 +3138,187 @@ impl WebRTCRsConnectionHandler {
         }));
     }
 
+    /// Authenticated P4/P8 entry seam. Must be activated before V3 producers
+    /// publish on this exact lifetime; V4 framing is never guessed from bytes.
+    pub async fn activate_v4_send_path(
+        &self,
+        peer: &WebRTCRsConnection,
+        transport: super::index_mod::hello::TransportSelection,
+    ) -> RxResult<super::index_mod::scheduler::NativeSendScheduler> {
+        self.activate_v4_sender(peer, transport, None).await
+    }
+
+    /// E14 seam: the caller owns state keyed by authenticated device, instance,
+    /// epoch and rights, and supplies fresh native authorization for each replay.
+    /// No signaling ID or untrusted hello field is sufficient to retrieve it.
+    pub async fn activate_v4_session_send_path(
+        &self,
+        peer: &WebRTCRsConnection,
+        transport: super::index_mod::hello::TransportSelection,
+        binding: super::index_mod::scheduler::SessionBinding,
+        authorize: Arc<
+            dyn Fn(
+                    super::index_mod::lanes::Lane,
+                    super::index_mod::hello::WireSeq,
+                    &[u8],
+                ) -> RxResult<Arc<dyn WebRTCPublicationGuard>>
+                + Send
+                + Sync,
+        >,
+    ) -> RxResult<super::index_mod::scheduler::NativeSendScheduler> {
+        self.activate_v4_sender(peer, transport, Some((binding, authorize)))
+            .await
+    }
+
+    async fn activate_v4_sender(
+        &self,
+        peer: &WebRTCRsConnection,
+        transport: super::index_mod::hello::TransportSelection,
+        session: Option<(
+            super::index_mod::scheduler::SessionBinding,
+            Arc<
+                dyn Fn(
+                        super::index_mod::lanes::Lane,
+                        super::index_mod::hello::WireSeq,
+                        &[u8],
+                    ) -> RxResult<Arc<dyn WebRTCPublicationGuard>>
+                    + Send
+                    + Sync,
+            >,
+        )>,
+    ) -> RxResult<super::index_mod::scheduler::NativeSendScheduler> {
+        let pc = {
+            let _lifecycle = self.peer_lifecycle.lock();
+            let peers = self.peers.lock();
+            let entry = peers
+                .get(peer.peer_id())
+                .filter(|e| e.generation == peer.generation())
+                .ok_or_else(|| stale_connection_error(peer))?;
+            if self.send_queues.lock().contains_key(peer.peer_id())
+                || !entry.auxiliary_data_channels.is_empty()
+            {
+                return Err(new_rx_error(
+                    "RC_WEBRTC_PEER",
+                    Some(serde_json::json!({
+                        "message": "V4 negotiation must precede legacy publication", "peer": peer.peer_id(), "generation": peer.generation()
+                    })),
+                ));
+            }
+            let mut senders = self.v4_senders.lock();
+            senders.retain(|connection, sender| {
+                if connection.peer_id() != peer.peer_id() || connection == peer {
+                    return true;
+                }
+                if let Some(sender) = sender {
+                    sender.close_now();
+                }
+                false
+            });
+            if senders.contains_key(peer) {
+                return Err(new_rx_error(
+                    "RC_WEBRTC_PEER",
+                    Some(
+                        serde_json::json!({"message": "V4 send path already installed or starting"}),
+                    ),
+                ));
+            }
+            senders.insert(peer.clone(), None);
+            Arc::clone(&entry.peer_connection)
+        };
+        struct Starting<'a> {
+            handler: &'a WebRTCRsConnectionHandler,
+            peer: WebRTCRsConnection,
+        }
+        impl Drop for Starting<'_> {
+            fn drop(&mut self) {
+                let mut map = self.handler.v4_senders.lock();
+                if map.get(&self.peer).is_some_and(Option::is_none) {
+                    map.remove(&self.peer);
+                }
+            }
+        }
+        let _starting = Starting {
+            handler: self,
+            peer: peer.clone(),
+        };
+        let scheduler = if let Some((binding, authorize)) = session {
+            super::index_mod::scheduler::NativeSendScheduler::create_resumed(
+                &pc,
+                transport,
+                binding,
+                |lane, id, bytes| {
+                    let native = authorize(lane, id, bytes)?;
+                    let _lifecycle = self.peer_lifecycle.lock();
+                    if !self.is_current_connection(peer) {
+                        return Err(stale_connection_error(peer));
+                    }
+                    self.v4_publication(peer, Some(native))
+                        .ok_or_else(|| new_rx_error("ctox_webrtc_publication_denied", None))
+                },
+            )
+            .await?
+        } else {
+            super::index_mod::scheduler::NativeSendScheduler::create(&pc, transport).await?
+        };
+        {
+            let _lifecycle = self.peer_lifecycle.lock();
+            if !self.is_current_connection(peer) {
+                return Err(stale_connection_error(peer));
+            }
+            self.v4_senders
+                .lock()
+                .insert(peer.clone(), Some(scheduler.clone()));
+        }
+        Ok(scheduler)
+    }
+
+    fn v4_send_path(
+        &self,
+        peer: &WebRTCRsConnection,
+    ) -> RxResult<Option<super::index_mod::scheduler::NativeSendScheduler>> {
+        let _lifecycle = self.peer_lifecycle.lock();
+        if !self.is_current_connection(peer) {
+            return Err(stale_connection_error(peer));
+        }
+        match self.v4_senders.lock().get(peer) {
+            Some(Some(sender)) => Ok(Some(sender.clone())),
+            Some(None) => Err(new_rx_error(
+                "RC_WEBRTC_PEER",
+                Some(serde_json::json!({"message": "V4 send path is negotiating"})),
+            )),
+            None => Ok(None),
+        }
+    }
+
+    fn v4_publication(
+        &self,
+        peer: &WebRTCRsConnection,
+        native: Option<Arc<dyn WebRTCPublicationGuard>>,
+    ) -> Option<Arc<dyn WebRTCPublicationGuard>> {
+        native.map(|native| {
+            Arc::new(PeerPublicationGuard {
+                native,
+                peer: peer.clone(),
+                capability: self
+                    .peer_capability_tokens
+                    .lock()
+                    .get(peer.peer_id())
+                    .cloned(),
+                lifecycle: Arc::clone(&self.peer_lifecycle),
+                peers: Arc::clone(&self.peers),
+                capabilities: Arc::clone(&self.peer_capability_tokens),
+                closed: Arc::clone(&self.closed),
+            }) as Arc<dyn WebRTCPublicationGuard>
+        })
+    }
+
     async fn send_with_publication(
         &self,
         peer: &WebRTCRsConnection,
         frame: WebRTCWireFrame,
         publication: Option<Arc<dyn WebRTCPublicationGuard>>,
     ) -> RxResult<()> {
+        self.require_v4_live(peer)?;
         let text = serde_json::to_string(&frame).map_err(|e| {
             new_rx_error(
                 "RC_WEBRTC_PEER",
@@ -2992,6 +3329,45 @@ impl WebRTCRsConnectionHandler {
                 })),
             )
         })?;
+        if let Some(sender) = self.v4_send_path(peer)? {
+            use super::index_mod::lanes::Lane;
+            let collection = match &frame {
+                WebRTCWireFrame::Message(m) => m.collection.as_deref(),
+                WebRTCWireFrame::Response(r) => r.collection.as_deref(),
+            };
+            let lane = if collection.is_none() {
+                Lane::Control
+            } else if collection.is_some_and(|c| {
+                crate::collection_policy::collection_policy().prioritizes_response(c)
+            }) {
+                Lane::Commands
+            } else if collection == Some(CTOX_BROWSER_INPUT_RESPONSE_COLLECTION) {
+                Lane::Interactive
+            } else if self
+                .active_collections
+                .lock()
+                .get(peer.peer_id())
+                .is_some_and(|set| collection.is_some_and(|c| set.contains(c)))
+            {
+                Lane::Live
+            } else {
+                Lane::InitialSync
+            };
+            let publication = {
+                let _lifecycle = self.peer_lifecycle.lock();
+                self.v4_publication(peer, publication)
+            };
+            return sender
+                .send(
+                    lane,
+                    super::index_mod::hello::WireSeq(
+                        self.frame_counter.fetch_add(1, Ordering::Relaxed),
+                    ),
+                    text.as_bytes(),
+                    publication,
+                )
+                .await;
+        }
         // Phase 2: derive the collection-aware priority class. Control frames
         // are intrinsically High; oversized writes are Low; everything else is
         // High when its collection is in the peer's active set, else Normal.
@@ -3006,7 +3382,10 @@ impl WebRTCRsConnectionHandler {
                 .get(&peer.peer_id)
                 .filter(|entry| entry.generation == peer.generation && entry.data_channel_open)
                 .and_then(|entry| entry.data_channel.clone())
-                .ok_or_else(|| stale_connection_error(peer))?;
+                .ok_or_else(|| {
+                    transport_diagnostics().reject_not_ready(text.len());
+                    stale_connection_error(peer)
+                })?;
             // Capture the exact generation and token under their mutation
             // fence. The native guard enters first at each physical poll;
             // lifecycle/token validation then stays held through that poll.
@@ -3028,7 +3407,11 @@ impl WebRTCRsConnectionHandler {
             let queued = self.enqueue_with_publication(&peer.peer_id, class, publication)?;
             (data_channel, queued)
         };
-        self.finish_send(&peer.peer_id, data_channel, queued).await
+        let result = self.finish_send(&peer.peer_id, data_channel, queued).await;
+        if result.is_ok() {
+            transport_diagnostics().logical_sent(MessageClass::Reliable);
+        }
+        result
     }
 
     #[cfg(test)]
@@ -3198,8 +3581,7 @@ impl WebRTCRsConnectionHandler {
                     )
                     .await?;
                     send_under_publication(item.publication.as_ref(), async {
-                        data_channel
-                            .send_text(&item.text)
+                        send_text_checked(&data_channel, &item.text)
                             .await
                             .map_err(|e| webrtc_error("send data channel frame", e))
                     })
@@ -3310,11 +3692,8 @@ impl WebRTCRsConnectionHandler {
                 .await?;
                 self.record_sent_transport_frame(&restart);
             }
-            // Up to FRAME_PIPELINE_WINDOWS ACK windows are in flight. Waiting
-            // for every 4-chunk window before sending the next capped a relayed
-            // channel at ~40 KB per round trip (~1 MB/s measured on the customer
-            // on-prem tenant). The browser ACKs cumulatively, so the oldest
-            // outstanding window bounds what has to be resent.
+            // The browser ACKs cumulatively. Track bounded transfer windows
+            // for retries, while SCTP backpressure controls physical handoff.
             let mut outstanding: VecDeque<(
                 usize,
                 PendingFrameAckKey,
@@ -3322,11 +3701,9 @@ impl WebRTCRsConnectionHandler {
             )> = VecDeque::new();
             let mut windows_iter = windows.iter().copied();
             loop {
-                let next_window = if outstanding.len() < FRAME_PIPELINE_WINDOWS {
-                    windows_iter.next()
-                } else {
-                    None
-                };
+                // The old 24-window (~1-MiB) lead cap is gone. SCTP
+                // backpressure, not a second byte/RTT ceiling, paces the wire.
+                let next_window = windows_iter.next();
                 if let Some((window_start, window_end)) = next_window {
                     self.drain_high_priority_inline_frames(peer, &data_channel, available)
                         .await?;
@@ -3382,7 +3759,6 @@ impl WebRTCRsConnectionHandler {
                             );
                             return Err(error);
                         }
-                        tokio::time::sleep(SEND_FRAME_PAUSE).await;
                     }
                     outstanding.push_back((window_end, ack_key, ack_rx));
                     continue;
@@ -3533,9 +3909,11 @@ impl WebRTCRsConnectionHandler {
                 )
                 .await?;
                 send_under_publication(item.publication.as_ref(), async {
-                    data_channel.send_text(&item.text).await.map_err(|error| {
-                        webrtc_error("send interleaved high-priority frame", error)
-                    })
+                    send_text_checked(&data_channel, &item.text)
+                        .await
+                        .map_err(|error| {
+                            webrtc_error("send interleaved high-priority frame", error)
+                        })
                 })
                 .await
             })
@@ -4153,6 +4531,13 @@ impl PeerConnectionEventHandler for RsPeerConnectionEvents {
 
     async fn on_data_channel(&self, data_channel: Arc<dyn DataChannel>) {
         let label = data_channel.label().await.unwrap_or_default();
+        // The V4 scheduler owns the original handles and their event receivers.
+        // This SDK also announces locally created channels with a second handle
+        // whose receiver is closed. Installing that handle as bootstrap would
+        // replace the bootstrap and retire the live peer on receiver EOF.
+        if label.starts_with("ctox-v4-") {
+            return;
+        }
         let staged = {
             let mut pending = self.handler.pending_offers.lock();
             if let Some(entry) = pending.get_mut(&(self.remote_peer_id.clone(), self.generation)) {
@@ -4220,12 +4605,22 @@ fn install_auxiliary_data_channel(
             }
             match event {
                 DataChannelEvent::OnMessage(message) => {
+                    if let Some(router) = handler_task.v4_router() {
+                        let peer = WebRTCRsConnection::new(peer_task.clone(), generation);
+                        if !router.is_live(&peer) {
+                            let _ = router.receive(&handler_task, &peer, &message.data).await;
+                            continue;
+                        }
+                    }
+                    transport_diagnostics().received(MessageClass::Reliable);
                     let text = String::from_utf8_lossy(&message.data).to_string();
                     match serde_json::from_str::<WebRTCMessage>(&text) {
-                        Ok(message) => message_subject.next(PeerWithMessage {
-                            peer: WebRTCRsConnection::new(peer_task.clone(), generation),
-                            message,
-                        }),
+                        Ok(message) => {
+                            message_subject.next(PeerWithMessage {
+                                peer: WebRTCRsConnection::new(peer_task.clone(), generation),
+                                message,
+                            });
+                        }
                         Err(error) => {
                             error_subject.next(decode_error("auxiliary message", error, &text))
                         }
@@ -4286,7 +4681,13 @@ async fn build_peer_connection(
         )
     })?;
     let config = RTCConfigurationBuilder::new()
-        .with_ice_servers(handler.ice_servers.clone())
+        .with_ice_servers(
+            handler
+                .signaling
+                .as_ref()
+                .map(|s| s.ice_servers(&handler.ice_servers))
+                .unwrap_or_else(|| handler.ice_servers.clone()),
+        )
         .build();
     let mut setting_engine = SettingEngine::default();
     setting_engine.set_multicast_dns_mode(MulticastDnsMode::QueryOnly);
@@ -4366,6 +4767,17 @@ fn install_data_channel(
                             entry.data_channel_open = true;
                         }
                     }
+                    if let Some(router) = handler_for_task.v4_router() {
+                        let peer = WebRTCRsConnection::new(peer_for_task.clone(), generation);
+                        if let Err(error) = router.connected(&handler_for_task, peer.clone()).await
+                        {
+                            if error.code() != "ctox_v4_local_hello_failed" {
+                                handler_for_task.publish_v4_error(error);
+                            }
+                            handler_for_task.close_peer(&peer).await;
+                        }
+                        continue;
+                    }
                     // Presence join snapshot: broadcasts fire on CHANGE, peer
                     // close and TTL sweep — a peer that connects while other
                     // peers already publish presence would otherwise see
@@ -4386,7 +4798,23 @@ fn install_data_channel(
                         .next(WebRTCRsConnection::new(peer_for_task.clone(), generation));
                 }
                 DataChannelEvent::OnMessage(msg) => {
+                    if handler_for_task
+                        .v4_senders
+                        .lock()
+                        .contains_key(&WebRTCRsConnection::new(peer_for_task.clone(), generation))
+                    {
+                        error_subject.next(new_rx_error("RC_WEBRTC_PEER", Some(serde_json::json!({"message": "legacy frame after V4 negotiation", "peer": peer_for_task, "generation": generation}))));
+                        continue;
+                    }
+                    transport_diagnostics().received(MessageClass::Reliable);
                     let text = String::from_utf8_lossy(&msg.data).to_string();
+                    if let Some(router) = handler_for_task.v4_router() {
+                        let peer = WebRTCRsConnection::new(peer_for_task.clone(), generation);
+                        if !router.is_live(&peer) {
+                            let _ = router.receive(&handler_for_task, &peer, &msg.data).await;
+                            continue;
+                        }
+                    }
                     let value = match serde_json::from_str::<Value>(&text) {
                         Ok(value) => value,
                         Err(err) => {
@@ -4394,6 +4822,19 @@ fn install_data_channel(
                             continue;
                         }
                     };
+                    if let Some(router) = handler_for_task.v4_router() {
+                        let peer = WebRTCRsConnection::new(peer_for_task.clone(), generation);
+                        if matches!(
+                            value.get("type").and_then(Value::as_str),
+                            Some("hello" | "hello_ok" | "hello_reject")
+                        ) || !router.is_live(&peer)
+                        {
+                            let _ = router
+                                .receive(&handler_for_task, &peer, text.as_bytes())
+                                .await;
+                            continue;
+                        }
+                    }
                     let value = if is_ctox_transport_frame(&value) {
                         match handler_for_task
                             .handle_transport_frame(
@@ -4433,15 +4874,22 @@ fn install_data_channel(
                     }
                     if value.get("result").is_some() || value.get("error").is_some() {
                         match serde_json::from_value::<WebRTCResponse>(value) {
-                            Ok(response) => response_subject.next(PeerWithResponse {
-                                peer: WebRTCRsConnection::new(peer_for_task.clone(), generation),
-                                response,
-                            }),
+                            Ok(response) => {
+                                transport_diagnostics().logical_received(MessageClass::Reliable);
+                                response_subject.next(PeerWithResponse {
+                                    peer: WebRTCRsConnection::new(
+                                        peer_for_task.clone(),
+                                        generation,
+                                    ),
+                                    response,
+                                });
+                            }
                             Err(err) => error_subject.next(decode_error("response", err, &text)),
                         }
                     } else {
                         match serde_json::from_value::<WebRTCMessage>(value) {
                             Ok(message) => {
+                                transport_diagnostics().logical_received(MessageClass::Reliable);
                                 // Phase 2: `rxdb.activeCollections` is a
                                 // transport-control frame, not a replication
                                 // request. The browser sends it whenever its
@@ -4662,6 +5110,15 @@ fn remove_peer_inner(
         // Clear every per-peer registry before a replacement generation can
         // register. Otherwise delayed teardown from the old connection can
         // erase the new generation's capability token or send state.
+        handler.v4_senders.lock().retain(|connection, sender| {
+            if connection.peer_id() != peer {
+                return true;
+            }
+            if let Some(sender) = sender {
+                sender.close_now();
+            }
+            false
+        });
         handler.active_collections.lock().remove(peer);
         if handler.remove_peer_presence(peer) {
             handler.presence_dirty.store(true, Ordering::SeqCst);
@@ -4693,7 +5150,12 @@ fn remove_peer_inner(
             task.abort();
         }
         let peer_id = peer.to_string();
+        let router = handler.v4_router();
+        let retired_peer = WebRTCRsConnection::new(peer_id.clone(), entry.generation);
         tokio::spawn(async move {
+            if let Some(router) = router {
+                router.disconnected(&retired_peer).await;
+            }
             if let Some(data_channel) = entry.data_channel {
                 let _ = data_channel.close().await;
             }
@@ -4975,8 +5437,7 @@ async fn send_json_text(data_channel: &Arc<dyn DataChannel>, value: &Value) -> R
             })),
         ));
     }
-    data_channel
-        .send_text(&text)
+    send_text_checked(data_channel, &text)
         .await
         .map_err(|e| webrtc_error("send WebRTC transport frame", e))
 }
@@ -4994,8 +5455,7 @@ async fn send_auxiliary_wire_frame(
         )
     })?;
     if text.len() <= 12_000 {
-        return data_channel
-            .send_text(&text)
+        return send_text_checked(data_channel, &text)
             .await
             .map_err(|error| webrtc_error("send auxiliary WebRTC frame", error));
     }
@@ -5100,6 +5560,148 @@ mod tests {
     // (used by `apply_active_collections` + the send path) and reach the tests
     // through this glob.
     use super::*;
+
+    /// Invoke the public handler send API, not send_text_checked in isolation.
+    #[test]
+    fn p4_handler_send_failure_has_one_event_counter_and_log() {
+        // The production counters are process-global. A child test process
+        // isolates this measurement from unrelated parallel handler tests.
+        let module = module_path!().split_once("::").unwrap().1;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &format!("{module}::p4_handler_send_failure_isolated"),
+                "--ignored",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "isolated handler wiring failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stdout).contains("1 passed"),
+            "the isolated wiring test must actually run"
+        );
+    }
+
+    // Executed by the wrapper above in its own process so global counters and
+    // tracing remain isolated without a process-environment test switch.
+    #[test]
+    #[ignore = "invoked by p4_handler_send_failure_has_one_event_counter_and_log"]
+    fn p4_handler_send_failure_isolated() {
+        #[derive(Clone)]
+        struct LogWriter(Arc<Mutex<Vec<u8>>>);
+        impl std::io::Write for LogWriter {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let logs = Arc::new(Mutex::new(Vec::new()));
+        let sink = logs.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .without_time()
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || LogWriter(sink.clone()))
+            .finish();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        tracing::subscriber::with_default(subscriber, || {
+            runtime.block_on(async {
+                use futures::FutureExt;
+                use send_result::SendFailureKind;
+                let handler = WebRTCRsConnectionHandler::new();
+                let peer = install_test_connection(&handler, "p4-send-wiring", 1).await;
+                let pc = handler.peers.lock()[peer.peer_id()].peer_connection.clone();
+                let channel = pc
+                    .create_data_channel("p4-not-connected", None)
+                    .await
+                    .unwrap();
+                // A real, unconnected channel: handler admission succeeds but the
+                // transport must reject the send before SCTP handoff.
+                assert_eq!(
+                    channel.ready_state().await.unwrap(),
+                    webrtc::data_channel::RTCDataChannelState::Connecting
+                );
+                let channel_id = channel.id();
+                handler
+                    .peers
+                    .lock()
+                    .get_mut(peer.peer_id())
+                    .unwrap()
+                    .data_channel = Some(channel);
+                let frame = WebRTCWireFrame::Response(WebRTCResponse {
+                    id: "p4-send-wiring".into(),
+                    result: serde_json::json!({"private": "never-log-this-body"}),
+                    error: None,
+                    collection: None,
+                });
+                let bytes = serde_json::to_string(&frame).unwrap().len();
+                let diagnostics = transport_diagnostics();
+                let before = diagnostics.counters(MessageClass::Reliable);
+                let realtime_before = diagnostics.counters(MessageClass::Realtime);
+                let mut events = diagnostics.errors();
+                let result =
+                    tokio::time::timeout(Duration::from_secs(2), handler.send(&peer, frame))
+                        .await
+                        .expect("the caller must receive the transport error");
+                assert!(
+                    result.is_err(),
+                    "a rejected transport send must reach the caller"
+                );
+                let after = diagnostics.counters(MessageClass::Reliable);
+                assert_eq!(
+                    after.attempted,
+                    before.attempted + 1,
+                    "the actual queue drainer must account for exactly one attempt"
+                );
+                assert_eq!(after.not_ready, before.not_ready + 1);
+                assert_eq!(after.failed(), before.failed() + 1);
+                assert_eq!(after.handed_to_sctp, before.handed_to_sctp);
+                assert_eq!(
+                    diagnostics.counters(MessageClass::Realtime),
+                    realtime_before
+                );
+                let event = events
+                    .next()
+                    .now_or_never()
+                    .flatten()
+                    .expect("the actual queue drainer must publish its send failure");
+                assert_eq!(event.class, MessageClass::Reliable);
+                assert_eq!(event.kind, SendFailureKind::NotReady);
+                assert_eq!(event.channel_id, channel_id);
+                assert_eq!(event.bytes, bytes);
+                assert!(
+                    events.next().now_or_never().is_none(),
+                    "no duplicate error event"
+                );
+                let log = String::from_utf8(logs.lock().clone()).unwrap();
+                assert_eq!(
+                    log.matches("DataChannel send rejected before SCTP handoff")
+                        .count(),
+                    1,
+                    "exactly one transport failure log is required"
+                );
+                assert!(log.contains("ctox_webrtc_send"));
+                assert!(
+                    !log.contains("never-log-this-body"),
+                    "logs must not expose payloads"
+                );
+                handler.close().await.unwrap();
+            })
+        });
+    }
 
     struct TestPublicationGuard {
         allowed: Mutex<bool>,
@@ -5755,6 +6357,57 @@ mod tests {
         handler
             .connection_for_peer(route)
             .expect("fixture connection is current")
+    }
+
+    #[tokio::test]
+    async fn v4_channel_callback_preserves_bootstrap_and_its_event_consumer() {
+        use super::super::index_mod::lanes::{Lane, REALTIME_LABEL};
+        let handler = WebRTCRsConnectionHandler::new();
+        let peer = install_test_connection(&handler, "v4-callback", 1).await;
+        let pc = handler.peers.lock()[peer.peer_id()].peer_connection.clone();
+        let bootstrap = pc.create_data_channel("ctox-rxdb", None).await.unwrap();
+        handler
+            .peers
+            .lock()
+            .get_mut(peer.peer_id())
+            .unwrap()
+            .data_channel = Some(bootstrap.clone());
+        let listener = super::super::signaling_client::bind_test_signaling_listener().await;
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            let mut ws = tokio_tungstenite::accept_async(socket).await.unwrap();
+            while ws.next().await.is_some() {}
+        });
+        let signaling = SignalingClient::connect(format!("ws://{address}"))
+            .await
+            .unwrap();
+        let events = RsPeerConnectionEvents {
+            handler: handler.clone(),
+            signaling: signaling.clone(),
+            remote_peer_id: peer.peer_id().to_owned(),
+            generation: peer.generation(),
+        };
+        for label in Lane::ALL.iter().map(|l| l.label()).chain([REALTIME_LABEL]) {
+            let lane = pc.create_data_channel(label, None).await.unwrap();
+            events.on_data_channel(lane).await;
+            let peers = handler.peers.lock();
+            let entry = peers
+                .get(peer.peer_id())
+                .expect("V4 callback must not retire its peer");
+            assert_eq!(
+                entry.data_channel.as_ref().unwrap().id(),
+                bootstrap.id(),
+                "V4 callback must not replace bootstrap"
+            );
+            assert!(
+                entry.tasks.is_empty(),
+                "scheduler must remain the only V4 event consumer"
+            );
+        }
+        handler.close().await.unwrap();
+        signaling.close().await;
+        server.abort();
     }
 
     fn invoke_policy_probe(
@@ -6413,7 +7066,9 @@ mod tests {
         async fn ready_state(
             &self,
         ) -> webrtc::error::Result<webrtc::data_channel::RTCDataChannelState> {
-            self.inner.ready_state().await
+            // This fixture terminates sends itself and generates synthetic ACKs;
+            // its inner, unconnected handle only supplies the channel metadata.
+            Ok(webrtc::data_channel::RTCDataChannelState::Open)
         }
         async fn buffered_amount_high_threshold(&self) -> webrtc::error::Result<u32> {
             self.inner.buffered_amount_high_threshold().await

@@ -1,6 +1,5 @@
-import { applyPaneIconLabels } from '../../shared/pane-icon-labels.js';
-import { loadModuleMessages } from '../../shared/i18n.js';
-import { renderHtmlIfChanged } from '../../shared/stable-dom.js';
+import { renderHtmlIfChanged } from 'ctox:shared/stable-dom.js';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
 import {
   CATEGORIES,
   COMMUNITY_PRESET,
@@ -11,10 +10,6 @@ import {
   buildAdapterCommand,
   buildAuthCommand,
   buildGenerateCommand,
-  digestActive,
-  digestOf,
-  withDigest,
-  issueWindow,
   buildScheduleCommand,
   categoryCounts,
   compactCount,
@@ -49,21 +44,11 @@ const RENDER_DEBOUNCE_MS = 60;
 
 const labels = {
   de: {
+    title: 'News',
     topicsTitle: 'Themen',
     trendTitle: 'Im Trend',
-    noTopicSelected: 'Kein Thema ausgewählt',
-    emptyTopicsTitle: 'Lege dein erstes Thema an',
-    emptyTopicsBody: 'Ein Thema bündelt Quellen und einen Rhythmus zu einem eigenen Feed.',
     createTopic: 'Thema anlegen',
-    noTopicsInView: 'Keine Themen in dieser Ansicht.',
-    emptyIssueTitle: 'Noch keine Ausgabe',
-    emptyIssueBody: 'CTOX recherchiert die Quellen und schreibt daraus den Feed.',
-    generateFirst: 'Erste Ausgabe erzeugen',
-    issueRunning: 'Ausgabe wird erstellt',
-    issueRunningBody: 'CTOX liest gerade die Quellen. Der Feed erscheint hier, sobald er fertig ist.',
     issueFailed: 'Ausgabe fehlgeschlagen',
-    retry: 'Erneut erzeugen',
-    noPostsInView: 'Keine Beiträge in dieser Ansicht.',
     showMore: 'Mehr anzeigen',
     showLess: 'Weniger anzeigen',
     sources: 'Quellen',
@@ -75,22 +60,12 @@ const labels = {
     linkCopied: 'Link kopiert',
     editorial: 'CTOX Redaktion',
     topicsFooter: '{0} Themen',
-    topicsFooterOne: '1 Thema',
     postsFooter: '{0} Beiträge · {1}',
     newTopic: 'Neues Thema',
     titleRequired: 'Gib dem Thema einen Namen.',
     deadlineRequired: 'Wähle einen Stichtag.',
     saveFailed: 'Speichern fehlgeschlagen',
-    drawerUndo: 'Rückgängig',
-    drawerUndone: 'Rückgängig gemacht',
-    createTopic: 'Thema anlegen',
-    savedSourceOn: '„{0}“ aktiviert',
-    savedSourceOff: '„{0}“ deaktiviert',
-    savedSourceRemoved: '„{0}“ entfernt',
-    savedSourcesAdded: 'Quellen hinzugefügt',
-    savedTopic: 'Gespeichert',
     commandFailed: 'Auftrag konnte nicht an CTOX übergeben werden',
-    commandQueued: 'Auftrag an CTOX übergeben',
     deleteConfirm: 'Nochmal klicken: „{0}“ mit allen Ausgaben löschen',
     deleteTopic: 'Thema löschen',
     groupLab: 'Labs',
@@ -110,7 +85,6 @@ const labels = {
     statusNeedsAuth: 'Anmeldung nötig',
     statusFailed: 'Fehler',
     statusRepairing: 'wird repariert',
-    statusPending: 'in Arbeit',
     statusAuthRequested: 'Anmeldung offen',
     saveTopicFirst: 'Speichere das Thema, bevor du Quellen einrichtest.',
     placeholderLab: 'https://www.example.com/blog',
@@ -127,32 +101,13 @@ const labels = {
     weekly: '{1} {0}',
     deadline: 'Stichtag {0}',
     manual: 'Manuell',
-    digestLabel: 'Wochenzusammenfassung',
-    digestHint: 'Fasst die Tagesausgaben der Woche zu Top-Meldungen und Trends zusammen, ohne neue Recherche.',
-    digestWeekday: 'Wochentag',
-    digestTime: 'Uhrzeit',
-    digestSavedOn: 'Wochenzusammenfassung {0} {1} gespeichert',
-    digestSavedOff: 'Wochenzusammenfassung ausgeschaltet',
-    undo: 'Rückgängig',
-    undone: 'Rückgängig gemacht',
-    digestCadence: '{0} · Woche {1}',
   },
   en: {
+    title: 'News',
     topicsTitle: 'Topics',
     trendTitle: 'Trending',
-    noTopicSelected: 'No topic selected',
-    emptyTopicsTitle: 'Create your first topic',
-    emptyTopicsBody: 'A topic bundles sources and a cadence into its own feed.',
     createTopic: 'Create topic',
-    noTopicsInView: 'No topics in this view.',
-    emptyIssueTitle: 'No issue yet',
-    emptyIssueBody: 'CTOX researches the sources and writes the feed from them.',
-    generateFirst: 'Create first issue',
-    issueRunning: 'Issue in progress',
-    issueRunningBody: 'CTOX is reading the sources. The feed appears here when it is done.',
     issueFailed: 'Issue failed',
-    retry: 'Generate again',
-    noPostsInView: 'No posts in this view.',
     showMore: 'Show more',
     showLess: 'Show less',
     sources: 'Sources',
@@ -164,22 +119,12 @@ const labels = {
     linkCopied: 'Link copied',
     editorial: 'CTOX Editorial',
     topicsFooter: '{0} topics',
-    topicsFooterOne: '1 topic',
     postsFooter: '{0} posts · {1}',
     newTopic: 'New topic',
     titleRequired: 'Give the topic a name.',
     deadlineRequired: 'Pick a deadline.',
     saveFailed: 'Saving failed',
-    drawerUndo: 'Undo',
-    drawerUndone: 'Undone',
-    createTopic: 'Create topic',
-    savedSourceOn: '“{0}” enabled',
-    savedSourceOff: '“{0}” disabled',
-    savedSourceRemoved: '“{0}” removed',
-    savedSourcesAdded: 'Sources added',
-    savedTopic: 'Saved',
     commandFailed: 'Could not hand the task to CTOX',
-    commandQueued: 'Task handed to CTOX',
     deleteConfirm: 'Click again: delete “{0}” with all issues',
     deleteTopic: 'Delete topic',
     groupLab: 'Labs',
@@ -199,7 +144,6 @@ const labels = {
     statusNeedsAuth: 'Sign-in needed',
     statusFailed: 'Error',
     statusRepairing: 'repairing',
-    statusPending: 'in progress',
     statusAuthRequested: 'sign-in open',
     saveTopicFirst: 'Save the topic before setting up sources.',
     placeholderLab: 'https://www.example.com/blog',
@@ -216,15 +160,6 @@ const labels = {
     weekly: '{1} {0}',
     deadline: 'Deadline {0}',
     manual: 'Manual',
-    digestLabel: 'Weekly digest',
-    digestHint: "Sums up the week's daily issues into top stories and trends, without new research.",
-    digestWeekday: 'Weekday',
-    digestTime: 'Time',
-    digestSavedOn: 'Weekly digest {0} {1} saved',
-    digestSavedOff: 'Weekly digest turned off',
-    undo: 'Undo',
-    undone: 'Undone',
-    digestCadence: '{0} · week {1}',
   },
 };
 
@@ -242,7 +177,8 @@ const ICONS = {
 };
 
 const state = {
-  ctx: null,
+  api: null,
+  root: null,
   lang: 'de',
   messages: labels.de,
   topics: [],
@@ -258,52 +194,177 @@ const state = {
   expandedPosts: new Set(),
   drawer: null,
   renderTimer: 0,
-  subscriptions: [],
   disposed: false,
+  commandWatches: new Map(),
 };
 const els = {};
 
-export async function mount(ctx) {
-  state.ctx = ctx;
-  state.disposed = false;
-  state.lang = ctx.locale === 'en' ? 'en' : 'de';
-  state.messages = await loadModuleMessages(import.meta.url, state.lang, labels);
-  ensureStyles();
-  ctx.host.innerHTML = await loadModuleMarkup();
-  bindElements(ctx.host);
-  applyPaneIconLabels(ctx.host, state.lang);
-  wireEvents();
-  await loadAll();
-  subscribeAll();
-  render();
-  return unmount;
+function langFrom(locale) {
+  return String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
 }
 
-function unmount() {
-  state.disposed = true;
-  clearTimeout(state.renderTimer);
-  for (const sub of state.subscriptions) {
-    try { sub?.unsubscribe?.(); } catch {}
+// Eingebettete labels sind der Rückfall; api.shell.t('news.<key>') übersteuert (Schlüsselraum offen, OFFEN-B).
+function messagesFor(api, lang) {
+  const base = { ...labels.de, ...labels[lang] };
+  for (const key of Object.keys(base)) {
+    const scoped = `news.${key}`;
+    const value = api?.shell?.t?.(scoped);
+    if (typeof value === 'string' && value && value !== scoped) base[key] = value;
   }
-  state.subscriptions = [];
+  return base;
 }
 
-function ensureStyles() {
-  // The stylesheet carries the module's own cache-buster so fresh JS never
-  // binds against a stale cached sheet.
-  const version = String(import.meta.url).split('?v=')[1] || '';
-  const href = new URL('./index.css', import.meta.url).pathname + (version ? `?v=${version}` : '');
-  if (document.querySelector(`link[href="${href}"]`)) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.href = href;
-  document.head.append(link);
+function resetState() {
+  Object.assign(state, {
+    topics: [], sources: [], issues: [], posts: [], selectedTopicId: '', selectedIssueId: '',
+    leftGrammar: { search: '', band: 'active', filters: {} }, centerGrammar: { search: '', band: 'all', filters: {} },
+    leftView: 'cards', centerView: 'cards', expandedPosts: new Set(), drawer: null, renderTimer: 0, disposed: false,
+    commandWatches: new Map(),
+  });
+  for (const key of Object.keys(els)) delete els[key];
+}
+
+export async function mount(root, api, { restored } = {}) {
+  resetState();
+  // Abos gehören dieser Montage (PORTING.md §4 Falle 1).
+  const disposers = [];
+  const watches = state.commandWatches;
+  state.api = api;
+  state.root = root;
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'news';
+  state.lang = langFrom(api.shell.locale.get());
+  state.messages = messagesFor(api, state.lang);
+  // CSS lädt die Shell aus dem Manifest; index.html liefert der Service Worker versioniert (§16.15).
+  root.innerHTML = await loadModuleMarkup();
+  bindElements(root);
+  wireEvents();
+  autoWirePaneGrammar(root);
+  api.shell.setTitle(t('title'));
+  const pendingRestore = restored && typeof restored === 'object' && restored.v === 1 ? restored : null;
+  applyRestoredView(pendingRestore);
+  let drawerRestore = pendingRestore?.drawer || null;
+  // Live-Abos statt RxDB-Einmal-Lesen + Observable + Neuladen.
+  for (const [key, name] of Object.entries(COLLECTIONS)) {
+    disposers.push(api.query(name, {}).subscribe((rows) => {
+      state[key] = Array.isArray(rows) ? rows : [];
+      scheduleRender();
+      if (drawerRestore && restoreDrawer(drawerRestore)) drawerRestore = null;
+    }));
+  }
+  disposers.push(api.shell.locale.subscribe((locale) => {
+    const lang = langFrom(locale);
+    if (lang === state.lang) return;
+    state.lang = lang;
+    state.messages = messagesFor(api, lang);
+    scheduleRender();
+  }));
+  return {
+    unmount() {
+      clearTimeout(state.renderTimer);
+      for (const off of disposers.splice(0)) {
+        try { off(); } catch (error) { console.warn('[news] unsubscribe failed', error); }
+      }
+      for (const off of watches.values()) { try { off(); } catch {} }
+      watches.clear();
+      root.replaceChildren();
+      if (state.root === root) {
+        state.disposed = true;
+        state.api = null;
+        state.root = null;
+      }
+    },
+    snapshot: newsSnapshot,
+  };
+}
+
+function scheduleRender() {
+  clearTimeout(state.renderTimer);
+  state.renderTimer = setTimeout(() => {
+    if (state.disposed || !state.api) return;
+    reconcileSelection();
+    render();
+  }, RENDER_DEBOUNCE_MS);
+}
+
+// Snapshot für den Live-Remount (§10.2a Nr. 1): Auswahl, Ansichten, Grammatik und offener Themen-Drawer samt
+// ungespeicherter Eingaben und Quellen-Entwürfe.
+function newsSnapshot() {
+  const snap = {
+    v: 1,
+    selectedTopicId: state.selectedTopicId,
+    selectedIssueId: state.selectedIssueId,
+    leftGrammar: structuredClone(state.leftGrammar),
+    centerGrammar: structuredClone(state.centerGrammar),
+    leftView: state.leftView,
+    centerView: state.centerView,
+    expandedPosts: [...state.expandedPosts],
+    feedScrollTop: els.feed?.scrollTop || 0,
+  };
+  if (state.drawer && els.drawer && !els.drawer.hidden) {
+    const values = {};
+    for (const el of els.form?.elements || []) {
+      if (!el.name) continue;
+      if (el.type === 'checkbox') { values[el.name] = values[el.name] || []; if (el.checked) values[el.name].push(el.value); }
+      else if (el.type === 'radio') { if (el.checked) values[el.name] = el.value; }
+      else values[el.name] = el.value;
+    }
+    snap.drawer = {
+      persisted: state.drawer.persisted,
+      topicId: state.drawer.topic?.id || '',
+      tab: state.drawer.tab,
+      sources: structuredClone(state.drawer.sources),
+      removed: [...state.drawer.removed],
+      values,
+    };
+  }
+  return snap;
+}
+
+function applyRestoredView(restored) {
+  if (!restored) return;
+  if (typeof restored.selectedTopicId === 'string') state.selectedTopicId = restored.selectedTopicId;
+  if (typeof restored.selectedIssueId === 'string') state.selectedIssueId = restored.selectedIssueId;
+  if (restored.leftGrammar && typeof restored.leftGrammar === 'object') state.leftGrammar = { ...state.leftGrammar, ...restored.leftGrammar };
+  if (restored.centerGrammar && typeof restored.centerGrammar === 'object') state.centerGrammar = { ...state.centerGrammar, ...restored.centerGrammar };
+  if (restored.leftView === 'list' || restored.leftView === 'cards') state.leftView = restored.leftView;
+  if (restored.centerView === 'list' || restored.centerView === 'cards') state.centerView = restored.centerView;
+  if (Array.isArray(restored.expandedPosts)) state.expandedPosts = new Set(restored.expandedPosts.filter((id) => typeof id === 'string'));
+  const leftSearch = els.leftPane?.querySelector('[data-pg-search]');
+  if (leftSearch) leftSearch.value = state.leftGrammar.search || '';
+  const centerSearch = els.centerPane?.querySelector('[data-pg-search]');
+  if (centerSearch) centerSearch.value = state.centerGrammar.search || '';
+  for (const [pane, grammar] of [[els.leftPane, state.leftGrammar], [els.centerPane, state.centerGrammar]]) {
+    pane?.querySelectorAll('[data-pg-band]').forEach((tab) => {
+      tab.setAttribute('aria-selected', String(tab.dataset.pgBand === grammar.band));
+      tab.classList.toggle('is-active', tab.dataset.pgBand === grammar.band);
+    });
+  }
+}
+
+// Offener Drawer: erst wieder öffnen, wenn das gespeicherte Thema in den Live-Daten steht (neues Thema sofort).
+function restoreDrawer(snap) {
+  const topic = snap.persisted ? state.topics.find((item) => item.id === snap.topicId) : null;
+  if (snap.persisted && !topic) return false;
+  openDrawer(topic);
+  if (!state.drawer) return true;
+  if (!snap.persisted && snap.topicId) state.drawer.topic.id = snap.topicId;
+  if (Array.isArray(snap.sources)) state.drawer.sources = snap.sources;
+  if (Array.isArray(snap.removed)) state.drawer.removed = new Set(snap.removed);
+  for (const el of els.form?.elements || []) {
+    if (!el.name || !(el.name in (snap.values || {}))) continue;
+    const v = snap.values[el.name];
+    if (el.type === 'checkbox') el.checked = Array.isArray(v) && v.includes(el.value);
+    else if (el.type === 'radio') el.checked = v === el.value;
+    else el.value = v;
+  }
+  syncCadenceFields?.();
+  renderSourceGroups();
+  if (snap.tab) setDrawerTab(snap.tab);
+  return true;
 }
 
 async function loadModuleMarkup() {
-  const version = String(import.meta.url).split('?v=')[1] || '';
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (version ? `?v=${version}` : '');
-  const html = await fetch(markupHref).then((res) => res.text());
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
@@ -346,51 +407,22 @@ function bindElements(host) {
   els.newSourceValue = host.querySelector('[data-new-source-value]');
 }
 
-function collection(name) {
-  return state.ctx?.db?.collection?.(name) || null;
-}
-
-async function readCollection(name) {
-  const handle = collection(name);
-  if (!handle) return [];
-  const docs = await handle.find().exec();
-  return docs.map((doc) => (typeof doc?.toJSON === 'function' ? doc.toJSON() : doc)).filter((doc) => doc && !doc._deleted);
-}
-
-async function loadAll() {
-  const [topics, sources, issues, posts] = await Promise.all([
-    readCollection(COLLECTIONS.topics),
-    readCollection(COLLECTIONS.sources),
-    readCollection(COLLECTIONS.issues),
-    readCollection(COLLECTIONS.posts),
-  ]);
-  state.topics = topics;
-  state.sources = sources;
-  state.issues = issues;
-  state.posts = posts;
-  reconcileSelection();
-}
-
-function subscribeAll() {
-  for (const [key, name] of Object.entries(COLLECTIONS)) {
-    const handle = collection(name);
-    const sub = handle?.$?.subscribe?.(() => scheduleReload(key));
-    if (sub) state.subscriptions.push(sub);
+// Schreiben nur über die App-API; `local`-Ablehnung → Zustandszone (Core-Ablehnungen meldet der Kernel).
+function write(op, name, idOrDoc, patch) {
+  const api = state.api;
+  if (!api) return Promise.resolve(false);
+  let handle;
+  try {
+    handle = op === 'put' ? api.put(name, idOrDoc) : op === 'patch' ? api.patch(name, idOrDoc, patch) : api.remove(name, idOrDoc);
+  } catch (error) {
+    notify('error', t('saveFailed'), error?.message, `write.${name}`);
+    return Promise.resolve(false);
   }
+  return handle.local.then(() => true, (error) => { notify('error', t('saveFailed'), error?.message, `write.${name}`); return false; });
 }
 
-const pendingReloads = new Set();
-function scheduleReload(key) {
-  pendingReloads.add(key);
-  clearTimeout(state.renderTimer);
-  state.renderTimer = setTimeout(async () => {
-    if (state.disposed) return;
-    const keys = [...pendingReloads];
-    pendingReloads.clear();
-    await Promise.all(keys.map(async (k) => { state[k] = await readCollection(COLLECTIONS[k]); }));
-    reconcileSelection();
-    render();
-  }, RENDER_DEBOUNCE_MS);
+function readOne(name, id) {
+  return id && state.api ? state.api.get(name, id).get() : null;
 }
 
 function reconcileSelection() {
@@ -413,6 +445,19 @@ function selectedIssue() {
   return state.issues.find((issue) => issue.id === state.selectedIssueId) || null;
 }
 
+// Angezeigte Ausgabe (FIX9a): Solange die gewählte Ausgabe noch erstellt wird und keine Beiträge hat, zeigt der
+// Hauptbereich die letzte fertige Ausgabe desselben Themas. Der Erstellstatus steht nur in der Zone und als Punkt
+// am Ausgabeknoten.
+function displayedIssue() {
+  const issue = selectedIssue();
+  if (!issue || !ISSUE_ACTIVE_STATUSES.includes(issue.status)) return issue;
+  if (state.posts.some((post) => post.issue_id === issue.id)) return issue;
+  const ready = issuesForTopic(state.issues, issue.topic_id, Infinity)
+    .find((other) => other.id !== issue.id && !ISSUE_ACTIVE_STATUSES.includes(other.status) && other.status !== 'failed'
+      && state.posts.some((post) => post.issue_id === other.id));
+  return ready || issue;
+}
+
 function wireEvents() {
   els.leftPane?.addEventListener('ctox-pane-grammar-change', (event) => {
     state.leftGrammar = { ...state.leftGrammar, ...event.detail, view: state.leftView };
@@ -428,14 +473,6 @@ function wireEvents() {
   els.host.addEventListener('click', onClick);
   els.form?.addEventListener('submit', (event) => { event.preventDefault(); saveTopic(); });
   els.form?.querySelector('[name="cadence"]')?.addEventListener('change', syncCadenceFields);
-  // Instant save: every committed field change of a saved topic persists.
-  els.form?.addEventListener('change', (event) => {
-    if (event.target.closest?.('[data-digest-input]')) { onDigestChange(); return; }
-    if (event.target?.dataset?.action === 'toggle-source') return;
-    if (event.target === els.newSourceKind || event.target === els.newSourceValue) return;
-    if (event.target?.closest?.('[data-digest-undo], [data-panel="digest"]')) return;
-    instantSave(t('savedTopic'));
-  });
   els.newSourceKind?.addEventListener('change', syncSourcePlaceholder);
   els.newSourceValue?.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') { event.preventDefault(); addDraftSource(); }
@@ -474,8 +511,6 @@ function onClick(event) {
     'mobile-back': () => els.root?.classList.remove('is-detail'),
     'close-drawer': closeDrawer,
     'save-topic': saveTopic,
-    'drawer-undo': undoDrawerChange,
-    'digest-undo': undoDigest,
     'delete-topic': deleteTopic,
     'drawer-tab': () => setDrawerTab(target.dataset.tab),
     'add-source': addDraftSource,
@@ -486,10 +521,7 @@ function onClick(event) {
     'remove-source': () => removeDraftSource(target.dataset.sourceId),
     'source-adapter': () => runSourceCommand(target.dataset.sourceId, 'adapter'),
     'source-auth': () => runSourceCommand(target.dataset.sourceId, 'auth'),
-    'toggle-category': () => {
-      target.setAttribute('aria-pressed', String(target.getAttribute('aria-pressed') !== 'true'));
-      instantSave(t('savedTopic'));
-    },
+    'toggle-category': () => target.setAttribute('aria-pressed', String(target.getAttribute('aria-pressed') !== 'true')),
     'expand-post': () => toggleExpand(target.dataset.postId),
     'bookmark-post': () => toggleBookmark(target.dataset.postId),
     'copy-post-link': () => copyPostLink(target.dataset.postId),
@@ -526,21 +558,6 @@ function render() {
 }
 
 function cadenceLabel(topic) {
-  const base = baseCadenceLabel(topic);
-  if (!digestActive(topic)) return base;
-  const digest = digestOf(topic);
-  return t('digestCadence', base, `${weekdayShort(digest.weekday)} ${digest.run_time}`);
-}
-
-function weekdayShort(weekday) {
-  return new Date(2024, 0, 7 + (Number(weekday) || 0)).toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE', { weekday: 'short' }).replace('.', '');
-}
-
-function weekdayLong(weekday) {
-  return new Date(2024, 0, 7 + (Number(weekday) || 0)).toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE', { weekday: 'long' });
-}
-
-function baseCadenceLabel(topic) {
   if (topic.cadence === 'daily') return t('daily', topic.run_time);
   if (topic.cadence === 'weekly') {
     const day = new Date(2024, 0, 7 + (Number(topic.weekday) || 0)).toLocaleDateString(state.lang === 'en' ? 'en-US' : 'de-DE', { weekday: 'short' }).replace('.', '');
@@ -565,18 +582,9 @@ function renderLeft() {
   els.leftPane?.__ctoxPaneGrammar?.setCounts?.(counts);
   setCountsFallback(els.leftPane, counts);
   const topics = topicsForBand(state.topics, state.leftGrammar);
-  setFooter(els.leftPane, topics.length === 1 ? t('topicsFooterOne') : t('topicsFooter', topics.length));
-  if (!state.topics.length) {
-    renderHtmlIfChanged(els.topicList, `
-      <div class="ctox-empty news-empty">
-        <strong>${esc(t('emptyTopicsTitle'))}</strong>
-        <span>${esc(t('emptyTopicsBody'))}</span>
-        <button class="ctox-button is-primary" type="button" data-action="create-topic">${esc(t('createTopic'))}</button>
-      </div>`);
-    return;
-  }
+  // Leere Liste rendert nichts (PORTING.md R11); „Thema anlegen“ steht im Kopf der Spalte.
   if (!topics.length) {
-    renderHtmlIfChanged(els.topicList, `<div class="ctox-empty"><span>${esc(t('noTopicsInView'))}</span></div>`);
+    renderHtmlIfChanged(els.topicList, '');
     return;
   }
   const compact = state.leftView === 'list';
@@ -623,63 +631,63 @@ function setFooter(pane, text) {
   if (node) node.textContent = text;
 }
 
+// Laufende bzw. fehlgeschlagene Ausgabe der Auswahl → Zustandszone (vorher Leerzustand im Feed).
+function reportIssueState(issue) {
+  const api = state.api;
+  if (!api) return;
+  if (issue && ISSUE_ACTIVE_STATUSES.includes(issue.status)) {
+    api.status.report({ level: 'info', code: 'news.issue.running', text: state.lang === 'en' ? 'Issue in progress' : 'Ausgabe wird erstellt', ref: issue.id });
+  } else api.status.clear('news.issue.running');
+  if (issue && issue.status === 'failed') {
+    api.status.report({ level: 'error', code: 'news.issue.failed', text: issue.error ? `${t('issueFailed')}: ${issue.error}` : t('issueFailed'), ref: issue.id });
+  } else api.status.clear('news.issue.failed');
+}
+
 function renderCenter() {
   if (!els.feed) return;
   const topic = selectedTopic();
-  const issue = selectedIssue();
-  els.feedTitle.textContent = topic ? (issue ? `${topic.title} · ${issueLabel(issue.issue_date, state.lang)}` : topic.title) : t('noTopicSelected');
+  const running = selectedIssue();
+  const issue = displayedIssue();
+  els.feedTitle.textContent = topic ? (issue ? `${topic.title} · ${issueLabel(issue.issue_date, state.lang)}` : topic.title) : '';
   setDisabled('configure-topic', !topic);
-  setDisabled('generate-issue', !topic || Boolean(issue && ISSUE_ACTIVE_STATUSES.includes(issue.status)));
+  setDisabled('generate-issue', !topic || Boolean(running && ISSUE_ACTIVE_STATUSES.includes(running.status)));
   const taskButton = els.host.querySelector('[data-action="open-issue-task"]');
-  if (taskButton) taskButton.hidden = !(issue && (issue.task_id || issue.command_id) && issue.status !== 'ready');
+  if (taskButton) taskButton.hidden = !(running && (running.task_id || running.command_id) && running.status !== 'ready');
 
   const counts = categoryCounts(state.posts, issue?.id);
   els.centerPane?.__ctoxPaneGrammar?.setCounts?.(counts);
   setCountsFallback(els.centerPane, counts);
+  hideEmptyCategoryTabs(counts);
 
-  if (!topic) {
+  reportIssueState(running);
+  if (!topic || !issue) {
+    // Ohne Thema/Ausgabe bleibt der Feed leer; „Ausgabe erzeugen“ steht im Kopf des Feeds.
     setFooter(els.centerPane, '');
-    renderHtmlIfChanged(els.feed, '<div class="ctox-empty"></div>');
-    return;
-  }
-  if (!issue) {
-    setFooter(els.centerPane, '');
-    renderHtmlIfChanged(els.feed, `
-      <div class="ctox-empty news-empty">
-        <strong>${esc(t('emptyIssueTitle'))}</strong>
-        <span>${esc(t('emptyIssueBody'))}</span>
-        <button class="ctox-button is-primary" type="button" data-action="generate-issue">${esc(t('generateFirst'))}</button>
-      </div>`);
+    renderHtmlIfChanged(els.feed, '');
     return;
   }
   const posts = postsForIssue(state.posts, issue.id, state.centerGrammar);
-  setFooter(els.centerPane, t('postsFooter', posts.length, issueLabel(issue.issue_date, state.lang)));
-  if (!counts.all && ISSUE_ACTIVE_STATUSES.includes(issue.status)) {
-    renderHtmlIfChanged(els.feed, `
-      <div class="ctox-empty news-empty">
-        <span class="news-spinner" aria-hidden="true"></span>
-        <strong>${esc(t('issueRunning'))}</strong>
-        <span>${esc(t('issueRunningBody'))}</span>
-      </div>`);
-    return;
-  }
-  if (!counts.all && issue.status === 'failed') {
-    renderHtmlIfChanged(els.feed, `
-      <div class="ctox-empty news-empty">
-        <strong>${esc(t('issueFailed'))}</strong>
-        ${issue.error ? `<span>${esc(issue.error)}</span>` : ''}
-        <button class="ctox-button is-primary" type="button" data-action="generate-issue">${esc(t('retry'))}</button>
-      </div>`);
-    return;
-  }
   if (!posts.length) {
-    renderHtmlIfChanged(els.feed, `<div class="ctox-empty"><span>${esc(t('noPostsInView'))}</span></div>`);
+    renderHtmlIfChanged(els.feed, '');
     return;
   }
   const html = state.centerView === 'list'
     ? `<div class="news-rows">${posts.map(renderPostRow).join('')}</div>`
     : `<div class="news-column">${posts.map(renderPostThread).join('')}</div>`;
   renderHtmlIfChanged(els.feed, html);
+}
+
+// Leere Kategoriereiter (0) ausblenden (FIX9a); „Alle“ bleibt. Steht die Auswahl auf einem leeren Reiter, gilt „Alle“.
+function hideEmptyCategoryTabs(counts) {
+  const tabs = [...(els.centerPane?.querySelectorAll('[data-pg-band]') || [])];
+  let fallback = false;
+  for (const tab of tabs) {
+    const band = tab.dataset.pgBand;
+    const empty = band !== 'all' && !(counts[band] > 0);
+    tab.hidden = empty;
+    if (empty && tab.getAttribute('aria-selected') === 'true') fallback = true;
+  }
+  if (fallback) tabs.find((tab) => tab.dataset.pgBand === 'all')?.click();
 }
 
 function setDisabled(action, disabled) {
@@ -806,8 +814,10 @@ function renderPostRow(post) {
 
 function renderTrends() {
   if (!els.trends) return;
-  const issue = selectedIssue();
+  const issue = displayedIssue();
   const trends = issue ? trendsForIssue(issue, state.posts) : [];
+  // Leere Trend-Spalte ausblenden (FIX9a): Spalte samt Teiler weg, der Feed nimmt die Breite.
+  els.root?.classList.toggle('is-no-trends', !trends.length);
   if (!trends.length) {
     renderHtmlIfChanged(els.trends, '');
     return;
@@ -840,14 +850,9 @@ function toggleExpand(postId) {
 }
 
 async function toggleBookmark(postId) {
-  const handle = collection(COLLECTIONS.posts);
-  const doc = await handle?.findOne(postId).exec();
+  const doc = readOne(COLLECTIONS.posts, postId);
   if (!doc) return;
-  try {
-    await doc.incrementalPatch({ bookmarked: doc.bookmarked !== true, updated_at_ms: Date.now() });
-  } catch (error) {
-    notify('error', t('saveFailed'), error?.message);
-  }
+  await write('patch', COLLECTIONS.posts, postId, { bookmarked: doc.bookmarked !== true, updated_at_ms: Date.now() });
 }
 
 async function copyPostLink(postId) {
@@ -856,28 +861,62 @@ async function copyPostLink(postId) {
   if (!href) return;
   try {
     await navigator.clipboard.writeText(href);
-    notify('success', t('linkCopied'));
+    notify('info', t('linkCopied'), '', 'link.copied');
   } catch {}
 }
 
-function notify(type, title, message = '') {
-  try {
-    state.ctx?.notifications?.show?.({ type, title, message });
-  } catch {}
+// Meldungen nur in die Zustandszone (Anf. 27); stabiler Code je Fall, damit `clear` greift. v4-allow: text (Zonen-Code, keine Klasse)
+function notify(type, title, message = '', code = 'notice') {
+  const api = state.api;
+  if (!api) return;
+  const level = type === 'error' ? 'error' : type === 'warning' ? 'warn' : 'info';
+  api.status.report({ level, code: `news.${code}`, text: message ? `${title}: ${message}` : String(title || '') });
 }
 
 // --- Commands ------------------------------------------------------------
 
-async function dispatch(command) {
-  if (typeof state.ctx?.commandBus?.dispatch !== 'function') throw new Error(t('commandFailed'));
-  return state.ctx.commandBus.dispatch(command);
+// Befehle über api.command, nie warten (R5). Umschlag aus core/news-model.mjs → Typ + Payload (+ record_id,
+// client_context); Status live: failed → Zone (+ optionaler Folgeschritt), done → Zone räumen.
+function dispatch(envelope, { onFailed } = {}) {
+  const api = state.api;
+  if (!api) return null;
+  const type = envelope.command_type;
+  const code = `news.command.${type}`;
+  let handle;
+  try {
+    handle = api.command(type, {
+      ...(envelope.payload || {}),
+      record_id: envelope.record_id,
+      client_context: envelope.client_context,
+      sync_collections: envelope.sync_collections,
+    });
+  } catch (error) {
+    api.status.report({ level: 'error', code, text: `${t('commandFailed')}: ${error?.message || error}` });
+    onFailed?.(error?.message || String(error));
+    return null;
+  }
+  handle.local.catch((error) => {
+    api.status.report({ level: 'error', code, text: `${t('commandFailed')}: ${error?.message || error}`, ref: handle.id });
+    onFailed?.(error?.message || String(error));
+  });
+  const watches = state.commandWatches;
+  const off = handle.status.subscribe((st) => {
+    if (st?.status === 'failed') {
+      api.status.report({ level: 'error', code, text: `${t('commandFailed')}: ${st.error || ''}`.replace(/: $/, ''), ref: handle.id });
+      onFailed?.(st.error || '');
+    } else if (st?.status === 'done') {
+      api.status.clear(code);
+    } else return;
+    off?.();
+    watches.delete(handle.id);
+  });
+  watches.set(handle.id, off);
+  return handle;
 }
 
 async function generateIssue() {
   const topic = selectedTopic();
-  if (!topic) return;
-  const issuesHandle = collection(COLLECTIONS.issues);
-  if (!issuesHandle) return notify('error', t('commandFailed'));
+  if (!topic || !state.api) return;
   const now = Date.now();
   const previous = issuesForTopic(state.issues, topic.id).find((issue) => issue.status === 'ready') || null;
   const issue = {
@@ -895,19 +934,16 @@ async function generateIssue() {
     created_at_ms: now,
     updated_at_ms: now,
   };
-  const freshness = issueWindow(topic, state.issues, state.posts, now);
-  const command = buildGenerateCommand(topic, state.sources, issue, previous, freshness);
-  issue.command_id = command.command_id;
-  try {
-    await issuesHandle.insert(issue);
-    state.selectedIssueId = issue.id;
-      await dispatch(command);
-    notify('success', t('commandQueued'));
-  } catch (error) {
-    const doc = await issuesHandle.findOne(issue.id).exec().catch(() => null);
-    await doc?.incrementalPatch({ status: 'failed', error: String(error?.message || error), updated_at_ms: Date.now() }).catch(() => {});
-    notify('error', t('commandFailed'), error?.message);
-  }
+  const envelope = buildGenerateCommand(topic, state.sources, issue, previous);
+  // Ausgabe lokal anlegen, dann Befehl senden (ohne Warten); die Befehls-ID vergibt der Kernel (OFFEN-2).
+  issue.command_id = envelope.command_id;
+  const stored = write('put', COLLECTIONS.issues, issue);
+  state.selectedIssueId = issue.id;
+  const handle = dispatch(envelope, {
+    onFailed: (message) => write('patch', COLLECTIONS.issues, issue.id, { status: 'failed', error: String(message || t('commandFailed')), updated_at_ms: Date.now() }),
+  });
+  if (handle) stored.then((ok) => { if (ok) write('patch', COLLECTIONS.issues, issue.id, { command_id: handle.id, updated_at_ms: Date.now() }); });
+  scheduleRender();
 }
 
 function focusIssueTask(issue) {
@@ -915,17 +951,10 @@ function focusIssueTask(issue) {
   const taskId = issue.task_id || '';
   const commandId = issue.command_id || '';
   if (!taskId && !commandId) return;
-  try {
-    sessionStorage.setItem('ctox.businessOs.focusTask', JSON.stringify({
-      taskId, commandId, taskStatus: issue.status || '', sourceModule: 'news', openDrawer: true,
-    }));
-  } catch {}
-  const params = new URLSearchParams();
-  if (taskId) params.set('task_id', taskId);
-  if (commandId) params.set('command_id', commandId);
-  params.set('source', 'news');
-  params.set('drawer', '1');
-  location.hash = `#ctox?${params.toString()}`;
+  // Sprung in die CTOX-App über die Shell (R13) statt sessionStorage + location.hash.
+  state.api?.shell.navigate('ctox', {
+    task_id: taskId, command_id: commandId, task_status: issue.status || '', source: 'news', drawer: true,
+  });
 }
 
 async function runSourceCommand(sourceId, kind) {
@@ -933,21 +962,17 @@ async function runSourceCommand(sourceId, kind) {
   const source = state.drawer?.sources.find((item) => item.id === sourceId);
   if (!topic || !source) return;
   if (!state.drawer.persisted || !state.sources.some((item) => item.id === sourceId)) {
-    notify('error', t('saveTopicFirst'));
+    notify('error', t('saveTopicFirst'), '', 'source.unsaved');
     return;
   }
-  const command = kind === 'auth' ? buildAuthCommand(topic, source) : buildAdapterCommand(topic, source);
-  try {
-    const handle = collection(COLLECTIONS.sources);
-    const doc = await handle?.findOne(sourceId).exec();
-    await doc?.incrementalPatch({ status: 'pending', last_error: '', payload: { ...(doc.payload || {}), last_command_id: command.command_id }, updated_at_ms: Date.now() });
-    source.status = 'pending';
-    renderSourceGroups();
-    await dispatch(command);
-    notify('success', t('commandQueued'));
-  } catch (error) {
-    notify('error', t('commandFailed'), error?.message);
+  const envelope = kind === 'auth' ? buildAuthCommand(topic, source) : buildAdapterCommand(topic, source);
+  const doc = readOne(COLLECTIONS.sources, sourceId);
+  if (doc) {
+    write('patch', COLLECTIONS.sources, sourceId, { status: 'pending', last_error: '', payload: { ...(doc.payload || {}), last_command_id: envelope.command_id }, updated_at_ms: Date.now() });
   }
+  source.status = 'pending';
+  renderSourceGroups();
+  dispatch(envelope);
 }
 
 // --- Topic drawer --------------------------------------------------------
@@ -965,27 +990,7 @@ function openDrawer(topic) {
   const migrated = migrateLegacyRedditSources(state.drawer.sources, draft.id);
   state.drawer.sources = migrated.sources;
   migrated.removedIds.forEach((id) => state.drawer.removed.add(id));
-  state.drawer.saved = drawerSnapshot();
   els.drawerTitle.textContent = persisted ? draft.title : t('newTopic');
-  syncDrawerFoot();
-  hideDrawerUndo();
-  fillDrawerForm(draft);
-  const deleteButton = els.host.querySelector('[data-action="delete-topic"]');
-  deleteButton.hidden = !persisted;
-  deleteButton.classList.remove('is-danger');
-  deleteButton.setAttribute('title', t('deleteTopic'));
-  deleteButton.setAttribute('aria-label', t('deleteTopic'));
-  renderDigestField();
-  syncCadenceFields();
-  syncSourcePlaceholder();
-  setDrawerTab('topic');
-  renderSourceGroups();
-  els.scrim.hidden = false;
-  els.drawer.hidden = false;
-  form.elements.title.focus();
-}
-
-function fillDrawerForm(draft) {
   const form = els.form;
   form.elements.title.value = draft.title || '';
   form.elements.prompt.value = draft.prompt || '';
@@ -999,11 +1004,21 @@ function fillDrawerForm(draft) {
   els.drawer.querySelectorAll('[data-category]').forEach((chip) => {
     chip.setAttribute('aria-pressed', String((draft.categories || CATEGORIES).includes(chip.dataset.category)));
   });
+  const deleteButton = els.host.querySelector('[data-action="delete-topic"]');
+  deleteButton.hidden = !persisted;
+  deleteButton.classList.remove('is-danger');
+  deleteButton.setAttribute('title', t('deleteTopic'));
+  deleteButton.setAttribute('aria-label', t('deleteTopic'));
   syncCadenceFields();
+  syncSourcePlaceholder();
+  setDrawerTab('topic');
+  renderSourceGroups();
+  els.scrim.hidden = false;
+  els.drawer.hidden = false;
+  form.elements.title.focus();
 }
 
 function closeDrawer() {
-  hideDrawerUndo();
   state.drawer = null;
   if (els.drawer) els.drawer.hidden = true;
   if (els.scrim) els.scrim.hidden = true;
@@ -1028,108 +1043,6 @@ function syncCadenceFields() {
     deadline: cadence === 'deadline',
   };
   els.form?.querySelectorAll('[data-cadence-field]').forEach((field) => { field.hidden = !visible[field.dataset.cadenceField]; });
-  const digestField = els.form?.querySelector('[data-digest-field]');
-  if (digestField) digestField.hidden = cadence !== 'daily';
-}
-
-// --- Weekly digest (instant save + undo) ----------------------------------
-
-const DIGEST_UNDO_MS = 8000;
-
-function renderDigestField() {
-  const host = els.form?.querySelector('[data-digest-field]');
-  if (!host || !state.drawer) return;
-  const digest = digestOf(state.drawer.topic);
-  const days = [1, 2, 3, 4, 5, 6, 0]
-    .map((day) => `<option value="${day}"${day === digest.weekday ? ' selected' : ''}>${esc(weekdayLong(day))}</option>`)
-    .join('');
-  host.innerHTML = `
-    <label class="news-check"><input type="checkbox" data-digest-input="enabled"${digest.enabled ? ' checked' : ''} /> <span>${esc(t('digestLabel'))}</span></label>
-    <p class="news-digest-hint">${esc(t('digestHint'))}</p>
-    <div class="news-field-grid" data-digest-schedule${digest.enabled ? '' : ' hidden'}>
-      <div>
-        <label class="ctox-field-label" for="news-digest-weekday">${esc(t('digestWeekday'))}</label>
-        <select class="ctox-select" id="news-digest-weekday" data-digest-input="weekday">${days}</select>
-      </div>
-      <div>
-        <label class="ctox-field-label" for="news-digest-time">${esc(t('digestTime'))}</label>
-        <input class="ctox-input" id="news-digest-time" type="time" data-digest-input="run_time" value="${esc(digest.run_time)}" />
-      </div>
-    </div>
-    <div class="news-undo" data-digest-undo hidden>
-      <span data-digest-undo-text></span>
-      <button class="ctox-button" type="button" data-action="digest-undo">${esc(t('undo'))}</button>
-    </div>`;
-}
-
-function readDigestField() {
-  const host = els.form?.querySelector('[data-digest-field]');
-  return {
-    enabled: Boolean(host?.querySelector('[data-digest-input="enabled"]')?.checked),
-    weekday: Number(host?.querySelector('[data-digest-input="weekday"]')?.value ?? 5),
-    run_time: host?.querySelector('[data-digest-input="run_time"]')?.value || '17:00',
-  };
-}
-
-async function onDigestChange() {
-  if (!state.drawer) return;
-  const previous = digestOf(state.drawer.topic);
-  const next = readDigestField();
-  if (JSON.stringify(previous) === JSON.stringify(digestOf({ payload: { digest: next } }))) return;
-  const saved = await applyDigest(next);
-  if (!saved) return;
-  showDigestUndo(previous, next);
-}
-
-// Persisted topics save at once; a new topic keeps it in the draft until
-// the topic itself is created.
-async function applyDigest(digest) {
-  const drawer = state.drawer;
-  if (!drawer) return false;
-  drawer.topic = withDigest(drawer.topic, digest);
-  if (drawer.persisted) {
-    const topics = collection(COLLECTIONS.topics);
-    const stored = state.topics.find((item) => item.id === drawer.topic.id);
-    if (!topics || !stored) { notify('error', t('saveFailed')); return false; }
-    const topic = withDigest(stored, digest);
-    try {
-      await topics.upsert(topic);
-    } catch (error) {
-      notify('error', t('saveFailed'), error?.message);
-      return false;
-    }
-    dispatch(buildScheduleCommand(topic, { digest: true })).catch((error) => notify('error', t('commandFailed'), error?.message));
-  }
-  const schedule = els.form?.querySelector('[data-digest-schedule]');
-  if (schedule) schedule.hidden = !digestOf(drawer.topic).enabled;
-  return true;
-}
-
-function showDigestUndo(previous, next) {
-  const bar = els.form?.querySelector('[data-digest-undo]');
-  if (!bar || !state.drawer) return;
-  const text = next.enabled
-    ? t('digestSavedOn', weekdayLong(next.weekday), next.run_time)
-    : t('digestSavedOff');
-  bar.querySelector('[data-digest-undo-text]').textContent = text;
-  bar.hidden = false;
-  state.drawer.digestUndo = previous;
-  clearTimeout(state.digestUndoTimer);
-  state.digestUndoTimer = setTimeout(() => {
-    bar.hidden = true;
-    if (state.drawer) state.drawer.digestUndo = null;
-  }, DIGEST_UNDO_MS);
-}
-
-async function undoDigest() {
-  const previous = state.drawer?.digestUndo;
-  if (!previous) return;
-  clearTimeout(state.digestUndoTimer);
-  state.drawer.digestUndo = null;
-  if (await applyDigest(previous)) {
-    renderDigestField();
-    notify('success', t('undone'));
-  }
 }
 
 function syncSourcePlaceholder() {
@@ -1139,7 +1052,8 @@ function syncSourcePlaceholder() {
 }
 
 function sourceStatusPill(source) {
-  const map = { needs_auth: 'statusNeedsAuth', auth_requested: 'statusAuthRequested', failed: 'statusFailed', repairing: 'statusRepairing', pending: 'statusPending' };
+  // `pending` (Einrichtung läuft) ist der Zustand des laufenden Befehls und steht in der Zustandszone (news.command.*).
+  const map = { needs_auth: 'statusNeedsAuth', auth_requested: 'statusAuthRequested', failed: 'statusFailed', repairing: 'statusRepairing' };
   const key = map[source.status];
   if (!key) return '';
   const tone = source.status === 'failed' ? 'is-danger' : source.status === 'pending' || source.status === 'auth_requested' ? '' : 'is-warning';
@@ -1208,7 +1122,6 @@ function addDraftSource() {
   }
   els.newSourceValue.value = '';
   renderSourceGroups();
-  instantSave(t('savedSourcesAdded'));
 }
 
 function addPreset(kind) {
@@ -1217,29 +1130,24 @@ function addPreset(kind) {
     const merged = redditPresetSource(state.drawer.sources, state.drawer.topic.id);
     state.drawer.sources = [...state.drawer.sources.filter((source) => source.id !== merged.id), merged];
     renderSourceGroups();
-    instantSave(t('savedSourcesAdded'));
     return;
   }
   const preset = kind === 'lab' ? LAB_PRESET : COMMUNITY_PRESET;
   state.drawer.sources.push(...presetSources(state.drawer.topic.id, preset, kind, state.drawer.sources));
   renderSourceGroups();
-  instantSave(t('savedSourcesAdded'));
 }
 
 function toggleDraftSource(sourceId) {
   const source = state.drawer?.sources.find((item) => item.id === sourceId);
   if (!source) return;
   source.enabled = source.enabled === false;
-  instantSave(t(source.enabled ? 'savedSourceOn' : 'savedSourceOff', source.label));
 }
 
 function removeDraftSource(sourceId) {
   if (!state.drawer) return;
-  const label = state.drawer.sources.find((source) => source.id === sourceId)?.label || '';
   state.drawer.sources = state.drawer.sources.filter((source) => source.id !== sourceId);
   state.drawer.removed.add(sourceId);
   renderSourceGroups();
-  instantSave(t('savedSourceRemoved', label));
 }
 
 function readTopicForm() {
@@ -1268,131 +1176,29 @@ async function saveTopic() {
   const problem = validateTopic(topic);
   if (problem) {
     setDrawerTab('topic');
-    notify('error', t(problem));
+    notify('error', t(problem), '', 'topic.invalid');
     els.form.elements.title.focus();
     return;
   }
-  if (!(await persistDrawer(topic))) return;
-  closeDrawer();
-  state.selectedTopicId = topic.id;
-}
-
-// Write the drawer state (topic + sources) and re-dispatch the schedule when
-// it changed. Shared by "Thema anlegen", instant save and undo.
-async function persistDrawer(topic, sourceList = state.drawer?.sources || [], removed = state.drawer?.removed || new Set()) {
-  const topics = collection(COLLECTIONS.topics);
-  const sources = collection(COLLECTIONS.sources);
-  if (!topics || !sources) {
-    notify('error', t('saveFailed'));
-    return false;
-  }
+  state.api?.status.clear('news.topic.invalid');
   const now = Date.now();
-  const previous = state.topics.find((item) => item.id === topic.id);
-  try {
-    await topics.upsert(topic);
-    for (const source of sourceList) {
-      await sources.upsert({ ...source, topic_id: topic.id, updated_at_ms: now });
-    }
-    for (const sourceId of removed) {
-      const doc = await sources.findOne(sourceId).exec();
-      await doc?.remove();
-    }
-  } catch (error) {
-    notify('error', t('saveFailed'), error?.message);
-    return false;
+  const writes = [write('put', COLLECTIONS.topics, topic)];
+  for (const source of state.drawer.sources) {
+    writes.push(write('put', COLLECTIONS.sources, { ...source, topic_id: topic.id, updated_at_ms: now }));
   }
+  for (const sourceId of state.drawer.removed) {
+    if (readOne(COLLECTIONS.sources, sourceId)) writes.push(write('remove', COLLECTIONS.sources, sourceId));
+  }
+  if (!(await Promise.all(writes)).every(Boolean)) return;
+  const previous = state.topics.find((item) => item.id === topic.id);
   const scheduleChanged = !previous
     || previous.cron_expr !== topic.cron_expr
     || previous.enabled !== topic.enabled
     || previous.title !== topic.title;
-  if (scheduleChanged) {
-    dispatch(buildScheduleCommand(topic)).catch((error) => notify('error', t('commandFailed'), error?.message));
-  }
-  // The digest follows the topic: only a daily, active topic keeps it.
-  if (digestActive(topic) !== Boolean(previous && digestActive(previous)) || (digestActive(topic) && !previous)) {
-    dispatch(buildScheduleCommand(topic, { digest: true })).catch((error) => notify('error', t('commandFailed'), error?.message));
-  }
-  return true;
-}
-
-// --- Instant save + undo (8 s), same pattern as the weekly digest ----------
-
-const DRAWER_UNDO_MS = 8000;
-
-function syncDrawerFoot() {
-  const foot = els.drawer?.querySelector('[data-drawer-create-foot]');
-  if (!foot) return;
-  foot.hidden = Boolean(state.drawer?.persisted);
-  const create = foot.querySelector('[data-action="save-topic"]');
-  if (create) create.textContent = t('createTopic');
-  const undo = els.drawer?.querySelector('[data-action="drawer-undo"]');
-  if (undo) undo.textContent = t('drawerUndo');
-}
-
-function drawerSnapshot() {
-  return {
-    topic: { ...state.drawer.topic },
-    sources: state.drawer.sources.map((source) => ({ ...source })),
-  };
-}
-
-async function instantSave(message) {
-  const drawer = state.drawer;
-  if (!drawer?.persisted) return; // a new topic is created once, with its name
-  const topic = readTopicForm();
-  if (validateTopic(topic)) return; // keep editing; nothing half-valid is stored
-  const before = drawer.saved || drawerSnapshot();
-  const removed = new Set(drawer.removed);
-  if (!(await persistDrawer(topic, drawer.sources, removed))) return;
-  if (state.drawer !== drawer) return;
-  drawer.removed.clear();
-  drawer.topic = topic;
-  drawer.saved = drawerSnapshot();
-  els.drawerTitle.textContent = topic.title;
-  showDrawerUndo(message, before);
-}
-
-function showDrawerUndo(message, before) {
-  const bar = els.drawer?.querySelector('[data-drawer-undo]');
-  if (!bar || !state.drawer) return;
-  bar.querySelector('[data-drawer-undo-text]').textContent = message;
-  bar.querySelector('[data-action="drawer-undo"]').hidden = false;
-  bar.hidden = false;
-  // Undo returns to the state before the first change of this burst.
-  if (!state.drawer.undo) state.drawer.undo = before;
-  clearTimeout(state.drawerUndoTimer);
-  state.drawerUndoTimer = setTimeout(hideDrawerUndo, DRAWER_UNDO_MS);
-}
-
-function hideDrawerUndo() {
-  clearTimeout(state.drawerUndoTimer);
-  const bar = els.drawer?.querySelector('[data-drawer-undo]');
-  if (bar) bar.hidden = true;
-  if (state.drawer) state.drawer.undo = null;
-}
-
-async function undoDrawerChange() {
-  const drawer = state.drawer;
-  const snapshot = drawer?.undo;
-  if (!snapshot) return;
-  const keep = new Set(snapshot.sources.map((source) => source.id));
-  const added = new Set(drawer.sources.filter((source) => !keep.has(source.id)).map((source) => source.id));
-  if (!(await persistDrawer(snapshot.topic, snapshot.sources, added))) return;
-  if (state.drawer !== drawer) return;
-  clearTimeout(state.drawerUndoTimer);
-  drawer.topic = { ...snapshot.topic };
-  drawer.sources = snapshot.sources.map((source) => ({ ...source }));
-  drawer.saved = drawerSnapshot();
-  drawer.undo = null;
-  drawer.removed.clear();
-  fillDrawerForm(drawer.topic);
-  renderSourceGroups();
-  const bar = els.drawer?.querySelector('[data-drawer-undo]');
-  if (bar) {
-    bar.querySelector('[data-drawer-undo-text]').textContent = t('drawerUndone');
-    bar.querySelector('[data-action="drawer-undo"]').hidden = true;
-    state.drawerUndoTimer = setTimeout(hideDrawerUndo, 2500);
-  }
+  closeDrawer();
+  state.selectedTopicId = topic.id;
+  if (scheduleChanged) dispatch(buildScheduleCommand(topic));
+  scheduleRender();
 }
 
 async function deleteTopic() {
@@ -1407,19 +1213,11 @@ async function deleteTopic() {
     button?.setAttribute('aria-label', t('deleteConfirm', topic.title));
     return;
   }
-  try {
-    await dispatch(buildScheduleCommand(topic, { deleted: true }));
-    if (digestOf(topic).enabled) await dispatch(buildScheduleCommand(topic, { deleted: true, digest: true }));
-  } catch (error) {
-    notify('error', t('commandFailed'), error?.message);
-    return;
-  }
+  // Zeitplan löschen als Befehl (ohne Warten; Fehler → Zone), Datensätze lokal entfernen.
+  dispatch(buildScheduleCommand(topic, { deleted: true }));
   const removeWhere = async (name, predicate) => {
-    const handle = collection(name);
-    if (!handle) return;
-    const docs = await handle.find().exec();
-    for (const doc of docs) {
-      if (predicate(doc)) await doc.remove();
+    for (const doc of state.api ? state.api.query(name, {}).get() : []) {
+      if (predicate(doc)) await write('remove', name, doc.id);
     }
   };
   await removeWhere(COLLECTIONS.posts, (doc) => doc.topic_id === topic.id);
@@ -1454,25 +1252,23 @@ function importTopics() {
     if (!file) return;
     try {
       const data = JSON.parse(await file.text());
-      const topics = collection(COLLECTIONS.topics);
-      const sources = collection(COLLECTIONS.sources);
       const idMap = new Map();
       const now = Date.now();
       for (const raw of Array.isArray(data.topics) ? data.topics : []) {
         const topic = normalizeTopic({ ...raw, id: newId('topic'), schedule_task_id: '' }, now);
         idMap.set(raw.id, topic.id);
-        await topics.upsert(topic);
-        dispatch(buildScheduleCommand(topic)).catch(() => {});
-        if (digestActive(topic)) dispatch(buildScheduleCommand(topic, { digest: true })).catch(() => {});
+        await write('put', COLLECTIONS.topics, topic);
+        dispatch(buildScheduleCommand(topic));
       }
       for (const raw of Array.isArray(data.sources) ? data.sources : []) {
         const topicId = idMap.get(raw.topic_id);
         if (!topicId) continue;
-        await sources.upsert({ ...raw, id: newId('source'), topic_id: topicId, status: authSourceFor(raw) ? 'needs_auth' : 'new', created_at_ms: now, updated_at_ms: now });
+        await write('put', COLLECTIONS.sources, { ...raw, id: newId('source'), topic_id: topicId, status: authSourceFor(raw) ? 'needs_auth' : 'new', created_at_ms: now, updated_at_ms: now });
       }
-      notify('success', t('importDone', idMap.size));
+      state.api?.status.clear('news.import');
+      notify('info', t('importDone', idMap.size), '', 'import.done');
     } catch (error) {
-      notify('error', t('importFailed'), error?.message);
+      notify('error', t('importFailed'), error?.message, 'import');
     }
   });
   input.click();

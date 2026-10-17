@@ -1,5 +1,7 @@
-import { loadModuleMessages } from '../../shared/i18n.js';
-import { openUniversalImporter } from '../../shared/universal-importer.js';
+import { openUniversalImporter } from 'ctox:shared/universal-importer.js';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
+import { buildContextChatCommand } from 'ctox:shared/context-chat.js';
+import { getActionIcon } from 'ctox:shared/icons.js';
 import { createMailContentEditor } from './editor/mail-content-editor.mjs';
 import { mountMailBody } from './lib/mail-body-renderer.mjs';
 import {
@@ -12,9 +14,25 @@ import {
   mailGroupTemplate,
 } from './mail-group-model.mjs';
 
-const STYLE_BUILD = '20260806-mail-v5';
 const MAIL_PAGE_SIZE = 50;
-const MAIL_READ_TIMEOUT_MS = 10_000;
+const COMPOSER_FIELDS = ['composeFrom', 'composeTo', 'composeCampaign', 'composeSubject', 'composeBody'];
+const MAIL_COLLECTIONS = [
+  'business_commands',
+  // Weiterleitungsziele: App-Liste der Plattform (business_apps ersetzt den V2-business_module_catalog, E48).
+  'business_apps',
+  'business_users',
+  'communication_accounts',
+  'communication_threads',
+  'communication_messages',
+  'outbound_campaigns',
+  'outbound_pipeline_items',
+  'outbound_engagements',
+  'outbound_messages',
+  'outbound_approvals',
+  // Plattform-Projektion des Mailservers (Kern §16.28, ctox-platform; lesen nur mit Mailserver-Recht, sonst forbidden
+  // → Collection fehlt, Verwaltung bleibt leer). Dokumente kind=runtime|domain|user, nie Passwörter/Secrets.
+  'mail_server_state',
+];
 const TERMINAL_COMMAND_STATUSES = new Set(['completed', 'failed', 'cancelled', 'blocked']);
 const DRAFT_SEND_STATUSES = new Set([
   '',
@@ -30,26 +48,23 @@ const FALLBACK_LABELS = {
     workspace: 'Arbeitsbereich',
     mail: 'Mail',
     compose: 'Neue Mail',
+    keepDraftTitle: 'Entwurf behalten?',
+    keepDraft: 'Als Entwurf speichern',
+    discardDraft: 'Verwerfen',
+    ok: 'OK',
     mailbox: 'Postfach',
     allMailboxes: 'Alle sichtbaren Postfächer',
-    noMailbox: 'Kein E-Mail-Postfach verbunden',
     search: 'Mails durchsuchen',
     folders: 'Ordner',
     inbox: 'Posteingang',
     unread: 'Ungelesen',
+    unknownPerson: 'Unbekannt',
     sent: 'Gesendet',
     drafts: 'Entwürfe',
     groups: 'E-Mail-Gruppen',
-    noGroups: 'Noch keine E-Mail-Gruppen',
     messages: 'Nachrichten',
     thread: 'Thread',
     campaign: 'E-Mail-Gruppe',
-    emptyTitle: 'Keine E-Mails',
-    emptyBody: 'Nachrichten erscheinen nach der ersten Synchronisierung.',
-    syncingTitle: 'Mail wird synchronisiert',
-    syncingBody: 'Postfächer und Nachrichten werden gerade geladen.',
-    noSelectionTitle: 'Keine Mail ausgewählt',
-    noSelectionBody: 'Wähle eine E-Mail oder E-Mail-Gruppe aus.',
     reply: 'Antworten',
     openOutbound: 'In Outbound öffnen',
     requestApproval: 'Zur Freigabe',
@@ -83,22 +98,18 @@ const FALLBACK_LABELS = {
     failed: 'Fehler',
     active: 'Aktiv',
     paused: 'Pausiert',
-    refreshing: 'Wird aktualisiert…',
     accountShared: 'Geteilt',
     accountPersonal: 'Zugewiesen',
     manageMailboxes: 'Postfächer verwalten',
     administration: 'Administration',
     mailserverDomains: 'Mailserver-Domains',
-    noDomains: 'Keine Domain konfiguriert',
     createMailbox: 'Postfach anlegen',
     emailAddress: 'E-Mail-Adresse',
     ownerUser: 'Nutzer-ID oder Login',
     initialPassword: 'Initialpasswort',
     existingMailboxes: 'Vorhandene Postfächer',
-    mailboxSecurity: 'Das Passwort wird nach der Einrichtung aus dem Command entfernt.',
+    mailboxSecurity: 'Das Passwort wird nach der Einrichtung aus dem Auftrag entfernt.',
     reload: 'Neu laden',
-    loadingMailboxes: 'Mailserver-Konfiguration wird geladen…',
-    noManagedMailboxes: 'Noch keine Mailserver-Postfächer.',
     assignedTo: 'Zugeordnet zu',
     unassigned: 'Nicht zugeordnet',
     delete: 'Löschen',
@@ -113,26 +124,23 @@ const FALLBACK_LABELS = {
     workspace: 'Workspace',
     mail: 'Mail',
     compose: 'New email',
+    keepDraftTitle: 'Keep draft?',
+    keepDraft: 'Save as draft',
+    discardDraft: 'Discard',
+    ok: 'OK',
     mailbox: 'Mailbox',
     allMailboxes: 'All visible mailboxes',
-    noMailbox: 'No email mailbox connected',
     search: 'Search mail',
     folders: 'Folders',
     inbox: 'Inbox',
     unread: 'Unread',
+    unknownPerson: 'Unknown', // v4-allow: en
     sent: 'Sent',
     drafts: 'Drafts',
     groups: 'Email groups',
-    noGroups: 'No email groups yet',
     messages: 'messages',
     thread: 'Thread',
     campaign: 'Email group',
-    emptyTitle: 'No email',
-    emptyBody: 'Messages appear after the first synchronization.',
-    syncingTitle: 'Syncing mail',
-    syncingBody: 'Mailboxes and messages are loading.',
-    noSelectionTitle: 'No email selected',
-    noSelectionBody: 'Select an email or email group.',
     reply: 'Reply',
     openOutbound: 'Open in Outbound',
     requestApproval: 'Request approval',
@@ -166,22 +174,18 @@ const FALLBACK_LABELS = {
     failed: 'Failed',
     active: 'Active',
     paused: 'Paused',
-    refreshing: 'Refreshing…',
     accountShared: 'Shared',
     accountPersonal: 'Assigned',
     manageMailboxes: 'Manage mailboxes',
     administration: 'Administration',
     mailserverDomains: 'Mailserver domains',
-    noDomains: 'No domain configured',
     createMailbox: 'Create mailbox',
     emailAddress: 'Email address',
     ownerUser: 'User ID or login',
     initialPassword: 'Initial password',
     existingMailboxes: 'Existing mailboxes',
-    mailboxSecurity: 'The password is removed from the command after setup.',
+    mailboxSecurity: 'The password is removed from the request after setup.',
     reload: 'Reload',
-    loadingMailboxes: 'Loading mailserver configuration…',
-    noManagedMailboxes: 'No mailserver mailboxes yet.',
     assignedTo: 'Assigned to',
     unassigned: 'Not assigned',
     delete: 'Delete',
@@ -194,37 +198,47 @@ const FALLBACK_LABELS = {
   },
 };
 
-export async function mount(ctx) {
-  await ensureStyles();
-  const htmlUrl = new URL('./index.html', import.meta.url);
-  const version = String(import.meta.url).split('?v=')[1] || STYLE_BUILD;
-  htmlUrl.searchParams.set('v', version);
-  ctx.host.innerHTML = await fetch(htmlUrl).then((response) => response.text());
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
+// App-API 4.0 (V4-PORT.md): mount(root, api, { restored }) → { unmount, snapshot }.
+export async function mount(host, api, { restored } = {}) {
+  if (!host.dataset.app) host.dataset.app = 'mail';
+  api.shell.setTitle('Mail');
+  api.setVisible(['communication_accounts', 'communication_threads', 'communication_messages', 'outbound_messages']);
+  host.innerHTML = await fetch(new URL('./index.html', import.meta.url)).then((response) => response.text());
 
-  const root = ctx.host.querySelector('[data-mail-root]');
+  const root = host.querySelector('[data-mail-root]');
   if (!root) throw new Error('mail: root missing after fragment mount');
+  // Pane-Grammatik (Suche, Bänder, Filter) verdrahtet die App selbst (PORTING R14) statt Shell-DOM-Heuristik.
+  autoWirePaneGrammar(root);
 
-  const messages = await loadModuleMessages(import.meta.url, ctx.locale, FALLBACK_LABELS);
-  const t = (key, fallback) => messages[key] ?? fallback ?? key;
+  const currentLocale = () => (String(api.shell.locale.get() || document.documentElement.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de');
+  const messages = { ...(FALLBACK_LABELS.de || {}), ...(FALLBACK_LABELS[currentLocale()] || {}) };
+  const t = (key, fallback) => {
+    const fromShell = api.shell.t(`mail.${key}`);
+    if (fromShell && fromShell !== `mail.${key}`) return fromShell;
+    return messages[key] ?? fallback ?? key;
+  };
+  // Nur Spiegel für die Darstellung; jede Mutation entscheidet der Core (api.actor).
+  const actorUser = () => ({ id: api.actor.id, user_id: api.actor.id, role: api.actor.role, display_name: api.actor.display_name, name: api.actor.display_name });
+  const actorPermissions = () => ({ list: api.actor.permissions.get() || [] });
+  const report = (code, text, level = 'error', ref) => api.status.report(ref ? { level, code, text: String(text || code), ref } : { level, code, text: String(text || code) });
+  const restoredView = restored && typeof restored === 'object' && restored.v === 1 ? restored : null;
   applyStaticLabels(root, t);
 
   const refs = collectRefs(root);
-  renderActionIcons(ctx, refs);
-  const collections = Object.fromEntries([
-    'business_commands',
-    'business_module_catalog',
-    'business_users',
-    'communication_accounts',
-    'communication_threads',
-    'communication_messages',
-    'outbound_campaigns',
-    'outbound_pipeline_items',
-    'outbound_engagements',
-    'outbound_messages',
-    'outbound_approvals',
-  ].map((name) => [name, ctx.db?.collection?.(name) || null]));
+  renderActionIcons(refs);
+  // Lesen nur über api.query (lokal, live, ohne Zeilendeckel). Fremd-Collection ohne Recht → forbidden → null.
+  const liveRows = new Map();
+  const collections = Object.fromEntries(MAIL_COLLECTIONS.map((name) => [name, { name }]));
+  // Schreiben über api.put (lokal sofort, Outbox); abgelehnte Writes meldet die Zone.
+  async function putRecord(collection, record) {
+    if (!collection) throw new Error('Required mail collection is missing');
+    const handle = api.put(collection.name, record);
+    await handle.local;
+    handle.result.then((result) => {
+      if (result?.status === 'rejected') report(`mail.write.${collection.name}`, result.reason || 'rejected');
+    });
+    return record;
+  }
 
   const view = {
     accounts: [],
@@ -251,11 +265,7 @@ export async function mount(ctx) {
     mailReadComplete: false,
     mailReadError: '',
     disposed: false,
-    readiness: null,
     refreshTimer: null,
-    emptyReadTimer: null,
-    activeRefreshes: 0,
-    refreshPending: false,
     refreshSequence: 0,
     lastSuccessfulMailSequence: 0,
     authorityDecisionSequence: 0,
@@ -284,53 +294,86 @@ export async function mount(ctx) {
   };
   const cleanups = [];
   const subscribedCollections = new Set();
-  const accountAuthorityCache = new Map();
 
-  const savedLeft = Number(ctx.storageScope?.get?.('ctox.mail.layout.leftWidth') || 300);
-  const savedRight = Number(ctx.storageScope?.get?.('ctox.mail.layout.rightWidth') || 480);
+  // Spaltenbreiten und Ansicht: Fensterzustand über snapshot()/restored (statt ctx.storageScope).
+  const savedLeft = Number(restoredView?.leftWidth || 300);
+  const savedRight = Number(restoredView?.rightWidth || 480);
   root.style.setProperty('--mail-left-width', `${clamp(savedLeft, 250, 420)}px`);
   root.style.setProperty('--mail-right-width', `${clamp(savedRight, 300, 620)}px`);
+  applyRestoredView(restoredView);
 
   wireEvents();
   wireCollectionSubscriptions();
-  wireReadiness();
-  const revalidateAccounts = () => {
-    accountAuthorityCache.clear();
-    scheduleRefresh();
-  };
-  const authorityRefreshTimer = window.setInterval(revalidateAccounts, 15_000);
-  cleanups.push(() => window.clearInterval(authorityRefreshTimer));
-  window.addEventListener('focus', revalidateAccounts);
-  cleanups.push(() => window.removeEventListener('focus', revalidateAccounts));
-  const revalidateWhenVisible = () => {
-    if (document.visibilityState === 'visible') revalidateAccounts();
-  };
-  document.addEventListener('visibilitychange', revalidateWhenVisible);
-  cleanups.push(() => document.removeEventListener('visibilitychange', revalidateWhenVisible));
+  // Live-Abo statt 15-s-Revalidierung und Fokus-Neuladen (PORTING R12): die lokale Collection ist die
+  // Wahrheit; der Core entzieht Konten durch Löschung der Projektion.
+  refreshData();
   render();
-  // Keep the app responsive when a local RxDB query stalls during reconnect.
-  // The first snapshot can finish after mount; later subscription updates use
-  // the same refresh path and retain the last successful rows.
-  void refreshData().then(() => {
-    if (view.disposed) return;
-    applyDeepLink(ctx.args);
-    render();
-  }).catch((error) => {
-    if (view.disposed) return;
-    view.mailReadError = String(error?.message || error);
-    view.loading = false;
+  restoreDrafts(restoredView);
+  const offRoute = api.shell.onRoute((event) => {
+    if (event?.to && event.to !== 'mail') return;
+    applyDeepLink(event?.params || {});
     render();
   });
+  cleanups.push(offRoute);
 
-  return () => {
-    view.disposed = true;
-    if (view.emptyReadTimer) window.clearTimeout(view.emptyReadTimer);
-    void view.contentEditor?.destroy?.();
-    if (view.refreshTimer) window.clearTimeout(view.refreshTimer);
-    for (const cleanup of cleanups) {
-      try { cleanup?.(); } catch (error) { console.warn('[mail] cleanup failed', error); }
-    }
+  let unmounted = false;
+  return {
+    unmount() {
+      if (unmounted) return;
+      unmounted = true;
+      view.disposed = true;
+      void view.contentEditor?.destroy?.();
+      if (view.refreshTimer) window.clearTimeout(view.refreshTimer);
+      for (const cleanup of cleanups) {
+        try { cleanup?.(); } catch (error) { console.warn('[mail] cleanup failed', error); }
+      }
+      host.replaceChildren();
+    },
+    snapshot() {
+      return {
+        v: 1,
+        leftWidth: parseInt(root.style.getPropertyValue('--mail-left-width'), 10) || 300,
+        rightWidth: parseInt(root.style.getPropertyValue('--mail-right-width'), 10) || 480,
+        accountKey: view.accountKey,
+        scopeType: view.scopeType,
+        scopeId: view.scopeId,
+        selectedKind: view.selectedKind,
+        selectedId: view.selectedId,
+        selectedAccountKey: view.selectedAccountKey,
+        page: view.page,
+        leftGrammar: structuredClone(view.leftGrammar),
+        listGrammar: structuredClone(view.listGrammar),
+        composer: refs.composer && !refs.composer.hidden ? composerDraft() : null,
+      };
+    },
   };
+
+  function applyRestoredView(saved) {
+    if (!saved) return;
+    for (const key of ['accountKey', 'scopeType', 'scopeId', 'selectedKind', 'selectedId', 'selectedAccountKey']) {
+      if (typeof saved[key] === 'string') view[key] = saved[key];
+    }
+    if (Number.isInteger(saved.page) && saved.page >= 0) view.page = saved.page;
+    if (saved.leftGrammar && typeof saved.leftGrammar === 'object') view.leftGrammar = normalizePaneGrammar(saved.leftGrammar, view.leftGrammar);
+    if (saved.listGrammar && typeof saved.listGrammar === 'object') view.listGrammar = normalizePaneGrammar(saved.listGrammar, view.listGrammar);
+    view.search = view.listGrammar.search || '';
+  }
+
+  // Offene Eingaben des Composers (Felder tragen nur data-Attribute, daher explizit über refs).
+  function composerDraft() {
+    return Object.fromEntries(COMPOSER_FIELDS.map((key) => [key, String(refs[key]?.value ?? '')]));
+  }
+
+  function restoreDrafts(saved) {
+    if (!saved?.composer || typeof saved.composer !== 'object') return;
+    openComposer();
+    for (const key of COMPOSER_FIELDS) {
+      const value = saved.composer[key];
+      if (typeof value !== 'string' || !refs[key]) continue;
+      if (refs[key].tagName === 'SELECT' && ![...refs[key].options].some((item) => item.value === value)) continue;
+      refs[key].value = value;
+    }
+  }
 
   function wireEvents() {
     refs.account?.addEventListener('change', () => {
@@ -352,7 +395,7 @@ export async function mount(ctx) {
     refs.openNav?.addEventListener('click', openMobileNavigation);
     refs.closeNav?.addEventListener('click', closeMobileNavigation);
     refs.closeDetail?.addEventListener('click', closeDetail);
-    refs.closeComposer?.addEventListener('click', closeComposer);
+    refs.closeComposer?.addEventListener('click', requestCloseComposer);
     refs.saveDraft?.addEventListener('click', () => submitComposer('draft'));
     refs.requestApproval?.addEventListener('click', () => submitComposer('approval'));
     refs.sendNow?.addEventListener('click', () => submitComposer('send'));
@@ -363,7 +406,6 @@ export async function mount(ctx) {
     refs.closeContentEditor?.addEventListener('click', closeGroupContentEditor);
     refs.saveContent?.addEventListener('click', saveGroupContent);
     refs.closeMailboxAdmin?.addEventListener('click', closeMailboxAdmin);
-    refs.reloadMailboxes?.addEventListener('click', loadMailserverConfig);
     refs.serverForm?.addEventListener('submit', saveMailserverRuntime);
     refs.domainForm?.addEventListener('submit', saveMailserverDomain);
     refs.toggleServer?.addEventListener('click', toggleMailserverRuntime);
@@ -380,7 +422,6 @@ export async function mount(ctx) {
     refs.confirmRoute?.addEventListener('click', confirmRoute);
     refs.prevPage?.addEventListener('click', () => changePage(-1));
     refs.nextPage?.addEventListener('click', () => changePage(1));
-    refs.retryRead?.addEventListener('click', async () => { await refreshData(); if (!view.disposed) render(); });
     refs.leftPane?.addEventListener('ctox-pane-grammar-change', (event) => {
       if (event.target !== refs.leftPane) return;
       view.leftGrammar = normalizePaneGrammar(event.detail, view.leftGrammar);
@@ -483,6 +524,21 @@ export async function mount(ctx) {
       }
     });
     root.addEventListener('keydown', (event) => {
+      // Esc schließt die Verfassen-Schublade wie in Outlook/Apple Mail (FIX9a): leer sofort, sonst Rückfrage.
+      if (event.key === 'Escape' && refs.composer && !refs.composer.hidden) {
+        event.preventDefault();
+        event.stopPropagation();
+        requestCloseComposer();
+        return;
+      }
+      // Esc schließt auch die Mail-Einstellungen (FIX10); der Fokus geht zurück auf den Einstellungen-Knopf.
+      if (event.key === 'Escape' && refs.mailboxAdmin && !refs.mailboxAdmin.hidden) {
+        event.preventDefault();
+        event.stopPropagation();
+        closeMailboxAdmin();
+        refs.settings?.focus();
+        return;
+      }
       if (!['Enter', ' '].includes(event.key) || event.target.closest('input, textarea, select, button')) return;
       const record = event.target.closest('[data-mail-record-kind]');
       if (!record) return;
@@ -490,115 +546,52 @@ export async function mount(ctx) {
       record.click();
     });
 
-    const hashHandler = () => {
-      if (!String(location.hash || '').startsWith('#mail')) return;
-      applyDeepLink();
-      render();
-    };
-    window.addEventListener('hashchange', hashHandler);
-    cleanups.push(() => window.removeEventListener('hashchange', hashHandler));
-    const onAppLaunch = (event) => {
-      applyDeepLink(event?.detail?.args);
-      render();
-    };
-    ctx.host.addEventListener('ctox-business-os-app-launch', onAppLaunch);
-    cleanups.push(() => ctx.host.removeEventListener('ctox-business-os-app-launch', onAppLaunch));
   }
 
   function wireCollectionSubscriptions() {
-    for (const [name, collection] of Object.entries(collections)) {
+    for (const name of MAIL_COLLECTIONS) {
       if (subscribedCollections.has(name)) continue;
-      // An installed app only gets data grants for its own collections;
-      // shared ones such as business_commands are denied by design. Reading
-      // `collection.$` then throws, and the whole Mail app failed to mount
-      // ("Mail konnte nicht geladen werden", thesen 22.09.2026). A denied
-      // optional collection is skipped; the app works without it.
-      let stream = null;
+      subscribedCollections.add(name);
+      // Eine installierte App bekommt Fremd-Collections nur mit Recht; ohne Recht → forbidden. Die App
+      // läuft ohne diese Collection weiter (vorher brach der Mount ab, thesen 22.09.2026).
       try {
-        stream = collection?.$ || null;
+        const off = api.query(name, {}).subscribe((rows) => {
+          liveRows.set(name, rows);
+          scheduleRefresh();
+        });
+        cleanups.push(off);
       } catch (error) {
         if (!isPermissionDenied(error)) throw error;
         collections[name] = null;
-        continue;
       }
-      if (!stream) continue;
-      const subscription = stream.subscribe(() => scheduleRefresh());
-      subscribedCollections.add(name);
-      cleanups.push(() => subscription.unsubscribe?.());
     }
   }
 
-  function wireReadiness() {
-    const names = ['communication_accounts', 'communication_threads', 'communication_messages'];
-    const snapshots = new Map();
-    const updateReadiness = () => {
-      view.readiness = { ready: names.every((name) => snapshots.get(name)?.ready === true) };
-    };
-    if (typeof ctx.sync?.collectionReadiness === 'function') {
-      for (const name of names) snapshots.set(name, ctx.sync.collectionReadiness(name) || null);
-      updateReadiness();
-    }
-    if (typeof ctx.sync?.subscribeCollectionReadiness === 'function') {
-      for (const name of names) {
-        const unsubscribe = ctx.sync.subscribeCollectionReadiness(name, (snapshot) => {
-        snapshots.set(name, snapshot || null);
-        updateReadiness();
-        if (!view.disposed) {
-          scheduleRefresh();
-          renderList();
-        }
-      });
-      cleanups.push(() => unsubscribe?.());
-      }
-    }
+  function readAll(collection, required = false) {
+    if (!collection) return required ? new Error('Mail collection missing') : [];
+    return liveRows.get(collection.name) || [];
   }
 
   function scheduleRefresh() {
     if (view.disposed) return;
-    view.refreshPending = true;
-    // Coalesce a notification burst without moving its deadline forward.
-    // Keep at most two local reads active when replication emits continuously.
-    if (view.refreshTimer || view.activeRefreshes >= 2) return;
-    view.refreshTimer = window.setTimeout(async () => {
+    // Entprellung einer Emissionsfolge mehrerer Collections; Lesen ist lokal und synchron.
+    if (view.refreshTimer) return;
+    view.refreshTimer = window.setTimeout(() => {
       view.refreshTimer = null;
       if (view.disposed) return;
-      view.refreshPending = false;
-      try {
-        await refreshData();
-      } catch (error) {
-        view.mailReadError = String(error?.message || error);
-        view.loading = false;
-      }
+      refreshData();
       if (!view.disposed) render();
     }, 120);
   }
 
-  async function refreshData() {
-    if (view.activeRefreshes >= 2) {
-      view.refreshPending = true;
-      return;
-    }
-    view.activeRefreshes += 1;
+  function refreshData() {
     try {
-      return await readSnapshot();
-    } finally {
-      view.activeRefreshes -= 1;
-      if (view.refreshPending && view.activeRefreshes < 2 && !view.disposed) scheduleRefresh();
+      readSnapshot();
+      api.status.clear('mail.read');
+    } catch (error) {
+      console.error('[mail] read failed', error);
+      report('mail.read', error?.message || error);
     }
-  }
-
-  function readNativeAccount(collection, accountKey, options) {
-    const cached = accountAuthorityCache.get(accountKey);
-    if (cached && Date.now() - cached.at < 2_000) return cached.promise;
-    const entry = {
-      at: Date.now(),
-      promise: Promise.resolve().then(() => ctx.readNativeCollectionDocument(collection, accountKey, options)),
-    };
-    accountAuthorityCache.set(accountKey, entry);
-    entry.promise.catch(() => {
-      if (accountAuthorityCache.get(accountKey) === entry) accountAuthorityCache.delete(accountKey);
-    });
-    return entry.promise;
   }
 
   function closeAccountDerivedSurfaces() {
@@ -634,8 +627,8 @@ export async function mount(ctx) {
   }
 
   function applyVerifiedAccounts(accounts) {
-    const allowed = new Set(accounts.map((account) => account.account_key));
-    const accessContracted = view.accounts.some((account) => !allowed.has(account.account_key));
+    const allowed = new Set(accounts.map((account) => account.id));
+    const accessContracted = view.accounts.some((account) => !allowed.has(account.id));
     view.accounts = accounts;
     if (!accessContracted) return false;
     view.threads = view.threads.filter((thread) => allowed.has(thread.account_key));
@@ -648,20 +641,15 @@ export async function mount(ctx) {
     return true;
   }
 
-  async function readSnapshot() {
+  function readSnapshot() {
     const sequence = ++view.refreshSequence;
-    let recoveredCollection = false;
-    for (const name of ['communication_accounts', 'communication_threads', 'communication_messages']) {
-      if (collections[name]) continue;
-      try {
-        collections[name] = ctx.db?.collection?.(name) || null;
-        recoveredCollection ||= Boolean(collections[name]);
-      } catch { /* surfaced below */ }
+    if (collections.mail_server_state) {
+      Object.assign(view.mailserver, mailserverStateFromRows(readAll(collections.mail_server_state)));
+      if (view.mailserver.open) renderMailboxAdmin();
     }
-    if (recoveredCollection) wireCollectionSubscriptions();
     const reads = [
       readAll(collections.business_commands),
-      readAll(collections.business_module_catalog),
+      readAll(collections.business_apps),
       readAll(collections.business_users),
       readAll(collections.communication_accounts, true),
       readAll(collections.communication_threads, true),
@@ -671,33 +659,11 @@ export async function mount(ctx) {
       readAll(collections.outbound_messages),
       readAll(collections.outbound_approvals),
     ];
-    // Check the account before waiting for unrelated collection reads. A slow
-    // campaign query must not keep a revoked mailbox visible until it times out.
-    const accountRead = await reads[3];
-    if (view.disposed) return;
-    const accountCandidates = Array.isArray(accountRead)
-      ? accountRead : (view.accounts.length ? view.accounts : null);
-    let authorizedAccounts = null;
-    if (accountCandidates) {
-      try {
-        authorizedAccounts = await authoritativeVisibleEmailAccounts(
-          accountCandidates,
-          ctx.session?.user || {},
-          typeof ctx.readNativeCollectionDocument === 'function' ? readNativeAccount : null,
-        );
-      } catch (error) {
-        if (sequence > view.authorityDecisionSequence) {
-          view.authorityDecisionSequence = sequence;
-          view.mailReadError = String(error?.message || error);
-          // A stale local snapshot cannot prove that access still exists.
-          // Keep persisted RxDB data intact, but hide it until native authority
-          // has confirmed this account again.
-          hideUnverifiedMail();
-          view.loading = false;
-        }
-        return;
-      }
-    }
+    // Konten nur aus der Collection communication_accounts (Projektion des Cores). Der frühere native
+    // Gegenlesepfad (readNativeCollectionDocument) entfällt: der Core synchronisiert nur sichtbare Konten
+    // und entzieht sie durch Löschung (V4-PORT.md OFFEN).
+    const accountRead = reads[3];
+    const authorizedAccounts = Array.isArray(accountRead) ? visibleEmailAccounts(accountRead, actorUser()).sort(sortAccount) : null;
     if (authorizedAccounts && sequence > view.authorityDecisionSequence) {
       view.authorityDecisionSequence = sequence;
       if (!authorizedAccounts.length) {
@@ -707,10 +673,9 @@ export async function mount(ctx) {
         view.loading = false;
         return;
       }
-      if (applyVerifiedAccounts(authorizedAccounts)) render();
+      applyVerifiedAccounts(authorizedAccounts);
     }
-    const snapshots = await Promise.all(reads);
-    if (view.disposed) return;
+    const snapshots = reads;
     const failedRead = [3, 4, 5].map((index) => snapshots[index])
       .find((snapshot) => snapshot instanceof Error);
     const [commands, catalogs, users, accounts, threads, communicationMessages, campaigns, engagements, outboundMessages, approvals]
@@ -721,15 +686,13 @@ export async function mount(ctx) {
       if (authorizedAccounts) {
         view.authorityDecisionSequence = sequence;
         view.accounts = authorizedAccounts;
-        const visibleAccountKeys = new Set(view.accounts.map((account) => account.account_key));
+        const visibleAccountKeys = new Set(view.accounts.map((account) => account.id));
         if (accounts && threads && communicationMessages) {
           view.threads = threads.filter((thread) => thread.channel === 'email' && !isDeleted(thread) && visibleAccountKeys.has(thread.account_key));
           view.communicationMessages = communicationMessages.filter((message) => message.channel === 'email' && !isDeleted(message) && visibleAccountKeys.has(message.account_key));
           view.lastSuccessfulMailSequence = sequence;
           view.mailReadComplete = true;
-          // Keep a timed-out empty mailbox actionable until replication reports
-          // readiness or the selected folder actually contains records.
-          if (view.readiness?.ready !== false || currentRecords().length) view.mailReadError = '';
+          view.mailReadError = '';
         } else {
           view.threads = view.threads.filter((thread) => visibleAccountKeys.has(thread.account_key));
           view.communicationMessages = view.communicationMessages.filter((message) => visibleAccountKeys.has(message.account_key));
@@ -746,13 +709,13 @@ export async function mount(ctx) {
     }
     if (sequence >= view.lastAppliedAuxiliarySequence) {
       if (commands) view.commands = commands.filter((command) => !isDeleted(command));
-      if (catalogs) view.routeDestinations = routeDestinationsFromCatalog(catalogs, ctx.permissions);
+      if (catalogs) view.routeDestinations = routeDestinationsFromCatalog(catalogs, actorPermissions());
       if (users) view.users = users.filter((user) => !isDeleted(user) && user.active !== false).sort((a, b) => userDisplayName(a).localeCompare(userDisplayName(b)));
-      if (campaigns || outboundMessages) view.campaigns = visibleMailCampaigns(campaigns || view.campaigns, ctx.session?.user || {}, view.accounts, outboundMessages || view.outboundMessages);
+      if (campaigns || outboundMessages) view.campaigns = visibleMailCampaigns(campaigns || view.campaigns, actorUser(), view.accounts, outboundMessages || view.outboundMessages);
       if (engagements) view.engagements = engagements.filter((engagement) => !isDeleted(engagement));
       if (outboundMessages) view.outboundMessages = outboundMessages.filter((message) => (
         !isDeleted(message) && (!message.channel || message.channel === 'email')
-        && view.accounts.some((account) => account.account_key === (message.communication_account_key || message.sender_account_id))
+        && view.accounts.some((account) => account.id === (message.communication_account_key || message.sender_account_id))
       )).sort(sortUpdatedDesc);
       if (approvals) view.approvals = approvals.filter((approval) => !isDeleted(approval));
       view.lastAppliedAuxiliarySequence = sequence;
@@ -784,13 +747,13 @@ export async function mount(ctx) {
     if (!refs.account) return;
     const current = view.accountKey;
     refs.account.innerHTML = '';
-    refs.account.append(option('all', view.accounts.length ? t('allMailboxes', 'Alle sichtbaren Postfächer') : t('noMailbox', 'Kein E-Mail-Postfach verbunden')));
+    refs.account.append(option('all', t('allMailboxes', 'Alle sichtbaren Postfächer')));
     for (const account of view.accounts) {
       const profile = accountProfile(account);
-      const kind = accountOwnedByCurrentUser(account, ctx.session?.user || {})
+      const kind = accountOwnedByCurrentUser(account, actorUser())
         ? t('accountPersonal', 'Persönlich')
         : t('accountShared', 'Gemeinsam');
-      refs.account.append(option(account.account_key, `${account.address || account.account_key} · ${kind}`));
+      refs.account.append(option(account.id, `${account.address || account.id} · ${kind}`));
       void profile;
     }
     refs.account.value = current || 'all';
@@ -816,7 +779,7 @@ export async function mount(ctx) {
     });
     writePaneCounts(refs.leftPane, { queues: queueRows.length, campaigns: visibleGroups.length }, mailCountsKnown(view));
     refs.leftPane.dataset.mailView = view.leftGrammar.view;
-    syncViewToggleButton(ctx, refs.leftPane, view.leftGrammar.view, t);
+    syncViewToggleButton(refs.leftPane, view.leftGrammar.view, t);
     const search = view.leftGrammar.search;
     const sort = view.leftGrammar.filters.sort || 'recent';
     const sources = view.leftGrammar.band === 'campaigns'
@@ -848,22 +811,24 @@ export async function mount(ctx) {
     const showFolderSections = view.leftGrammar.band === 'queues' && sort === 'recent' && !search;
     refs.scopeList.innerHTML = rows.length ? rows.map((item) => {
       const scopeType = view.leftGrammar.band === 'campaigns' ? 'campaign' : 'queue';
-      const shape = scopeAsList ? 'mail-scope-card--line' : 'mail-scope-card--shard';
-      const meta = scopeAsList ? '' : `<span class="mail-scope-meta">${escapeHtml(mailCountsKnown(view) ? item.meta : t('refreshing', 'Wird aktualisiert…'))}</span>`;
+      // Ordner wie in Outlook/Apple Mail: eine Zeile mit Name und Zähler, keine Erklärzeile (Textdiät Regel 2).
+      const compact = scopeAsList || scopeType === 'queue';
+      const shape = compact ? 'mail-scope-card--line' : 'mail-scope-card--shard';
+      const meta = compact ? '' : `<span class="mail-scope-meta">${escapeHtml(item.meta)}</span>`;
       const section = showFolderSections && (item.id === 'inbound' || item.id === 'approval')
         ? `<div class="mail-scope-section-title">${escapeHtml(item.id === 'inbound' ? t('folders', 'Ordner') : t('workflows', 'Arbeitsabläufe'))}</div>`
         : '';
       return `${section}<button class="mail-scope-card ${shape}${view.scopeType === scopeType && view.scopeId === item.id ? ' is-active' : ''}" type="button" data-mail-scope="${scopeType}" data-mail-scope-id="${escapeAttribute(item.id)}" data-context-record-id="${escapeAttribute(item.id)}" data-context-record-type="${scopeType}" data-context-record-label="${escapeAttribute(item.title)}" data-context-label="${escapeAttribute(item.title)}">
         <span class="mail-scope-title">${escapeHtml(item.title)}</span>${meta}<span class="mail-scope-count">${escapeHtml(mailCountsKnown(view) ? (item.countLabel ?? item.count) : '…')}</span>
       </button>`;
-    }).join('') : `<div class="ctox-empty"><span>${escapeHtml(view.leftGrammar.band === 'campaigns' ? t('noGroups', 'Noch keine E-Mail-Gruppen') : t('noResults', 'Keine passenden Ordner'))}</span></div>`;
+    }).join('') : '';
     renderNavigationSelection();
     const groupsVisible = view.leftGrammar.band === 'campaigns';
     refs.navigationTitle.textContent = groupsVisible ? t('groups', 'E-Mail-Gruppen') : t('mailbox', 'Postfach');
     refs.newGroup.hidden = !groupsVisible;
-    const footer = `${mailCountsKnown(view) ? view.accounts.length : '…'} ${t('mailbox', 'Postfächer')} · ${mailCountsKnown(view) ? visibleGroups.length : '…'} ${t('groups', 'E-Mail-Gruppen')}`;
-    refs.sidebarFooter.textContent = footer;
-    refs.leftPane.__ctoxPaneGrammar?.setFooter?.(footer);
+    // Kein Zähler-Fuß in der Navigation (Textdiät Regel 5); die Zähler stehen an Reitern und Ordnern.
+    refs.sidebarFooter.textContent = '';
+    refs.leftPane.__ctoxPaneGrammar?.setFooter?.('');
   }
 
   function renderNavigationSelection() {
@@ -896,10 +861,10 @@ export async function mount(ctx) {
     refs.listTitle.textContent = view.listGrammar.band === 'outbound' && ['all', 'inbound'].includes(view.scopeId)
       ? t('sent', 'Gesendet') : scopeLabel;
     refs.listPane.dataset.mailView = view.listGrammar.view;
-    syncViewToggleButton(ctx, refs.listPane, view.listGrammar.view, t);
+    syncViewToggleButton(refs.listPane, view.listGrammar.view, t);
     writePaneCounts(refs.listPane, counts, mailCountsKnown(view));
     const range = !mailCountsKnown(view) ? '…' : allRows.length ? `${pageStart + 1}–${pageStart + rows.length} / ${allRows.length}` : '0';
-    const footer = `${range} ${t('messages', 'Nachrichten')} · ${view.accountKey ? accountLabel(view.accountKey) : t('allMailboxes', 'alle Postfächer')}`;
+    const footer = `${range} ${t('messages', 'Nachrichten')}${view.accountKey ? ` · ${accountLabel(view.accountKey)}` : ''}`;
     refs.listFooter.textContent = footer;
     refs.prevPage.disabled = view.page === 0;
     refs.nextPage.disabled = view.page >= maxPage;
@@ -908,57 +873,41 @@ export async function mount(ctx) {
     renderListSelection();
     renderBulkBar(rows, allRows);
 
-    refs.readError.hidden = !view.mailReadError;
-    refs.readErrorText.textContent = view.mailReadError
-      ? t('mailReadError', 'Mail-Daten konnten nicht sicher geladen werden. Bitte erneut versuchen.')
-      : '';
-
-    const shouldSync = view.loading || (view.readiness?.ready === false && (!view.mailReadComplete || view.accounts.length > 0));
-    // Bound every empty syncing view, including a folder selected after mount.
-    // Do not restart the deadline on each replication notification.
-    if (allRows.length || !shouldSync || view.mailReadError) {
-      if (view.emptyReadTimer) window.clearTimeout(view.emptyReadTimer);
-      view.emptyReadTimer = null;
-    } else if (!view.emptyReadTimer) {
-      view.emptyReadTimer = window.setTimeout(() => {
-        view.emptyReadTimer = null;
-        if (view.disposed || view.mailReadError || currentRecords().length) return;
-        if (!view.loading && view.readiness?.ready !== false) return;
-        view.mailReadError = 'Mail sync did not complete';
-        view.loading = false;
-        renderList();
-      }, MAIL_READ_TIMEOUT_MS);
-    }
-    refs.listEmpty.hidden = allRows.length > 0;
-    if (!allRows.length) {
-      refs.emptyTitle.textContent = view.mailReadError
-        ? t('mailReadErrorTitle', 'Postfach derzeit nicht verfügbar')
-        : shouldSync ? t('syncingTitle', 'Mail wird synchronisiert') : t('emptyTitle', 'Keine E-Mails');
-      refs.emptyBody.textContent = view.mailReadError
-        ? t('mailReadErrorBody', 'Die Nachrichten konnten nicht gelesen werden. Bitte erneut versuchen.')
-        : shouldSync ? t('syncingBody', 'Postfächer und Nachrichten werden gerade geladen.') : t('emptyBody', 'Nachrichten erscheinen nach der ersten Synchronisierung.');
-    }
+    // Leere Liste rendert nichts; Lesefehler gehen in die Zustandszone (PORTING R11, refreshData).
   }
 
   // Two genuinely different shapes for the same record:
   //   shard - bold subject plus one or two meta lines (sender, status, group,
   //           delivery progress) and generous padding;
   //   line  - exactly one dense row: subject and a single short meta (time).
+  // Absender/Empfänger in der Liste: Name oder Adresse, sonst „Unbekannt“ – nie eine Roh-ID
+  // (Konto-/Thread-Schlüssel wie „communication--001“). Textdiät Regel 4.
+  function mailPersonLabel(...candidates) {
+    for (const raw of candidates) {
+      const value = String(raw ?? '').trim();
+      if (!value) continue;
+      const address = value.replace(/^[a-z][a-z0-9_-]*:(?=[^@\s]+@)/i, '');
+      if (address.includes('@')) return address;
+      if (/\s/.test(value) || !/[-_:\d]/.test(value)) return value;
+    }
+    return t('unknownPerson', 'Unbekannt');
+  }
+
   function renderRecordRow(record) {
     const asList = view.listGrammar.view === 'list';
     const shape = asList ? 'mail-record-row--line' : 'mail-record-row--shard';
     if (record.__kind === 'thread') {
       const latest = latestMessageForThread(record, filteredAccountMessages());
       const sender = latest?.direction === 'outbound'
-        ? (latest.recipient_addresses_json?.[0] || record.participant_keys_json?.[0] || record.account_key)
-        : (latest?.sender_display || latest?.sender_address || record.participant_keys_json?.[0] || record.account_key);
+        ? mailPersonLabel(latest.recipient_addresses_json?.[0], record.participant_keys_json?.[0])
+        : mailPersonLabel(latest?.sender_display, latest?.sender_address, record.participant_keys_json?.[0]);
       const subject = latest?.subject || record.subject || '(Kein Betreff)';
       const preview = latest?.preview || latest?.body_text || '';
       const selectionKey = mailRecordKey(record);
       const route = routeCommandForRecord(record, view.commands);
       const unread = Number(record.unread_count || 0);
       const status = route ? routeTargetLabel(route) : (unread ? `${unread} neu` : latest?.direction === 'outbound' ? t('sent', 'Gesendet') : t('inbound', 'Eingang'));
-      const open = `<div class="mail-record-row ${shape}${unread > 0 ? ' is-unread' : ''}" role="option" tabindex="0" data-mail-record-kind="thread" data-mail-record-id="${escapeAttribute(record.thread_key)}" data-mail-record-account="${escapeAttribute(record.account_key)}" data-context-record-id="${escapeAttribute(record.thread_key)}" data-context-record-type="communication_thread" data-context-record-label="${escapeAttribute(subject)}" data-context-label="${escapeAttribute(subject)}">
+      const open = `<div class="mail-record-row ${shape}${unread > 0 ? ' is-unread' : ''}" role="option" tabindex="0" data-mail-record-kind="thread" data-mail-record-id="${escapeAttribute(record.id)}" data-mail-record-account="${escapeAttribute(record.account_key)}" data-context-record-id="${escapeAttribute(record.id)}" data-context-record-type="communication_thread" data-context-record-label="${escapeAttribute(subject)}" data-context-label="${escapeAttribute(subject)}">
         <input class="mail-record-select" type="checkbox" data-mail-select-record="${escapeAttribute(selectionKey)}" aria-label="${escapeAttribute(subject)} auswählen" ${view.selectedRecords.has(selectionKey) ? 'checked' : ''} />`;
       const time = `<span class="mail-record-time">${escapeHtml(formatRecordTime(record.last_message_at))}</span>`;
       if (asList) {
@@ -969,12 +918,12 @@ export async function mount(ctx) {
       }
       const previewLine = compact(preview);
       return `${open}
-        <span class="mail-record-copy"><span class="mail-record-identity"><span class="mail-record-person">${escapeHtml(sender || '—')}</span><span class="mail-record-status">${escapeHtml(status)}</span></span><span class="mail-record-subject">${escapeHtml(subject)}</span>${previewLine ? `<span class="mail-record-preview">${escapeHtml(previewLine)}</span>` : ''}</span>
+        <span class="mail-record-copy"><span class="mail-record-identity"><span class="mail-record-person">${escapeHtml(sender)}</span><span class="mail-record-status">${escapeHtml(status)}</span></span><span class="mail-record-subject">${escapeHtml(subject)}</span>${previewLine ? `<span class="mail-record-preview">${escapeHtml(previewLine)}</span>` : ''}</span>
         ${time}
       </div>`;
     }
     const campaign = view.campaigns.find((item) => item.id === record.campaign_id);
-    const recipient = record.recipient_email || record.recipient_address_text || '—';
+    const recipient = mailPersonLabel(record.recipient_name, record.recipient_email, record.recipient_address_text);
     const status = messageStatusLabel(record, t);
     const selectionKey = mailRecordKey(record);
     const route = routeCommandForRecord(record, view.commands);
@@ -990,7 +939,7 @@ export async function mount(ctx) {
     </div>`;
     }
     const progress = messageProgressModel(record);
-    const progressIcons = progress.steps.map((step) => `<span class="mail-progress-step is-${escapeAttribute(step.state)}" title="${escapeAttribute(step.label)}" aria-label="${escapeAttribute(step.label)}">${mailActionIcon(ctx, step.icon, 11, 1.9)}</span>`).join('');
+    const progressIcons = progress.steps.map((step) => `<span class="mail-progress-step is-${escapeAttribute(step.state)}" title="${escapeAttribute(step.label)}" aria-label="${escapeAttribute(step.label)}">${mailActionIcon(step.icon, 11, 1.9)}</span>`).join('');
     const group = campaign?.name ? `${escapeHtml(campaign.name)} · ` : '';
     return `${open}
       <span class="mail-record-copy"><span class="mail-record-identity"><span class="mail-record-person">${escapeHtml(recipient)}</span><span class="mail-record-status">${group}${escapeHtml(status)}</span></span><span class="mail-record-subject">${escapeHtml(subject)}</span><span class="mail-record-progress" role="img" aria-label="${escapeAttribute(progress.ariaLabel)}"><span class="mail-progress-track"><i style="width:${progress.percent}%"></i></span><span class="mail-progress-steps">${progressIcons}</span><span class="mail-progress-label">${escapeHtml(displayStatus)}</span></span></span>
@@ -1032,7 +981,7 @@ export async function mount(ctx) {
   }
 
   function renderThreadDetail(threadKey, accountKey = '') {
-    const thread = filteredAccountThreads().find((item) => item.thread_key === threadKey && (!accountKey || item.account_key === accountKey));
+    const thread = filteredAccountThreads().find((item) => item.id === threadKey && (!accountKey || item.account_key === accountKey));
     if (!thread) return renderMissingDetail();
     const timeline = view.communicationMessages
       .filter((message) => messageBelongsToThread(message, thread))
@@ -1044,7 +993,7 @@ export async function mount(ctx) {
         <div><span class="ctox-pane-kicker">${escapeHtml(t('thread', 'Thread'))}</span><h3>${escapeHtml(thread.subject || timeline.at(-1)?.subject || '(Kein Betreff)')}</h3><div class="mail-detail-participants">${escapeHtml(participants)}</div></div>
         <div class="mail-detail-actions"><button type="button" class="ctox-button is-primary" data-mail-action="reply" data-mail-id="${escapeAttribute(threadKey)}">${escapeHtml(t('reply', 'Antworten'))}</button><button type="button" class="ctox-button" data-mail-action="route" data-mail-id="${escapeAttribute(threadKey)}">${escapeHtml(t('routeToApp', 'An App routen'))}</button></div>
       </header>
-      <div class="mail-thread-timeline">${timeline.length ? timeline.map(renderTimelineMessage).join('') : `<div class="ctox-empty"><span>${escapeHtml(t('emptyBody', 'Nachrichten erscheinen nach der ersten Synchronisierung.'))}</span></div>`}</div>
+      <div class="mail-thread-timeline">${timeline.map(renderTimelineMessage).join('')}</div>
       <footer class="ctox-pane-footer"><span>${escapeHtml(replyTo || thread.account_key)}</span></footer>
     </article>`;
     const bodyHosts = refs.detail.querySelectorAll('[data-mail-message-body]');
@@ -1125,16 +1074,13 @@ export async function mount(ctx) {
 
   function renderMissingDetail() {
     if (view.requestedSourceFocus) {
-      const ready = ['communication_threads', 'communication_messages', 'outbound_messages']
-        .every((name) => ctx.sync?.collectionReadiness?.(name)?.ready === true);
-      const title = ready ? 'Verknüpfte Mail nicht verfügbar' : 'Verknüpfte Mail wird synchronisiert';
-      const body = ready
-        ? 'Der Datensatz ist in diesem Postfach nicht sichtbar. Die Mail-Übersicht bleibt verfügbar.'
-        : 'Der Datensatz wird geöffnet, sobald die Mail-Daten bereit sind.';
-      refs.detail.innerHTML = `<div class="ctox-empty mail-detail-empty" role="status"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(body)}</span></div>`;
+      // Live-Daten sind lokal vollständig: was hier fehlt, ist in diesem Postfach nicht sichtbar.
+      report('mail.focus.unavailable', 'Verknüpfte Mail ist in diesem Postfach nicht sichtbar.', 'warn');
+      refs.detail.innerHTML = '';
       return;
     }
-    refs.detail.innerHTML = `<div class="ctox-empty mail-detail-empty"><strong>${escapeHtml(t('noSelectionTitle', 'Keine Mail ausgewählt'))}</strong><span>${escapeHtml(t('noSelectionBody', 'Wähle eine Nachricht oder Kampagne aus.'))}</span></div>`;
+    // Ohne Auswahl rendert der Inspektor nichts (PORTING R11, keine Hinweisbox).
+    refs.detail.innerHTML = '';
   }
 
   async function handleDetailAction(action, id) {
@@ -1144,7 +1090,7 @@ export async function mount(ctx) {
       return;
     }
     if (action === 'reply') {
-      const thread = filteredAccountThreads().find((item) => item.thread_key === id && (!view.selectedAccountKey || item.account_key === view.selectedAccountKey));
+      const thread = filteredAccountThreads().find((item) => item.id === id && (!view.selectedAccountKey || item.account_key === view.selectedAccountKey));
       if (!thread) return;
       const timeline = view.communicationMessages.filter((message) => messageBelongsToThread(message, thread));
       const inbound = [...timeline].sort((a, b) => timeOf(b.external_created_at) - timeOf(a.external_created_at)).find((message) => message.direction === 'inbound');
@@ -1156,7 +1102,7 @@ export async function mount(ctx) {
       return;
     }
     if (action === 'route') {
-      const record = filteredAccountThreads().find((item) => item.thread_key === id && (!view.selectedAccountKey || item.account_key === view.selectedAccountKey))
+      const record = filteredAccountThreads().find((item) => item.id === id && (!view.selectedAccountKey || item.account_key === view.selectedAccountKey))
         || filteredAccountOutboundMessages().find((item) => item.id === id);
       if (record) {
         view.selectedRecords.add(mailRecordKey({ ...record, __kind: record.thread_key ? 'thread' : 'outbound' }));
@@ -1170,23 +1116,23 @@ export async function mount(ctx) {
       return;
     }
     if (action === 'open-outbound') {
-      location.hash = `outbound?campaign_id=${encodeURIComponent(id)}`;
+      api.shell.navigate('outbound', { campaign_id: id });
       return;
     }
     if (action === 'refresh-status') {
       await runBusy(async () => {
-        await dispatchOutbound('outbound.provider.reconcile', id, { message_id: id });
-        showToast('Zustellstatus wurde mit dem Mailserver abgeglichen.');
+        dispatchOutbound('outbound.provider.reconcile', id, { message_id: id }, {
+          onDone: () => api.status.report({ level: 'info', code: 'mail.notice', text: 'Zustellstatus wurde mit dem Mailserver abgeglichen.' }),
+        });
       });
       return;
     }
     if (action === 'campaign-pause' || action === 'campaign-resume') {
       await runBusy(async () => {
-        await dispatchOutbound('outbound.campaign.status.set', id, {
+        dispatchOutbound('outbound.campaign.status.set', id, {
           campaign_id: id,
           status: action === 'campaign-pause' ? 'paused' : 'active',
-        });
-        showToast(action === 'campaign-pause' ? t('paused', 'Pausiert') : t('active', 'Aktiv'));
+        }, { doneText: action === 'campaign-pause' ? t('paused', 'Pausiert') : t('active', 'Aktiv') });
       });
       return;
     }
@@ -1194,23 +1140,24 @@ export async function mount(ctx) {
     if (!message) return;
     await runBusy(async () => {
       if (action === 'request-approval') {
-        await dispatchOutbound('outbound.message.request_approval', id, { message_id: id });
-        showToast(t('approvalRequested', 'Entwurf wurde zur Freigabe eingereicht.'));
+        dispatchOutbound('outbound.message.request_approval', id, { message_id: id }, { doneText: t('approvalRequested', 'Entwurf wurde zur Freigabe eingereicht.') });
       } else if (action === 'approve') {
-        await dispatchOutbound('outbound.message.approve', id, { message_id: id });
-        showToast(t('approved', 'Nachricht wurde freigegeben.'));
+        dispatchOutbound('outbound.message.approve', id, { message_id: id }, { doneText: t('approved', 'Nachricht wurde freigegeben.') });
       } else if (action === 'send') {
-        await dispatchOutbound('outbound.message.send_approved', id, { message_id: id });
-        showToast(t('queued', 'Nachricht wurde in die Mailserver-Queue eingereiht.'));
+        dispatchOutbound('outbound.message.send_approved', id, { message_id: id }, { doneText: t('queued', 'Nachricht wurde in die Mailserver-Queue eingereiht.') });
       }
     });
   }
 
+  // Schubladen liegen nie übereinander (FIX10): wer eine öffnet, schließt die anderen. Die Verfassen-Schublade mit
+  // Inhalt wird nicht still verworfen, sondern fragt wie beim Schließen („Entwurf behalten?“).
   function openComposer(seed = {}) {
+    closeMailboxAdmin();
+    closeGroupEditor();
     refs.composer.hidden = false;
     refs.composerTitle.textContent = seed.series ? t('seriesEmail', 'Serien-E-Mail') : t('compose', 'Neue Mail');
     refs.composerKicker.textContent = seed.series ? t('campaign', 'Kampagne') : t('draft', 'Entwurf');
-    refs.composeFrom.value = seed.accountKey || view.accountKey || view.accounts[0]?.account_key || '';
+    refs.composeFrom.value = seed.accountKey || view.accountKey || view.accounts[0]?.id || '';
     refs.composeTo.value = Array.isArray(seed.to) ? seed.to.join('\n') : (seed.to || '');
     refs.composeCampaign.value = seed.campaignId || (view.scopeType === 'campaign' ? view.scopeId : '');
     refs.composeSubject.value = seed.subject || '';
@@ -1224,13 +1171,47 @@ export async function mount(ctx) {
     setComposerStatus('');
   }
 
+  // Ungespeicherter Inhalt = Empfänger, Betreff oder Text (Absender und Gruppe sind vorbelegt).
+  function composerHasContent() {
+    return ['composeTo', 'composeSubject', 'composeBody'].some((key) => String(refs[key]?.value ?? '').trim() !== '');
+  }
+
+  // Schließen per × oder Esc (FIX9a, Standard Outlook/Apple Mail): leer → sofort zu; sonst „Entwurf behalten?“ über
+  // api.shell.dialog. Behalten speichert den Entwurf, Verwerfen schließt ohne Speichern, Abbrechen (Esc) bleibt offen.
+  // (Funktion steht hinter dem return von mount → kein let/const davor; Merker am Element.)
+  async function requestCloseComposer() {
+    if (!refs.composer || refs.composer.hidden || refs.composer.dataset.mailAsking) return;
+    if (!composerHasContent()) { closeComposer(); return; }
+    refs.composer.dataset.mailAsking = '1';
+    let answer = null;
+    try {
+      answer = await api.shell.dialog({
+        kind: 'select',
+        title: t('keepDraftTitle', 'Entwurf behalten?'),
+        options: [{ value: 'keep', label: t('keepDraft', 'Als Entwurf speichern') }, { value: 'discard', label: t('discardDraft', 'Verwerfen') }],
+        default: 'keep',
+        confirm_label: t('ok', 'OK'),
+      });
+    } catch { answer = null; } finally { delete refs.composer.dataset.mailAsking; }
+    if (answer === 'keep') await submitComposer('draft');
+    else if (answer === 'discard') closeComposer();
+    else refs.composeTo?.focus();
+  }
+
+  // Verfassen-Schublade vor dem Öffnen einer anderen schließen; true = sie ist zu (leer, gespeichert oder verworfen).
+  async function releaseComposer() {
+    if (!refs.composer || refs.composer.hidden) return true;
+    await requestCloseComposer();
+    return refs.composer.hidden;
+  }
+
   function populateComposerSelects() {
     if (!refs.composeFrom || !refs.composeCampaign) return;
     const currentFrom = refs.composeFrom.value;
     refs.composeFrom.innerHTML = '';
     refs.composeFrom.append(option('', t('missingSender', 'Bitte ein Absenderpostfach auswählen.')));
-    for (const account of view.accounts) refs.composeFrom.append(option(account.account_key, account.address || account.account_key));
-    refs.composeFrom.value = view.accounts.some((account) => account.account_key === currentFrom) ? currentFrom : (view.accountKey || view.accounts[0]?.account_key || '');
+    for (const account of view.accounts) refs.composeFrom.append(option(account.id, account.address || account.id));
+    refs.composeFrom.value = view.accounts.some((account) => account.id === currentFrom) ? currentFrom : (view.accountKey || view.accounts[0]?.id || '');
 
     const currentCampaign = refs.composeCampaign.value;
     refs.composeCampaign.innerHTML = '';
@@ -1257,35 +1238,31 @@ export async function mount(ctx) {
       return;
     }
     await runBusy(async () => {
-      setComposerStatus(t('refreshing', 'Wird aktualisiert…'));
+      setComposerStatus('');
       const campaign = await ensureComposeCampaign(input.campaignId, { ...input, recipientCount: recipients.length });
       let lastMessageId = '';
       const contentRevisionId = String(campaign.payload?.mail_group?.content?.active_revision_id || '');
-      for (const recipient of recipients) {
-        const ids = { engagementId: `eng_mail_${crypto.randomUUID()}`, messageId: `msg_mail_${crypto.randomUUID()}` };
-        const commands = buildComposeCommandBundle({ ...input, recipient, campaignId: campaign.id, contentRevisionId }, ids, Date.now());
-        await dispatchOutbound(commands.engagement.commandType, ids.engagementId, commands.engagement.payload);
-        await dispatchOutbound(commands.message.commandType, ids.messageId, commands.message.payload);
-        if (mode === 'approval' || mode === 'send') {
-          await dispatchOutbound(commands.approval.commandType, ids.messageId, commands.approval.payload);
-        }
-        if (mode === 'send') {
-          await dispatchOutbound('outbound.message.approve', ids.messageId, { message_id: ids.messageId });
-          await dispatchOutbound('outbound.message.send_approved', ids.messageId, { message_id: ids.messageId });
-        }
-        lastMessageId = ids.messageId;
-      }
-      view.scopeType = 'campaign';
-      view.scopeId = campaign.id;
-      view.selectedKind = 'outbound';
-      view.selectedId = lastMessageId;
-      closeComposer();
       const successMessage = mode === 'send'
         ? `${recipients.length} E-Mail${recipients.length === 1 ? '' : 's'} an den Mailserver übergeben.`
         : mode === 'approval'
           ? t('approvalRequested', 'Entwurf wurde zur Freigabe eingereicht.')
           : `${recipients.length} ${t('draftsSaved', 'Entwurf/Entwürfe gespeichert.')}`;
-      notify('success', successMessage);
+      // EIN Befehl `outbound.message.compose` (Strang MAIL2): der outbound-Handler führt Engagement → Entwurf →
+      // [Freigabe → Versand] je Empfänger in fester Reihenfolge in einer Transaktion aus. Ohne Warten (PORTING R5);
+      // die Erfolgsmeldung kommt bei `done`, ein Fehler genau einmal in die Zone.
+      const payload = buildComposePayload({ ...input, campaignId: campaign.id, contentRevisionId, mode }, recipients.map((recipient) => ({
+        recipient_email: recipient,
+        engagement_id: `eng_mail_${crypto.randomUUID()}`,
+        message_id: `msg_mail_${crypto.randomUUID()}`,
+      })), Date.now());
+      lastMessageId = payload.recipients.at(-1)?.message_id || '';
+      dispatchOutbound('outbound.message.compose', campaign.id, payload, { renderAfter: false, doneText: successMessage });
+      view.scopeType = 'campaign';
+      view.scopeId = campaign.id;
+      view.selectedKind = 'outbound';
+      view.selectedId = lastMessageId;
+      closeComposer();
+      render();
     }, (error) => setComposerStatus(error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.'), true));
   }
 
@@ -1298,16 +1275,18 @@ export async function mount(ctx) {
       id: `mail_group_${crypto.randomUUID()}`,
       templateId: single ? 'single' : 'outbound-sales',
       name: String(seed.subject || seed.recipient || '').trim() || (single ? 'Einzel-E-Mail' : 'Serien-E-Mail'),
-      ownerId: String(ctx.session?.user?.id || ''),
+      ownerId: String(api.actor.id || ''),
       accountKey: String(seed.accountKey || ''),
     }, now);
     assertCanWriteCampaigns();
-    await insertCollectionRecord(collections.outbound_campaigns, record);
+    await putRecord(collections.outbound_campaigns, record);
     view.campaigns.push(record);
     return record;
   }
 
-  function openGroupEditor() {
+  async function openGroupEditor() {
+    if (!(await releaseComposer())) return;
+    closeMailboxAdmin();
     refs.groupEditor.hidden = false;
     refs.groupTemplate.value = 'outbound-sales';
     refs.groupName.value = '';
@@ -1327,10 +1306,11 @@ export async function mount(ctx) {
   async function createGroup() {
     const name = refs.groupName.value.trim();
     if (!name) {
-      showToast(t('groupNameRequired', 'Bitte einen Gruppennamen eingeben.'));
+      report('mail.group.validation', t('groupNameRequired', 'Bitte einen Gruppennamen eingeben.'), 'warn');
       refs.groupName.focus();
       return;
     }
+    api.status.clear('mail.group.validation');
     await runBusy(async () => {
       assertCanWriteCampaigns();
       const now = Date.now();
@@ -1339,10 +1319,10 @@ export async function mount(ctx) {
         name,
         objective: refs.groupDescription.value.trim(),
         templateId: refs.groupTemplate?.value || 'free',
-        ownerId: String(ctx.session?.user?.id || ''),
+        ownerId: String(api.actor.id || ''),
         accountKey: view.accountKey || '',
       }, now);
-      await insertCollectionRecord(collections.outbound_campaigns, record);
+      await putRecord(collections.outbound_campaigns, record);
       view.campaigns.unshift(record);
       view.scopeType = 'campaign';
       view.scopeId = record.id;
@@ -1369,10 +1349,11 @@ export async function mount(ctx) {
     refs.contentSurface.hidden = false;
     refs.saveContent.disabled = false;
     view.contentEditor = await createMailContentEditor({
-      ctx,
+      api,
+      getActionIcon,
       host: refs.contentHost,
       commandHost: refs.contentControls,
-      locale: ctx.locale,
+      locale: currentLocale(),
       mode: descriptor.contentMode === 'word' ? 'rich-text' : 'html',
       documentArtifact: envelope.documentArtifact || null,
       htmlDocument: envelope.htmlDocument || {},
@@ -1454,12 +1435,12 @@ export async function mount(ctx) {
         },
         updated_at_ms: Date.now(),
       };
-      await upsertCollectionRecord(collections.outbound_campaigns, next);
+      await putRecord(collections.outbound_campaigns, next);
       view.campaigns = view.campaigns.map((item) => item.id === next.id ? next : item);
       const adoptedMessages = applyContentRevisionToPending(view.outboundMessages, revision);
       const changedMessages = adoptedMessages.filter((message, index) => message !== view.outboundMessages[index]);
       for (const message of changedMessages) {
-        await upsertCollectionRecord(collections.outbound_messages, message);
+        await putRecord(collections.outbound_messages, message);
       }
       view.outboundMessages = adoptedMessages;
       view.contentEditor.markClean();
@@ -1468,16 +1449,18 @@ export async function mount(ctx) {
       renderDetail();
     }, (error) => {
       refs.saveContent.disabled = false;
-      showToast(error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.'));
+      // Word-Inhalt einfrieren (mail.content.freeze, Strang MAIL3) gescheitert → eigener Zonencode mit Befehls-ID.
+      if (error?.command_id) report('mail.command.mail.content.freeze', error.message, 'error', error.command_id);
+      else notify('error', error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.'));
     });
   }
 
   async function openMailboxAdmin() {
-    if (!isGlobalMailAdmin(ctx.session?.user || {})) {
-      showToast(t('mailboxAdminDenied', 'Nur Administratoren dürfen Postfächer verwalten.'));
+    if (!isGlobalMailAdmin(actorUser())) {
+      report('mail.mailserver.denied', t('mailboxAdminDenied', 'Nur Administratoren dürfen Postfächer verwalten.'), 'warn');
       return;
     }
-    closeComposer();
+    if (!(await releaseComposer())) return;
     closeGroupEditor();
     closeMobileNavigation();
     view.mailserver.open = true;
@@ -1485,6 +1468,8 @@ export async function mount(ctx) {
     view.mailserver.message = '';
     refs.mailboxAdmin.hidden = false;
     renderMailboxAdmin();
+    // Fokus in die Schublade (wie beim Verfassen), damit Esc sie auch nach einer Rückfrage schließt (FIX10).
+    window.setTimeout(() => { if (!refs.mailboxAdmin.hidden) refs.closeMailboxAdmin?.focus(); }, 0);
     await loadMailserverConfig();
   }
 
@@ -1503,36 +1488,15 @@ export async function mount(ctx) {
     root.classList.remove('is-mobile-nav-open');
   }
 
-  async function loadMailserverConfig() {
-    if (!view.mailserver.open || view.mailserver.loading) return;
-    view.mailserver.loading = true;
-    view.mailserver.error = '';
-    view.mailserver.message = '';
+  function loadMailserverConfig() {
+    // Kein Befehls-Leseweg (App-API 4.0): Domains, Postfächer, Laufzeit und Erreichbarkeit kommen live aus der
+    // Plattform-Collection `mail_server_state` (readSnapshot → view.mailserver); Mutationen laufen als Befehle.
     renderMailboxAdmin();
-    try {
-      const command = await dispatchCommand('ctox', 'ctox.mailserver.get_config', 'mailserver-config', {}, {
-        project: false,
-        refresh: false,
-        renderAfter: false,
-      });
-      const outcome = commandOutcome(command);
-      view.mailserver.domains = Array.isArray(outcome.domains) ? outcome.domains : [];
-      view.mailserver.users = Array.isArray(outcome.users) ? outcome.users : [];
-      view.mailserver.runtimeConfig = outcome.runtime_config || {};
-      view.mailserver.runtimeStatus = outcome.runtime_status || {};
-      view.mailserver.health = outcome.health || {};
-    } catch (error) {
-      console.error('[mail] failed to load mailserver configuration', error);
-      view.mailserver.error = error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.');
-    } finally {
-      view.mailserver.loading = false;
-      renderMailboxAdmin();
-    }
   }
 
   async function saveMailserverRuntime(event) {
     event?.preventDefault?.();
-    if (!isGlobalMailAdmin(ctx.session?.user || {}) || view.mailserver.loading) return;
+    if (!isGlobalMailAdmin(actorUser()) || view.mailserver.loading) return;
     const payload = {
       enabled: view.mailserver.runtimeConfig.enabled !== false,
       hostname: refs.serverHostname.value.trim(),
@@ -1541,13 +1505,12 @@ export async function mount(ctx) {
       imap_port: Number(refs.serverImapPort.value),
       outbound_throttle_per_min: Number(refs.serverThrottle.value),
       max_connections: Number(refs.serverConnections.value),
-      tracking_base_url: refs.serverTrackingUrl.value.trim(),
     };
     await persistMailserverRuntime(payload, 'Serverkonfiguration gespeichert und angewendet.');
   }
 
   async function toggleMailserverRuntime() {
-    if (!isGlobalMailAdmin(ctx.session?.user || {}) || view.mailserver.loading) return;
+    if (!isGlobalMailAdmin(actorUser()) || view.mailserver.loading) return;
     const enabled = view.mailserver.runtimeConfig.enabled === false;
     await persistMailserverRuntime(
       { ...view.mailserver.runtimeConfig, enabled },
@@ -1555,56 +1518,32 @@ export async function mount(ctx) {
     );
   }
 
-  async function persistMailserverRuntime(payload, successMessage) {
-    view.mailserver.loading = true;
-    view.mailserver.error = '';
-    view.mailserver.message = '';
+  function persistMailserverRuntime(payload, successMessage) {
+    dispatchCommand('ctox', 'ctox.mailserver.save_runtime', 'mailserver-runtime', payload, {
+      renderAfter: false, doneText: successMessage,
+    });
     renderMailboxAdmin();
-    try {
-      await dispatchCommand('ctox', 'ctox.mailserver.save_runtime', 'mailserver-runtime', payload, {
-        project: false, refresh: false, renderAfter: false,
-      });
-      view.mailserver.loading = false;
-      await loadMailserverConfig();
-      view.mailserver.message = successMessage;
-    } catch (error) {
-      view.mailserver.error = error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.');
-    } finally {
-      view.mailserver.loading = false;
-      renderMailboxAdmin();
-    }
   }
 
   async function saveMailserverDomain(event) {
     event?.preventDefault?.();
-    if (!isGlobalMailAdmin(ctx.session?.user || {}) || view.mailserver.loading) return;
+    if (!isGlobalMailAdmin(actorUser()) || view.mailserver.loading) return;
     const domainName = refs.domainName.value.trim().toLowerCase();
     if (!domainName || !domainName.includes('.')) {
       view.mailserver.error = 'Bitte eine gültige Versanddomain eingeben.';
       renderMailboxAdmin();
       return;
     }
-    view.mailserver.loading = true;
     view.mailserver.error = '';
+    dispatchCommand('ctox', 'ctox.mailserver.save_domain', domainName, {
+      domain_name: domainName,
+      dkim_selector: refs.dkimSelector.value.trim() || 'default',
+      spf_record: refs.spfRecord.value.trim(),
+      dmarc_record: refs.dmarcRecord.value.trim(),
+    }, { renderAfter: false, doneText: 'Versanddomain gespeichert. Die DNS-Werte stehen unten zum Kopieren bereit.' });
+    refs.domainName.value = '';
+    refs.dmarcRecord.value = '';
     renderMailboxAdmin();
-    try {
-      await dispatchCommand('ctox', 'ctox.mailserver.save_domain', domainName, {
-        domain_name: domainName,
-        dkim_selector: refs.dkimSelector.value.trim() || 'default',
-        spf_record: refs.spfRecord.value.trim(),
-        dmarc_record: refs.dmarcRecord.value.trim(),
-      }, { project: false, refresh: false, renderAfter: false });
-      refs.domainName.value = '';
-      refs.dmarcRecord.value = '';
-      view.mailserver.loading = false;
-      await loadMailserverConfig();
-      view.mailserver.message = 'Versanddomain gespeichert. Die DNS-Werte stehen unten zum Kopieren bereit.';
-    } catch (error) {
-      view.mailserver.error = error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.');
-    } finally {
-      view.mailserver.loading = false;
-      renderMailboxAdmin();
-    }
   }
 
   async function handleDomainAction(action, domainName) {
@@ -1620,27 +1559,16 @@ export async function mount(ctx) {
       return;
     }
     if (action !== 'confirm-delete') return;
-    view.mailserver.loading = true;
+    dispatchCommand('ctox', 'ctox.mailserver.delete_domain', domainName, { domain_name: domainName }, {
+      renderAfter: false, doneText: 'Versanddomain gelöscht.',
+    });
+    view.mailserver.pendingDomainDelete = '';
     renderMailboxAdmin();
-    try {
-      await dispatchCommand('ctox', 'ctox.mailserver.delete_domain', domainName, { domain_name: domainName }, {
-        project: false, refresh: false, renderAfter: false,
-      });
-      view.mailserver.pendingDomainDelete = '';
-      view.mailserver.loading = false;
-      await loadMailserverConfig();
-      view.mailserver.message = 'Versanddomain gelöscht.';
-    } catch (error) {
-      view.mailserver.error = error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.');
-    } finally {
-      view.mailserver.loading = false;
-      renderMailboxAdmin();
-    }
   }
 
   async function createMailbox(event) {
     event?.preventDefault?.();
-    if (!isGlobalMailAdmin(ctx.session?.user || {}) || view.mailserver.loading) return;
+    if (!isGlobalMailAdmin(actorUser()) || view.mailserver.loading) return;
     const username = refs.mailboxUsername.value.trim().toLowerCase();
     const ownerUserId = refs.mailboxOwner.value.trim();
     const password = refs.mailboxPassword.value;
@@ -1651,33 +1579,20 @@ export async function mount(ctx) {
       renderMailboxAdmin();
       return;
     }
-    view.mailserver.loading = true;
     view.mailserver.error = '';
-    view.mailserver.message = '';
-    renderMailboxAdmin();
-    try {
-      await dispatchCommand('ctox', 'ctox.mailserver.save_user', username, {
-        username,
-        owner_user_id: ownerUserId,
-        password,
-      }, { project: false, refresh: false, renderAfter: false });
-      refs.mailboxUsername.value = '';
-      refs.mailboxOwner.value = '';
-      await refreshData();
-      view.mailserver.loading = false;
-      await loadMailserverConfig();
-      view.mailserver.message = t('mailboxCreated', 'Postfach wurde angelegt und dem Nutzer zugeordnet.');
-    } catch (error) {
-      console.error('[mail] failed to create mailbox', error);
-      view.mailserver.error = error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.');
-    } finally {
-      view.mailserver.loading = false;
-      render();
-    }
+    // Passwort geht wie bisher im Befehls-Payload an den Core (Secret-Intake, V4-HANDLERS.md); der Handler sieht es nie.
+    dispatchCommand('ctox', 'ctox.mailserver.save_user', username, {
+      username,
+      owner_user_id: ownerUserId,
+      password,
+    }, { renderAfter: false, doneText: t('mailboxCreated', 'Postfach wurde angelegt und dem Nutzer zugeordnet.') });
+    refs.mailboxUsername.value = '';
+    refs.mailboxOwner.value = '';
+    render();
   }
 
   async function handleMailboxAction(action, username) {
-    if (!isGlobalMailAdmin(ctx.session?.user || {}) || !username || view.mailserver.loading) return;
+    if (!isGlobalMailAdmin(actorUser()) || !username || view.mailserver.loading) return;
     if (action === 'request-delete') {
       view.mailserver.pendingDelete = username;
       renderMailboxAdmin();
@@ -1689,32 +1604,15 @@ export async function mount(ctx) {
       return;
     }
     if (action !== 'confirm-delete') return;
-    view.mailserver.loading = true;
-    view.mailserver.error = '';
-    view.mailserver.message = '';
-    renderMailboxAdmin();
-    try {
-      await dispatchCommand('ctox', 'ctox.mailserver.delete_user', username, { username }, {
-        project: false,
-        refresh: false,
-        renderAfter: false,
-      });
-      view.mailserver.pendingDelete = '';
-      await refreshData();
-      view.mailserver.loading = false;
-      await loadMailserverConfig();
-      view.mailserver.message = t('mailboxDeleted', 'Postfach wurde gelöscht.');
-    } catch (error) {
-      console.error('[mail] failed to delete mailbox', error);
-      view.mailserver.error = error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.');
-    } finally {
-      view.mailserver.loading = false;
-      render();
-    }
+    dispatchCommand('ctox', 'ctox.mailserver.delete_user', username, { username }, {
+      renderAfter: false, doneText: t('mailboxDeleted', 'Postfach wurde gelöscht.'),
+    });
+    view.mailserver.pendingDelete = '';
+    render();
   }
 
   function renderMailboxAdmin() {
-    const admin = isGlobalMailAdmin(ctx.session?.user || {});
+    const admin = isGlobalMailAdmin(actorUser());
     if (!admin) {
       refs.mailboxAdmin.hidden = true;
       return;
@@ -1729,9 +1627,11 @@ export async function mount(ctx) {
     const status = view.mailserver.runtimeStatus || {};
     const health = view.mailserver.health || {};
     const running = config.enabled !== false && status.state !== 'stopped';
-    refs.serverState.textContent = running
-      ? (health.smtp_reachable && health.imap_reachable ? 'Mailserver läuft' : 'Mailserver startet oder ist beeinträchtigt')
-      : 'Mailserver gestoppt';
+    // Laufzustand nur als Punkt (is-running/is-degraded) und über den Schaltknopf; Beeinträchtigung → Zone.
+    refs.serverState.textContent = 'Mailserver';
+    if (running && Object.keys(health).length && !(health.smtp_reachable && health.imap_reachable)) {
+      api.status.report({ level: 'warn', code: 'mail.mailserver.health', text: 'Mailserver ist beeinträchtigt (SMTP/IMAP nicht erreichbar).' });
+    } else api.status.clear('mail.mailserver.health');
     refs.serverEndpoints.textContent = `SMTP ${config.bind_host || '127.0.0.1'}:${config.smtp_port || 2525} · IMAP ${config.bind_host || '127.0.0.1'}:${config.imap_port || 1143}`;
     refs.serverDot.classList.toggle('is-running', running && health.smtp_reachable && health.imap_reachable);
     refs.serverDot.classList.toggle('is-degraded', running && !(health.smtp_reachable && health.imap_reachable));
@@ -1746,25 +1646,19 @@ export async function mount(ctx) {
     refs.serverImapPort.value = String(config.imap_port || 1143);
     refs.serverThrottle.value = String(config.outbound_throttle_per_min || 120);
     refs.serverConnections.value = String(config.max_connections || 10);
-    refs.serverTrackingUrl.value = config.tracking_base_url || '';
     refs.saveServer.disabled = view.mailserver.loading;
     refs.saveDomain.disabled = view.mailserver.loading;
 
     const domains = view.mailserver.domains.filter((domain) => mailserverDomain(domain));
-    refs.domainList.innerHTML = domains.length
-      ? domains.map((domain) => renderDomainCard(domain)).join('')
-      : `<span class="mail-mailbox-owner">${escapeHtml(t('noDomains', 'Keine Domain konfiguriert'))}</span>`;
+    refs.domainList.innerHTML = domains.map((domain) => renderDomainCard(domain)).join('');
 
     const users = view.mailserver.users.map(mailserverUsername).filter(Boolean).sort((a, b) => a.localeCompare(b));
     refs.mailboxCount.textContent = String(users.length);
-    refs.mailboxList.innerHTML = users.length
-      ? users.map((username) => renderMailboxRow(username)).join('')
-      : `<div class="ctox-empty"><span>${escapeHtml(t('noManagedMailboxes', 'Noch keine Mailserver-Postfächer.'))}</span></div>`;
+    refs.mailboxList.innerHTML = users.map((username) => renderMailboxRow(username)).join('');
 
-    refs.mailboxStatus.textContent = view.mailserver.loading
-      ? t('loadingMailboxes', 'Mailserver-Konfiguration wird geladen…')
-      : (view.mailserver.error || view.mailserver.message || '');
-    refs.mailboxStatus.classList.toggle('is-error', Boolean(view.mailserver.error));
+    // Zustand nur in die Zustandszone (PORTING R11).
+    if (view.mailserver.error) report('mail.mailserver', view.mailserver.error);
+    else api.status.clear('mail.mailserver');
   }
 
   function renderDomainCard(domain) {
@@ -1782,7 +1676,7 @@ export async function mount(ctx) {
   function renderMailboxRow(username) {
     const account = view.accounts.find((candidate) => (
       String(candidate.address || '').toLowerCase() === username.toLowerCase()
-      || String(candidate.account_key || '').toLowerCase() === `email:${username.toLowerCase()}`
+      || String(candidate.id || '').toLowerCase() === `email:${username.toLowerCase()}`
     ));
     const owner = String(accountProfile(account).owner_user_id || accountProfile(account).ownerUserId || '').trim();
     const ownerUser = view.users.find((user) => String(user.id || user.user_id) === owner);
@@ -1800,63 +1694,45 @@ export async function mount(ctx) {
     </div>`;
   }
 
-  async function dispatchOutbound(commandType, recordId, payload, options = {}) {
+  function dispatchOutbound(commandType, recordId, payload, options = {}) {
     return dispatchCommand('outbound', commandType, recordId, payload, options);
   }
 
-  async function dispatchCommand(module, commandType, recordId, payload, options = {}) {
-    if (!ctx.commandBus?.dispatch) throw new Error('CTOX command bus is required for mail actions');
-    const commandId = `cmd_mail_${crypto.randomUUID()}`;
-    const result = await ctx.commandBus.dispatch({
-      id: commandId,
-      command_id: commandId,
-      module,
-      command_type: commandType,
+  // App-API 4.0: Befehl ohne Warten (PORTING R5). failed → Zustandszone, done → Zone leeren. Ergebnisse
+  // kommen über die Collections zurück (Handler projizieren), nie über das Befehlsdokument.
+  function dispatchCommand(module, commandType, recordId, payload, options = {}) {
+    const handle = sendCommand(commandType, {
+      ...payload,
       record_id: recordId,
-      inbound_channel: 'business_os.mail',
-      status: 'pending_sync',
-      payload,
-      client_context: { source_module: 'mail' },
-    });
-    const command = await waitForCommand(result?.command_id || result?.id || commandId, result);
-    if (command?.status === 'failed' || command?.status === 'blocked' || command?.status === 'cancelled') {
-      throw new Error(command.error || command.result?.error || `${commandType} failed`);
-    }
-    if (options.project !== false) await projectCommandResult(command?.result || result?.result || {});
-    if (options.refresh !== false) await refreshData();
+      client_context: { source_module: 'mail', target_module: module, inbound_channel: 'business_os.mail' },
+    }, options.doneText || '', options.onDone);
     if (options.renderAfter !== false) render();
-    return command;
+    return { id: handle.id, command_id: handle.id, status: 'queued' };
   }
 
-  async function waitForCommand(commandId, initial, timeoutMs = 45000) {
-    if (TERMINAL_COMMAND_STATUSES.has(initial?.status)) return initial;
-    if (!collections.business_commands) return initial;
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      let document = null;
-      try {
-        document = await collections.business_commands.findOne(commandId).exec();
-      } catch (error) {
-        if (isPermissionDenied(error)) return initial;
-        throw error;
+  // doneText: Erfolgsmeldung erst bei `done` (vorher kam sie nach dem Warten auf den Terminalstatus).
+  function sendCommand(commandType, payload, doneText = '', onDone = null) {
+    const code = `mail.command.${commandType}`;
+    const handle = api.command(commandType, payload);
+    let off = null;
+    let finished = false;
+    off = handle.status.subscribe((state) => {
+      if (finished) return;
+      if (state?.status === 'failed') report(code, state.error || commandType, 'error', handle.id);
+      else if (state?.status === 'done') {
+        api.status.clear(code);
+        if (doneText) notify('success', doneText);
+        onDone?.();
       }
-      const command = document?.toJSON?.() || document || null;
-      if (command && TERMINAL_COMMAND_STATUSES.has(command.status)) return command;
-      await sleep(250);
-    }
-    throw new Error(`Mail command ${commandId} was not acknowledged by the local service.`);
-  }
-
-  async function projectCommandResult(result) {
-    const projections = [
-      ['outbound_engagements', result.engagement],
-      ['outbound_messages', result.message],
-      ['outbound_approvals', result.approval],
-    ];
-    for (const [name, record] of projections) {
-      if (!record?.id || !collections[name]) continue;
-      await upsertCollectionRecord(collections[name], record);
-    }
+      if (state?.status === 'done' || state?.status === 'failed') {
+        finished = true;
+        off?.();
+      }
+    });
+    if (finished) off?.();
+    cleanups.push(() => off?.());
+    handle.local.catch((error) => report(code, error?.message || error, 'error', handle.id));
+    return handle;
   }
 
   async function runBusy(operation, onError) {
@@ -1868,16 +1744,17 @@ export async function mount(ctx) {
     } catch (error) {
       console.error('[mail] action failed', error);
       if (onError) onError(error);
-      else showToast(error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.'));
+      else notify('error', error.message || t('commandFailed', 'Die Mail-Aktion ist fehlgeschlagen.'));
     } finally {
       view.busy = false;
       root.classList.remove('is-busy');
     }
   }
 
+  // Zustand nur in die Zustandszone (PORTING R11): Fehler/Prüfhinweise → api.status.report.
   function setComposerStatus(message, error = false) {
-    refs.composerStatus.textContent = message || '';
-    refs.composerStatus.classList.toggle('is-error', Boolean(error));
+    if (error && message) report('mail.composer', message, 'warn');
+    else api.status.clear('mail.composer');
   }
 
   function showToast(message) {
@@ -1885,11 +1762,11 @@ export async function mount(ctx) {
   }
 
   function notify(type, message) {
-    ctx.notifications?.show?.({ type, title: t('mail', 'Mail'), message: String(message || '') });
+    report(type === 'error' ? 'mail.action.failed' : 'mail.notice', message, type === 'error' ? 'error' : 'info');
   }
 
   function filteredAccountThreads() {
-    const allowedAccounts = new Set(view.accounts.map((account) => account.account_key));
+    const allowedAccounts = new Set(view.accounts.map((account) => account.id));
     return view.threads.filter((thread) => (
       allowedAccounts.has(thread.account_key)
       && (!view.accountKey || thread.account_key === view.accountKey)
@@ -1918,7 +1795,7 @@ export async function mount(ctx) {
   }
 
   function filteredAccountOutboundMessages() {
-    const allowedAccounts = new Set(view.accounts.map((account) => account.account_key));
+    const allowedAccounts = new Set(view.accounts.map((account) => account.id));
     return view.outboundMessages.filter((message) => {
       const accountKey = message.communication_account_key || message.sender_account_id;
       if (!allowedAccounts.has(accountKey)) return false;
@@ -1927,10 +1804,7 @@ export async function mount(ctx) {
   }
 
   function assertCanWriteCampaigns() {
-    if (ctx.permissions?.canWriteCollection
-      && ctx.permissions.canWriteCollection('outbound_campaigns') !== true) {
-      throw new Error(t('writeDenied', 'Du darfst keine Mailgruppen anlegen.'));
-    }
+    // Schreibrecht entscheidet der Core (api.put → forbidden); kein UI-Gate (App-API 4.0, R9).
   }
 
   function scopeRecords() {
@@ -2064,7 +1938,7 @@ export async function mount(ctx) {
   function exportSelectedMail() {
     const records = selectedMailRecords();
     if (!records.length) return;
-    downloadJson({ schema: 'ctox.mail.bulk-export.v1', exported_at: new Date().toISOString(), records }, `ctox-mail-auswahl-${records.length}.json`, ctx.host);
+    downloadJson({ schema: 'ctox.mail.bulk-export.v1', exported_at: new Date().toISOString(), records }, `ctox-mail-auswahl-${records.length}.json`, root);
     notify('success', `${records.length} ${t('recordsExported', 'Datensätze exportiert.')}`);
   }
 
@@ -2075,16 +1949,16 @@ export async function mount(ctx) {
       : String(record.approval_status || '') === 'approved');
     if (!eligible.length) return;
     await runBusy(async () => {
-      let completed = 0;
-      for (const record of eligible) {
-        const commandType = action === 'request-approval' ? 'outbound.message.request_approval' : 'outbound.message.send_approved';
-        await dispatchOutbound(commandType, record.id, { message_id: record.id }, { refresh: false, renderAfter: false });
-        completed += 1;
-      }
-      await refreshData();
+      const commandType = action === 'request-approval' ? 'outbound.message.request_approval' : 'outbound.message.send_approved';
+      const doneText = `${eligible.length} ${action === 'request-approval' ? t('submittedForApproval', 'Mails zur Freigabe eingereicht.') : t('queuedForSending', 'Mails zum Versand eingereiht.')}`;
+      eligible.forEach((record, index) => {
+        dispatchOutbound(commandType, record.id, { message_id: record.id }, {
+          renderAfter: false,
+          doneText: index === eligible.length - 1 ? doneText : '',
+        });
+      });
       clearSelection(false);
       render();
-      notify('success', `${completed} ${action === 'request-approval' ? t('submittedForApproval', 'Mails zur Freigabe eingereicht.') : t('queuedForSending', 'Mails zum Versand eingereiht.')}`);
     });
   }
 
@@ -2103,7 +1977,6 @@ export async function mount(ctx) {
     refs.routeDestination.innerHTML = `<option value="">— ${escapeHtml(t('selectDestination', 'Ziel-App wählen'))} —</option>${destinations.map((destination) => `<option value="${escapeAttribute(destination.id)}">${escapeHtml(destination.title)}</option>`).join('')}`;
     refs.routeSelection.textContent = `${records.length} ${t('messages', 'Nachrichten')} · ${records.filter((record) => record.__kind === 'thread').length} Inbound · ${records.filter((record) => record.__kind === 'outbound').length} Outbound`;
     refs.routeNote.value = '';
-    refs.routeStatus.textContent = '';
     window.setTimeout(() => refs.routeDestination.focus(), 0);
   }
 
@@ -2120,14 +1993,12 @@ export async function mount(ctx) {
     const destinationModule = refs.routeDestination.value;
     const records = selectedMailRecords();
     if (!destinationModule || !records.length) {
-      refs.routeStatus.textContent = t('routeDestinationRequired', 'Bitte eine Ziel-App wählen.');
-      refs.routeStatus.classList.add('is-error');
+      report('mail.route', t('routeDestinationRequired', 'Bitte eine Ziel-App wählen.'), 'warn');
       return;
     }
     view.route.busy = true;
     refs.confirmRoute.disabled = true;
-    refs.routeStatus.classList.remove('is-error');
-    refs.routeStatus.textContent = t('routingInProgress', 'Routing wird angelegt…');
+    api.status.clear('mail.route');
     const batchId = `mail_route_${crypto.randomUUID()}`;
     try {
       const commands = buildMailRouteCommands({
@@ -2136,32 +2007,28 @@ export async function mount(ctx) {
         mode: refs.routeMode.value,
         note: refs.routeNote.value.trim(),
         records,
-        actor: ctx.session?.user || {},
+        actor: actorUser(),
       });
       const commandIds = [];
-      for (let offset = 0; offset < commands.length; offset += 8) {
-        const commandBatch = commands.slice(offset, offset + 8);
-        const results = await Promise.all(commandBatch.map((command) => ctx.commandBus.dispatch(command)));
-        results.forEach((result, index) => {
-          const command = commandBatch[index];
-          const commandId = result?.command_id || result?.id || command.id;
-          commandIds.push(commandId);
-          view.commands.unshift({ ...command, ...result, id: commandId, command_id: commandId, status: result?.status || 'pending_sync' });
-        });
-      }
-      view.route.lastCommandId = commandIds[0] || '';
       view.route.status = `${records.length} ${t('routedTo', 'E-Mails geroutet an')} ${routeDestinationTitle(destinationModule, view.routeDestinations)} · ${batchId}`;
-      refs.routeStatus.textContent = view.route.status;
+      commands.forEach((command, index) => {
+        const handle = sendCommand(command.command_type, {
+          ...(command.payload || {}),
+          record_id: command.record_id,
+          client_context: command.client_context || { source_module: 'mail' },
+        }, index === commands.length - 1 ? view.route.status : '');
+        commandIds.push(handle.id);
+        view.commands.unshift({ ...command, id: handle.id, command_id: handle.id, status: 'queued' });
+      });
+      view.route.lastCommandId = commandIds[0] || '';
       clearSelection(false);
       view.scopeType = 'queue';
       view.scopeId = 'routed';
       renderNavigation();
       renderList();
-      notify('success', view.route.status);
     } catch (error) {
       view.route.error = error?.message || String(error);
-      refs.routeStatus.textContent = view.route.error;
-      refs.routeStatus.classList.add('is-error');
+      report('mail.route', view.route.error);
     } finally {
       view.route.busy = false;
       refs.confirmRoute.disabled = false;
@@ -2170,7 +2037,8 @@ export async function mount(ctx) {
 
   async function openMailImporter() {
     closeMobileNavigation();
-    await openUniversalImporter(ctx, {
+    // shared/universal-importer.js ist noch v3 (ctx.host/ctx.sync); hier nur der Host (dispatch:false).
+    await openUniversalImporter({ host: root }, {
       side: 'left',
       moduleId: 'mail',
       entityType: 'series_email_recipients',
@@ -2179,10 +2047,9 @@ export async function mount(ctx) {
       kicker: t('mailCampaign', 'Mail-Kampagne'),
       defaultSource: 'excel',
       showFileExplorer: false,
-      defaultTitle: `${t('seriesEmail', 'Serien-E-Mail')} ${new Date().toLocaleDateString(ctx.locale === 'en' ? 'en-US' : 'de-DE')}`,
-      helperText: t('importHelper', 'CSV, Excel oder Text mit E-Mail-Adressen übernehmen. Die Empfänger werden vor dem Speichern noch einmal im Mail-Entwurf angezeigt.'),
+      defaultTitle: `${t('seriesEmail', 'Serien-E-Mail')} ${new Date().toLocaleDateString(currentLocale() === 'en' ? 'en-US' : 'de-DE')}`,
       submitLabel: t('transferToMail', 'In Serien-E-Mail übernehmen'),
-      submittingLabel: t('importing', 'Empfänger werden geprüft…'),
+      submittingLabel: t('transferToMail', 'In Serien-E-Mail übernehmen'),
       doneLabel: t('importDone', 'Empfänger übernommen.'),
       closeOnSubmit: true,
       dispatch: false,
@@ -2206,7 +2073,7 @@ export async function mount(ctx) {
       exported_at: new Date().toISOString(),
       scope: { type: view.scopeType, id: view.scopeId, account_key: view.accountKey || null },
       records,
-    }, `ctox-mail-${new Date().toISOString().slice(0, 10)}.json`, ctx.host);
+    }, `ctox-mail-${new Date().toISOString().slice(0, 10)}.json`, root);
     notify('success', `${records.length} ${t('recordsExported', 'Datensätze exportiert.')}`);
   }
 
@@ -2229,14 +2096,13 @@ export async function mount(ctx) {
   }
 
   function accountLabel(accountKey) {
-    const account = view.accounts.find((item) => item.account_key === accountKey);
+    const account = view.accounts.find((item) => item.id === accountKey);
     return account?.address || accountKey;
   }
 
+  // Deep-Link nur über api.shell.onRoute (params), nicht mehr über location.hash.
   function applyDeepLink(args = null) {
-    const raw = String(location.hash || '');
-    const query = raw.includes('?') ? raw.slice(raw.indexOf('?') + 1) : '';
-    const params = new URLSearchParams(query);
+    const params = new URLSearchParams(Object.entries(args || {}).filter(([, value]) => value != null && typeof value !== 'object').map(([key, value]) => [key, String(value)]));
     const campaignId = params.get('campaign_id') || '';
     const action = params.get('action') || '';
     const recipients = parseRecipientAddresses(params.get('recipients') || '');
@@ -2275,7 +2141,7 @@ export async function mount(ctx) {
     if (!request || view.loading) return;
     const communicationMessage = request.kind === 'message'
       ? view.communicationMessages.find((item) => item.id === request.recordId
-        && view.threads.some((thread) => thread.thread_key === item.thread_key))
+        && view.threads.some((thread) => thread.id === item.thread_key))
       : null;
     if (communicationMessage && (view.selectedKind !== 'thread'
       || view.selectedId !== communicationMessage.thread_key)) {
@@ -2290,16 +2156,14 @@ export async function mount(ctx) {
           ? item.dataset.contextRecordType === 'communication_thread'
           : ['communication_message', 'outbound_message'].includes(item.dataset.contextRecordType)));
     const focused = Boolean(recordElement);
-    const ready = ['communication_threads', 'communication_messages', 'outbound_messages']
-      .every((name) => ctx.sync?.collectionReadiness?.(name)?.ready === true);
-    if (!focused && (!ready || request.reportedUnavailable)) return;
+    if (!focused && request.reportedUnavailable) return;
     if (focused) {
       recordElement.focus?.({ preventScroll: true });
       recordElement.scrollIntoView?.({ block: 'nearest' });
     }
     if (focused) view.requestedSourceFocus = null;
     else request.reportedUnavailable = true;
-    ctx.host.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
+    root.dispatchEvent(new CustomEvent('ctox-business-os-record-focus', {
       bubbles: true,
       detail: { module: 'mail', status: focused ? 'record_focused' : 'unavailable',
         recordId: request.recordId, returnThreadId: request.returnThreadId },
@@ -2329,12 +2193,6 @@ function collectRefs(root) {
     listKicker: one('[data-mail-list-kicker]'),
     listTitle: one('[data-mail-list-title]'),
     recordList: one('[data-mail-record-list]'),
-    readError: one('[data-mail-read-error]'),
-    readErrorText: one('[data-mail-read-error-text]'),
-    retryRead: one('[data-mail-retry-read]'),
-    listEmpty: one('[data-mail-list-empty]'),
-    emptyTitle: one('[data-mail-empty-title]'),
-    emptyBody: one('[data-mail-empty-body]'),
     listFooter: one('[data-mail-list-footer]'),
     prevPage: one('[data-mail-prev-page]'),
     nextPage: one('[data-mail-next-page]'),
@@ -2365,7 +2223,6 @@ function collectRefs(root) {
     composeCampaign: one('[data-mail-compose-campaign]'),
     composeSubject: one('[data-mail-compose-subject]'),
     composeBody: one('[data-mail-compose-body]'),
-    composerStatus: one('[data-mail-composer-status]'),
     saveDraft: one('[data-mail-save-draft]'),
     requestApproval: one('[data-mail-request-approval]'),
     sendNow: one('[data-mail-send-now]'),
@@ -2392,7 +2249,6 @@ function collectRefs(root) {
     serverImapPort: one('[data-mail-server-imap-port]'),
     serverThrottle: one('[data-mail-server-throttle]'),
     serverConnections: one('[data-mail-server-connections]'),
-    serverTrackingUrl: one('[data-mail-server-tracking-url]'),
     saveServer: one('[data-mail-save-server]'),
     domainForm: one('[data-mail-domain-form]'),
     domainName: one('[data-mail-domain-name]'),
@@ -2406,7 +2262,6 @@ function collectRefs(root) {
     mailboxPassword: one('[data-mail-mailbox-password]'),
     createMailbox: one('[data-mail-create-mailbox]'),
     domainList: one('[data-mail-domain-list]'),
-    mailboxStatus: one('[data-mail-mailbox-status]'),
     mailboxCount: one('[data-mail-mailbox-count]'),
     mailboxList: one('[data-mail-mailbox-list]'),
     routeDrawer: one('[data-mail-route-drawer]'),
@@ -2417,12 +2272,11 @@ function collectRefs(root) {
     routeDestination: one('[data-mail-route-destination]'),
     routeMode: one('[data-mail-route-mode]'),
     routeNote: one('[data-mail-route-note]'),
-    routeStatus: one('[data-mail-route-status]'),
   };
 }
 
-function renderActionIcons(ctx, refs) {
-  const icon = (name) => mailActionIcon(ctx, name);
+function renderActionIcons(refs) {
+  const icon = (name) => mailActionIcon(name);
   const assignments = [
     [refs.compose, 'edit'], [refs.newGroup, 'add'], [refs.settings, 'settings'], [refs.openNav, 'columns'],
     [refs.closeNav, 'close'], [refs.closeDetail, 'chevronLeft'],
@@ -2466,9 +2320,8 @@ const MAIL_ICON_FALLBACK_PATHS = Object.freeze({
   warning: 'M12 4 2.8 19.5h18.4L12 4ZM12 10v4M12 17h.01',
 });
 
-function mailActionIcon(ctx, name, size = 16, strokeWidth = 1.8) {
-  const fromShell = ctx?.getActionIcon?.(name, size, strokeWidth);
-  if (typeof fromShell === 'string' && fromShell.trim()) return fromShell;
+// App-API 4.0 hat keine Icon-API (app-api.d.ts OFFEN-D): Glyphen bleiben app-lokal.
+function mailActionIcon(name, size = 16, strokeWidth = 1.8) {
   const path = MAIL_ICON_FALLBACK_PATHS[name] || MAIL_ICON_FALLBACK_PATHS.more;
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="mail-action-icon mail-action-${name}"><path d="${path}"></path></svg>`;
 }
@@ -2485,7 +2338,7 @@ function viewToggleLabel(currentView, t) {
     : t('showAsList', 'Als Liste anzeigen');
 }
 
-function syncViewToggleButton(ctx, pane, currentView, t) {
+function syncViewToggleButton(pane, currentView, t) {
   const button = pane?.querySelector?.('[data-mail-view-toggle]');
   if (!button) return;
   const cards = currentView !== 'list';
@@ -2496,7 +2349,7 @@ function syncViewToggleButton(ctx, pane, currentView, t) {
   button.removeAttribute('aria-pressed');
   button.setAttribute('aria-label', label);
   button.setAttribute('title', label);
-  button.innerHTML = mailActionIcon(ctx, cards ? 'list' : 'grid');
+  button.innerHTML = mailActionIcon(cards ? 'list' : 'grid');
 }
 
 function normalizePaneGrammar(detail, fallback) {
@@ -2509,7 +2362,7 @@ function normalizePaneGrammar(detail, fallback) {
 }
 
 function mailCountsKnown(view) {
-  return Boolean(view?.mailReadComplete && !view.loading && !view.mailReadError && view.readiness?.ready !== false);
+  return Boolean(view?.mailReadComplete && !view.loading && !view.mailReadError);
 }
 
 function writePaneCounts(pane, counts, known = true) {
@@ -2527,12 +2380,13 @@ function userDisplayName(user) {
 function mailRecordKey(record) {
   const kind = record?.__kind || (record?.thread_key ? 'thread' : 'outbound');
   return kind === 'thread'
-    ? `${kind}:${String(record?.account_key || '')}:${String(record?.thread_key || '')}`
+    ? `${kind}:${String(record?.account_key || '')}:${String(record?.id || '')}`
     : `${kind}:${String(record?.id || '')}`;
 }
 
+// App-API 4.0: Dokument-ID ist `id` (communication_threads: id = thread_key, Kern §16.28; outbound: id).
 function mailRecordId(record) {
-  return String(record?.thread_key || record?.id || '');
+  return String(record?.id || '');
 }
 
 function routeCommandForRecord(record, commands = []) {
@@ -2546,7 +2400,7 @@ function routeCommandForRecord(record, commands = []) {
         || command?.client_context?.surface === 'mail.bulk.route';
       if (!isRoute || (!sourceIds.includes(recordId) && String(command?.record_id || '') !== recordId)) return false;
       if (!record?.thread_key) return true;
-      const snapshot = payload.record_snapshot;
+      const snapshot = payload.record_snapshot || payload.context?.record_snapshot;
       const snapshots = Array.isArray(snapshot?.records) ? snapshot.records : [snapshot];
       return snapshots.some((item) => item?.thread_key === recordId && item?.account_key === record.account_key);
     })
@@ -2572,7 +2426,8 @@ function defaultMailRouteDestinations() {
 function routeDestinationsFromCatalog(catalogs = [], permissions) {
   const seen = new Map(defaultMailRouteDestinations().map((item) => [item.id, item]));
   for (const catalog of catalogs || []) {
-    for (const module of Array.isArray(catalog?.modules) ? catalog.modules : []) {
+    // v4: eine business_apps-Zeile ist selbst der Eintrag; V2-Katalogzeilen tragen modules[].
+    for (const module of Array.isArray(catalog?.modules) ? catalog.modules : (catalog?.id ? [catalog] : [])) {
       const id = String(module?.id || module?.module_id || '').trim();
       if (!id || id === 'mail' || module?.hidden === true || module?.installed === false) continue;
       if (typeof permissions?.canViewModule === 'function' && permissions.canViewModule(id) === false) continue;
@@ -2603,6 +2458,7 @@ function mailQueueDefinitions({ threads = [], inboxThreads = threads, sentThread
     { id: 'all', title: t('allTraffic', 'Alle Nachrichten'), meta: t('inboundOutbound', 'Posteingang und Gesendet'), count: allRecords.length, updatedAt: latest },
     { id: 'inbound', title: t('inbox', 'Posteingang'), meta: `${inboxThreads.filter((item) => Number(item.unread_count || 0) > 0).length} ${t('unread', 'ungelesen')}`, count: inboxThreads.length, updatedAt: Math.max(0, ...inboxThreads.map(recordTime)) },
     { id: 'outbound', title: t('sent', 'Gesendet'), meta: t('sentMail', 'Versendete Nachrichten'), count: sentThreads.length, updatedAt: Math.max(0, ...sentThreads.map(recordTime)) },
+    // v4-allow: label (Ordnerbeschreibung „Freigabe“, fachlich, kein App-Zustand)
     { id: 'approval', title: t('awaiting', 'Freigabe'), meta: t('governedSending', 'Wartet auf Freigabe'), count: outboundMessages.filter((item) => String(item.approval_status || '') === 'awaiting_approval').length, updatedAt: latest },
     { id: 'failed', title: t('failed', 'Fehler'), meta: t('retryRequired', 'Prüfung erforderlich'), count: outboundMessages.filter((item) => String(item.send_status || '').toLowerCase().includes('fail')).length, updatedAt: latest },
     { id: 'routed', title: t('routed', 'Geroutete E-Mails'), meta: t('crossAppHandoffs', 'App-Übergaben'), count: routed.length, updatedAt: Math.max(0, ...routed.map((record) => Number(routeCommandForRecord(record, commands)?.updated_at_ms || 0))) },
@@ -2613,7 +2469,7 @@ function routeSnapshot(record) {
   if (record.__kind === 'thread') {
     return {
       kind: 'inbound_thread',
-      id: record.thread_key,
+      id: record.id,
       thread_key: record.thread_key,
       account_key: record.account_key || '',
       subject: record.subject || '',
@@ -2692,30 +2548,42 @@ function buildMailRouteCommands({ batchId, destinationModule, mode = 'handoff', 
     const commandId = `cmd_mail_route_${crypto.randomUUID()}`;
     const sourceRecordIds = chunk.map(mailRecordId);
     const instruction = note || `Übernimm ${chunk.length} E-Mail-Datensätze aus Mail als ${mode === 'reference' ? 'Referenz' : 'Arbeitsauftrag'}.`;
+    // „An CTOX übergeben“: Standardbefehl ctox.chat.task der Chat-App ctox über den Baustein (Strang SKL-D, Kern §16.40
+    // commands_out). Die Datensätze gehen als Kontext in den Prompt; route_kind/source_record_ids bleiben oben für den
+    // Weiterleitungsnachweis der Mail-App (routeCommandForRecord).
+    const routeContext = {
+      target_module: destinationModule,
+      route_kind: 'mail.bulk.route',
+      route_batch_id: batchId,
+      route_mode: mode,
+      source_record_ids: sourceRecordIds,
+      record_snapshot: { schema: 'ctox.mail.route-batch.v1', records: chunk.map(routeSnapshot) },
+      risk_class: 'internal',
+    };
+    const routed = buildContextChatCommand({
+      source_app: 'mail',
+      record_ref: `${batchId}_${chunkNumber}`,
+      text: instruction,
+      mode: 'data',
+      title: `${chunk.length} E-Mails aus Mail`,
+      thread_key: `business-os/mail/routes/${batchId}/${chunkNumber}`,
+      context: routeContext,
+    });
     commands.push({
       id: commandId,
       command_id: commandId,
       module: destinationModule,
-      command_type: 'business_os.chat.task',
-      record_id: `${batchId}_${chunkNumber}`,
+      command_type: routed.type,
+      record_id: routed.record_id,
       inbound_channel: 'business_os.mail',
       status: 'pending_sync',
       payload: {
-        title: `${chunk.length} E-Mails aus Mail`,
-        prompt: instruction,
-        instruction,
-        user_message: instruction,
-        source_module: 'mail',
+        ...routed.payload,
         target_module: destinationModule,
         route_kind: 'mail.bulk.route',
         route_batch_id: batchId,
         route_mode: mode,
         source_record_ids: sourceRecordIds,
-        record_snapshot: { schema: 'ctox.mail.route-batch.v1', records: chunk.map(routeSnapshot) },
-        thread_key: `business-os/mail/routes/${batchId}/${chunkNumber}`,
-        response_channel: 'business_os_chat',
-        outbound_channel: 'business_os_chat',
-        risk_class: 'internal',
       },
       client_context: baseContext,
     });
@@ -2808,10 +2676,6 @@ function applyStaticLabels(root, t) {
   const labels = {
     '[data-mail-kicker]': t('workspace', 'Arbeitsbereich'),
     '[data-mail-title]': t('mail', 'Mail'),
-    '[data-mail-empty-title]': t('emptyTitle', 'Keine E-Mails'),
-    '[data-mail-empty-body]': t('emptyBody', 'Nachrichten erscheinen nach der ersten Synchronisierung.'),
-    '[data-mail-detail-empty-title]': t('noSelectionTitle', 'Keine Mail ausgewählt'),
-    '[data-mail-detail-empty-body]': t('noSelectionBody', 'Wähle eine Nachricht oder Kampagne aus.'),
     '[data-mail-composer-title]': t('compose', 'Neue Mail'),
     '[data-mail-compose-primary]': t('compose', 'Neue Mail'),
     '[data-mail-from-label]': t('from', 'Von'),
@@ -2831,13 +2695,15 @@ function applyStaticLabels(root, t) {
     '[data-mail-password-label]': t('initialPassword', 'Initialpasswort'),
     '[data-mail-create-mailbox]': t('createMailbox', 'Postfach anlegen'),
     '[data-mail-existing-mailboxes-label]': t('existingMailboxes', 'Vorhandene Postfächer'),
-    '[data-mail-mailbox-security]': t('mailboxSecurity', 'Das Passwort wird nach der Einrichtung aus dem Command entfernt.'),
     '[data-mail-reload-mailboxes]': t('reload', 'Neu laden'),
   };
   for (const [selector, text] of Object.entries(labels)) {
     const element = root.querySelector(selector);
     if (element) element.textContent = text;
   }
+  // Sachinformation zum Passwortfeld nur als Tooltip (Textdiät Regel 1).
+  const password = root.querySelector('[data-mail-mailbox-security]');
+  if (password) password.title = t('mailboxSecurity', 'Das Passwort wird nach der Einrichtung aus dem Auftrag entfernt.');
   const search = root.querySelector('[data-mail-search]');
   if (search) search.placeholder = t('search', 'Mails durchsuchen');
 }
@@ -2855,26 +2721,11 @@ function visibleEmailAccounts(accounts, user) {
   }).sort(sortAccount);
 }
 
-async function authoritativeVisibleEmailAccounts(accounts, user, readNativeAccount) {
-  const candidates = visibleEmailAccounts(accounts, user);
-  if (!candidates.length) return [];
-  if (typeof readNativeAccount !== 'function') {
-    throw new Error('Mail account verification is unavailable.');
-  }
-  const verified = await Promise.all(candidates.map(async (account) => {
-    const document = await readNativeAccount('communication_accounts', account.account_key, { timeoutMs: 4000 });
-    const nativeAccount = document?.toJSON?.() || document;
-    if (nativeAccount?.account_key !== account.account_key) return null;
-    return visibleEmailAccounts([nativeAccount], user)[0] || null;
-  }));
-  return verified.filter(Boolean).sort(sortAccount);
-}
-
 function visibleMailCampaigns(campaigns, user, accounts, messages) {
   const active = (campaigns || []).filter((campaign) => !isDeleted(campaign));
   if (isGlobalMailAdmin(user)) return active.sort(sortUpdatedDesc);
   const userIds = new Set([user?.id, user?.user_id, user?.email, user?.login].filter(Boolean).map(String));
-  const accountKeys = new Set((accounts || []).map((account) => account.account_key));
+  const accountKeys = new Set((accounts || []).map((account) => account.id));
   const campaignIdsForAccounts = new Set((messages || [])
     .filter((message) => accountKeys.has(message.communication_account_key || message.sender_account_id))
     .map((message) => message.campaign_id));
@@ -2897,9 +2748,24 @@ function isGlobalMailAdmin(user) {
   return ['admin', 'chef', 'owner'].includes(String(user?.role || '').toLowerCase());
 }
 
-function commandOutcome(command) {
-  const result = command?.result ?? command?.payload?.outcome ?? command ?? {};
-  return result?.outcome && typeof result.outcome === 'object' ? result.outcome : result;
+// mail_server_state (Plattformmanifest ctox-platform, Kern §16.28): {id, kind:'runtime'|'domain'|'user', name, status,
+// data, updated_at_ms}. runtime: status = Laufzustand, data.{config, health}; domain: name = Domain, data = DNS-Werte
+// (dkim_selector, dkim_public_key, spf_record, dmarc_record); user: name = Postfachadresse, data.{owner_user_id,
+// communication_account_key}. Abbildung auf die Felder, die die Verwaltung schon rendert (vorher get_config-Ergebnis).
+function mailserverStateFromRows(rows) {
+  const live = (rows || []).filter((row) => row && !isDeleted(row));
+  const runtime = live.find((row) => row.kind === 'runtime') || null;
+  const data = (row) => (row?.data && typeof row.data === 'object' ? row.data : {});
+  const byName = (a, b) => String(a.name || a.id || '').localeCompare(String(b.name || b.id || ''));
+  return {
+    runtimeConfig: runtime ? { ...(data(runtime).config || {}) } : {},
+    runtimeStatus: runtime ? { ...(data(runtime).status || {}), ...(runtime.status ? { state: runtime.status } : {}) } : {},
+    health: runtime ? { ...(data(runtime).health || {}) } : {},
+    domains: live.filter((row) => row.kind === 'domain').sort(byName)
+      .map((row) => ({ ...data(row), domain_name: String(row.name || data(row).domain_name || '') })),
+    users: live.filter((row) => row.kind === 'user').sort(byName)
+      .map((row) => ({ ...data(row), username: String(row.name || data(row).username || '') })),
+  };
 }
 
 function mailserverDomain(domain) {
@@ -2990,45 +2856,20 @@ function groupContentLabel(mode) {
   })[mode] || 'Inhalt bearbeiten';
 }
 
-function buildComposeCommandBundle(input, ids, now) {
-  const senderAddress = String(input.accountKey || '').replace(/^email:/, '');
-  const engagementPayload = {
-    engagement_id: ids.engagementId,
+// Payload des Sammelbefehls outbound.message.compose (modules/outbound/handlers/outbound.message.compose.js baut daraus
+// je Empfänger exakt die früheren Einzel-Payloads: engagement.create, message.prepare, request_approval, approve,
+// send_approved).
+function buildComposePayload(input, recipients, now) {
+  return {
+    mode: input.mode || 'draft',
     campaign_id: input.campaignId,
     sender_account_id: input.accountKey,
-    contact_email: input.recipient,
-    status: 'assigned',
-    payload: {
-      source: 'mail_app',
-      recipient_email: input.recipient,
-    },
-    created_at_ms: now,
-  };
-  const messagePayload = {
-    message_id: ids.messageId,
-    engagement_id: ids.engagementId,
-    campaign_id: input.campaignId,
-    channel: 'email',
-    message_type: 'initial',
-    direction: 'outbound',
-    sender_account_id: input.accountKey,
-    communication_account_key: input.accountKey,
-    recipient_email: input.recipient,
     subject: input.subject,
     body_text: input.body,
     body_html: plainTextToEmailHtml(input.body),
-    payload: {
-      source: 'mail_app',
-      sender_address: senderAddress,
-      mail_content_revision_id: String(input.contentRevisionId || ''),
-      tracking_enabled: true,
-    },
+    content_revision_id: String(input.contentRevisionId || ''),
     created_at_ms: now,
-  };
-  return {
-    engagement: { commandType: 'outbound.engagement.create', payload: engagementPayload },
-    message: { commandType: 'outbound.message.prepare', payload: messagePayload },
-    approval: { commandType: 'outbound.message.request_approval', payload: { message_id: ids.messageId } },
+    recipients,
   };
 }
 
@@ -3125,11 +2966,12 @@ function messageProgressModel(message) {
     currentIndex = 1;
   }
 
+  // Versandschritte je Nachricht = fachlicher Datensatzstatus (outbound_messages), kein App-Zustand.
   const labels = [
     ['Entwurf erstellt', 'edit'],
-    [approved ? 'Freigegeben' : 'Freigabe ausstehend', approved ? 'check' : 'clock'],
-    [queued ? 'An Mailserver übergeben' : 'Versand ausstehend', 'send'],
-    [delivery === 'failed' ? 'Zustellung fehlgeschlagen' : delivery === 'delivered' ? 'Zugestellt' : 'Zustellung ausstehend', delivery === 'failed' ? 'warning' : 'check'],
+    [approved ? 'Freigegeben' : 'Freigabe ausstehend', approved ? 'check' : 'clock'], // v4-allow: label
+    [queued ? 'An Mailserver übergeben' : 'Versand ausstehend', 'send'], // v4-allow: label
+    [delivery === 'failed' ? 'Zustellung fehlgeschlagen' : delivery === 'delivered' ? 'Zugestellt' : 'Zustellung ausstehend', delivery === 'failed' ? 'warning' : 'check'], // v4-allow: label
     [opened ? 'Öffnung erfasst' : trackingEnabled ? 'Keine Öffnung erfasst' : 'Öffnungstracking nicht aktiv', 'eye'],
     [clicked ? 'Link geklickt' : trackingEnabled ? 'Kein Linkklick erfasst' : 'Klicktracking nicht aktiv', 'link'],
   ];
@@ -3153,7 +2995,7 @@ function messageEventTimeline(message) {
   const events = [{ label: 'Vorbereitet', detail: formatRecordTime(message.created_at_ms), state: 'done' }];
   const approval = String(message.approval_status || 'draft');
   events.push({
-    label: approval === 'approved' ? 'Freigegeben' : approval === 'awaiting_approval' ? 'Freigabe ausstehend' : 'Noch nicht freigegeben',
+    label: approval === 'approved' ? 'Freigegeben' : approval === 'awaiting_approval' ? 'Freigabe ausstehend' : 'Noch nicht freigegeben', // v4-allow: label
     detail: formatRecordTime(message.updated_at_ms || message.created_at_ms),
     state: approval === 'approved' ? 'done' : 'pending',
   });
@@ -3166,7 +3008,7 @@ function messageEventTimeline(message) {
   } else if (delivery === 'failed') {
     events.push({ label: 'Zustellung fehlgeschlagen', detail: payload.provider_error_text || payload.last_send_error || 'Der Mailserver hat einen permanenten Fehler gemeldet.', state: 'failed' });
   } else if (delivery === 'queued') {
-    events.push({ label: 'Zustellung läuft', detail: 'Wartet auf das terminale SMTP-Ergebnis', state: 'active' });
+    events.push({ label: 'Zustellung läuft', detail: 'Wartet auf das terminale SMTP-Ergebnis', state: 'active' }); // v4-allow: label
   }
   if (Number(payload.open_count || 0) > 0) {
     events.push({ label: `Öffnung erfasst · ${payload.open_count}×`, detail: formatRecordTime(payload.last_opened_at_ms), state: 'done' });
@@ -3180,7 +3022,7 @@ function messageEventTimeline(message) {
 }
 
 function messageBelongsToThread(message, thread) {
-  return message.thread_key === thread.thread_key && message.account_key === thread.account_key;
+  return message.thread_key === thread.id && message.account_key === thread.account_key;
 }
 
 function latestMessageForThread(thread, messages) {
@@ -3194,71 +3036,9 @@ function renderMetric(value, label) {
 }
 
 function isPermissionDenied(error) {
-  return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
+  return error?.code === 'forbidden'
+    || error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
     || error?.name === 'BusinessOsPermissionError';
-}
-
-async function readAll(collection, required = false) {
-  if (!collection) return required ? new Error('Mail collection unavailable') : [];
-  let timeout;
-  let timedOut = false;
-  const controller = new AbortController();
-  try {
-    const docs = await Promise.race([
-      collection.find({ selector: {}, signal: controller.signal }).exec(),
-      new Promise((_, reject) => {
-        timeout = setTimeout(() => {
-          timedOut = true;
-          // CTOX RxDB demand queries accept this signal and cancel their
-          // underlying request; a bare Promise.race would leave it running.
-          controller.abort();
-          reject(new Error('Mail collection read timed out'));
-        }, MAIL_READ_TIMEOUT_MS);
-      }),
-    ]);
-    return docs.map((doc) => doc?.toJSON?.() || doc).filter(Boolean);
-  } catch (error) {
-    if (timedOut) return new Error('Mail collection read timed out');
-    if (isTransientCollectionReadError(error)) return null;
-    console.warn('[mail] collection read failed', error);
-    return error instanceof Error ? error : new Error(String(error));
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function isTransientCollectionReadError(error) {
-  const message = String(error?.message || error || '');
-  return /QUERY_CANCELLED|replication-cancel|WebRTC replication cancelled|IDBDatabase.*closing|database connection is closing|collection is closed|closed collection|RxDB Error-Code: COL21/i.test(message);
-}
-
-async function insertCollectionRecord(collection, record) {
-  if (!collection) throw new Error('Required mail collection is unavailable');
-  if (collection.insert) return collection.insert(record);
-  throw new Error('Required mail collection is read-only');
-}
-
-async function upsertCollectionRecord(collection, record) {
-  if (collection.incrementalUpsert) return collection.incrementalUpsert(record);
-  if (collection.upsert) return collection.upsert(record);
-  const existing = await collection.findOne(record.id).exec();
-  if (existing?.incrementalPatch) return existing.incrementalPatch(record);
-  if (existing?.patch) return existing.patch(record);
-  return collection.insert(record);
-}
-
-async function ensureStyles() {
-  const version = String(import.meta.url).split('?v=')[1] || STYLE_BUILD;
-  const href = new URL('./index.css', import.meta.url);
-  href.searchParams.set('v', version);
-  let link = document.querySelector('link[data-mail-style]');
-  if (!link) {
-    link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.dataset.mailStyle = 'true';
-    document.head.append(link);
-  }
-  if (link.href !== href.href) link.href = href.href;
 }
 
 function option(value, label) {
@@ -3287,7 +3067,7 @@ function sortUpdatedDesc(a, b) {
 }
 
 function sortAccount(a, b) {
-  return String(a.address || a.account_key || '').localeCompare(String(b.address || b.account_key || ''));
+  return String(a.address || a.id || '').localeCompare(String(b.address || b.id || ''));
 }
 
 function timeOf(value) {
@@ -3321,10 +3101,6 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, Number(value) || min));
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => window.setTimeout(resolve, ms));
-}
-
 function stableJson(value) {
   const normalize = (item) => {
     if (Array.isArray(item)) return item.map(normalize);
@@ -3353,7 +3129,6 @@ function escapeAttribute(value) {
 export const __mailTestHooks = {
   visibleEmailAccounts,
   mailCountsKnown,
-  authoritativeVisibleEmailAccounts,
   visibleMailCampaigns,
   messageBelongsToThread,
   latestMessageForThread,
@@ -3364,14 +3139,14 @@ export const __mailTestHooks = {
   messageProgressModel,
   messageEventTimeline,
   plainTextToEmailHtml,
-  buildComposeCommandBundle,
+  buildComposePayload,
+  mailserverStateFromRows,
   mailActionIcon,
   validateComposeInput,
   messageActions,
   isDraftMessage,
   replySubject,
   isGlobalMailAdmin,
-  commandOutcome,
   mailserverDomain,
   mailserverUsername,
   isEmailAddress,
@@ -3385,5 +3160,4 @@ export const __mailTestHooks = {
   buildMailRouteCommands,
   stableJson,
   sha256Text,
-  isTransientCollectionReadError,
 };

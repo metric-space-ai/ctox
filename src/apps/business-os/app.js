@@ -1,31 +1,31 @@
-import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { connectWorkjetCalendar } from './shared/workjet-calendar-connect.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { requestDictation } from './shared/speech-dictation.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './shared/workjet-project-execution-policy-contract.generated.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261016-shell-v2-push-resume-native-owned';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261016-shell-v2-push-resume-native-owned';
-import { CtoxResizer } from './shared/resizer.js?v=20261016-shell-v2-push-resume-native-owned';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261016-shell-v2-push-resume-native-owned';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261016-shell-v2-push-resume-native-owned';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261016-shell-v2-push-resume-native-owned';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261016-shell-v2-push-resume-native-owned';
-import { createAppActions } from './shared/app-actions.js?v=20261016-shell-v2-push-resume-native-owned';
+import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261017-shell-v2-v4-train16m';
+import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261017-shell-v2-v4-train16m';
+import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261017-shell-v2-v4-train16m';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261017-shell-v2-v4-train16m';
+import { connectWorkjetCalendar } from './shared/workjet-calendar-connect.mjs?v=20261017-shell-v2-v4-train16m';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261017-shell-v2-v4-train16m';
+import { requestDictation } from './shared/speech-dictation.mjs?v=20261017-shell-v2-v4-train16m';
+import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261017-shell-v2-v4-train16m';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261017-shell-v2-v4-train16m';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261017-shell-v2-v4-train16m';
+import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './shared/workjet-project-execution-policy-contract.generated.mjs?v=20261017-shell-v2-v4-train16m';
+import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261017-shell-v2-v4-train16m';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261017-shell-v2-v4-train16m';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261017-shell-v2-v4-train16m';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261017-shell-v2-v4-train16m';
+import { CtoxResizer } from './shared/resizer.js?v=20261017-shell-v2-v4-train16m';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261017-shell-v2-v4-train16m';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261017-shell-v2-v4-train16m';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261017-shell-v2-v4-train16m';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261017-shell-v2-v4-train16m';
+import { createAppActions } from './shared/app-actions.js?v=20261017-shell-v2-v4-train16m';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261016-shell-v2-push-resume-native-owned';
+} from './shared/app-lifecycle.js?v=20261017-shell-v2-v4-train16m';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -34,20 +34,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261016-shell-v2-push-resume-native-owned';
+} from './shared/permissions.js?v=20261017-shell-v2-v4-train16m';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261016-shell-v2-push-resume-native-owned';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261016-shell-v2-push-resume-native-owned';
+} from './shared/branding.js?v=20261017-shell-v2-v4-train16m';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261017-shell-v2-v4-train16m';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261016-shell-v2-push-resume-native-owned';
+} from './shared/presentation.js?v=20261017-shell-v2-v4-train16m';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -58,9 +58,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261016-shell-v2-push-resume-native-owned';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261016-shell-v2-push-resume-native-owned';
-import { createDocumentsFacade } from './shared/documents.js?v=20261016-shell-v2-push-resume-native-owned';
+} from './shared/shell-permissions-ui.js?v=20261017-shell-v2-v4-train16m';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261017-shell-v2-v4-train16m';
+import { createDocumentsFacade } from './shared/documents.js?v=20261017-shell-v2-v4-train16m';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -68,27 +68,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261016-shell-v2-push-resume-native-owned';
+} from './shared/maintenance-state.js?v=20261017-shell-v2-v4-train16m';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261016-shell-v2-push-resume-native-owned';
+} from './shared/workspace-session.js?v=20261017-shell-v2-v4-train16m';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261016-shell-v2-push-resume-native-owned';
+} from './shared/taskbar-pins.js?v=20261017-shell-v2-v4-train16m';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261016-shell-v2-push-resume-native-owned';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261016-shell-v2-push-resume-native-owned';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261016-shell-v2-push-resume-native-owned';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261016-shell-v2-push-resume-native-owned';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261016-shell-v2-push-resume-native-owned';
+} from './shared/workjet-theme.js?v=20261017-shell-v2-v4-train16m';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261017-shell-v2-v4-train16m';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261017-shell-v2-v4-train16m';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261017-shell-v2-v4-train16m';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261017-shell-v2-v4-train16m';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -96,14 +96,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261016-shell-v2-push-resume-native-owned';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261016-shell-v2-push-resume-native-owned';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261016-shell-v2-push-resume-native-owned';
+} from './shared/startup-deadlines.js?v=20261017-shell-v2-v4-train16m';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261017-shell-v2-v4-train16m';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261017-shell-v2-v4-train16m';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261016-shell-v2-push-resume-native-owned';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261016-shell-v2-push-resume-native-owned';
+} from './shared/jour-fixe-presentation.mjs?v=20261017-shell-v2-v4-train16m';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261017-shell-v2-v4-train16m';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -124,7 +124,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261016-shell-v2-push-resume-native-owned';
+const APP_BUILD = '20261017-shell-v2-v4-train16m';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -12744,8 +12744,8 @@ const OFFLINE_FALLBACK_CATALOG = {
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-reports\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-reports\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#ef4444\" /><stop offset=\"100%\" stop-color=\"#f97316\" /></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" fill=\"url(#grad-reports)\" fill-opacity=\"0.12\" stroke=\"url(#grad-reports)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M18 17V10M12 17V6M6 17v-4\" stroke=\"url(#grad-reports)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"6\" r=\"2\" fill=\"#ffffff\" stroke=\"url(#grad-reports)\" stroke-width=\"1.2\"></circle></svg>",
         "left": "Bug and feature filters and history",
         "center": "Selected report evidence, CTOX change log, and rollback",
-        "right": "CTOX task, coding-agent delegation, and rollback actions for the selected report",
-        "third_pane_justification": "Die Aktions-Spalte (CTOX Task zeigen, Übergabe an den Coding Agent, Modul-Rollback) gehört zum selektierten Report und muss in breiten Fenstern neben Liste und Detail sichtbar bleiben; sie ist default-eingeklappt und öffnet über den Aktionen-Toggle im Detail-Header.",
+        "right": "CTOX task, hand-over to the coding agent in the code view, and rollback actions for the selected report",
+        "third_pane_justification": "Die Aktions-Spalte (CTOX Task zeigen, Übergabe an den Coding Agent in der Code-Ansicht, Modul-Rollback) gehört zum selektierten Report und muss in breiten Fenstern neben Liste und Detail sichtbar bleiben; sie ist default-eingeklappt und öffnet über den Aktionen-Toggle im Detail-Header.",
         "default_width": 1120,
         "default_height": 760,
         "min_width": 640,

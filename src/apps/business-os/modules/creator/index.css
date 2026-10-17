@@ -2,7 +2,13 @@
    labels, inputs, buttons, badges, chips, lists and empty states come from
    shared/base.css + app.css (the standard shell/kit classes). */
 
-.creator-module[data-creator-root] {
+/* v4: root ist Container der Breitenabfragen (Shell-Vorfahren liegen außerhalb von root). */
+[data-app="creator"] {
+  container: business-app-window / inline-size;
+  position: relative;
+}
+
+[data-app="creator"] .creator-module[data-creator-root] {
   /* Standard two-pane frame: library rail left, composer canvas right.
      The rail width is a custom property so the shell-owned declarative
      resizer ([data-resizer-var="--ctox-left-width"]) works without module JS. */
@@ -22,34 +28,34 @@
    dehnbare Zeile auf das ANSICHTSBAND statt auf das Well - gemessen 403 bis
    538px leeres Band, waehrend die Trefferliste content-hoch am unteren Rand
    klebte. Die Zeilen stehen so, wie das Markup sie beschreibt. */
-.creator-library {
+[data-app="creator"] .creator-library {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
 /* custom: the composer is a centered, document-style form canvas (prompt,
    examples, options), not a data pane — content column is width-capped. */
-.creator-workspace {
+[data-app="creator"] .creator-workspace {
   padding: clamp(18px, 3vw, 38px);
 }
 
-.creator-workspace > * {
+[data-app="creator"] .creator-workspace > * {
   width: min(860px, 100%);
   margin-inline: auto;
 }
 
-.creator-composer {
+[data-app="creator"] .creator-composer {
   padding-bottom: 22px;
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
 /* custom: large central prompt field — the signature input of this app. */
-.creator-request-textarea {
+[data-app="creator"] .creator-request-textarea {
   min-height: 150px;
   max-height: 300px;
   margin-top: 7px;
 }
 
-.creator-url-row {
+[data-app="creator"] .creator-url-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
@@ -57,22 +63,22 @@
 
 /* custom: removable reference token — kit badge plus URL ellipsis and a bare
    remove button (the kit chip is a clickable filter, this one is static). */
-.creator-url-list {
+[data-app="creator"] .creator-url-list {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
 }
 
-.creator-url-chip { max-width: 100%; }
+[data-app="creator"] .creator-url-chip { max-width: 100%; }
 
-.creator-url-chip > span {
+[data-app="creator"] .creator-url-chip > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.creator-url-chip button {
+[data-app="creator"] .creator-url-chip button {
   appearance: none;
   border: 0;
   padding: 0;
@@ -82,18 +88,18 @@
   cursor: pointer;
 }
 
-.creator-examples { padding: 22px 0; }
-.creator-examples > .ctox-field-label { margin-bottom: 10px; }
+[data-app="creator"] .creator-examples { padding: 22px 0; }
+[data-app="creator"] .creator-examples > .ctox-field-label { margin-bottom: 10px; }
 
 /* custom: prompt suggestion picker — a bordered two-column choice grid with
    accent hover, not a data list or table. */
-.creator-example-grid {
+[data-app="creator"] .creator-example-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   border-top: 1px solid var(--hairline, var(--line));
 }
 
-.creator-example {
+[data-app="creator"] .creator-example {
   min-width: 0;
   padding: 12px 12px 12px 0;
   border: 0;
@@ -106,57 +112,55 @@
   transition: color 120ms ease;
 }
 
-.creator-example:nth-child(odd) { border-right: 1px solid var(--hairline, var(--line)); }
-.creator-example:nth-child(even) { padding-left: 12px; }
-.creator-example:hover { color: var(--accent); }
-.creator-example:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+[data-app="creator"] .creator-example:nth-child(odd) { border-right: 1px solid var(--hairline, var(--line)); }
+[data-app="creator"] .creator-example:nth-child(even) { padding-left: 12px; }
+[data-app="creator"] .creator-example:hover { color: var(--accent); }
+[data-app="creator"] .creator-example:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
-.creator-example strong,
-.creator-example span { display: block; }
-.creator-example span {
+[data-app="creator"] .creator-example strong,
+[data-app="creator"] .creator-example span { display: block; }
+[data-app="creator"] .creator-example span {
   margin-top: 4px;
   color: var(--muted);
   line-height: 1.4;
 }
 
 /* custom: progressive-disclosure sections (the kit has no accordion pattern). */
-.creator-options,
-.creator-status-details,
-.creator-requests-details {
+[data-app="creator"] .creator-options,
+[data-app="creator"] .creator-requests-details {
   border-top: 1px solid var(--hairline, var(--line));
 }
 
-.creator-options summary,
-.creator-status-details summary,
-.creator-requests-details summary {
+[data-app="creator"] .creator-options summary,
+[data-app="creator"] .creator-requests-details summary {
   padding: 12px 0;
   color: var(--muted);
   font-weight: 700;
   cursor: pointer;
 }
 
-.creator-options-body {
+[data-app="creator"] .creator-options-body {
   display: grid;
   gap: 12px;
   padding: 4px 0 18px;
 }
 
 /* custom: form layout helpers for the options grid (visual only). */
-.creator-form-group { display: grid; gap: 6px; }
-.creator-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.creator-options-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+[data-app="creator"] .creator-form-group { display: grid; gap: 6px; }
+[data-app="creator"] .creator-form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+[data-app="creator"] .creator-options-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
-.collection-row {
+[data-app="creator"] .collection-row {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-bottom: 6px;
 }
-.collection-row:last-child { margin-bottom: 0; }
-.collection-row .ctox-input { flex: 1; }
+[data-app="creator"] .collection-row:last-child { margin-bottom: 0; }
+[data-app="creator"] .collection-row .ctox-input { flex: 1; }
 
 /* custom: mono collection-name chip inside a collection row. */
-.creator-collection-name {
+[data-app="creator"] .creator-collection-name {
   flex: 1;
   overflow: hidden;
   color: var(--accent);
@@ -168,61 +172,27 @@
 
 /* custom: sticky composer action bar — readiness status plus the single
    signature .ctox-run-control of this app. */
-.creator-submit {
+[data-app="creator"] .creator-submit {
   position: sticky;
-  bottom: -1px;
+  /* Bis an den unteren Rand des Scrollbereichs: dessen Innenpolster (.creator-workspace) lag sonst unter der
+     Leiste frei, und weitergescrollte Beispiele schimmerten darunter durch (Rundgang RUND1 @1280). */
+  --creator-pad: clamp(18px, 3vw, 38px);
+  bottom: calc(-1px - var(--creator-pad));
+  margin-bottom: calc(-1 * var(--creator-pad));
   z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 14px 0;
+  padding: 14px 0 calc(14px + var(--creator-pad));
   border-top: 1px solid var(--hairline, var(--line));
   background: var(--surface);
 }
 
-.creator-submit #btn-deploy-app {
+[data-app="creator"] .creator-submit #btn-deploy-app {
   min-width: 180px;
   justify-content: space-between;
 }
-
-/* custom: live readiness dot (sync-dot/is-blocked/is-ready/is-saving are JS
-   hooks set via className in index.js). */
-.sync-status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  color: var(--muted);
-}
-
-.sync-dot {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  border-radius: 99px;
-  background: var(--success);
-}
-.sync-dot.is-blocked { background: var(--muted); opacity: .6; }
-.sync-dot.is-ready { background: var(--success); }
-.sync-dot.is-saving { background: var(--warning); animation: creator-pulse .8s infinite alternate; }
-@keyframes creator-pulse { from { opacity: .35; } to { opacity: 1; } }
-
-/* custom: technical log console — mono diagnostic stream, not kit content. */
-.creator-status-details { margin-top: 2px; }
-.console-logs {
-  max-height: 140px;
-  overflow: auto;
-  padding: 8px 0 18px;
-  color: var(--muted);
-  font-family: var(--font-mono), monospace;
-  font-size: 11px;
-  line-height: 1.55;
-}
-.console-log-entry { white-space: pre-wrap; overflow-wrap: anywhere; }
-.console-log-entry.success { color: var(--success); }
-.console-log-entry.warning { color: var(--warning); }
-.console-log-entry.error { color: var(--danger); }
 
 /* Library shards — pure selectors inside the kit .ctox-list well (frame,
    header, filterbar, tray, view band, well, footer and selection accent bar
@@ -231,9 +201,9 @@
    Die beiden Ansichten sind bewusst VERSCHIEDEN (Betreiber-Direktive 31.08.):
    KARTE = mehrzeiliger Eintrag mit grosszuegigem Padding, LISTE = genau eine
    kompakte Zeile mit maximaler Dichte. */
-.creator-shard { cursor: pointer; }
+[data-app="creator"] .creator-shard { cursor: pointer; }
 
-.creator-shard-head {
+[data-app="creator"] .creator-shard-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -241,7 +211,7 @@
   min-width: 0;
 }
 
-.creator-shard-title {
+[data-app="creator"] .creator-shard-title {
   min-width: 0;
   overflow: hidden;
   color: var(--text-strong, var(--text));
@@ -249,7 +219,7 @@
   white-space: nowrap;
 }
 
-.creator-shard-meta {
+[data-app="creator"] .creator-shard-meta {
   margin-top: 3px;
   overflow: hidden;
   color: var(--muted);
@@ -259,21 +229,21 @@
 }
 
 /* KARTE: Titel fett, darunter ein bis zwei Meta-Zeilen, mehr Luft. */
-.creator-shard--cards {
+[data-app="creator"] .creator-shard--cards {
   padding: 12px 14px;
   line-height: 1.35;
 }
 
-.creator-shard--cards .creator-shard-title { font-weight: 700; }
+[data-app="creator"] .creator-shard--cards .creator-shard-title { font-weight: 700; }
 
-.creator-shard-sub {
+[data-app="creator"] .creator-shard-sub {
   margin-top: 1px;
   font-size: 11px;
   opacity: 0.85;
 }
 
 /* LISTE: eine Zeile, enge Zeilenhoehe, ein Kurz-Meta rechts. */
-.creator-shard--list {
+[data-app="creator"] .creator-shard--list {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -282,9 +252,9 @@
   line-height: 1.25;
 }
 
-.creator-shard--list .creator-shard-title { font-size: 13px; }
+[data-app="creator"] .creator-shard--list .creator-shard-title { font-size: 13px; }
 
-.creator-shard-side {
+[data-app="creator"] .creator-shard-side {
   flex: 0 0 auto;
   max-width: 45%;
   overflow: hidden;
@@ -301,14 +271,14 @@
    (shared/base.css), es bleibt keine leere Spur reserviert. */
 @container business-app-window (max-width: 768px) {
   /* Keep the primary task (composer) first when the panes stack. */
-  .creator-main { order: -1; }
+  [data-app="creator"] .creator-main { order: -1; }
 
   /* Gestapelt ist die Bahn die ganze Fensterbreite: der 6px-Rahmen des Kits
      wuerde den ersten Kopf in die Icon-Zone schieben, deshalb faellt das
      aeussere Padding weg (gleiche Geometrie wie Knowledge/Calendar). Der
      Bogen scrollt als Ganzes, damit die zweite Sektion nicht abgeschnitten
      wird. */
-  .creator-module[data-creator-root] {
+  [data-app="creator"] .creator-module[data-creator-root] {
     padding: 0;
     height: auto;
     min-height: 100%;
@@ -316,62 +286,63 @@
     row-gap: 8px;
   }
 
-  .creator-library,
-  .creator-main {
+  [data-app="creator"] .creator-library,
+  [data-app="creator"] .creator-main {
     height: auto;
     min-height: 220px;
   }
 
-  .creator-example-grid,
-  .creator-form-grid,
-  .creator-options-grid { grid-template-columns: minmax(0, 1fr); }
-  .creator-example:nth-child(odd) { border-right: 0; }
-  .creator-example:nth-child(even) { padding-left: 0; }
+  [data-app="creator"] .creator-example-grid,
+  [data-app="creator"] .creator-form-grid,
+  [data-app="creator"] .creator-options-grid { grid-template-columns: minmax(0, 1fr); }
+  [data-app="creator"] .creator-example:nth-child(odd) { border-right: 0; }
+  [data-app="creator"] .creator-example:nth-child(even) { padding-left: 0; }
 
-  .creator-workspace { padding: 18px 12px; }
-  .creator-url-row { grid-template-columns: minmax(0, 1fr); }
-  .creator-submit { align-items: stretch; flex-direction: column; }
-  .creator-submit #btn-deploy-app { width: 100%; }
+  [data-app="creator"] .creator-workspace { padding: 18px 12px; }
+  [data-app="creator"] .creator-submit { --creator-pad: 18px; }
+  [data-app="creator"] .creator-url-row { grid-template-columns: minmax(0, 1fr); }
+  [data-app="creator"] .creator-submit { align-items: stretch; flex-direction: column; }
+  [data-app="creator"] .creator-submit #btn-deploy-app { width: 100%; }
 }
 
 /* Touch targets on coarse pointers (phone/tablet): every interactive control
    reaches the 44px minimum, icon-only pane buttons in both dimensions, plus
    the example picker cells and the tiny URL-chip remove button. */
 @media (pointer: coarse) {
-  .creator-module button,
-  .creator-module input,
-  .creator-module select,
-  .creator-module textarea {
+  [data-app="creator"] .creator-module button,
+  [data-app="creator"] .creator-module input,
+  [data-app="creator"] .creator-module select,
+  [data-app="creator"] .creator-module textarea {
     min-height: 44px;
   }
 
-  .creator-module .ctox-pane-icon {
+  [data-app="creator"] .creator-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .creator-module .ctox-pane-tab {
+  [data-app="creator"] .creator-module .ctox-pane-tab {
     min-height: 44px;
   }
 
-  .creator-module .creator-shard {
+  [data-app="creator"] .creator-module .creator-shard {
     min-height: 44px;
   }
 
-  .creator-module .creator-example {
+  [data-app="creator"] .creator-module .creator-example {
     min-height: 44px;
   }
 
-  .creator-module .creator-url-chip button {
+  [data-app="creator"] .creator-module .creator-url-chip button {
     min-width: 44px;
     min-height: 44px;
   }
 
   /* The accordion summaries are the only way to reach the options/log —
      give them a full finger-height hit area. */
-  .creator-module .creator-options summary,
-  .creator-module .creator-status-details summary,
-  .creator-module .creator-requests-details summary {
+  [data-app="creator"] .creator-module .creator-options summary,
+  [data-app="creator"] .creator-module .creator-status-details summary,
+  [data-app="creator"] .creator-module .creator-requests-details summary {
     min-height: 44px;
     padding: 12px 0;
   }
@@ -382,14 +353,14 @@
    Filterzeile (Muster Knowledge/Browser), beide ueber die Kopf-Einrueckung aus
    der Icon-Zone (80px) herausgehalten. Rechts: eine ueber beide Kopfzeilen
    zentrierte Titelzeile. */
-.shell-window[data-shell-contract="v2"] .creator-module .ctox-pane-header {
+[data-app="creator"] .creator-module .ctox-pane-header {
   box-sizing: border-box;
   min-height: calc(var(--shell-v2-header-row-size, 37px) * 2);
   padding-block: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .creator-module .ctox-pane-title-row,
-.shell-window[data-shell-contract="v2"] .creator-module .ctox-pane-header > .ctox-filterbar {
+[data-app="creator"] .creator-module .ctox-pane-title-row,
+[data-app="creator"] .creator-module .ctox-pane-header > .ctox-filterbar {
   box-sizing: border-box;
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
@@ -398,30 +369,30 @@
 
 /* 14px Kicker + 17px Titel bleiben gestapelt und passen in die 37px-Zeile
    (gleiche Loesung wie im Browser-Modul). */
-.shell-window[data-shell-contract="v2"] .creator-module .ctox-pane-titles {
+[data-app="creator"] .creator-module .ctox-pane-titles {
   padding-top: 0;
   overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .creator-module .ctox-pane-title {
+[data-app="creator"] .creator-module .ctox-pane-title {
   margin-top: 0;
   line-height: 1.15;
 }
 
 /* Linke Spalte: Icon-Zone freihalten — Titel- UND Filterzeile erben die
    Einrueckung vom Kopf; das offene Filter-Tray ebenso. */
-.shell-window[data-shell-contract="v2"] .creator-module .creator-library > .ctox-pane-header {
+[data-app="creator"] .creator-module .creator-library > .ctox-pane-header {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
 }
 
 /* Rechte Spalte: die einzelne Titelzeile fuellt beide Kopfzeilen und zentriert
    den Titel vertikal. Als LETZTER Kopf der obersten Reihe haelt sie zugleich
    die 74px-Fenstersteuerung frei (Vertrag §7.3). */
-.shell-window[data-shell-contract="v2"] .creator-module .creator-main > .ctox-pane-header {
+[data-app="creator"] .creator-module .creator-main > .ctox-pane-header {
   padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
 }
 
-.shell-window[data-shell-contract="v2"] .creator-module .creator-main > .ctox-pane-header .ctox-pane-title-row {
+[data-app="creator"] .creator-module .creator-main > .ctox-pane-header .ctox-pane-title-row {
   height: calc(var(--shell-v2-header-row-size, 37px) * 2);
 }
 
@@ -431,11 +402,11 @@
    Falte und gibt seine Icon-Einrueckung zurueck, damit dort keine leere
    94px-Flaeche stehen bleibt. */
 @container business-app-window (max-width: 768px) {
-  .shell-window[data-shell-contract="v2"] .creator-module .creator-main > .ctox-pane-header {
+  [data-app="creator"] .creator-module .creator-main > .ctox-pane-header {
     padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
   }
 
-  .shell-window[data-shell-contract="v2"] .creator-module .creator-library > .ctox-pane-header {
+  [data-app="creator"] .creator-module .creator-library > .ctox-pane-header {
     padding-left: 14px;
   }
 }

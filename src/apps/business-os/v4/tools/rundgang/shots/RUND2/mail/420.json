@@ -1,0 +1,160 @@
+{
+ "app": "mail",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Mail",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Mail-Navigation öffnen",
+    "button:Mails importieren",
+    "button:Mails exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Eingang (6)",
+    "nav:Gesendet (0)",
+    "nav:Aktion nötig (6)",
+    "row:Nachrichten Zeit",
+    "check:Sichtbare Seite auswählen",
+    "row:communication--001 3 neu Budge",
+    "check:Budgetplanung Vertrieb Süd aus",
+    "row:communication--002 12 neu Quar",
+    "check:Quartalsbericht Q3 2026 auswäh",
+    "row:communication--003 1 neu Angeb",
+    "check:Angebot Wartungsvertrag Halle ",
+    "row:communication--004 7 neu Proje",
+    "check:Projektplan Relaunch Kundenpor",
+    "row:communication--005 24 neu Lief",
+    "check:Lieferantenbewertung 2026 ausw",
+    "row:communication--006 5 neu Onboa",
+    "check:Onboarding neue Mitarbeitende "
+   ],
+   "shot": "mail/420-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "mail/420-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Eingang (6)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Gesendet (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "mail/420-03-nav_Gesendet_0_.png"
+  },
+  {
+   "step": "nav Aktion nötig (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "mail/420-04-nav_Aktion_n_tig_6_.png"
+  },
+  {
+   "step": "zurück zu Reiter Alle (6)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "row Nachrichten Zeit",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row"
+  },
+  {
+   "step": "row communication--001 3 neu Budgetplanung Vertrieb Süd 13.10.",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "mail/420-05-row_communication--001_3_neu_Budgetplanu.png"
+  },
+  {
+   "step": "button Mail-Navigation öffnen: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Mails importieren: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Mails exportieren: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Als Liste anzeigen: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Filter: verdeckt/nicht erreichbar, übersprungen"
+  },
+  {
+   "step": "button Zurück zur Liste",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "mail/420-06-button_Zur_ck_zur_Liste.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "mail",
+  "Mail"
+ ]
+}

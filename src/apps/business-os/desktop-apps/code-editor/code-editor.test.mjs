@@ -1,210 +1,65 @@
+// Editor-Bibliothek (Shell v4): reine Hilfsfunktionen + Quelltext-Wächter. Browser-Verhalten: tests/v4-api.test.mjs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
-import { fileURLToPath } from 'node:url';
+import {
+  buildLineDiff, filterSourceFiles, formatSourceContent, isJavaScriptMime, normalizeSourceFiles,
+  resolveMonacoBaseUrl, sourceEditorActionState, sourceModelPath,
+} from './app.js';
 
-import { build } from 'esbuild';
+const appSource = (await readFile(new URL('./app.js', import.meta.url), 'utf8')).split('\n').filter((l) => !/^\s*\/\//.test(l)).join('\n');
 
-const bundledModule = await build({
-  entryPoints: [fileURLToPath(new URL('./app.js', import.meta.url))],
-  bundle: true,
-  format: 'esm',
-  platform: 'browser',
-  write: false,
-});
-
-const [{ text: bundledSource }] = bundledModule.outputFiles;
-const appSource = await readFile(new URL('./app.js', import.meta.url), 'utf8');
-const {
-  filterSourceFiles,
-  formatSourceContent,
-  isDesktopAppTargetAvailable,
-  isJavaScriptMime,
-  normalizeModuleCatalog,
-  normalizeSourceFiles,
-  resolveMonacoBaseUrl,
-  sourceCommandErrorMessage,
-  sourceEditorActionState,
-  sourceModelPath,
-} = await import(`data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`);
-
-test('module catalog exposes editable Business OS apps once each', () => {
-  const modules = normalizeModuleCatalog([
-    { id: 'ctox', title: 'CTOX', editable: true },
-    { id: 'ctox', title: 'Duplicate', editable: true },
-    { id: 'hidden', title: 'Hidden', hidden: true },
-    { id: 'locked', title: 'Locked', editable: false },
-    { id: 'notes', title: 'Notizen' },
-  ]);
-
-  assert.deepEqual(modules.map((module) => module.id).sort(), ['ctox', 'notes']);
-  assert.equal(modules.find((module) => module.id === 'notes').title, 'Notizen');
-});
-
-test('module catalog can filter source-visible apps by projected permissions', () => {
-  const governance = {
-    permission_model: {
-      explicit_grants: [
-        {
-          grant_id: 'viewer_notes_source',
-          subject_type: 'user',
-          subject_id: 'viewer',
-          permission: 'apps.source.view',
-          scope_type: 'module',
-          scope_id: 'notes',
-          active: true,
-        },
-      ],
-    },
-  };
-  const modules = normalizeModuleCatalog([
-    { id: 'ctox', title: 'CTOX' },
-    { id: 'notes', title: 'Notizen' },
-  ], {
-    session: { user: { id: 'viewer', role: 'user' } },
-    governance,
-    requireSourceView: true,
-  });
-
-  assert.deepEqual(modules.map((module) => module.id), ['notes']);
+test('Bibliothek statt App: createCodeEditor exportiert, kein mount/ctx/Datenweg', () => {
+  assert.match(appSource, /export async function createCodeEditor\(\{ root, files = \[\], onChange, readOnly = false/);
+  assert.doesNotMatch(appSource, /export (async )?function mount\b/);
+  assert.doesNotMatch(appSource, /\bctx\.|commandBus|registry\.json|until:|startCollection|setInterval|\?v=/);
+  assert.doesNotMatch(appSource, /delay\(300\)|45000|45_000/);
 });
 
 test('source file normalization removes deleted rows and sorts paths', () => {
   const files = normalizeSourceFiles([
-    { path: 'z.css', content: '', is_deleted: false },
-    { path: 'deleted.js', _deleted: true },
-    { path: 'index.js', content: 'export {}' },
-    { path: '', content: 'bad' },
+    { path: 'z.js', content: 'z' }, { path: ' a.css ', content: 'a' }, { path: 'gone.js', is_deleted: true }, { path: '' }, null,
   ]);
-
-  assert.deepEqual(files.map((file) => file.path), ['index.js', 'z.css']);
-  assert.equal(files[0].language, 'javascript');
-  assert.equal(files[1].language, 'css');
-  assert.equal(files[0].dirty, false);
+  assert.deepEqual(files.map((f) => f.path), ['a.css', 'z.js']);
+  assert.equal(files[0].language, 'css');
+  assert.equal(files[1].dirty, false);
 });
 
 test('file search matches path and language without mutating rows', () => {
-  const files = normalizeSourceFiles([
-    { path: 'index.js', language: 'javascript' },
-    { path: 'styles/main.css', language: 'css' },
-  ]);
-
-  assert.deepEqual(filterSourceFiles(files, 'css').map((file) => file.path), ['styles/main.css']);
-  assert.equal(filterSourceFiles(files, '').length, 2);
+  const files = normalizeSourceFiles([{ path: 'index.js' }, { path: 'index.css' }, { path: 'module.json' }]);
+  assert.deepEqual(filterSourceFiles(files, 'css').map((f) => f.path), ['index.css']);
+  assert.deepEqual(filterSourceFiles(files, 'JAVASCRIPT').map((f) => f.path), ['index.js']);
+  assert.equal(filterSourceFiles(files, '').length, 3);
 });
 
-test('actions stay disabled until a dirty writable file is selected', () => {
-  assert.deepEqual(sourceEditorActionState({}), {
-    openApp: false,
-    diff: false,
-    format: false,
-    revert: false,
-    reload: false,
-    save: false,
-  });
-
-  assert.deepEqual(sourceEditorActionState({
-    moduleId: 'ctox',
-    hasFile: true,
-    dirty: true,
-    readonly: false,
-  }), {
-    openApp: true,
-    diff: true,
-    format: true,
-    revert: true,
-    reload: true,
-    save: true,
-  });
-
-  assert.equal(sourceEditorActionState({
-    moduleId: 'ctox',
-    hasFile: true,
-    dirty: true,
-    readonly: true,
-  }).save, false);
-  assert.equal(sourceEditorActionState({
-    moduleId: 'ctox',
-    hasFile: true,
-    dirty: false,
-    readonly: true,
-  }).format, false);
+test('editor actions stay disabled without file, revert needs a dirty writable file', () => {
+  assert.deepEqual(sourceEditorActionState({}), { canFormat: false, canRevert: false, canDiff: false });
+  assert.deepEqual(sourceEditorActionState({ hasFile: true }), { canFormat: true, canRevert: false, canDiff: true });
+  assert.deepEqual(sourceEditorActionState({ hasFile: true, dirty: true, readOnly: true }), { canFormat: false, canRevert: false, canDiff: true });
+  assert.equal(sourceEditorActionState({ hasFile: true, dirty: true }).canRevert, true);
 });
 
-test('coding-agent cross-link is gated by the shell target catalog', () => {
-  assert.equal(isDesktopAppTargetAvailable({
-    canOpenDesktopApp: (appId) => appId === 'coding-agents',
-  }, 'coding-agents'), true);
-  assert.equal(isDesktopAppTargetAvailable({
-    desktopApps: [{ id: 'explorer' }],
-  }, 'coding-agents'), false);
-  assert.equal(isDesktopAppTargetAvailable({
-    getDesktopApps: () => [{ id: 'coding-agents' }],
-  }, 'coding-agents'), true);
-});
-
-test('failed source commands surface policy denials as hard errors', () => {
-  assert.equal(sourceCommandErrorMessage({
-    status: 'failed',
-    result: {
-      policy_decision: {
-        allowed: false,
-        display_reason: 'Nicht erlaubt',
-      },
-    },
-  }), 'Nicht erlaubt');
-
-  assert.equal(sourceCommandErrorMessage({
-    status: 'completed',
-    result: { count: 1 },
-  }), '');
-});
-
-test('monaco asset path resolves under the Business OS app bundle', () => {
-  assert.equal(
-    resolveMonacoBaseUrl('https://cto1.example.com/business-os/desktop-apps/code-editor/app.js?v=1'),
-    'https://cto1.example.com/business-os/vendor/monaco/',
-  );
-  assert.equal(isJavaScriptMime('text/html; charset=utf-8'), false);
-  assert.equal(isJavaScriptMime('application/javascript; charset=utf-8'), true);
+test('monaco kommt aus der Shell-Standardbibliothek ctox:lib/monaco@0 (SW-umgeschrieben), ohne Rückfallpfad', () => {
+  assert.equal(resolveMonacoBaseUrl('/~a/shell@4.0.0/lib/monaco@0/', 'https://x.test'), 'https://x.test/~a/shell@4.0.0/lib/monaco@0/');
+  assert.equal(resolveMonacoBaseUrl('ctox:lib/monaco@0/', 'https://x.test'), 'ctox:lib/monaco@0/');
+  assert.match(appSource, /'ctox:lib\/monaco@0\/'/);
+  assert.doesNotMatch(appSource, /vendor\/monaco/);
+  assert.equal(isJavaScriptMime('text/javascript; charset=utf-8'), true);
+  assert.equal(isJavaScriptMime('text/html'), false);
 });
 
 test('monaco model paths never create an authority-less double-slash URI', () => {
-  assert.equal(sourceModelPath('', 'empty.txt'), '/unselected/empty.txt');
-  assert.equal(sourceModelPath('notes', '/index.js'), '/notes/index.js');
-  assert.equal(sourceModelPath('/notes/', '\\locales\\de.json'), '/notes/locales/de.json');
-  assert.doesNotMatch(sourceModelPath('', '//empty.txt'), /^\/\//);
+  assert.equal(sourceModelPath('', '/index.js'), '/unselected/index.js');
+  assert.equal(sourceModelPath('notes/', 'a//b.js'), '/notes/a/b.js');
 });
 
 test('formatter handles json and low-risk whitespace cleanup', () => {
-  assert.equal(formatSourceContent('{"b":1,"a":2}', 'json'), '{\n  "b": 1,\n  "a": 2\n}\n');
-  assert.equal(formatSourceContent('const value = 1;  \n\n', 'javascript'), 'const value = 1;\n');
+  assert.equal(formatSourceContent('{"a":1}', 'json'), '{\n  "a": 1\n}\n');
+  assert.equal(formatSourceContent('a  \nb', 'javascript'), 'a\nb\n');
 });
 
-test('embedded editor uses the shell v2 frame and never creates window chrome', () => {
-  assert.match(appSource, /data-shell-v2="true"/);
-  assert.match(appSource, /data-shell-v2-header-row="1"/);
-  assert.doesNotMatch(appSource, /window-(?:titlebar|controls|close|minimize|maximize)/);
-  assert.doesNotMatch(appSource, /window\.prompt/);
-});
-
-test('embedded editor keeps narrow toolbars single-row and scrollable', () => {
-  assert.match(appSource, /source-editor-toolbar[\s\S]*flex-wrap: nowrap/);
-  assert.match(appSource, /source-editor-actions[\s\S]*overflow-x: auto/);
-  assert.match(appSource, /source-editor-workbench[\s\S]*minmax\(220px, 34%\)/);
-  assert.match(appSource, /source-editor-action-icon/);
-});
-
-test('commit entry is bounded to the embedded editor overlay', () => {
-  assert.match(appSource, /data-source-commit-dialog/);
-  assert.match(appSource, /className = 'source-editor-dialog'/);
-  assert.match(appSource, /\.source-editor-dialog\s*\{[\s\S]*position: absolute;[\s\S]*inset: 0;/);
-  assert.match(appSource, /data-source-commit-message/);
-});
-
-test('toolbar icons prefer shell actions and retain local SVG fallbacks', () => {
-  assert.match(appSource, /ctx\?\.getActionIcon\?\.\(name, size, strokeWidth\)/);
-  assert.match(appSource, /ACTION_ICON_FALLBACKS/);
-  assert.match(appSource, /data-source-history[\s\S]*actionIcon\(ctx, 'history'\)/);
+test('line diff counts added and removed lines', () => {
+  const diff = buildLineDiff('a\nb\nc', 'a\nB\nc\nd');
+  assert.equal(diff.added, 3);
+  assert.equal(diff.removed, 2);
 });

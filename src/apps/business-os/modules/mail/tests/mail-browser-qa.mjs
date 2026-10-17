@@ -203,7 +203,6 @@ mailQa: try {
         imap_port: 1143,
         outbound_throttle_per_min: 120,
         max_connections: 10,
-        tracking_base_url: 'https://mail.example.test',
       },
       runtime_status: { state: 'running', enabled: true, generation: 1 },
       health: { smtp_reachable: true, imap_reachable: true, queue_pending: 2, delivery_success: 18, delivery_failed: 1 },
@@ -1045,8 +1044,9 @@ function assertIconState(state, className, label) {
 
 async function assertMailIconAcceptance(page, providerMode) {
   const fallback = providerMode !== 'shell';
-  const compose = await iconState(page.locator('[data-mail-compose]'));
-  assertIconState(compose, fallback ? 'mail-action-edit' : 'ctox-action-edit', 'compose');
+  // Neue Mail nur noch als großer Knopf (Textdiät Regel 6, wie Outlook/Apple Mail); kein Stift im Kopf.
+  assert.equal(await page.locator('[data-mail-compose]').count(), 0, 'kein zweiter Neue-Mail-Knopf im Kopf');
+  assert.equal(await page.locator('[data-mail-compose-primary]').count(), 1, 'genau ein Neue-Mail-Knopf');
 
   const toggle = page.locator('[data-mail-left-pane] [data-mail-view-toggle]');
   let toggleState = await iconState(toggle);

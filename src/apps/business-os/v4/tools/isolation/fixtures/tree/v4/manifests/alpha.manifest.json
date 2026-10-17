@@ -1,0 +1,11 @@
+{
+  "app_id": "alpha",
+  "collections": { "alpha_docs": {} },
+  "exports": {},
+  "foreign_collections": {
+    "beta_items": { "owner_app": "beta", "ops": ["read", "write"] },
+    "beta_log": { "owner_app": "beta", "ops": ["read"], "_evidence": { "code_write": ["index.js:9"] } },
+    "beta_missing": { "owner_app": "beta", "ops": ["read"] },
+    "business_commands": { "owner_app": "ctox-platform", "ops": ["read"] }
+  }
+}

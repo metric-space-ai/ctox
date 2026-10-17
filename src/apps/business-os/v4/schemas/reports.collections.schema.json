@@ -1,0 +1,131 @@
+{
+  "_app_id": "reports",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {},
+  "_foreign_copies_not_taken": [
+    {
+      "name": "business_chats",
+      "owner": "ctox"
+    },
+    {
+      "name": "business_commands",
+      "owner": "ctox-platform"
+    },
+    {
+      "name": "business_module_acl",
+      "owner": "ctox"
+    },
+    {
+      "name": "business_module_catalog",
+      "owner": "ctox-platform"
+    },
+    {
+      "name": "business_module_commits",
+      "owner": "ctox"
+    },
+    {
+      "name": "business_module_releases",
+      "owner": "ctox"
+    },
+    {
+      "name": "business_module_reports",
+      "owner": "ctox"
+    },
+    {
+      "name": "business_module_source_blob_chunks",
+      "owner": "ctox"
+    },
+    {
+      "name": "business_module_source_files",
+      "owner": "ctox"
+    },
+    {
+      "name": "business_users",
+      "owner": "ctox"
+    },
+    {
+      "name": "business_workspace_branding",
+      "owner": "ctox"
+    },
+    {
+      "name": "communication_accounts",
+      "owner": "conversations"
+    },
+    {
+      "name": "ctox_bug_reports",
+      "owner": "ctox"
+    },
+    {
+      "name": "ctox_crew_learnings",
+      "owner": "ctox"
+    },
+    {
+      "name": "ctox_crew_members",
+      "owner": "ctox"
+    },
+    {
+      "name": "ctox_harness_events",
+      "owner": "ctox"
+    },
+    {
+      "name": "ctox_harness_status",
+      "owner": "ctox"
+    },
+    {
+      "name": "ctox_queue_tasks",
+      "owner": "ctox-platform"
+    },
+    {
+      "name": "ctox_runs",
+      "owner": "ctox"
+    },
+    {
+      "name": "ctox_runtime_settings",
+      "owner": "ctox-platform"
+    },
+    {
+      "name": "ctox_task_approval_requests",
+      "owner": "threads"
+    },
+    {
+      "name": "workjet_computers",
+      "owner": "ctox"
+    },
+    {
+      "name": "workjet_project_chats",
+      "owner": "ctox"
+    },
+    {
+      "name": "workjet_project_workers",
+      "owner": "ctox"
+    },
+    {
+      "name": "workjet_projects",
+      "owner": "ctox"
+    },
+    {
+      "name": "workjet_provider_registry",
+      "owner": "ctox"
+    },
+    {
+      "name": "workjet_session_transfers",
+      "owner": "ctox"
+    },
+    {
+      "name": "workjet_sessions",
+      "owner": "ctox"
+    },
+    {
+      "name": "workjet_worker_profile_bindings",
+      "owner": "ctox"
+    },
+    {
+      "name": "workjet_working_copies",
+      "owner": "ctox"
+    }
+  ],
+  "collections": {},
+  "migrations": {}
+}

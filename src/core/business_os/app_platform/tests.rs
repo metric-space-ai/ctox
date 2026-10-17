@@ -1,0 +1,1368 @@
+// Origin: CTOX
+// License: AGPL-3.0-only
+
+use super::super::super::policy::BusinessOsActor;
+use super::{
+    commands::{self, version_id},
+    *,
+};
+use ctox_store::{
+    change_log,
+    schema::{self, CollectionDefinition, MigrationOutput, PublishLock},
+    types::{DbId, JobOptions, WriteJob},
+    writer::WriterHandle,
+};
+use ring::{
+    rand::SystemRandom,
+    signature::{self, Ed25519KeyPair, KeyPair},
+};
+
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+use std::{sync::Arc, time::Duration};
+
+use ctox_store::change_log::subscription::{
+    protocol::{InstanceSigner, InstanceVerifier, StreamKind},
+    ReadAuthority, Subscription, SubscriptionKey,
+};
+
+struct StreamKey(Arc<Ed25519KeyPair>);
+impl InstanceSigner for StreamKey {
+    fn instance_id(&self) -> &str {
+        "isolated-core"
+    }
+    fn key_id(&self) -> &str {
+        "isolated-instance-key"
+    }
+    fn sign(&self, bytes: &[u8]) -> Result<Vec<u8>, String> {
+        Ok(self.0.sign(bytes).as_ref().to_vec())
+    }
+}
+
+impl InstanceVerifier for StreamKey {
+    fn verify(
+        &self,
+        instance: &str,
+        key_id: &str,
+        canonical: &[u8],
+        signature: &[u8],
+    ) -> Result<(), String> {
+        if instance != self.instance_id() || key_id != self.key_id() {
+            return Err("wrong instance signing identity".into());
+        }
+        signature::UnparsedPublicKey::new(&signature::ED25519, self.0.public_key().as_ref())
+            .verify(canonical, signature)
+            .map_err(|_| "invalid instance signature".into())
+    }
+}
+
+// The existing stream runs over the real snapshot reader and writer's retained
+// commit wake. Its synthetic installer is authorized through native policy.
+struct InstallerReadAuthority;
+impl ReadAuthority for InstallerReadAuthority {
+    fn authorize(
+        &self,
+        _: &rusqlite::Transaction<'_>,
+        key: &SubscriptionKey,
+    ) -> rusqlite::Result<()> {
+        use super::super::super::policy::{self, BusinessOsPermission, BusinessOsScope};
+        if key.participant != "owner"
+            || key.collection != "business_apps"
+            || !policy::evaluate(
+                &admin(),
+                BusinessOsPermission::AppsInstall,
+                &BusinessOsScope::module("ctox-platform", false),
+            )
+            .allowed
+        {
+            return Err(rusqlite::Error::InvalidParameterName("forbidden".into()));
+        }
+        Ok(())
+    }
+    fn project(
+        &self,
+        _: &rusqlite::Transaction<'_>,
+        _: &SubscriptionKey,
+        doc: &change_log::ChangeDocument,
+    ) -> rusqlite::Result<Option<Value>> {
+        Ok(doc.body.clone())
+    }
+}
+fn admin() -> BusinessOsActor {
+    BusinessOsActor::new(Some("owner".into()), "admin")
+}
+fn manifest(version: u64) -> Value {
+    json!({"app_id":"unknown-at-boot","title":"Runtime app","entry":"index.mjs","files":{"index.mjs":"a".repeat(64)},
+        "commands_in":[{"type":"app.echo","from":["app-store"]}],
+        "commands_out":[{"app":"app-store","type":"app.reply"}],
+        "collections":{"runtime_records":{"class":"full","client_limit":0,"byte_budget":4096,
+            "schema":{"version":version,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"},"label":{"type":"string"}},"required":["id"]}}}})
+}
+pub(super) struct Fixture {
+    pub(super) stores: crate::service::store_runtime::DaemonStores,
+    pub(super) readers: ctox_store::read_pool::ReadPool,
+    writer: WriterHandle,
+    pub(super) platform: Platform,
+    public_key: Vec<u8>,
+    stream_key: Arc<StreamKey>,
+
+    _directory: tempfile::TempDir,
+    _policy: super::super::super::policy::PolicyAuthorityRegistration,
+    #[cfg(unix)]
+    _scope: crate::service::store_startup::ForegroundTestScope,
+}
+impl Fixture {
+    pub(super) async fn new() -> Self {
+        #[cfg(unix)]
+        let scope = crate::service::store_startup::isolate_test_roots().await;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("store.sqlite");
+        let mut stores = crate::service::store_runtime::DaemonStores::start(
+            ctox_store::ipc::StoreEndpoint::UnixSocket {
+                path: directory.path().join("ipc/store.sock"),
+            },
+            tokio::runtime::Handle::current(),
+        )
+        .unwrap();
+        let database = stores.register("sync", DbId::new(&path).unwrap(), true, Arc::new(|tx| {
+            for name in ["business_commands","business_apps","business_app_versions","app_catalog","app_drafts","app_activations","ctox_runtime_settings"] {
+                schema::create_collection(tx, &CollectionDefinition {name:name.into(),app_id:"ctox-platform".into(),schema_ver:1,
+                    schema_json:json!({"version":1,"type":"object","primaryKey":"id","properties":{"id":{"type":"string"}},"required":["id"]}),
+                    class:"full".into(),client_limit:0,byte_budget:1_048_576,rights_ver:1,app_ver:"platform-1".into()})?;
+            }
+            // Native publication now evaluates the actual P6 transaction policy.
+            // Seed its canonical role/action rows, as the runtime bootstrap does.
+            super::super::super::policy::sync_rights::initialize(tx)?;
+            super::super::super::policy::sync_rights::replace(tx, 1, &super::super::super::policy::base_release_rights(&[]))?;
+            Ok(())
+        })).await.unwrap();
+        let writer = database.writer.clone();
+        let key = Arc::new(
+            Ed25519KeyPair::from_pkcs8(
+                Ed25519KeyPair::generate_pkcs8(&SystemRandom::new())
+                    .unwrap()
+                    .as_ref(),
+            )
+            .unwrap(),
+        );
+        let public_key = key.public_key().as_ref().to_vec();
+        let stream_key = Arc::new(StreamKey(key.clone()));
+        let platform = Platform::from_database(&database, stream_key.clone());
+        let platform = platform.unwrap();
+
+        let rights = super::super::super::policy::sync_rights::StoreRightsAuthority::attach(
+            writer.clone(),
+            "isolated-core".into(),
+        )
+        .await
+        .unwrap();
+        let policy = super::super::super::policy::bind_policy_authority(rights).unwrap();
+        let f = Self {
+            stores,
+            readers: database.readers,
+            _directory: directory,
+            writer,
+            platform,
+            public_key,
+            stream_key,
+            _policy: policy,
+            #[cfg(unix)]
+            _scope: scope,
+        };
+        f.bootstrap_ipc(json!("*")).await;
+        f
+    }
+    async fn bootstrap_ipc(&self, allowed: Value) {
+        let kinds = [
+            "ctox.app.publish",
+            "ctox.app.update",
+            "ctox.app.rollback",
+            "ctox.app.release",
+            "ctox.app.remove",
+            "app.reply",
+        ];
+        for app_id in ["ctox-platform", "app-store"] {
+            let mut outgoing = kinds
+                .iter()
+                .map(|kind| json!({"app":"ctox-platform","type":kind}))
+                .collect::<Vec<_>>();
+            outgoing.push(json!({"app":"unknown-at-boot","type":"app.echo"}));
+            let manifest = json!({"app_id":app_id,"app_ver":"bootstrap","collections":{},"files":{},
+                "commands_out":outgoing,"commands_in":kinds.iter().map(|kind|json!({"type":kind,"from":allowed})).collect::<Vec<_>>()});
+            let signature = commands::sign_manifest(
+                self.platform.signer.as_ref(),
+                &serde_json::to_vec(&manifest).unwrap(),
+            )
+            .unwrap();
+            let id = version_id(app_id, "bootstrap");
+            self.seed(
+                "business_app_versions",
+                &id,
+                json!({"id":id,"app_id":app_id,"app_ver":"bootstrap",
+                "state":"published","manifest":manifest,"signature":signature}),
+            )
+            .await;
+            self.seed(
+                "business_apps",
+                app_id,
+                json!({"id":app_id,"app_id":app_id,"active_ver":"bootstrap",
+                "state":"active","provenance":{"owner_id":"owner"}}),
+            )
+            .await;
+        }
+    }
+    async fn ipc_allowed(&self, sender: &str, receiver: &str, kind: &str) -> bool {
+        let (sender, receiver, kind) = (sender.to_owned(), receiver.to_owned(), kind.to_owned());
+        self.writer
+            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                commands::ipc_declarations_allow(tx, &sender, &receiver, &kind)
+            }))
+            .unwrap()
+            .await
+            .unwrap()
+    }
+    async fn seed(&self, collection: &str, id: &str, body: Value) {
+        let collection = collection.to_string();
+        let id = id.to_string();
+        self.writer
+            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                commands::put(tx, &collection, &id, &body)
+            }))
+            .unwrap()
+            .await
+            .unwrap();
+    }
+    async fn get(&self, collection: &str, id: &str) -> Option<Value> {
+        let collection = collection.to_string();
+        let id = id.to_string();
+        self.writer
+            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+                commands::get(tx, &collection, &id)
+            }))
+            .unwrap()
+            .await
+            .unwrap()
+    }
+    async fn release_input(&self, version: &str, content: Value, catalog: bool) {
+        let bytes = serde_json::to_vec(&content).unwrap();
+        let signature = commands::sign_manifest(self.platform.signer.as_ref(), &bytes).unwrap();
+        self.seed("business_app_versions", &version_id("unknown-at-boot",version), json!({
+            "id":version_id("unknown-at-boot",version),"app_id":"unknown-at-boot","app_ver":version,
+            "manifest":content,"manifest_sha256":format!("{:x}",Sha256::digest(&bytes)),"signature":signature,"state":"published"
+        })).await;
+        if catalog {
+            self.seed(
+                "app_catalog",
+                version,
+                json!({"id":version,"app_id":"unknown-at-boot","app_ver":version,"source":"main"}),
+            )
+            .await;
+        }
+    }
+    fn command(id: &str, kind: &str, base: Value, extra: Value) -> CommandDocument {
+        let mut payload = json!({"app_id":"unknown-at-boot","base_app_ver":base});
+        payload
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        CommandDocument {
+            id: id.into(),
+            app_id: "app-store".into(),
+            module: "ctox-platform".into(),
+            command_type: format!("ctox.app.{kind}"),
+            payload,
+        }
+    }
+    async fn run(&self, id: &str, kind: &str, base: Value, extra: Value) -> Value {
+        self.platform
+            .execute(admin(), Self::command(id, kind, base, extra), 1000)
+            .unwrap()
+            .await
+            .unwrap()
+    }
+    async fn install(&self) -> String {
+        self.release_input("release-1", manifest(1), true).await;
+        let result = self
+            .run(
+                "install",
+                "update",
+                Value::Null,
+                json!({"release_ver":"release-1"}),
+            )
+            .await;
+        assert_eq!(result["status"], "accepted", "{result}");
+        result["app_ver"].as_str().unwrap().into()
+    }
+    async fn draft(&self, base: Value, content: Value) {
+        self.seed("app_drafts","draft",json!({"id":"draft","app_id":"unknown-at-boot","user_id":"owner","base_app_ver":base,
+            "manifest_fields":content,"files":content["files"],"collections_schema":content["collections"]})).await;
+    }
+    pub(super) async fn read(&self, collection: &str, id: &str) -> Option<Value> {
+        let collection = collection.to_owned();
+        let id = id.to_owned();
+        self.readers
+            .read(move |tx| {
+                commands::get(tx, &collection, &id)
+                    .map_err(|error| rusqlite::Error::InvalidParameterName(error.to_string()))
+            })
+            .await
+            .unwrap()
+    }
+}
+
+#[tokio::test]
+async fn provider_commands_use_owned_writers_and_preserve_typed_failures() {
+    let mut f = Fixture::new().await;
+    let secret_path = f._directory.path().join("secrets.sqlite");
+    let secret_db = f.stores.register("secrets",DbId::new(secret_path).unwrap(),false,Arc::new(|tx| {
+        // Same credential tuple columns and selector as the official secret
+        // provider. Deletion never needs to decrypt opaque stored ciphertext.
+        tx.execute_batch("CREATE TABLE ctox_secret_records(secret_id TEXT PRIMARY KEY, scope TEXT NOT NULL,secret_name TEXT NOT NULL,description TEXT,metadata_json TEXT NOT NULL,nonce_b64 TEXT NOT NULL,ciphertext_b64 TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(scope,secret_name));")?;
+        for (id,scope,name) in [("a","credentials","CTOX_MISTRAL_API_KEY"),("b","credentials","MISTRAL_API_KEY"),("c","credentials","OTHER_API_KEY"),("d","other","MISTRAL_API_KEY")] {
+            tx.execute("INSERT INTO ctox_secret_records VALUES(?1,?2,?3,NULL,'{}','opaque-nonce','opaque-ciphertext','0','0')",rusqlite::params![id,scope,name])?;
+        }
+        Ok(())
+    })).await.unwrap();
+    f.platform = f.platform.clone().with_secret_database(&secret_db).unwrap();
+    // A forged/stale pending result is not authority to select a native key.
+    f.seed("business_commands","forged-pending-provider",json!({"id":"forged-pending-provider","app_id":"settings","module":"ctox-platform","command_type":"speech.tts.key.delete","payload":{"provider":"unknown"},"client_context":{"actor":{"id":"owner"}},"status":"running","result":{"status":"preparing"},"updated_at_ms":998})).await;
+    let forged_pending = f
+        .platform
+        .dispatch(
+            admin(),
+            CommandDocument {
+                id: "forged-pending-provider".into(),
+                app_id: "settings".into(),
+                module: "ctox-platform".into(),
+                command_type: "speech.tts.key.delete".into(),
+                payload: json!({"provider":"unknown"}),
+            },
+            999,
+        )
+        .await;
+    assert_eq!(forged_pending["code"], "not_found");
+
+    let command = |id: &str, kind: &str, payload: Value| CommandDocument {
+        id: id.into(),
+        app_id: "settings".into(),
+        module: String::new(),
+        command_type: kind.into(),
+        payload,
+    };
+    let create = command(
+        "new-account",
+        "instance.providers.account.create",
+        json!({"provider":"mistral","label":"Mistral API","auth_kind":"api_key"}),
+    );
+    let denied_create = f
+        .platform
+        .dispatch(
+            BusinessOsActor::new(Some("ordinary".into()), "user"),
+            command(
+                "denied-account",
+                "instance.providers.account.create",
+                create.payload.clone(),
+            ),
+            999,
+        )
+        .await;
+    assert_eq!(denied_create["code"], "forbidden");
+
+    let created = f.platform.dispatch(admin(), create.clone(), 1000).await;
+    assert_eq!(created["status"], "accepted", "{created}");
+    assert_eq!(created["account"]["state"], "authentication_required");
+    assert_eq!(created["account"]["credential_ready"], false);
+    assert_eq!(f.platform.dispatch(admin(), create, 1001).await, created);
+    let projection = f
+        .read("ctox_runtime_settings", "instance.providers")
+        .await
+        .unwrap();
+    assert_eq!(
+        projection["runtime"]["provider_accounts"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    f.platform
+        .project_speech_key("mistral", "ephemeral-test-key-abcd", 1002)
+        .unwrap()
+        .await
+        .unwrap();
+    let projected = f
+        .read("ctox_runtime_settings", "instance.providers")
+        .await
+        .unwrap();
+    assert_eq!(projected["auth"]["speech"]["mistral"]["key_hint"], "··abcd");
+    assert!(!projected.to_string().contains("ephemeral-test-key"));
+    let delete = command(
+        "delete-key",
+        "speech.tts.key.delete",
+        json!({"provider":"mistral"}),
+    );
+    let denied = f
+        .platform
+        .dispatch(
+            BusinessOsActor::new(Some("ordinary".into()), "user"),
+            delete.clone(),
+            1003,
+        )
+        .await;
+    assert_eq!(denied["status"], "rejected");
+    assert_eq!(denied["code"], "forbidden");
+    for name in ["reason", "path", "detail"] {
+        assert!(denied[name].is_string(), "{denied}");
+    }
+    // A new authorized request: denied command IDs remain bound to their actor.
+    let delete = command(
+        "delete-key-admin",
+        "speech.tts.key.delete",
+        json!({"provider":"mistral"}),
+    );
+    let deleted = f.platform.dispatch(admin(), delete.clone(), 1004).await;
+    assert_eq!(deleted["status"], "accepted", "{deleted}");
+    assert_eq!(deleted["deleted"], 2);
+    assert_eq!(f.platform.dispatch(admin(), delete, 1005).await, deleted);
+    let remaining = secret_db
+        .readers
+        .read(|tx| {
+            tx.query_row("SELECT COUNT(*) FROM ctox_secret_records", [], |r| {
+                r.get::<_, i64>(0)
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(remaining, 2); // Neither another provider nor another scope is deleted.
+    assert_eq!(
+        f.read("ctox_runtime_settings", "instance.providers")
+            .await
+            .unwrap()["auth"]["speech"]["mistral"]["key_hint"],
+        Value::Null
+    );
+    // Crash after the secret transaction, before the sync receipt: a retry
+    // must not delete a replacement key or erase its newer public hint.
+    secret_db.writer.submit(WriteJob::new(JobOptions::default(),|tx| {
+        tx.execute("INSERT INTO ctox_secret_records VALUES('e','credentials','CTOX_MISTRAL_API_KEY',NULL,'{}','opaque','opaque','0','0')",[])?; Ok(())
+    })).unwrap().await.unwrap();
+    let recover = command(
+        "recover-delete",
+        "speech.tts.key.delete",
+        json!({"provider":"mistral"}),
+    );
+    let preparing = f
+        .platform
+        .execute(admin(), recover.clone(), 1010)
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(preparing["status"], "preparing");
+    let effect_command = recover.clone();
+    let committed = secret_db
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            commands::delete_tts_key(tx, &admin(), &effect_command)
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(committed["deleted"], 1);
+    let mut forged = recover.clone();
+    forged.app_id = "different-calling-app".into();
+    let conflict = secret_db
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            commands::delete_tts_key(tx, &admin(), &forged)
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(conflict["code"], "conflict");
+
+    secret_db.writer.submit(WriteJob::new(JobOptions::default(),|tx| {
+        tx.execute("INSERT INTO ctox_secret_records VALUES('f','credentials','CTOX_MISTRAL_API_KEY',NULL,'{}','opaque','new-opaque','0','0')",[])?; Ok(())
+    })).unwrap().await.unwrap();
+    f.platform
+        .project_speech_key("mistral", "replacement-key-wxyz", 1010)
+        .unwrap()
+        .await
+        .unwrap();
+    // Authority can be revoked after an already committed effect. Replaying
+    // its bound receipt completes it without authorizing a new deletion.
+    let recovered = f
+        .platform
+        .dispatch(
+            BusinessOsActor::new(Some("owner".into()), "user"),
+            recover,
+            1013,
+        )
+        .await;
+    assert_eq!(recovered, committed);
+    let remaining = secret_db
+        .readers
+        .read(|tx| {
+            tx.query_row("SELECT COUNT(*) FROM ctox_secret_records", [], |r| {
+                r.get::<_, i64>(0)
+            })
+        })
+        .await
+        .unwrap();
+    assert_eq!(remaining, 3);
+    assert_eq!(
+        f.read("ctox_runtime_settings", "instance.providers")
+            .await
+            .unwrap()["auth"]["speech"]["mistral"]["key_hint"],
+        "··wxyz"
+    );
+    let revoke = command(
+        "revoke-before-delete",
+        "speech.tts.key.delete",
+        json!({"provider":"mistral"}),
+    );
+    f.platform
+        .execute(admin(), revoke.clone(), 1014)
+        .unwrap()
+        .await
+        .unwrap();
+    let revoked = f
+        .platform
+        .dispatch(
+            BusinessOsActor::new(Some("owner".into()), "user"),
+            revoke,
+            1015,
+        )
+        .await;
+    assert_eq!(revoked["code"], "forbidden");
+    assert_eq!(revoked["reason"], "permission_revoked");
+    let invalid = f
+        .platform
+        .dispatch(
+            admin(),
+            command(
+                "invalid-account",
+                "instance.providers.account.create",
+                json!({"provider":"mistral","label":"X","auth_kind":"unsupported"}),
+            ),
+            1006,
+        )
+        .await;
+    assert_eq!(invalid["code"], "invalid");
+    assert_eq!(invalid["reason"], "payload_invalid:auth_kind");
+    assert_eq!(invalid["path"], "payload.auth_kind");
+    let invalid_secret = f.platform.dispatch(admin(),command("no-key-in-command","instance.providers.account.create",json!({"provider":"mistral","label":"X","auth_kind":"api_key","api_key":"private-marker-must-not-copy"})),1006).await;
+    assert_eq!(invalid_secret["code"], "invalid");
+    assert!(!f
+        .read("business_commands", "no-key-in-command")
+        .await
+        .unwrap()
+        .to_string()
+        .contains("private-marker"));
+    assert_eq!(commands::key_hint("abcd"), None);
+    let unknown = f
+        .platform
+        .dispatch(
+            admin(),
+            command(
+                "unknown-speech",
+                "speech.tts.key.delete",
+                json!({"provider":"unknown"}),
+            ),
+            1007,
+        )
+        .await;
+    assert_eq!(unknown["code"], "not_found");
+    let mut full = f
+        .read("ctox_runtime_settings", "instance.providers")
+        .await
+        .unwrap();
+    full["runtime"]["provider_accounts"] = Value::Array(vec![json!({"id":"existing"}); 256]);
+    f.seed("ctox_runtime_settings", "instance.providers", full)
+        .await;
+    let quota = f
+        .platform
+        .dispatch(
+            admin(),
+            command(
+                "full-account-registry",
+                "instance.providers.account.create",
+                json!({"provider":"mistral","label":"X","auth_kind":"api_key"}),
+            ),
+            1016,
+        )
+        .await;
+    assert_eq!(quota["code"], "quota");
+    assert_eq!(quota["reason"], "provider_account_limit");
+    let unattached = Platform::new(f.writer.clone(), f.stream_key.clone());
+    let missing = unattached
+        .dispatch(
+            admin(),
+            command(
+                "missing-secret-owner",
+                "speech.tts.key.delete",
+                json!({"provider":"mistral"}),
+            ),
+            1008,
+        )
+        .await;
+    assert_eq!(missing["status"], "failed");
+    assert_eq!(missing["code"], "unavailable");
+    assert_eq!(missing["reason"], "secret_owner_missing");
+    assert_eq!(
+        f.read("business_commands", "missing-secret-owner")
+            .await
+            .unwrap()["result"],
+        missing
+    );
+    f.stores.shutdown().await.unwrap();
+    let closed = f
+        .platform
+        .dispatch(
+            admin(),
+            command(
+                "closed-owner",
+                "instance.providers.account.create",
+                json!({"provider":"mistral","label":"X","auth_kind":"api_key"}),
+            ),
+            1009,
+        )
+        .await;
+    assert_eq!(closed["code"], "unavailable");
+    assert_eq!(closed["reason"], "store_closed");
+}
+
+#[tokio::test]
+async fn publish_signed_draft_without_fabricating_client_activation() {
+    let f = Fixture::new().await;
+    let mut draft = manifest(1);
+    draft["visible_roles"] = json!(["user"]);
+    f.draft(Value::Null, draft).await;
+    let admitted = Fixture::command(
+        "publish",
+        "publish",
+        Value::Null,
+        json!({"draft_id":"draft"}),
+    );
+    f.seed(
+        "business_commands",
+        "publish",
+        json!({"id":"publish","app_id":admitted.app_id,"module":admitted.module,"command_type":admitted.command_type,
+        "payload":admitted.payload,"client_context":{"actor":{"id":"owner"}},"status":"pending"}),
+    )
+    .await;
+    let result = f
+        .run(
+            "publish",
+            "publish",
+            Value::Null,
+            json!({"draft_id":"draft"}),
+        )
+        .await;
+    assert_eq!(result["status"], "accepted");
+    let app = f.read("business_apps", "unknown-at-boot").await.unwrap();
+    assert_eq!(app["active_ver"], result["app_ver"]);
+    assert_eq!(
+        app["provenance"]["calling_app"], "app-store",
+        "sender is document app_id, never module or payload.app_id"
+    );
+    assert_eq!(app["locally_modified"], true);
+    assert_eq!(
+        app["visible_roles"],
+        json!(["chef", "admin"]),
+        "manifest fields cannot assign native roles"
+    );
+    let version = f
+        .get(
+            "business_app_versions",
+            &version_id("unknown-at-boot", result["app_ver"].as_str().unwrap()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(version["manifest"]["entry"], "index.mjs");
+    let signature = version["signature"]
+        .as_str()
+        .unwrap()
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|s| u8::from_str_radix(std::str::from_utf8(s).unwrap(), 16).unwrap())
+        .collect::<Vec<_>>();
+    signature::UnparsedPublicKey::new(&signature::ED25519, &f.public_key)
+        .verify(
+            &serde_json::to_vec(&version["manifest"]).unwrap(),
+            &signature,
+        )
+        .unwrap();
+    let activations = f
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            let table = schema::active_collection(tx, "app_activations")?
+                .unwrap()
+                .table;
+            Ok(
+                tx.query_row(&format!("SELECT count(*) FROM \"{table}\""), [], |r| {
+                    r.get::<_, u64>(0)
+                })?,
+            )
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(activations, 0, "publishing is not client activation");
+    assert_eq!(
+        f.run(
+            "publish",
+            "publish",
+            Value::Null,
+            json!({"draft_id":"draft"})
+        )
+        .await,
+        result,
+        "replay must not republish"
+    );
+    let mut rebound = admitted;
+    rebound.app_id = "another-app".into();
+    assert!(
+        f.platform
+            .execute(admin(), rebound, 1000)
+            .unwrap()
+            .await
+            .is_err(),
+        "a command receipt cannot be rebound to another document app_id"
+    );
+}
+
+#[tokio::test]
+async fn update_hot_plugs_unknown_app_on_existing_connection() {
+    let mut f = Fixture::new().await;
+    assert!(f.read("business_apps", "unknown-at-boot").await.is_none());
+    let readers = f.readers.clone();
+    let mut stream = Subscription::new(
+        readers.clone(),
+        &f.writer,
+        SubscriptionKey {
+            participant: "owner".into(),
+            collection: "business_apps".into(),
+            scope_hash: "installer-apps".into(),
+            gen: 1,
+        },
+        None,
+    )
+    .unwrap();
+    let initial = stream
+        .next_page(
+            100,
+            Arc::new(InstallerReadAuthority),
+            f.stream_key.as_ref(),
+            || 1,
+        )
+        .await
+        .unwrap();
+    initial.verify(f.stream_key.as_ref()).unwrap();
+    assert_eq!(initial.kind, StreamKind::Page);
+    assert!(initial.docs.iter().all(|doc| doc.id != "unknown-at-boot"));
+    let mut feed = f.writer.subscribe_commits();
+    feed.latest();
+    let installed = f.install().await;
+    let notification = tokio::time::timeout(Duration::from_secs(2), feed.changed())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(notification.head_seq > 0);
+    let live = tokio::time::timeout(
+        Duration::from_secs(2),
+        stream.next_page(
+            100,
+            Arc::new(InstallerReadAuthority),
+            f.stream_key.as_ref(),
+            || 2,
+        ),
+    )
+    .await
+    .expect("existing subscription must receive the unknown app")
+    .unwrap();
+    live.verify(f.stream_key.as_ref()).unwrap();
+    assert_eq!(live.kind, StreamKind::Live);
+    assert!(live.seq_to > initial.seq_to);
+    assert!(live.docs.iter().any(|doc| doc.id == "unknown-at-boot"
+        && doc
+            .body
+            .as_ref()
+            .is_some_and(|body| body["active_ver"] == installed)));
+    assert_eq!(
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["active_ver"],
+        installed
+    );
+    f.seed(
+        "runtime_records",
+        "persisted",
+        json!({"id":"persisted","label":"survives"}),
+    )
+    .await;
+    let mut changed = manifest(2);
+    assert!(f
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            commands::ipc_declarations_allow(tx, "app-store", "unknown-at-boot", "app.echo")
+        }))
+        .unwrap()
+        .await
+        .unwrap());
+    assert!(
+        f.ipc_allowed("unknown-at-boot", "app-store", "app.reply")
+            .await
+    );
+    changed["commands_in"] = json!([]);
+    changed["commands_out"] = json!([]);
+    changed["title"] = json!("Updated while connected");
+    changed["collections"]["runtime_records"]["rights"] = json!({"read":"admin","write":"admin"});
+    f.release_input("release-2", changed, true).await;
+    let result = f
+        .run(
+            "update",
+            "update",
+            json!(installed),
+            json!({"release_ver":"release-2"}),
+        )
+        .await;
+    assert_eq!(result["status"], "accepted");
+    assert_eq!(
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["title"],
+        "Updated while connected"
+    );
+    assert_eq!(
+        f.read("runtime_records", "persisted").await.unwrap()["label"],
+        "survives"
+    );
+    f.writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            let collection = schema::active_collection(tx, "runtime_records")?.unwrap();
+            assert_eq!(
+                collection.gen, 1,
+                "compatible rights/schema changes preserve generation"
+            );
+            assert_eq!(
+                collection.definition.rights_ver, 2,
+                "rights changes invalidate old admissions"
+            );
+            Ok(())
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    let page = f
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            let c = schema::active_collection(tx, "business_apps")?.unwrap();
+            Ok(change_log::read_page(tx, "business_apps", c.gen, 0, 100)?)
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    assert!(page.docs.iter().any(|d| d.id == "unknown-at-boot"
+        && d.body.as_ref().unwrap()["title"] == "Updated while connected"));
+    let updated = tokio::time::timeout(
+        Duration::from_secs(2),
+        stream.next_page(
+            100,
+            Arc::new(InstallerReadAuthority),
+            f.stream_key.as_ref(),
+            || 3,
+        ),
+    )
+    .await
+    .expect("same subscription must adopt the update")
+    .unwrap();
+    updated.verify(f.stream_key.as_ref()).unwrap();
+    assert_eq!(updated.kind, StreamKind::Live);
+    assert!(!f
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            commands::ipc_declarations_allow(tx, "app-store", "unknown-at-boot", "app.echo")
+        }))
+        .unwrap()
+        .await
+        .unwrap());
+    assert!(
+        !f.ipc_allowed("unknown-at-boot", "app-store", "app.reply")
+            .await
+    );
+    assert!(updated.seq_to > live.seq_to);
+    assert!(updated.docs.iter().any(|doc| doc.id == "unknown-at-boot"
+        && doc
+            .body
+            .as_ref()
+            .is_some_and(|body| body["title"] == "Updated while connected")));
+    f.stores.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn release_enters_catalog_and_stale_release_has_no_effect() {
+    let f = Fixture::new().await;
+    let installed = f.install().await;
+    let result = f
+        .run(
+            "release",
+            "release",
+            json!(installed),
+            json!({"channel":"stable"}),
+        )
+        .await;
+    assert_eq!(result["status"], "accepted");
+    assert!(f
+        .read(
+            "app_catalog",
+            &format!("unknown-at-boot:{installed}:stable")
+        )
+        .await
+        .is_some());
+    assert_eq!(
+        f.run(
+            "stale-release",
+            "release",
+            json!("old"),
+            json!({"channel":"bad"})
+        )
+        .await["code"],
+        "stale_base"
+    );
+    assert!(f
+        .read("app_catalog", &format!("unknown-at-boot:{installed}:bad"))
+        .await
+        .is_none());
+}
+
+#[tokio::test]
+async fn rollback_publishes_new_version_and_retains_prior_versions() {
+    let f = Fixture::new().await;
+    let first = f.install().await;
+    let mut m = manifest(2);
+    m["title"] = json!("Changed");
+    f.release_input("second", m, true).await;
+    let second = f
+        .run(
+            "change",
+            "update",
+            json!(first),
+            json!({"release_ver":"second"}),
+        )
+        .await["app_ver"]
+        .clone();
+    // Same schema semantics but an old schema version requires a real reverse
+    // migration, so use an earlier title with the current compatible schema.
+    let mut target = manifest(2);
+    target["title"] = json!("Original title");
+    f.release_input("rollback-target", target, false).await;
+    let rolled = f
+        .run(
+            "rollback",
+            "rollback",
+            second.clone(),
+            json!({"target_ver":"rollback-target"}),
+        )
+        .await;
+    assert_eq!(rolled["status"], "accepted");
+    assert_ne!(rolled["app_ver"], second);
+    assert_ne!(rolled["app_ver"], "rollback-target");
+    assert_eq!(
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["title"],
+        "Original title"
+    );
+    assert!(f
+        .get(
+            "business_app_versions",
+            &version_id("unknown-at-boot", &first)
+        )
+        .await
+        .is_some());
+}
+
+#[tokio::test]
+async fn remove_archives_without_deleting_even_after_retention() {
+    let f = Fixture::new().await;
+    let installed = f.install().await;
+    f.seed(
+        "runtime_records",
+        "important",
+        json!({"id":"important","label":"never delete"}),
+    )
+    .await;
+    let result = f.run("remove", "remove", json!(installed), json!({})).await;
+    assert_eq!(result["status"], "accepted");
+    assert_eq!(
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["state"],
+        "archived"
+    );
+    let retained = f
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), |tx| {
+            let c = schema::collection(tx, "runtime_records", 1)?;
+            assert_eq!(c.state, "archived");
+            let value: String = tx.query_row(
+                &format!("SELECT data FROM \"{}\" WHERE id='important'", c.table),
+                [],
+                |r| r.get(0),
+            )?;
+            assert!(
+                schema::purge_generation_page(tx, "runtime_records", 1, 10_000_000, 100).is_err()
+            );
+            Ok(value)
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&retained).unwrap()["label"],
+        "never delete"
+    );
+}
+
+#[tokio::test]
+async fn stale_base_rejects_every_command_including_null_install() {
+    let f = Fixture::new().await;
+    let installed = f.install().await;
+    f.draft(Value::Null, manifest(1)).await;
+    for (kind, extra) in [
+        ("publish", json!({"draft_id":"draft"})),
+        ("update", json!({"release_ver":"release-1"})),
+        ("rollback", json!({"target_ver":"release-1"})),
+        ("release", json!({"channel":"stale"})),
+        ("remove", json!({})),
+    ] {
+        let result = f
+            .run(&format!("stale-{kind}"), kind, Value::Null, extra)
+            .await;
+        assert_eq!(
+            result,
+            json!({"status":"rejected","code":"stale_base"}),
+            "{kind}"
+        );
+    }
+    assert_eq!(
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["active_ver"],
+        installed
+    );
+}
+
+#[tokio::test]
+async fn not_found_prevents_installing_unreleased_version() {
+    let f = Fixture::new().await;
+    f.release_input("unreleased", manifest(1), false).await;
+    let result = f
+        .run(
+            "missing",
+            "update",
+            Value::Null,
+            json!({"release_ver":"unreleased"}),
+        )
+        .await;
+    assert_eq!(result, json!({"status":"rejected","code":"not_found"}));
+    assert!(f.read("business_apps", "unknown-at-boot").await.is_none());
+}
+
+#[tokio::test]
+async fn locally_modified_requires_explicit_discard_and_archives_rollback_source() {
+    let f = Fixture::new().await;
+    f.draft(Value::Null, manifest(1)).await;
+    let local = f
+        .run("local", "publish", Value::Null, json!({"draft_id":"draft"}))
+        .await["app_ver"]
+        .clone();
+    f.release_input("main", manifest(1), true).await;
+    assert_eq!(
+        f.run(
+            "protect",
+            "update",
+            local.clone(),
+            json!({"release_ver":"main"})
+        )
+        .await["code"],
+        "locally_modified"
+    );
+    let replaced = f
+        .run(
+            "discard",
+            "update",
+            local.clone(),
+            json!({"release_ver":"main","discard_local":true}),
+        )
+        .await;
+    assert_eq!(replaced["status"], "accepted");
+    let archived = f
+        .get(
+            "business_app_versions",
+            &version_id("unknown-at-boot", local.as_str().unwrap()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(archived["origin"], "local");
+    assert_eq!(archived["status"], "archived");
+    assert_eq!(
+        f.run(
+            "restore-local",
+            "rollback",
+            replaced["app_ver"].clone(),
+            json!({"target_ver":local})
+        )
+        .await["status"],
+        "accepted"
+    );
+}
+
+#[tokio::test]
+async fn forbidden_uses_native_actor_and_draft_rights() {
+    let f = Fixture::new().await;
+    let installed = f.install().await;
+    let user = BusinessOsActor::new(Some("other".into()), "user");
+    let command = Fixture::command(
+        "forbidden",
+        "release",
+        json!(installed),
+        json!({"channel":"stable"}),
+    );
+    let result = f
+        .platform
+        .execute(user.clone(), command, 1000)
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(result, json!({"status":"rejected","code":"forbidden"}));
+    let draft = json!({"user_id":"other","app_id":"unknown-at-boot"});
+    assert!(can_read_draft(&user, &draft, None));
+    assert!(can_write_draft(&user, &draft));
+    assert!(can_read_draft(&admin(), &draft, None));
+    assert!(!can_write_draft(&admin(), &draft));
+    assert!(!can_read_draft(
+        &BusinessOsActor::new(Some("stranger".into()), "user"),
+        &draft,
+        None
+    ));
+}
+
+#[tokio::test]
+async fn migration_required_keeps_active_schema_and_data_untouched() {
+    let f = Fixture::new().await;
+    f.release_input("new-schema", manifest(2), true).await;
+    let current = f
+        .run(
+            "install",
+            "update",
+            Value::Null,
+            json!({"release_ver":"new-schema"}),
+        )
+        .await["app_ver"]
+        .clone();
+    f.release_input("old-schema", manifest(1), true).await;
+    let rejected = f
+        .run(
+            "older",
+            "update",
+            current.clone(),
+            json!({"release_ver":"old-schema"}),
+        )
+        .await;
+    assert_eq!(
+        rejected,
+        json!({"status":"rejected","code":"migration_required"})
+    );
+    assert_eq!(
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["active_ver"],
+        current
+    );
+}
+
+#[tokio::test]
+async fn native_reverse_migration_waits_for_real_pages_before_switch() {
+    let mut f = Fixture::new().await;
+    f.release_input("new-schema", manifest(2), true).await;
+    let current = f
+        .run(
+            "install",
+            "update",
+            Value::Null,
+            json!({"release_ver":"new-schema"}),
+        )
+        .await["app_ver"]
+        .clone();
+    f.seed(
+        "runtime_records",
+        "kept",
+        json!({"id":"kept","label":"retained"}),
+    )
+    .await;
+    let mut old = manifest(1);
+    old["collections"]["runtime_records"]["schema"]["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("label");
+    old["collections"]["runtime_records"]["schema"]["properties"]["previous_label"] =
+        json!({"type":"string"});
+    old["migrations"] = json!({"runtime_records":{"from_ver":2,"steps":[{"op":"rename","from":"label","to":"previous_label"}]}});
+    f.release_input("old-schema", old, false).await;
+    // Native declarative rename migration. Not a payload permission flag.
+    f.platform = f.platform.clone().with_migrations(Arc::new(|old,new,manifest| {
+        old.schema_json.pointer("/properties/label/type").and_then(Value::as_str) == Some("string")
+            && new.schema_json.pointer("/properties/previous_label/type").and_then(Value::as_str) == Some("string")
+            && manifest["migrations"]["runtime_records"] == json!({"from_ver":2,"steps":[{"op":"rename","from":"label","to":"previous_label"}]})
+    }));
+    let pending = f
+        .run(
+            "reverse",
+            "rollback",
+            current.clone(),
+            json!({"target_ver":"old-schema"}),
+        )
+        .await;
+    assert_eq!(pending["status"], "preparing");
+    assert_eq!(
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["active_ver"],
+        current
+    );
+    assert!(
+        f.platform
+            .complete(admin(), "reverse".into(), 1001)
+            .unwrap()
+            .await
+            .is_err(),
+        "unmigrated generation must not activate"
+    );
+    let lock: PublishLock = serde_json::from_value(pending["publication"].clone()).unwrap();
+    let lock_for_read = lock.clone();
+    let page = f
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            let migration = schema::migration(tx, &lock_for_read.operation_id, "runtime_records")?;
+            Ok(change_log::read_page(
+                tx,
+                "runtime_records",
+                migration.source_gen,
+                migration.cursor,
+                100,
+            )?)
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    // Transform outside the writer, then let P3 recheck source revisions.
+    let outputs = page
+        .docs
+        .iter()
+        .map(|d| {
+            let mut body = d.body.clone().unwrap();
+            body["previous_label"] = body.as_object_mut().unwrap().remove("label").unwrap();
+            MigrationOutput::Upsert {
+                rev: d.rev.clone(),
+                body,
+            }
+        })
+        .collect::<Vec<_>>();
+    f.writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            Ok(schema::apply_migration_page(
+                tx,
+                &lock,
+                "runtime_records",
+                0,
+                &page,
+                &outputs,
+                1,
+            )?)
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(
+        f.platform
+            .complete(admin(), "reverse".into(), 1002)
+            .unwrap()
+            .await
+            .unwrap()["status"],
+        "accepted"
+    );
+    assert_eq!(
+        f.read("runtime_records", "kept").await.unwrap()["previous_label"],
+        "retained"
+    );
+    // Prepare a forward rename back, then revoke the caller before the pointer
+    // switch. The native completion path must recheck the current actor too.
+    let mut return_target = manifest(2);
+    return_target["migrations"] = json!({"runtime_records":{"from_ver":3,"steps":[{"op":"rename","from":"previous_label","to":"label"}]}});
+    f.release_input("return-schema", return_target, false).await;
+    f.platform = f.platform.clone().with_migrations(Arc::new(|old,new,manifest| {
+        old.schema_json.pointer("/properties/previous_label/type").and_then(Value::as_str) == Some("string")
+            && new.schema_json.pointer("/properties/label/type").and_then(Value::as_str) == Some("string")
+            && manifest["migrations"]["runtime_records"] == json!({"from_ver":3,"steps":[{"op":"rename","from":"previous_label","to":"label"}]})
+    }));
+    let active = f.read("business_apps", "unknown-at-boot").await.unwrap()["active_ver"].clone();
+    let revoke = f
+        .run(
+            "revoke",
+            "rollback",
+            active.clone(),
+            json!({"target_ver":"return-schema"}),
+        )
+        .await;
+    assert_eq!(revoke["status"], "preparing");
+    let lock: PublishLock = serde_json::from_value(revoke["publication"].clone()).unwrap();
+    let lock_for_read = lock.clone();
+    let page = f
+        .writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            let m = schema::migration(tx, &lock_for_read.operation_id, "runtime_records")?;
+            Ok(change_log::read_page(
+                tx,
+                "runtime_records",
+                m.source_gen,
+                m.cursor,
+                100,
+            )?)
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    let outputs = page
+        .docs
+        .iter()
+        .map(|d| {
+            let mut body = d.body.clone().unwrap();
+            body["label"] = body
+                .as_object_mut()
+                .unwrap()
+                .remove("previous_label")
+                .unwrap();
+            MigrationOutput::Upsert {
+                rev: d.rev.clone(),
+                body,
+            }
+        })
+        .collect::<Vec<_>>();
+    f.writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            Ok(schema::apply_migration_page(
+                tx,
+                &lock,
+                "runtime_records",
+                0,
+                &page,
+                &outputs,
+                1,
+            )?)
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    let revoked = BusinessOsActor::new(Some("owner".into()), "user");
+    assert_eq!(
+        f.platform
+            .complete(revoked, "revoke".into(), 1003)
+            .unwrap()
+            .await
+            .unwrap()["code"],
+        "forbidden"
+    );
+    assert_eq!(
+        f.read("business_apps", "unknown-at-boot").await.unwrap()["active_ver"],
+        active
+    );
+    assert_eq!(
+        f.read("runtime_records", "kept").await.unwrap()["previous_label"],
+        "retained"
+    );
+}

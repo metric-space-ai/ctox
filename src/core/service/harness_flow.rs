@@ -1,18 +1,14 @@
 // Origin: CTOX
 // License: AGPL-3.0-only
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::Utc;
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection};
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
-use std::sync::{Arc, Mutex, OnceLock};
-
-use crate::persistence::{sqlite_busy_timeout_duration, sqlite_busy_timeout_millis};
 
 const USAGE: &str = "Usage:
   ctox harness-flow [--latest] [--message-key <key>] [--work-id <id>] [--width <n>] [--json]
@@ -183,8 +179,7 @@ pub fn handle_harness_flow_command(root: &Path, args: &[String]) -> Result<()> {
     }
     match args.first().map(String::as_str) {
         Some("init") => {
-            let conn = open_event_connection(root)?;
-            ensure_event_schema(&conn)?;
+            init_event_ledger(root)?;
             println!("harness flow event ledger ready");
             return Ok(());
         }
@@ -247,8 +242,7 @@ pub fn load_selected_flow(
 
 #[allow(dead_code)]
 pub fn init_event_ledger(root: &Path) -> Result<()> {
-    let conn = open_event_connection(root)?;
-    ensure_event_schema(&conn)
+    with_event_writer(root, |_| Ok(()))
 }
 
 #[allow(dead_code)]
@@ -256,60 +250,53 @@ pub fn record_harness_flow_event(
     root: &Path,
     request: RecordHarnessFlowEventRequest<'_>,
 ) -> Result<HarnessFlowEvent> {
-    with_event_writer(root, |conn| insert_harness_flow_event(root, conn, request))
+    let (event_kind, title, body_text) = (
+        request.event_kind.to_owned(),
+        request.title.to_owned(),
+        request.body_text.to_owned(),
+    );
+    let message_key = request.message_key.map(str::to_owned);
+    let work_id = request.work_id.map(str::to_owned);
+    let ticket_key = request.ticket_key.map(str::to_owned);
+    let attempt_index = request.attempt_index;
+    let metadata = request.metadata;
+    let write_root = root.to_owned();
+    let event = with_event_writer(root, move |conn| {
+        insert_harness_flow_event(
+            &write_root,
+            conn,
+            RecordHarnessFlowEventRequest {
+                event_kind: &event_kind,
+                title: &title,
+                body_text: &body_text,
+                message_key: message_key.as_deref(),
+                work_id: work_id.as_deref(),
+                ticket_key: ticket_key.as_deref(),
+                attempt_index,
+                metadata,
+            },
+        )
+    })?;
+    // Publish only after the Core commit acknowledgement, on the admitted caller.
+    crate::business_os::harness_cockpit::schedule_flow_refresh(root, &event.event_kind);
+    Ok(event)
 }
 
-/// Flow events arrive several times per second per worker (tool calls, token
-/// usage). Opening Core for each one parsed its whole schema and closing it
-/// freed it again: two of the busiest SQLite stacks on the customer on-prem
-/// host (08.10.2026). A worker thread keeps its writer while the database file
-/// stays the same; any failure drops it.
-type EventDbIdentity = Option<(u64, u64)>;
-
-thread_local! {
-    static EVENT_WRITERS: std::cell::RefCell<HashMap<PathBuf, (EventDbIdentity, Connection)>> =
-        std::cell::RefCell::new(HashMap::new());
-}
-
-fn event_db_identity(db_path: &Path) -> EventDbIdentity {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt as _;
-        std::fs::metadata(db_path)
-            .ok()
-            .map(|meta| (meta.dev(), meta.ino()))
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = db_path;
-        None
-    }
-}
-
-fn with_event_writer<T>(root: &Path, write: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
-    let identity = event_db_identity(&db_path);
-    let cached = EVENT_WRITERS.with(|writers| writers.borrow_mut().remove(&db_path));
-    let conn = match cached {
-        Some((cached_identity, conn)) if identity.is_some() && cached_identity == identity => conn,
-        _ => {
-            let conn = open_event_connection(root)?;
-            ensure_event_schema(&conn)?;
-            conn
-        }
-    };
-    let result = write(&conn);
-    let identity = event_db_identity(&db_path);
-    if result.is_ok() && identity.is_some() {
-        EVENT_WRITERS.with(|writers| {
-            writers.borrow_mut().insert(db_path, (identity, conn));
-        });
-    }
-    result
+/// Every event phase runs on Core's bounded writer, never a thread-local
+/// native connection. The additive legacy schema seam remains until P3-06
+/// registers the ledger; schema preparation cannot alter journal pragmas.
+fn with_event_writer<T: Send + 'static>(
+    root: &Path,
+    write: impl FnOnce(&Connection) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    crate::lcm::with_lcm_write(&crate::paths::core_db(root), move |conn| {
+        ensure_event_schema(conn)?;
+        write(conn)
+    })
 }
 
 fn insert_harness_flow_event(
-    root: &Path,
+    _root: &Path,
     conn: &Connection,
     request: RecordHarnessFlowEventRequest<'_>,
 ) -> Result<HarnessFlowEvent> {
@@ -345,7 +332,6 @@ fn insert_harness_flow_event(
             created_at,
         ],
     )?;
-    crate::business_os::harness_cockpit::schedule_flow_refresh(root, request.event_kind);
     Ok(HarnessFlowEvent {
         event_id,
         chain_key,
@@ -361,38 +347,45 @@ fn insert_harness_flow_event(
     })
 }
 
-/// Count of forensic flow events whose durable write was dropped since process
-/// start. The flow ledger is the weakest-durability writer in the audit plane —
-/// `record_harness_flow_event` opens a fresh WAL connection to the contended
-/// `runtime/ctox.sqlite3`, so an INSERT can fail (e.g. SQLITE_BUSY under the
-/// serial router's contention). This counter, paired with the stderr log in
-/// `record_harness_flow_event_lossy`, makes a lost forensic write detectable
-/// instead of silently swallowed (x-flow-event-lossy-nontxn).
+/// Count of forensic flow events whose owner admission or durable write failed
+/// since process start. A full queue, retired owner or failed transaction must
+/// remain detectable through this counter and the loss log. No native-connection
+/// fallback may turn failed owner admission into an untracked independent write
+/// (x-flow-event-lossy-nontxn).
 static DROPPED_HARNESS_FLOW_EVENTS: AtomicU64 = AtomicU64::new(0);
 
 #[cfg(test)]
-#[test]
-fn cockpit_eligibility_remains_unknown_without_a_routing_row() -> Result<()> {
+#[tokio::test]
+async fn cockpit_eligibility_remains_unknown_without_a_routing_row() -> Result<()> {
     let root = tempfile::tempdir()?;
-    let event = record_harness_flow_event(
-        root.path(),
-        RecordHarnessFlowEventRequest {
-            event_kind: "worker.phase",
-            title: "Starting",
-            body_text: "",
-            message_key: Some("not-materialized-yet"),
-            work_id: None,
-            ticket_key: None,
-            attempt_index: None,
-            metadata: serde_json::json!({}),
-        },
-    )?;
-    let metadata: serde_json::Value = serde_json::from_str(&event.metadata_json)?;
-    assert!(
-        metadata.get("cockpit_eligible").is_none(),
-        "unknown must not become a permanent denial"
-    );
-    Ok(())
+    let (writer, readers, adapter) = flow_owner_fixture(root.path()).await?;
+    let dispatch_root = root.path().to_owned();
+    let result = crate::persistence::run_core_sync(move || {
+        let event = record_harness_flow_event(
+            &dispatch_root,
+            RecordHarnessFlowEventRequest {
+                event_kind: "worker.phase",
+                title: "Starting",
+                body_text: "",
+                message_key: Some("not-materialized-yet"),
+                work_id: None,
+                ticket_key: None,
+                attempt_index: None,
+                metadata: serde_json::json!({}),
+            },
+        )?;
+        let metadata: serde_json::Value = serde_json::from_str(&event.metadata_json)?;
+        assert!(
+            metadata.get("cockpit_eligible").is_none(),
+            "unknown must not become a permanent denial"
+        );
+        Ok(())
+    })
+    .await;
+    drop(adapter);
+    drop(readers);
+    writer.shutdown().await?;
+    result
 }
 
 /// Number of forensic flow events dropped (write failed) since process start.
@@ -421,14 +414,17 @@ fn build_flow(
     message_key: Option<&str>,
     work_id: Option<&str>,
 ) -> Result<HarnessFlow> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
-    with_harness_read_connection(&db_path, |conn| {
-        build_flow_with_connection(root, conn, message_key, work_id)
+    let db_path = crate::paths::core_db(root);
+    let root = root.to_owned();
+    let message_key = message_key.map(str::to_owned);
+    let work_id = work_id.map(str::to_owned);
+    with_harness_read_connection(&db_path, move |conn| {
+        build_flow_with_connection(&root, conn, message_key.as_deref(), work_id.as_deref())
     })
 }
 
 fn build_flow_with_connection(
-    root: &Path,
+    _root: &Path,
     conn: &Connection,
     message_key: Option<&str>,
     work_id: Option<&str>,
@@ -484,8 +480,8 @@ fn build_flow_with_connection(
     let review_approval = load_founder_review_approval(conn, &message.message_key)?;
     let proofs = load_core_proofs_for_key(conn, &message.message_key)?;
     let violations = load_state_violations_for_key(conn, &message.message_key)?;
-    let ledger_events = load_flow_events(
-        root,
+    let ledger_events = load_flow_events_with_connection(
+        conn,
         Some(&message.message_key),
         work_for_attempt_2
             .as_ref()
@@ -578,42 +574,11 @@ fn build_flow_with_connection(
     })
 }
 
-fn harness_connection_cache() -> &'static Mutex<HashMap<PathBuf, Arc<Mutex<Connection>>>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<Connection>>>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn with_harness_read_connection<T>(
+fn with_harness_read_connection<T: Send + 'static>(
     db_path: &Path,
-    f: impl FnOnce(&Connection) -> Result<T>,
+    f: impl FnOnce(&Connection) -> Result<T> + Send + 'static,
 ) -> Result<T> {
-    let db_path = db_path.to_path_buf();
-    let cached = {
-        let mut cache = harness_connection_cache()
-            .lock()
-            .unwrap_or_else(|err| err.into_inner());
-        if let Some(conn) = cache.get(&db_path) {
-            conn.clone()
-        } else {
-            let conn = open_harness_read_connection(&db_path)?;
-            let conn = Arc::new(Mutex::new(conn));
-            cache.insert(db_path.clone(), conn.clone());
-            conn
-        }
-    };
-    let guard = cached.lock().unwrap_or_else(|err| err.into_inner());
-    f(&guard)
-}
-
-fn open_harness_read_connection(db_path: &Path) -> Result<Connection> {
-    let conn = Connection::open_with_flags(
-        db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .with_context(|| format!("failed to open {}", db_path.display()))?;
-    conn.busy_timeout(sqlite_busy_timeout_duration())
-        .context("failed to configure SQLite busy_timeout for harness flow")?;
-    Ok(conn)
+    crate::lcm::with_lcm_read(db_path, f)
 }
 
 fn task_lines(message: &MessageRow) -> Vec<String> {
@@ -1473,25 +1438,6 @@ fn load_state_violations_for_key(conn: &Connection, key: &str) -> Result<Vec<Sta
     Ok(rows.filter_map(|row| row.ok()).collect())
 }
 
-fn open_event_connection(root: &Path) -> Result<Connection> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
-    if let Some(parent) = db_path.parent() {
-        std::fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    let conn = Connection::open(&db_path)
-        .with_context(|| format!("failed to open {}", db_path.display()))?;
-    conn.busy_timeout(sqlite_busy_timeout_duration())
-        .context("failed to configure SQLite busy_timeout for harness flow")?;
-    let busy_timeout_ms = sqlite_busy_timeout_millis();
-    conn.execute_batch(&format!(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA busy_timeout={busy_timeout_ms};"
-    ))
-    .context("failed to apply harness flow SQLite PRAGMA")?;
-    Ok(conn)
-}
-
 pub(crate) fn ensure_event_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS ctox_harness_flow_events (
@@ -1526,14 +1472,27 @@ fn load_flow_events(
     ticket_key: Option<&str>,
     limit: usize,
 ) -> Result<Vec<HarnessFlowEvent>> {
-    let db_path = root.join("runtime").join("ctox.sqlite3");
-    let conn = Connection::open_with_flags(
-        &db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )
-    .with_context(|| format!("failed to open {}", db_path.display()))?;
-    conn.busy_timeout(sqlite_busy_timeout_duration())
-        .context("failed to configure SQLite busy_timeout for harness flow")?;
+    let message_key = message_key.map(str::to_owned);
+    let work_id = work_id.map(str::to_owned);
+    let ticket_key = ticket_key.map(str::to_owned);
+    crate::lcm::with_lcm_read(&crate::paths::core_db(root), move |conn| {
+        load_flow_events_with_connection(
+            conn,
+            message_key.as_deref(),
+            work_id.as_deref(),
+            ticket_key.as_deref(),
+            limit,
+        )
+    })
+}
+
+fn load_flow_events_with_connection(
+    conn: &Connection,
+    message_key: Option<&str>,
+    work_id: Option<&str>,
+    ticket_key: Option<&str>,
+    limit: usize,
+) -> Result<Vec<HarnessFlowEvent>> {
     let has_table = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ctox_harness_flow_events'",
@@ -1705,6 +1664,25 @@ fn clip(value: &str, max: usize) -> String {
 }
 
 #[cfg(test)]
+async fn flow_owner_fixture(
+    root: &Path,
+) -> Result<(
+    ctox_store::writer::WriterHandle,
+    ctox_store::read_pool::ReadPool,
+    crate::lcm::owner_adapter::OwnerAdapter,
+)> {
+    let path = crate::paths::core_db(root);
+    std::fs::create_dir_all(path.parent().unwrap())?;
+    let (writer, readers) = ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&path)?)
+        .await?
+        .into_parts();
+    let adapter =
+        crate::lcm::owner_adapter::OwnerAdapter::attach(&path, writer.clone(), readers.clone())
+            .await?;
+    Ok((writer, readers, adapter))
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1721,53 +1699,63 @@ mod tests {
         }
     }
 
-    #[test]
-    fn flow_events_reuse_the_thread_writer_until_the_database_is_replaced() {
-        let root = tempfile::tempdir().expect("temp root");
-        std::fs::create_dir_all(root.path().join("runtime")).expect("runtime dir");
-        let db_path = root.path().join("runtime").join("ctox.sqlite3");
-        record_harness_flow_event(root.path(), phase_event("queue-a")).expect("first event");
-        let first = EVENT_WRITERS.with(|writers| {
-            writers
-                .borrow()
-                .get(&db_path)
-                .map(|(identity, conn)| (*identity, unsafe { conn.handle() } as usize))
-        });
-        record_harness_flow_event(root.path(), phase_event("queue-a")).expect("second event");
-        let second = EVENT_WRITERS.with(|writers| {
-            writers
-                .borrow()
-                .get(&db_path)
-                .map(|(identity, conn)| (*identity, unsafe { conn.handle() } as usize))
-        });
-        assert!(first.is_some());
-        assert_eq!(
-            first, second,
-            "the second event must reuse the cached writer"
-        );
-
-        // A replaced database file gets a fresh writer and its own schema.
-        // Moved aside, the old inode stays allocated and cannot be reused.
-        std::fs::rename(&db_path, db_path.with_extension("old")).expect("move database aside");
-        let _ = std::fs::remove_file(db_path.with_extension("sqlite3-wal"));
-        let _ = std::fs::remove_file(db_path.with_extension("sqlite3-shm"));
-        record_harness_flow_event(root.path(), phase_event("queue-b"))
-            .expect("event after replace");
-        let events = load_flow_events(root.path(), Some("queue-b"), None, None, 20)
-            .expect("load events from the new database");
-        assert_eq!(events.len(), 1);
-        let replaced = EVENT_WRITERS.with(|writers| {
-            writers
-                .borrow()
-                .get(&db_path)
-                .map(|(identity, _)| *identity)
-        });
-        assert_ne!(replaced, first.map(|(identity, _)| identity));
-        EVENT_WRITERS.with(|writers| writers.borrow_mut().clear());
+    #[tokio::test]
+    async fn flow_events_share_core_writer_and_snapshot_without_a_native_cache() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = crate::paths::core_db(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let (writer, readers) =
+            ctox_store::testkit::StoreFixture::open(ctox_store::DbId::new(&path)?)
+                .await?
+                .into_parts();
+        let adapter =
+            crate::lcm::owner_adapter::OwnerAdapter::attach(&path, writer.clone(), readers.clone())
+                .await?;
+        writer.submit(ctox_store::WriteJob::new(Default::default(),|tx|{
+            ensure_event_schema(tx).map_err(|e|ctox_store::StoreError::Invalid(e.to_string()))?;
+            tx.execute_batch("CREATE TEMP TABLE flow_owner_audit(value INTEGER); CREATE TEMP TRIGGER audit_flow AFTER INSERT ON main.ctox_harness_flow_events BEGIN INSERT INTO flow_owner_audit VALUES(1);END;")?;Ok(())
+        }))?.await?;
+        let root = dir.path().to_owned();
+        let read_path = path.clone();
+        crate::persistence::run_core_sync(move || {
+            for key in ["queue-a", "queue-b"] {
+                let key = key.to_owned();
+                let insert_root = root.clone();
+                with_event_writer(&root, move |conn| {
+                    insert_harness_flow_event(&insert_root, conn, phase_event(&key))
+                })?;
+            }
+            let count = with_event_writer(&root, |conn| {
+                Ok(
+                    conn.query_row("SELECT COUNT(*) FROM temp.flow_owner_audit", [], |r| {
+                        r.get::<_, i64>(0)
+                    })?,
+                )
+            })?;
+            assert_eq!(count, 2, "flow writes escaped the actual Core connection");
+            with_harness_read_connection(&read_path, |conn| {
+                assert_eq!(
+                    conn.query_row("PRAGMA query_only", [], |r| r.get::<_, i64>(0))?,
+                    1
+                );
+                assert!(!conn.is_autocommit());
+                let events =
+                    load_flow_events_with_connection(conn, Some("queue-a"), None, None, 20)?;
+                assert_eq!(events.len(), 1);
+                assert_eq!(events[0].message_key.as_deref(), Some("queue-a"));
+                Ok(())
+            })?;
+            Ok(())
+        })
+        .await?;
+        drop(adapter);
+        drop(readers);
+        writer.shutdown().await?;
+        Ok(())
     }
 
-    #[test]
-    fn worker_metrics_remain_scoped_to_their_message_chain() {
+    #[tokio::test]
+    async fn worker_metrics_remain_scoped_to_their_message_chain() -> Result<()> {
         let root = std::env::temp_dir().join(format!(
             "ctox-flow-task-scope-{}",
             std::time::SystemTime::now()
@@ -1776,52 +1764,63 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(root.join("runtime")).expect("create runtime directory");
-        for (message_key, input_tokens) in [("queue-a", 1200), ("queue-b", 9876)] {
-            record_harness_flow_event(
-                &root,
-                RecordHarnessFlowEventRequest {
-                    event_kind: "worker.token_usage",
-                    title: "Model usage updated",
-                    body_text: "",
-                    message_key: Some(message_key),
-                    work_id: None,
-                    ticket_key: None,
-                    attempt_index: Some(1),
-                    metadata: serde_json::json!({
-                        "usage": {
-                            "input_tokens": input_tokens,
-                            "output_tokens": 10,
-                        },
-                        "metrics_mode": "cumulative",
-                    }),
-                },
-            )
-            .expect("record worker telemetry");
-        }
+        let (writer, readers, adapter) = flow_owner_fixture(&root).await?;
+        let dispatch_root = root.clone();
+        let result = crate::persistence::run_core_sync(move || {
+            let root = dispatch_root;
+            for (message_key, input_tokens) in [("queue-a", 1200), ("queue-b", 9876)] {
+                record_harness_flow_event(
+                    &root,
+                    RecordHarnessFlowEventRequest {
+                        event_kind: "worker.token_usage",
+                        title: "Model usage updated",
+                        body_text: "",
+                        message_key: Some(message_key),
+                        work_id: None,
+                        ticket_key: None,
+                        attempt_index: Some(1),
+                        metadata: serde_json::json!({
+                            "usage": {
+                                "input_tokens": input_tokens,
+                                "output_tokens": 10,
+                            },
+                            "metrics_mode": "cumulative",
+                        }),
+                    },
+                )
+                .expect("record worker telemetry");
+            }
 
-        let task_a = load_flow_events(&root, Some("queue-a"), None, None, 20)
-            .expect("load first task events");
-        assert_eq!(task_a.len(), 1);
-        assert_eq!(task_a[0].message_key.as_deref(), Some("queue-a"));
-        assert!(task_a[0].metadata_json.contains("\"input_tokens\":1200"));
-        assert!(!task_a[0].metadata_json.contains("9876"));
+            let task_a = load_flow_events(&root, Some("queue-a"), None, None, 20)
+                .expect("load first task events");
+            assert_eq!(task_a.len(), 1);
+            assert_eq!(task_a[0].message_key.as_deref(), Some("queue-a"));
+            assert!(task_a[0].metadata_json.contains("\"input_tokens\":1200"));
+            assert!(!task_a[0].metadata_json.contains("9876"));
 
-        let task_b = load_flow_events(&root, Some("queue-b"), None, None, 20)
-            .expect("load second task events");
-        assert_eq!(task_b.len(), 1);
-        assert_eq!(task_b[0].message_key.as_deref(), Some("queue-b"));
-        assert!(task_b[0].metadata_json.contains("\"input_tokens\":9876"));
-        assert!(!task_b[0].metadata_json.contains("1200"));
+            let task_b = load_flow_events(&root, Some("queue-b"), None, None, 20)
+                .expect("load second task events");
+            assert_eq!(task_b.len(), 1);
+            assert_eq!(task_b[0].message_key.as_deref(), Some("queue-b"));
+            assert!(task_b[0].metadata_json.contains("\"input_tokens\":9876"));
+            assert!(!task_b[0].metadata_json.contains("1200"));
 
+            Ok(())
+        })
+        .await;
+        drop(adapter);
+        drop(readers);
+        writer.shutdown().await?;
         let _ = std::fs::remove_dir_all(root);
+        result
     }
 
-    #[test]
-    fn record_harness_flow_event_lossy_counts_a_dropped_write() {
+    #[tokio::test]
+    async fn record_harness_flow_event_lossy_counts_a_dropped_write() -> Result<()> {
         // x-flow-event-lossy-nontxn (b): a forensic write whose connection cannot
         // be opened must be COUNTED + logged, not silently swallowed. Force
-        // open_event_connection to fail by making runtime/ a FILE (so its
-        // create_dir_all errors), then confirm the drop counter advanced. Only
+        // owner identity lookup to fail with runtime/ as a FILE, then confirm
+        // the drop counter advanced. There is no independent-open fallback. Only
         // forced-failure paths touch the counter, so a strict increase pins the
         // fix even under parallel test execution.
         let root = std::env::temp_dir().join(format!(
@@ -1835,24 +1834,31 @@ mod tests {
         std::fs::write(root.join("runtime"), b"not a directory").expect("seed runtime as a file");
 
         let before = dropped_harness_flow_event_count();
-        record_harness_flow_event_lossy(
-            &root,
-            RecordHarnessFlowEventRequest {
-                event_kind: "test.forced_drop",
-                title: "forced drop",
-                body_text: "",
-                message_key: Some("msg-x-flow"),
-                work_id: None,
-                ticket_key: None,
-                attempt_index: None,
-                metadata: serde_json::json!({}),
-            },
-        );
+        let dispatch_root = root.clone();
+        crate::persistence::run_core_sync(move || {
+            let root = dispatch_root;
+            record_harness_flow_event_lossy(
+                &root,
+                RecordHarnessFlowEventRequest {
+                    event_kind: "test.forced_drop",
+                    title: "forced drop",
+                    body_text: "",
+                    message_key: Some("msg-x-flow"),
+                    work_id: None,
+                    ticket_key: None,
+                    attempt_index: None,
+                    metadata: serde_json::json!({}),
+                },
+            );
+            Ok(())
+        })
+        .await?;
         assert!(
             dropped_harness_flow_event_count() > before,
             "a dropped forensic write must increment the drop counter"
         );
         let _ = std::fs::remove_dir_all(&root);
+        Ok(())
     }
 
     #[test]
@@ -1883,39 +1889,60 @@ mod tests {
         assert!(rendered.contains("├──►"));
     }
 
-    #[test]
-    fn process_mining_branch_surfaces_confirmed_findings_and_last_audit() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::service::harness_mining::findings::ensure_findings_schema(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO ctox_hm_findings \
+    #[tokio::test]
+    async fn process_mining_branch_surfaces_confirmed_findings_and_last_audit() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let (writer, readers, adapter) = flow_owner_fixture(dir.path()).await?;
+        let root = dir.path().to_owned();
+        let result = crate::persistence::run_core_sync(move || {
+            crate::lcm::with_lcm_write(&crate::paths::core_db(&root), |conn| {
+                crate::service::harness_mining::findings::ensure_findings_schema(conn)?;
+                conn.execute(
+                    "INSERT INTO ctox_hm_findings \
              (finding_id, signature, kind, severity, status, detected_at, last_seen_at) \
              VALUES ('f1','sig1','drift','critical','confirmed','t','t')",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO ctox_hm_audit_runs (run_id, started_at, status) \
+                    [],
+                )?;
+                conn.execute(
+                    "INSERT INTO ctox_hm_audit_runs (run_id, started_at, status) \
              VALUES ('r1','2026-06-14T00:00:00.000Z','completed')",
-            [],
-        )
-        .unwrap();
-        let branch = process_mining_branch(&conn).unwrap();
-        assert!(
-            branch
-                .lines
-                .iter()
-                .any(|l| l.contains("Confirmed findings: 1 (critical 1)")),
-            "lines: {:?}",
-            branch.lines
-        );
-        assert!(
-            branch
-                .lines
-                .iter()
-                .any(|l| l.contains("Last audit tick: completed at 2026-06-14")),
-            "lines: {:?}",
-            branch.lines
-        );
+                    [],
+                )?;
+                Ok(())
+            })?;
+            let branch = with_harness_read_connection(&crate::paths::core_db(&root), |conn| {
+                assert_eq!(
+                    conn.query_row("PRAGMA query_only", [], |r| r.get::<_, i64>(0))?,
+                    1
+                );
+                assert!(
+                    !conn.is_autocommit(),
+                    "finding and audit rows must share the owner's snapshot"
+                );
+                process_mining_branch(conn)
+            })?;
+            assert!(
+                branch
+                    .lines
+                    .iter()
+                    .any(|l| l.contains("Confirmed findings: 1 (critical 1)")),
+                "lines: {:?}",
+                branch.lines
+            );
+            assert!(
+                branch
+                    .lines
+                    .iter()
+                    .any(|l| l.contains("Last audit tick: completed at 2026-06-14")),
+                "lines: {:?}",
+                branch.lines
+            );
+            Ok(())
+        })
+        .await;
+        drop(adapter);
+        drop(readers);
+        writer.shutdown().await?;
+        result
     }
 }

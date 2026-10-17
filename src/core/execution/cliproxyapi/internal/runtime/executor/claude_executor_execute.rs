@@ -1121,11 +1121,7 @@ impl ClaudeSubscriptionMessagesExecutor {
                 .map(|delay| u64::try_from(delay.as_millis()).unwrap_or(u64::MAX)),
             observed_at_ms: binding.clock.now_ms(),
         };
-        Some(
-            tokio::task::spawn_blocking(move || conductor.record(result))
-                .await
-                .is_ok_and(|result| result.is_ok()),
-        )
+        Some(conductor.record_async(result).await.is_ok())
     }
 }
 
@@ -1391,7 +1387,7 @@ impl ClaudeTrackedMessagesStreamResponse {
             retry_delay_ms: None,
             observed_at_ms: binding.clock.now_ms(),
         };
-        let _ = tokio::task::spawn_blocking(move || conductor.record(result)).await;
+        let _ = conductor.record_async(result).await;
     }
 }
 

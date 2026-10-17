@@ -1,6 +1,37 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { Buffer } from 'node:buffer';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join as joinPath } from 'node:path';
+// Lader (OLDTEST): esbuild aus dem Klon, sonst ESBUILD_MODULE, sonst aus dem Haupt-Checkout
+// ~/Documents/ctox/src/apps/business-os/node_modules (wie PLAYWRIGHT_MODULE in den v4-api-Tests). Nicht installieren.
+const requireDev = createRequire(import.meta.url);
+function loadDev(name, envVar) {
+  try { return requireDev(name); } catch {
+    return requireDev(process.env[envVar] || joinPath(homedir(), 'Documents/ctox/src/apps/business-os/node_modules', name));
+  }
+}
+const { build } = loadDev('esbuild', 'ESBUILD_MODULE');
+
+// v4: index.js importiert 'ctox:shared/…' (nur über den Service Worker auflösbar) und Locales als JSON-Module →
+// esbuild-Bündel mit demselben Umschreiben wie der SW (§16.15).
+const bundled = await build({
+  entryPoints: [fileURLToPath(new URL('./index.js', import.meta.url))],
+  bundle: true,
+  format: 'esm',
+  platform: 'browser',
+  write: false,
+  logLevel: 'silent',
+  plugins: [{
+    name: 'ctox-shared',
+    setup(b) {
+      b.onResolve({ filter: /^ctox:shared\// }, (args) => ({ path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)) }));
+    },
+  }],
+});
 
 const {
   buildAppCreateCommand,
@@ -18,7 +49,7 @@ const {
   filterCreatorLibrary,
   creatorRequestStatuses,
   prepareCreatorRequestImport,
-} = await import('./index.js');
+} = await import(`data:text/javascript;base64,${Buffer.from(bundled.outputFiles[0].text).toString('base64')}`);
 
 const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
 const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
@@ -330,21 +361,23 @@ test('composer flow is preserved: app select prefills upgrade, request adopts te
   assert.match(html, /id="btn-deploy-app"/);
 });
 
-test('data-driven library empties are gated on canonical collection readiness', () => {
-  // Both bands subscribe to their backing collection's readiness and re-render
-  // the well on state transitions.
-  assert.match(js, /subscribeCollectionReadiness\(ctx, 'business_module_catalog'/);
-  assert.match(js, /subscribeCollectionReadiness\(ctx, 'business_commands'/);
-  // Empty + unready renders the kit syncing shell; empty + ready stays ctox-empty.
-  assert.match(js, /bandTotal === 0 && readiness\?\.ready === false/);
-  assert.match(js, /class="ctox-syncing" role="status" aria-live="polite"/);
-  assert.match(js, /class="ctox-empty"/);
-  // Readiness subscriptions are cleaned up on unmount.
-  assert.match(js, /cleanupSubscription\(state\.catalogReadinessSubscription\)/);
-  assert.match(js, /cleanupSubscription\(state\.commandReadinessSubscription\)/);
-  // Sync hint is translated in both locales.
-  assert.equal(localeDe.libSyncing, 'Daten werden synchronisiert.');
-  assert.equal(localeEn.libSyncing, 'Syncing data.');
-  // Filter-empties (band has data, filter hides it) are NOT gated.
-  assert.match(js, /state\.t\('libEmptyFiltered'/);
+test('v4: library empties render nothing; data only via api.query, commands never wait', () => {
+  assert.doesNotMatch(js, /subscribeCollectionReadiness|startCollection|commandBus|until: 'terminal'|ctox-syncing|ctox-empty/);
+  assert.match(js, /api\.query\('business_apps'/);
+  assert.match(js, /api\.query\('business_commands', \{\}\)/);
+  assert.match(js, /api\.command\(command\.command_type,/);
+  // Kein HTTP-Ladeweg auf installed-modules/<id>/module.json, kein Hash-Einstieg.
+  assert.doesNotMatch(js, /fetch\(`installed-modules|window\.location/);
+  assert.equal(localeDe.libSyncing, undefined);
+  assert.equal(localeEn.libSyncing, undefined);
+});
+
+test('creator v4: Plattform-, Shell- und Bibliothekszeilen sind keine Eigenbau-Apps', () => {
+  const apps = normalizeCreatorInstalledApps({ modules: [
+    { id: 'ctox-platform', app_id: 'ctox-platform', title: 'Plattform', active_ver: '1' },
+    { id: 'shell', app_id: 'shell', title: 'Shell', active_ver: 'lab' },
+    { id: 'lib:ctox-office', app_id: 'lib:ctox-office', title: 'lib:ctox-office@1.0', active_ver: '1.0' },
+    { id: 'lager', app_id: 'lager', title: 'Lager', active_ver: '1.0.0' },
+  ] });
+  assert.deepEqual(apps.map((a) => a.id), ['lager']);
 });

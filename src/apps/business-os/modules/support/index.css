@@ -13,7 +13,7 @@
 /* Standard frame defaults for the declarative resizers — the shell writes
    inline --ctox-*-width onto the frame while dragging. The primary (center)
    column keeps a hard minimum so side panes never squeeze it to zero. */
-.support-module {
+[data-app="support"] .support-module {
   /* 380px, not 300: the counted band is four labels WITH their counts
      (Offen/Meine/Nicht zugewiesen/SLA-Risiko) and the kit pins .ctox-pane-tabs
      to min-width: max-content, so a 300px queue column cut the last tab off.
@@ -29,35 +29,44 @@
 
 /* Pin the workspace panes to explicit grid tracks so a hidden resizer never
    lets the center pane slide onto an empty resizer track (design-guide). */
-.support-left { grid-column: 1; }
-.support-module [data-resizer="left"] { grid-column: 2; }
-.support-center { grid-column: 3; }
-.support-module [data-resizer="right"] { grid-column: 4; }
-.support-right { grid-column: 5; }
+[data-app="support"] .support-left { grid-column: 1; }
+[data-app="support"] .support-module [data-resizer="left"] { grid-column: 2; }
+[data-app="support"] .support-center { grid-column: 3; }
+[data-app="support"] .support-module [data-resizer="right"] { grid-column: 4; }
+[data-app="support"] .support-right { grid-column: 5; }
+
+/* VIS3: the counted band wraps into a second row instead of clipping the last
+   tab ("SLA-Risiko") at the pane edge when the queue column is narrower than
+   the band's max-content width (e.g. window 900). */
+[data-app="support"] .support-module .support-left > .ctox-view-switch > .ctox-pane-tabs {
+  flex-wrap: wrap;
+  min-width: 0;
+  max-width: 100%;
+}
 
 /* Left grammar column: explicit rows header / counted band / well / footer.
    The single track is pinned to minmax(0, 1fr): without it the pane's implicit
    column is content-sized, the counted band with its four labels+counts blows
    it to 368px inside a 300px pane, and every conversation row is cut off at
    the pane edge instead of ellipsising (measured live at 1180px). */
-.ctox-pane.support-left {
+[data-app="support"] .ctox-pane.support-left {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   grid-template-columns: minmax(0, 1fr);
 }
 
 /* Center pane stacks header + timeline body + composer footer. */
-.ctox-pane.support-center {
+[data-app="support"] .ctox-pane.support-center {
   grid-template-rows: auto minmax(0, 1fr) auto;
 }
 
 /* Context pane hidden by default — no selection, or the operator collapsed it.
    Selecting a conversation flips .is-context-hidden off (auto-reveal). */
-.support-module.is-context-hidden {
+[data-app="support"] .support-module.is-context-hidden {
   grid-template-columns: var(--ctox-left-width) 12px minmax(320px, 1fr);
 }
 
-.support-module.is-context-hidden .support-right,
-.support-module.is-context-hidden [data-resizer="right"] {
+[data-app="support"] .support-module.is-context-hidden .support-right,
+[data-app="support"] .support-module.is-context-hidden [data-resizer="right"] {
   display: none;
 }
 
@@ -87,7 +96,7 @@
    No height pin here: title row (37px) + filterbar row (36px) + 1px band
    hairline sum to exactly 74px, and the opened tray may still expand the head
    downwards as it always did. */
-.shell-window[data-shell-contract="v2"] .support-module .support-left > .ctox-pane-header {
+[data-app="support"] .support-module .support-left > .ctox-pane-header {
   box-sizing: border-box;
   padding: 0 14px 0 calc(var(--shell-v2-icon-size, 80px) + 14px);
 }
@@ -97,7 +106,7 @@
    writes no `.ctox-filterbar` rule (the kit owns its look), but the shell-v2
    band height is geometry this head must satisfy, not chrome styling. 36px
    + the head's 1px bottom hairline lands row 2 exactly on the 74px icon edge. */
-.shell-window[data-shell-contract="v2"] .support-module .support-left > .ctox-pane-header > .ctox-pane-title-row + div {
+[data-app="support"] .support-module .support-left > .ctox-pane-header > .ctox-pane-title-row + div {
   box-sizing: border-box;
   height: calc(var(--shell-v2-header-row-size, 37px) - 1px);
   min-height: 0;
@@ -113,13 +122,12 @@
    .ctox-pane-search class, so this stays head geometry and not chrome styling.
    120px is a floor, not the working size: at the pane's own 380px minimum the
    field measures 174px, so the floor never forces the two row icons out. */
-.shell-window[data-shell-contract="v2"] .support-module .support-left > .ctox-pane-header > .ctox-pane-title-row + div > [data-pg-search] {
+[data-app="support"] .support-module .support-left > .ctox-pane-header > .ctox-pane-title-row + div > [data-pg-search] {
   min-width: 120px;
 }
 
-.shell-window[data-shell-contract="v2"] .support-module .support-center > .ctox-pane-header {
+[data-app="support"] .support-module .support-center > .ctox-pane-header {
   box-sizing: border-box;
-  height: calc(2 * var(--shell-v2-header-row-size, 37px));
   min-height: calc(2 * var(--shell-v2-header-row-size, 37px));
   padding: 0 14px;
   display: grid;
@@ -129,23 +137,22 @@
 /* Last head: the close control is 74px wide, 70px is the contract floor. The
    context pane is the last column whenever it is revealed; with it collapsed
    (the default) the conversation head is the last head instead. */
-.shell-window[data-shell-contract="v2"] .support-module .support-right > .ctox-pane-header {
+[data-app="support"] .support-module .support-right > .ctox-pane-header {
   box-sizing: border-box;
-  height: calc(2 * var(--shell-v2-header-row-size, 37px));
   min-height: calc(2 * var(--shell-v2-header-row-size, 37px));
   padding: 0 70px 0 14px;
   display: grid;
   align-content: center;
 }
 
-.shell-window[data-shell-contract="v2"] .support-module.is-context-hidden .support-center > .ctox-pane-header {
-  padding-right: 70px;
+[data-app="support"] .support-module.is-context-hidden .support-center > .ctox-pane-header {
+  padding-right: var(--shell-v2-control-inset, 70px);
 }
 
-/* Row 1 of all three heads is the shell header band: identical height. */
-.shell-window[data-shell-contract="v2"] .support-module .ctox-pane > .ctox-pane-header > .ctox-pane-title-row {
+/* Row 1 of all three heads is the shell header band: at least one band tall.
+   VIS3: a long title wraps (no ellipsis), so the row may grow past it. */
+[data-app="support"] .support-module .ctox-pane > .ctox-pane-header > .ctox-pane-title-row {
   box-sizing: border-box;
-  height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
 }
 
@@ -155,31 +162,31 @@
    redundant "Support Desk" kicker (the shell frame already names the app, and
    Knowledge's first head carries no kicker either) and every title keeps the
    shell's 44px trigger minimum. */
-.shell-window[data-shell-contract="v2"] .support-module .support-left > .ctox-pane-header .ctox-pane-kicker {
+[data-app="support"] .support-module .support-left > .ctox-pane-header .ctox-pane-kicker {
   display: none;
 }
 
-.shell-window[data-shell-contract="v2"] .support-module .ctox-pane > .ctox-pane-header .ctox-pane-titles {
+[data-app="support"] .support-module .ctox-pane > .ctox-pane-header .ctox-pane-titles {
   flex: 1 1 auto;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: 0 8px;
   min-width: 0;
   padding-top: 0;
-  overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .support-module .ctox-pane > .ctox-pane-header .ctox-pane-title {
-  flex: 0 1 auto;
+/* VIS3: no ellipsis (frame kit) - the title takes at most the line width and
+   wraps at word boundaries; the 44px trigger floor stays. */
+[data-app="support"] .support-module .ctox-pane > .ctox-pane-header .ctox-pane-title {
+  flex: 0 0 auto;
+  max-width: 100%;
   min-width: 44px;
   margin: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 /* The action block never claims the title's width. */
-.shell-window[data-shell-contract="v2"] .support-module .ctox-pane > .ctox-pane-header .ctox-pane-actions {
+[data-app="support"] .support-module .ctox-pane > .ctox-pane-header .ctox-pane-actions {
   flex: 0 0 auto;
 }
 
@@ -193,7 +200,7 @@
    padding.
    --list:           exactly one dense line — subject left, the status word as
    the single short meta hard right, tight line height. */
-.support-conversation-row--cards {
+[data-app="support"] .support-conversation-row--cards {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: 3px;
@@ -201,31 +208,30 @@
   padding-bottom: 12px;
 }
 
-.support-conversation-row--cards .support-row-head {
+[data-app="support"] .support-conversation-row--cards .support-row-head {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 10px;
 }
 
-.support-conversation-row--cards .support-row-title {
+[data-app="support"] .support-conversation-row--cards .support-row-title {
   min-width: 0;
   font-size: 13px;
   font-weight: 600;
   line-height: 1.35;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Umbruch statt Ellipse: lange Titel bleiben vollständig lesbar (Geometrie G4). */
+  overflow-wrap: anywhere;
 }
 
-.support-conversation-row--cards .support-row-badges {
+[data-app="support"] .support-conversation-row--cards .support-row-badges {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 4px;
 }
 
-.support-conversation-row--cards .support-row-meta {
+[data-app="support"] .support-conversation-row--cards .support-row-meta {
   display: block;
   color: var(--muted);
   font-size: 11px;
@@ -235,7 +241,7 @@
   white-space: nowrap;
 }
 
-.support-conversation-row--list {
+[data-app="support"] .support-conversation-row--list {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -245,16 +251,15 @@
   line-height: 1.3;
 }
 
-.support-conversation-row--list .support-row-title {
+[data-app="support"] .support-conversation-row--list .support-row-title {
   min-width: 0;
   font-size: 12px;
   font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Umbruch statt Ellipse: lange Titel bleiben vollständig lesbar (Geometrie G4). */
+  overflow-wrap: anywhere;
 }
 
-.support-conversation-row--list .support-row-tail {
+[data-app="support"] .support-conversation-row--list .support-row-tail {
   flex: 0 0 auto;
   color: var(--muted);
   font-size: 11px;
@@ -263,14 +268,14 @@
 /* custom: support timeline — note/event/agent-suggestion entries with
    kind-tinted hairlines. A message timeline is a special view the kit does
    not express (cf. the conversations module chat timeline). */
-.support-timeline {
+[data-app="support"] .support-timeline {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 10px 12px;
 }
 
-.support-timeline-item {
+[data-app="support"] .support-timeline-item {
   max-width: 760px;
   padding: 8px 10px;
   border: 1px solid var(--hairline, var(--line));
@@ -278,15 +283,15 @@
   background: var(--surface-2);
 }
 
-.support-timeline-item.is-note {
+[data-app="support"] .support-timeline-item.is-note {
   border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
 }
 
-.support-timeline-item.is-agent_suggestion {
+[data-app="support"] .support-timeline-item.is-agent_suggestion {
   border-color: color-mix(in srgb, var(--warning) 30%, var(--line));
 }
 
-.support-timeline-item header {
+[data-app="support"] .support-timeline-item header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -296,7 +301,7 @@
   font-size: 11px;
 }
 
-.support-timeline-item p {
+[data-app="support"] .support-timeline-item p {
   margin: 0;
   line-height: 1.48;
   white-space: pre-wrap;
@@ -304,7 +309,7 @@
 
 /* custom: note composer docked to the bottom of the conversation pane
    (textarea + primary action row) — the kit has no composer pattern. */
-.support-composer {
+[data-app="support"] .support-composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
@@ -314,7 +319,7 @@
 }
 
 /* Inspector card stack (kit .ctox-card sections) in the context pane. */
-.support-context-list {
+[data-app="support"] .support-context-list {
   display: grid;
   gap: 8px;
   align-content: start;
@@ -323,47 +328,47 @@
 
 /* custom: two-column grids for status/priority controls and the routine
    conversation actions inside inspector cards. */
-.support-control-grid,
-.support-context-actions {
+[data-app="support"] .support-control-grid,
+[data-app="support"] .support-context-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 6px;
 }
 
-.support-control-grid {
+[data-app="support"] .support-control-grid {
   margin-bottom: 8px;
 }
 
-.support-control-grid label {
+[data-app="support"] .support-control-grid label {
   min-width: 0;
   display: grid;
   gap: 4px;
 }
 
-.support-control-grid .ctox-field-label {
+[data-app="support"] .support-control-grid .ctox-field-label {
   margin-bottom: 0;
 }
 
 /* custom: compact two-line record rows inside inspector cards (linked
    threads, CTOX commands/tasks) — record content, not kit list items. */
-.support-linked-row {
+[data-app="support"] .support-linked-row {
   display: grid;
   gap: 2px;
   margin: 0 0 8px;
 }
 
-.support-linked-row strong {
+[data-app="support"] .support-linked-row strong {
   font-size: 12px;
 }
 
-.support-linked-row span {
+[data-app="support"] .support-linked-row span {
   color: var(--muted);
   font-size: 11px;
   overflow-wrap: anywhere;
 }
 
 /* custom: suggestion entries separated by hairlines inside the agent card. */
-.support-suggestion-row {
+[data-app="support"] .support-suggestion-row {
   display: grid;
   gap: 6px;
   border-top: 1px solid var(--hairline, var(--line));
@@ -371,30 +376,30 @@
   margin-top: 8px;
 }
 
-.support-suggestion-row:first-child {
+[data-app="support"] .support-suggestion-row:first-child {
   border-top: 0;
   padding-top: 0;
   margin-top: 0;
 }
 
-.support-suggestion-row p {
+[data-app="support"] .support-suggestion-row p {
   margin: 0;
   line-height: 1.42;
 }
 
-.support-suggestion-row small {
+[data-app="support"] .support-suggestion-row small {
   color: var(--muted);
   font-size: 11px;
 }
 
 /* Quiet status line (command feedback) — mirrors the kit's muted meta text. */
-.support-status {
+[data-app="support"] .support-status {
   min-height: 18px;
   color: var(--muted);
   font-size: 11px;
 }
 
-.support-status.is-error {
+[data-app="support"] .support-status.is-error {
   color: var(--danger);
 }
 
@@ -402,20 +407,20 @@
    context pane overlays the center track (the collapse toggle in its header is
    the return path); otherwise only the queue + conversation columns show. */
 @container business-app-window (max-width: 1024px) {
-  .support-module,
-  .support-module.is-context-hidden {
+  [data-app="support"] .support-module,
+  [data-app="support"] .support-module.is-context-hidden {
     grid-template-columns: var(--ctox-left-width) 12px minmax(0, 1fr);
   }
 
-  .support-module [data-resizer="right"] {
+  [data-app="support"] .support-module [data-resizer="right"] {
     display: none;
   }
 
-  .support-module:not(.is-context-hidden) .support-center {
+  [data-app="support"] .support-module:not(.is-context-hidden) .support-center {
     display: none;
   }
 
-  .support-module:not(.is-context-hidden) .support-right {
+  [data-app="support"] .support-module:not(.is-context-hidden) .support-right {
     display: grid;
     grid-column: 3;
     grid-row: 1;
@@ -434,8 +439,8 @@
    Same behaviour as the Knowledge reference and the migrated Nachweise app.
    `overflow-x: hidden` keeps a single track from ever scrolling sideways. */
 @container business-app-window (max-width: 768px) {
-  .support-module,
-  .support-module.is-context-hidden {
+  [data-app="support"] .support-module,
+  [data-app="support"] .support-module.is-context-hidden {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(200px, 40vh) minmax(280px, 1fr);
     height: auto;
@@ -446,43 +451,43 @@
     gap: 6px;
   }
 
-  .support-module [data-resizer] {
+  [data-app="support"] .support-module [data-resizer] {
     display: none !important;
   }
 
-  .support-left {
+  [data-app="support"] .support-left {
     grid-column: 1;
     grid-row: 1;
     min-height: 200px;
   }
 
-  .support-center {
+  [data-app="support"] .support-center {
     grid-column: 1;
     grid-row: 2;
     min-height: 240px;
   }
 
-  .support-composer {
+  [data-app="support"] .support-composer {
     grid-template-columns: minmax(0, 1fr);
   }
 
   /* Stacked: the queue head becomes the top row, so it now has to clear the
      window control on the right as well as the app icon on the left. */
-  .shell-window[data-shell-contract="v2"] .support-module .support-left > .ctox-pane-header {
-    padding-right: 70px;
+  [data-app="support"] .support-module .support-left > .ctox-pane-header {
+    padding-right: var(--shell-v2-control-inset, 70px);
   }
 
   /* Revealed context takes over the whole sheet; the collapse toggle returns. */
-  .support-module:not(.is-context-hidden) {
+  [data-app="support"] .support-module:not(.is-context-hidden) {
     grid-template-rows: minmax(0, 1fr);
   }
 
-  .support-module:not(.is-context-hidden) .support-left,
-  .support-module:not(.is-context-hidden) .support-center {
+  [data-app="support"] .support-module:not(.is-context-hidden) .support-left,
+  [data-app="support"] .support-module:not(.is-context-hidden) .support-center {
     display: none;
   }
 
-  .support-module:not(.is-context-hidden) .support-right {
+  [data-app="support"] .support-module:not(.is-context-hidden) .support-right {
     display: grid;
     grid-column: 1;
     grid-row: 1;
@@ -492,16 +497,16 @@
 
 /* Secondary context reference sections: collapsed disclosures under the two
    primary cards, so the context pane isn't a wall of cards. Kit-card look. */
-.support-context-details { border-top: 1px solid var(--line); }
-.support-context-details > summary {
+[data-app="support"] .support-context-details { border-top: 1px solid var(--line); }
+[data-app="support"] .support-context-details > summary {
   cursor: pointer;
   padding: 10px 2px;
   font-weight: 600;
   color: var(--text);
   list-style-position: inside;
 }
-.support-context-details[open] > summary { color: var(--muted); }
-.support-context-details > .ctox-card-body { padding: 0 2px 12px; }
+[data-app="support"] .support-context-details[open] > summary { color: var(--muted); }
+[data-app="support"] .support-context-details > .ctox-card-body { padding: 0 2px 12px; }
 
 /* Touch targets on coarse pointers (phone/tablet): every interactive control
    reaches the 44px minimum, icon-only pane buttons in both dimensions, and
@@ -509,24 +514,34 @@
    pane stacking itself is handled by the @container business-app-window
    rules above, at the shell's two breakpoints (1024px/768px) and no others. */
 @media (pointer: coarse) {
-  .support-module button,
-  .support-module input,
-  .support-module select,
-  .support-module textarea {
+  [data-app="support"] .support-module button,
+  [data-app="support"] .support-module input,
+  [data-app="support"] .support-module select,
+  [data-app="support"] .support-module textarea {
     min-height: 44px;
   }
 
-  .support-module .ctox-pane-icon {
+  [data-app="support"] .support-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .support-module .support-conversation-list .ctox-list-item {
+  [data-app="support"] .support-module .support-conversation-list .ctox-list-item {
     min-height: 44px;
   }
 
   /* Disclosure summaries are tap targets too. */
-  .support-module .support-context-details > summary {
+  [data-app="support"] .support-module .support-context-details > summary {
     min-height: 44px;
   }
+}
+
+/* Textdiät R2 (15.10.): Listen-Fuß ohne Inhalt (Zählerwiederholung entfernt) nimmt keinen Platz ein. */
+[data-app="support"] .ctox-pane-footer:has(> [data-pg-footer]:empty) { display: none; }
+
+/* Textdiät R2 (15.10.): schmale Fenster – Spaltentitel einzeilig mit Ellipse statt Wort-/Silbenbruch
+   (420: „Kunden / konten“, „Kampagnen / & Sequenzen“). Voller Titel bleibt im title-Attribut bzw. im Fenster. */
+@container business-app-window (max-width: 768px) {
+  [data-app="support"] .ctox-pane-titles { min-width: 0; }
+  [data-app="support"] .ctox-pane-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; hyphens: manual; overflow-wrap: normal; }
 }

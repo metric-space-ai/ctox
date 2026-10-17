@@ -6,7 +6,7 @@
 //! rendered into the identity lane; the memory is rendered into the runtime
 //! context lane; learning happens through the existing continuity refresh.
 use super::*;
-use crate::lcm::{ContinuityKind, LcmConfig, LcmEngine};
+use crate::lcm::{ContinuityKind, LcmClient};
 use rusqlite::OptionalExtension;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -23,8 +23,8 @@ pub(crate) fn member_conversation_id(member_id: &str) -> i64 {
     )))
 }
 
-pub(crate) fn open_engine(root: &Path) -> Result<LcmEngine> {
-    LcmEngine::open(&crate::paths::core_db(root), LcmConfig::default())
+pub(crate) fn open_engine(root: &Path) -> Result<LcmClient> {
+    LcmClient::attach(&crate::paths::core_db(root))
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -36,7 +36,7 @@ pub(crate) struct MemberMemory {
 
 /// Reads the stored documents without creating them: a member that never
 /// learned anything has no memory, and the prompt omits the block.
-pub(crate) fn load_member_memory(engine: &LcmEngine, member_id: &str) -> MemberMemory {
+pub(crate) fn load_member_memory(engine: &LcmClient, member_id: &str) -> MemberMemory {
     let conversation = member_conversation_id(member_id);
     match engine.stored_continuity_show_all(conversation) {
         Ok(all) => MemberMemory {
@@ -193,36 +193,41 @@ pub(crate) fn narrative_lines(narrative: &str) -> Vec<String> {
 
 /// One-time move of the legacy `crew_member_learnings` rows into the member's
 /// anchors document. Idempotent through `migrated_to_lcm`.
-pub(crate) fn migrate_learnings_into_memory(
-    conn: &Connection,
-    engine: &LcmEngine,
-    member_id: &str,
-) -> Result<usize> {
-    let rows = conn
-        .prepare(
-            "SELECT id,text,kind,scope_json,evidence_run_id,confirmed_by_owner
+pub(crate) fn migrate_learnings_into_memory(root: &Path, member_id: &str) -> Result<usize> {
+    let path = crate::paths::core_db(root);
+    let member = member_id.to_owned();
+    let rows = crate::lcm::with_lcm_read(&path, move |conn| {
+        let member_id = member.as_str();
+        let rows = conn
+            .prepare(
+                "SELECT id,text,kind,scope_json,evidence_run_id,confirmed_by_owner
              FROM crew_member_learnings
              WHERE member_id=?1 AND archived=0 AND COALESCE(migrated_to_lcm,0)=0
              ORDER BY created_at,id LIMIT 200",
-        )?
-        .query_map([member_id], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, String>(1)?,
-                r.get::<_, String>(2)?,
-                r.get::<_, String>(3)?,
-                r.get::<_, String>(4)?,
-                r.get::<_, bool>(5)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    if rows.is_empty() {
-        return Ok(0);
-    }
+            )?
+            .query_map([member_id], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, bool>(5)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    })?;
     let conversation = member_conversation_id(member_id);
-    engine.continuity_init_documents(conversation)?;
     let mut moved = 0;
     for (id, text, kind, scope, evidence, confirmed) in rows {
+        let expected = (
+            text.clone(),
+            kind.clone(),
+            scope.clone(),
+            evidence.clone(),
+            confirmed,
+        );
         let scope: LearningScope = serde_json::from_str(&scope).unwrap_or_default();
         let diff = anchor_diff(
             &id.replace(':', "_"),
@@ -236,12 +241,26 @@ pub(crate) fn migrate_learnings_into_memory(
             &scope,
             &evidence,
         );
-        engine.continuity_apply_diff(conversation, ContinuityKind::Anchors, &diff)?;
-        conn.execute(
-            "UPDATE crew_member_learnings SET migrated_to_lcm=1 WHERE id=?1",
-            [&id],
-        )?;
-        moved += 1;
+        let changed = crate::lcm::with_lcm_write_session(&path, move |conn, engine| {
+            let current = conn.query_row(
+                "SELECT text,kind,scope_json,evidence_run_id,confirmed_by_owner FROM crew_member_learnings WHERE id=?1 AND archived=0 AND COALESCE(migrated_to_lcm,0)=0",
+                [&id], |r| Ok((r.get::<_,String>(0)?,r.get::<_,String>(1)?,r.get::<_,String>(2)?,r.get::<_,String>(3)?,r.get::<_,bool>(4)?)),
+            ).optional()?;
+            let Some(current) = current else {
+                return Ok(false);
+            };
+            if current != expected {
+                return Err(ctox_store::StoreError::Busy.into());
+            }
+            engine.continuity_init_documents(conversation)?;
+            engine.continuity_apply_diff(conversation, ContinuityKind::Anchors, &diff)?;
+            conn.execute(
+                "UPDATE crew_member_learnings SET migrated_to_lcm=1 WHERE id=?1",
+                [&id],
+            )?;
+            Ok(true)
+        })?;
+        moved += usize::from(changed);
     }
     Ok(moved)
 }
@@ -542,10 +561,11 @@ pub(crate) fn run_learning_tick(
     root: &Path,
     settings: &BTreeMap<String, String>,
 ) -> Result<Option<LearningOutcome>> {
-    let conn = Connection::open(crate::paths::core_db(root))?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-    ensure_schema(&conn)?;
-    let Some((attempt, member_id, task_id, module, succeeded, review_passed, elapsed, retrospective, learning_json, summary, finalized)) = conn
+    let db_path = crate::paths::core_db(root);
+    // Claim the next attempt atomically on Core, then release the writer before
+    // mechanical preparation or a model session. Schema is installed at boot.
+    let claimed = crate::lcm::with_lcm_write(&db_path, move |conn| {
+        let pending=conn
         .query_row(
             "SELECT attempt_id,member_id,task_id,module,succeeded,review_passed,elapsed_ms,
                     COALESCE(retrospective,''),COALESCE(learning_json,'[]'),COALESCE(task_summary,''),finalized_at
@@ -568,15 +588,31 @@ pub(crate) fn run_learning_tick(
                 ))
             },
         )
-        .optional()?
+        .optional()?;
+        if let Some(row) = pending.as_ref() {
+            conn.execute(
+                "UPDATE crew_attempts SET learning_due=0 WHERE attempt_id=?1 AND learning_due=1",
+                [&row.0],
+            )?;
+        }
+        Ok(pending)
+    })?;
+    let Some((
+        attempt,
+        member_id,
+        task_id,
+        module,
+        succeeded,
+        review_passed,
+        elapsed,
+        retrospective,
+        learning_json,
+        summary,
+        finalized,
+    )) = claimed
     else {
         return Ok(None);
     };
-    // Claim first: a failing refresh must not be retried forever.
-    conn.execute(
-        "UPDATE crew_attempts SET learning_due=0 WHERE attempt_id=?1",
-        [&attempt],
-    )?;
     let mut outcome = LearningOutcome {
         attempt_id: attempt.clone(),
         member_id: member_id.clone(),
@@ -664,10 +700,14 @@ pub(crate) fn run_learning_tick(
         Err(error) => outcome.error = Some(format!("memory refresh session unavailable: {error}")),
     }
     // The projection keys on the member stamp; a changed memory must re-project.
-    let _ = conn.execute(
-        "UPDATE crew_members SET updated_at=?2,last_learning_at=?2 WHERE id=?1",
-        params![member_id, chrono::Utc::now().to_rfc3339()],
-    );
+    let stamp_member = member_id.clone();
+    let _ = crate::lcm::with_lcm_write(&db_path, move |conn| {
+        conn.execute(
+            "UPDATE crew_members SET updated_at=?2,last_learning_at=?2 WHERE id=?1",
+            params![stamp_member, chrono::Utc::now().to_rfc3339()],
+        )?;
+        Ok(())
+    });
     crate::service::harness_flow::record_harness_flow_event_lossy(
         root,
         crate::service::harness_flow::RecordHarnessFlowEventRequest {

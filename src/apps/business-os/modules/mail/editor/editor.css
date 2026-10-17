@@ -1,4 +1,4 @@
-.mail-content-editor {
+[data-app="mail"] .mail-content-editor {
   container: mail-content-editor / inline-size;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
@@ -10,11 +10,11 @@
   background: var(--surface);
 }
 
-.mail-content-editor.has-external-commandbar {
+[data-app="mail"] .mail-content-editor.has-external-commandbar {
   grid-template-rows: minmax(0, 1fr);
 }
 
-.mail-content-editor-commandbar {
+[data-app="mail"] .mail-content-editor-commandbar {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -25,7 +25,7 @@
   background: var(--surface);
 }
 
-.mail-content-editor-commandbar.is-integrated {
+[data-app="mail"] .mail-content-editor-commandbar.is-integrated {
   flex: 1 1 auto;
   justify-content: center;
   min-height: 0;
@@ -34,7 +34,7 @@
   background: transparent;
 }
 
-.mail-content-editor-commandbar.is-integrated .ctox-pane-tabs {
+[data-app="mail"] .mail-content-editor-commandbar.is-integrated .ctox-pane-tabs {
   gap: 1px;
   padding: 2px;
   border: 1px solid var(--line);
@@ -42,7 +42,7 @@
   background: var(--surface-2);
 }
 
-.mail-content-editor-commandbar.is-integrated .ctox-pane-tab {
+[data-app="mail"] .mail-content-editor-commandbar.is-integrated .ctox-pane-tab {
   min-height: 26px;
   padding: 0 8px;
   border: 0;
@@ -51,7 +51,7 @@
   line-height: 1;
 }
 
-.mail-content-editor-html-tools {
+[data-app="mail"] .mail-content-editor-html-tools {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -61,7 +61,7 @@
   border-inline-start: 1px solid var(--line);
 }
 
-.mail-content-editor-viewport-tools {
+[data-app="mail"] .mail-content-editor-viewport-tools {
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -70,32 +70,32 @@
   border-inline-start: 1px solid var(--line);
 }
 
-.mail-content-editor-viewport-tools[hidden] { display: none; }
+[data-app="mail"] .mail-content-editor-viewport-tools[hidden] { display: none; }
 
-.mail-content-editor-history-tools {
+[data-app="mail"] .mail-content-editor-history-tools {
   display: inline-flex;
   align-items: center;
   gap: 2px;
   margin-inline-start: 4px;
 }
 
-.mail-content-editor-history-tools[hidden] { display: none; }
+[data-app="mail"] .mail-content-editor-history-tools[hidden] { display: none; }
 
-.mail-content-editor-viewport-button[aria-pressed='true'] {
+[data-app="mail"] .mail-content-editor-viewport-button[aria-pressed='true'] {
   color: var(--text-strong);
   background: var(--accent-soft);
 }
 
-.mail-content-editor-html-tools[hidden] {
+[data-app="mail"] .mail-content-editor-html-tools[hidden] {
   display: none;
 }
 
-.mail-content-editor-panel-button[aria-expanded='true'] {
+[data-app="mail"] .mail-content-editor-panel-button[aria-expanded='true'] {
   color: var(--text-strong);
   background: var(--accent-soft);
 }
 
-.mail-content-editor-panel-button {
+[data-app="mail"] .mail-content-editor-panel-button {
   display: inline-flex;
   box-sizing: border-box;
   align-items: center;
@@ -103,15 +103,15 @@
   white-space: nowrap;
 }
 
-.mail-content-editor-panel-icon,
-.mail-content-editor-panel-icon svg {
+[data-app="mail"] .mail-content-editor-panel-icon,
+[data-app="mail"] .mail-content-editor-panel-icon svg {
   display: inline-flex;
   width: 13px;
   height: 13px;
   flex: 0 0 13px;
 }
 
-.mail-content-editor-status {
+[data-app="mail"] .mail-content-editor-status {
   min-width: 0;
   order: 2;
   overflow: hidden;
@@ -121,52 +121,52 @@
   white-space: nowrap;
 }
 
-.mail-content-editor-status:empty {
+[data-app="mail"] .mail-content-editor-status:empty {
   display: none;
 }
 
-.mail-content-editor-status[data-kind='error'] {
+[data-app="mail"] .mail-content-editor-status[data-kind='error'] {
   color: var(--danger);
 }
 
-.mail-content-editor-body,
-.mail-content-editor-panel,
-.mail-content-editor-html-host {
+[data-app="mail"] .mail-content-editor-body,
+[data-app="mail"] .mail-content-editor-panel,
+[data-app="mail"] .mail-content-editor-html-host {
   min-width: 0;
   min-height: 0;
   height: 100%;
 }
 
-.mail-content-editor-body {
+[data-app="mail"] .mail-content-editor-body {
   overflow: hidden;
   background: var(--surface-2);
 }
 
-.mail-content-editor-panel[hidden] {
+[data-app="mail"] .mail-content-editor-panel[hidden] {
   display: none;
 }
 
-.mail-content-editor-word {
+[data-app="mail"] .mail-content-editor-word {
   overflow: auto;
   padding: 8px;
 }
 
-.mail-content-editor-html,
-.mail-content-editor-html-host {
+[data-app="mail"] .mail-content-editor-html,
+[data-app="mail"] .mail-content-editor-html-host {
   overflow: hidden;
 }
 
-.mail-content-editor-html {
+[data-app="mail"] .mail-content-editor-html {
   position: relative;
 }
 
-.mail-content-editor-html-host {
+[data-app="mail"] .mail-content-editor-html-host {
   position: absolute;
   inset: 0;
   background: var(--surface-2);
 }
 
-.mail-content-editor-drawer-backdrop {
+[data-app="mail"] .mail-content-editor-drawer-backdrop {
   position: absolute;
   z-index: 2;
   inset: 0;
@@ -178,12 +178,12 @@
   cursor: default;
 }
 
-.mail-content-editor-drawer-backdrop[hidden],
-.mail-content-editor-drawer[hidden] {
+[data-app="mail"] .mail-content-editor-drawer-backdrop[hidden],
+[data-app="mail"] .mail-content-editor-drawer[hidden] {
   display: none;
 }
 
-.mail-content-editor-drawer {
+[data-app="mail"] .mail-content-editor-drawer {
   position: absolute;
   z-index: 3;
   inset-block: 0;
@@ -198,7 +198,7 @@
   border-inline-start: 1px solid var(--line);
 }
 
-.mail-content-editor-drawer-header {
+[data-app="mail"] .mail-content-editor-drawer-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -208,7 +208,7 @@
   border-bottom: 1px solid var(--line);
 }
 
-.mail-content-editor-drawer-header strong {
+[data-app="mail"] .mail-content-editor-drawer-header strong {
   min-width: 0;
   overflow: hidden;
   color: var(--text-strong);
@@ -217,25 +217,25 @@
   white-space: nowrap;
 }
 
-.mail-content-editor-drawer-body {
+[data-app="mail"] .mail-content-editor-drawer-body {
   min-height: 0;
   overflow: auto;
   padding: 8px;
   background: var(--surface);
 }
 
-.mail-content-editor-drawer-panel[hidden] {
+[data-app="mail"] .mail-content-editor-drawer-panel[hidden] {
   display: none;
 }
 
-.mail-logic-editor {
+[data-app="mail"] .mail-logic-editor {
   display: grid;
   gap: 10px;
   min-width: 0;
   color: var(--text);
 }
 
-.mail-logic-editor-result {
+[data-app="mail"] .mail-logic-editor-result {
   padding: 7px 8px;
   border: 1px solid var(--line);
   border-radius: 3px;
@@ -243,20 +243,20 @@
   font-size: 12px;
 }
 
-.mail-logic-editor-result.is-match {
+[data-app="mail"] .mail-logic-editor-result.is-match {
   color: var(--success);
 }
 
-.mail-logic-editor-result.is-miss {
+[data-app="mail"] .mail-logic-editor-result.is-miss {
   color: var(--warning);
 }
 
-.mail-logic-editor-tree {
+[data-app="mail"] .mail-logic-editor-tree {
   display: grid;
   min-width: 0;
 }
 
-.mail-logic-group {
+[data-app="mail"] .mail-logic-group {
   display: grid;
   gap: 6px;
   min-width: 0;
@@ -266,30 +266,30 @@
   background: var(--surface);
 }
 
-.mail-logic-group .mail-logic-group {
+[data-app="mail"] .mail-logic-group .mail-logic-group {
   margin-inline-start: 10px;
   background: var(--surface-2);
 }
 
-.mail-logic-group-header {
+[data-app="mail"] .mail-logic-group-header {
   display: flex;
   align-items: center;
   gap: 5px;
   min-width: 0;
 }
 
-.mail-logic-group-header > .ctox-select {
+[data-app="mail"] .mail-logic-group-header > .ctox-select {
   min-width: 0;
   flex: 1 1 150px;
 }
 
-.mail-logic-group-children {
+[data-app="mail"] .mail-logic-group-children {
   display: grid;
   gap: 5px;
   min-width: 0;
 }
 
-.mail-logic-rule {
+[data-app="mail"] .mail-logic-rule {
   display: grid;
   grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr);
   gap: 5px;
@@ -299,28 +299,28 @@
   background: var(--surface);
 }
 
-.mail-logic-rule > .ctox-input,
-.mail-logic-rule > .ctox-select {
+[data-app="mail"] .mail-logic-rule > .ctox-input,
+[data-app="mail"] .mail-logic-rule > .ctox-select {
   width: 100%;
   min-width: 0;
 }
 
-.mail-logic-match {
+[data-app="mail"] .mail-logic-match {
   align-self: center;
   min-width: max-content;
   color: var(--muted);
   font-size: 11px;
 }
 
-.mail-logic-match.is-match {
+[data-app="mail"] .mail-logic-match.is-match {
   color: var(--success);
 }
 
-.mail-logic-match.is-miss {
+[data-app="mail"] .mail-logic-match.is-miss {
   color: var(--muted);
 }
 
-.mail-logic-node-actions {
+[data-app="mail"] .mail-logic-node-actions {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
@@ -328,33 +328,33 @@
   margin-inline-start: auto;
 }
 
-.mail-logic-rule > .mail-logic-match {
+[data-app="mail"] .mail-logic-rule > .mail-logic-match {
   justify-self: start;
 }
 
-.mail-logic-rule > .mail-logic-node-actions {
+[data-app="mail"] .mail-logic-rule > .mail-logic-node-actions {
   justify-self: end;
 }
 
-.mail-logic-editor-testdata {
+[data-app="mail"] .mail-logic-editor-testdata {
   display: grid;
   gap: 5px;
 }
 
-.mail-logic-editor-testdata textarea {
+[data-app="mail"] .mail-logic-editor-testdata textarea {
   min-height: 132px;
   resize: vertical;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
 }
 
-.mail-logic-editor-error {
+[data-app="mail"] .mail-logic-editor-error {
   min-height: 16px;
   color: var(--danger);
   font-size: 11px;
 }
 
-.mail-content-editor-artifact {
+[data-app="mail"] .mail-content-editor-artifact {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -363,116 +363,98 @@
   background: var(--surface);
 }
 
-.mail-content-editor-artifact-copy {
+[data-app="mail"] .mail-content-editor-artifact-copy {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
-.mail-content-editor-artifact-copy strong,
-.mail-content-editor-artifact-meta {
+[data-app="mail"] .mail-content-editor-artifact-copy strong,
+[data-app="mail"] .mail-content-editor-artifact-meta {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.mail-content-editor-artifact-copy strong {
+[data-app="mail"] .mail-content-editor-artifact-copy strong {
   color: var(--text-strong);
   font-size: 13px;
 }
 
-.mail-content-editor-artifact-meta {
+[data-app="mail"] .mail-content-editor-artifact-meta {
   color: var(--muted);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
 }
 
-.mail-content-editor-empty {
+[data-app="mail"] .mail-content-editor-empty {
   min-height: 160px;
 }
 
 @container mail-content-editor (max-width: 460px) {
-  .mail-content-editor-commandbar {
+  [data-app="mail"] .mail-content-editor-commandbar {
     padding-inline: 6px;
   }
 
-  .mail-content-editor-status {
+  [data-app="mail"] .mail-content-editor-status {
     display: none;
   }
 
-  .mail-content-editor-html-tools {
+  [data-app="mail"] .mail-content-editor-html-tools {
     margin-inline-start: auto;
     padding-inline-start: 4px;
   }
 
-  .mail-content-editor-panel-button {
+  [data-app="mail"] .mail-content-editor-panel-button {
     width: 28px;
     max-width: 28px;
     padding-inline: 7px;
     overflow: hidden;
   }
 
-  .mail-content-editor-panel-button > span:last-child {
+  [data-app="mail"] .mail-content-editor-panel-button > span:last-child {
     display: none;
   }
 
-  .mail-content-editor-drawer {
+  [data-app="mail"] .mail-content-editor-drawer {
     width: 100%;
     min-width: 0;
     border-inline-start: 0;
   }
 
-  .mail-logic-group-header {
+  [data-app="mail"] .mail-logic-group-header {
     align-items: flex-start;
     flex-wrap: wrap;
   }
 
-  .mail-logic-group-header > .ctox-select {
+  [data-app="mail"] .mail-logic-group-header > .ctox-select {
     flex-basis: 100%;
   }
 
-  .mail-content-editor-artifact {
+  [data-app="mail"] .mail-content-editor-artifact {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .mail-content-editor-artifact .ctox-button {
+  [data-app="mail"] .mail-content-editor-artifact .ctox-button {
     justify-self: start;
   }
 }
 
-@media (max-width: 620px) {
-  .mail-content-editor-commandbar.is-integrated {
-    gap: 2px;
-  }
-
-  .mail-content-editor-commandbar.is-integrated .mail-content-editor-panel-button {
-    width: 28px;
-    min-width: 28px;
-    max-width: 28px;
-    padding-inline: 7px;
-    overflow: hidden;
-  }
-
-  .mail-content-editor-commandbar.is-integrated .mail-content-editor-panel-button > span:last-child {
-    display: none;
-  }
-
-  .mail-content-editor-commandbar.is-integrated .mail-content-editor-html-tools {
-    margin-inline-start: 4px;
-    padding-inline-start: 4px;
-  }
-
-  .mail-content-editor-commandbar.is-integrated .mail-content-editor-viewport-tools {
-    display: none;
-  }
-
-  .mail-content-editor-commandbar.is-integrated .mail-content-editor-history-tools {
-    display: none;
-  }
-}
-
-@media (min-width: 621px) and (max-width: 1100px) {
-  .mail-content-editor-commandbar.is-integrated .mail-content-editor-panel-button {
+/* The integrated command bar lives in the head of the group-content surface,
+   so its width steps follow that surface (container `mail-content-surface`,
+   modules/mail/index.css), never the viewport: in v4 the app is a window that
+   can be much narrower than the screen, and the head also reserves the shell's
+   app-icon and window-control zones (94px + 70px below 768px window width).
+   The surface head costs ~254px beside the bar (close, save, title at its
+   96px minimum, control inset), so the steps are:
+     > 840px  labels on the four panel buttons (unchanged wide look)
+     <= 840px icon-only panel buttons            (V2: viewport 621-1100px)
+     <= 700px undo/redo fold away
+     <= 635px preview widths fold away, 28px buttons (V2: viewport <= 620px)
+     <= 500px the bar breaks into two lines: modes over panel buttons, both
+              inside the head's two 37px rows. */
+@container mail-content-surface (max-width: 840px) {
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-panel-button {
     width: 30px;
     min-width: 30px;
     max-width: 30px;
@@ -480,13 +462,62 @@
     overflow: hidden;
   }
 
-  .mail-content-editor-commandbar.is-integrated .mail-content-editor-panel-button > span:last-child {
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-panel-button > span:last-child {
     display: none;
   }
 }
 
+@container mail-content-surface (max-width: 700px) {
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-history-tools {
+    display: none;
+  }
+}
+
+@container mail-content-surface (max-width: 635px) {
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated {
+    gap: 2px;
+  }
+
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-panel-button {
+    width: 28px;
+    min-width: 28px;
+    max-width: 28px;
+    padding-inline: 7px;
+  }
+
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-html-tools {
+    margin-inline-start: 4px;
+    padding-inline-start: 4px;
+  }
+
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-viewport-tools {
+    display: none;
+  }
+}
+
+@container mail-content-surface (max-width: 500px) {
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated {
+    flex-wrap: wrap;
+    align-content: flex-start;
+    row-gap: 5px;
+  }
+
+  /* Textreiter brauchen Luft für fremde Schriftmetriken: auf Linux-Fonts (CI) lief die Zeile bei 360 px um 2 px über. */
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .ctox-pane-tab:not(.mail-content-editor-panel-button) {
+    padding-inline: 6px;
+  }
+
+  [data-app="mail"] .mail-content-editor-commandbar.is-integrated .mail-content-editor-html-tools {
+    flex: 1 0 100%;
+    justify-content: center;
+    margin-inline-start: 0;
+    padding-inline-start: 0;
+    border-inline-start: 0;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .mail-content-editor * {
+  [data-app="mail"] .mail-content-editor * {
     scroll-behavior: auto;
   }
 }

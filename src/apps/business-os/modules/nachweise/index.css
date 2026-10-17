@@ -10,18 +10,29 @@
    --ctox-left-width onto the frame while dragging). The shell-v2 app icon
    claims the first 80px of the rail head, so the default track carries that
    reservation; otherwise the pane title truncates to "Nachw…" at rest. */
-.nachweise-module { --ctox-left-width: 400px; }
+[data-app="nachweise"] .nachweise-module { --ctox-left-width: 400px; }
+
+/* Shell v4: Fenster-Icon und Fenstersteuerung liegen in einer eigenen
+   Chrome-Zeile UEBER dem App-root (v4/frame/frame.css .shell-window-content
+   grid-row 2), nicht mehr ueber dem Inhalt. Icon-Zone 0 (die calc()-Einzuege
+   fallen auf ihr normales Polster), 70px-Steuerungszonen entfernt. Der
+   v4-Rahmen setzt keinen Container je Fenster (nur `container: v4f` am
+   Desktop), deshalb traegt das App-root den Fenster-Container. */
+[data-app="nachweise"] {
+  --shell-v2-icon-size: 0px;
+  container: business-app-window / inline-size;
+}
 
 /* Explicit column pins so the center pane never slides onto the resizer track
    when the kit hides resizers on narrow windows. Row 1 of both panes is the
    shell-v2 header row (the shell paints its icon, header band and window
    controls over it); the app-owned chrome starts in row 2. */
-.nachweise-rail {
+[data-app="nachweise"] .nachweise-rail {
   grid-column: 1;
   grid-template-rows: var(--shell-v2-header-row-size, 37px) auto auto minmax(0, 1fr) auto;
 }
-.nachweise-module > [data-resizer="left"] { grid-column: 2; }
-.nachweise-main {
+[data-app="nachweise"] .nachweise-module > [data-resizer="left"] { grid-column: 2; }
+[data-app="nachweise"] .nachweise-main {
   grid-column: 3;
   grid-template-rows: var(--shell-v2-header-row-size, 37px) auto minmax(0, 1fr);
 }
@@ -32,7 +43,7 @@
    zones free itself: 80x80 icon top left, a 37px header band across the
    width, and the 74x74 window controls top right. Knowledge is the reference.
    ------------------------------------------------------------------------ */
-.nachweise-module .ctox-pane-header {
+[data-app="nachweise"] .nachweise-module .ctox-pane-header {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
@@ -42,13 +53,13 @@
 
 /* Row 1 is only 37px high: the kicker sits beside the title instead of above
    it, and both truncate rather than push the action block out of the row. */
-.nachweise-module .ctox-pane-header .ctox-pane-title-row {
+[data-app="nachweise"] .nachweise-module .ctox-pane-header .ctox-pane-title-row {
   height: 100%;
   min-width: 0;
   gap: 8px;
 }
 
-.nachweise-module .ctox-pane-header .ctox-pane-titles {
+[data-app="nachweise"] .nachweise-module .ctox-pane-header .ctox-pane-titles {
   flex: 1 1 auto;
   min-width: 0;
   flex-direction: row;
@@ -58,7 +69,7 @@
   overflow: hidden;
 }
 
-.nachweise-module .ctox-pane-header .ctox-pane-title {
+[data-app="nachweise"] .nachweise-module .ctox-pane-header .ctox-pane-title {
   min-width: 0;
   margin-top: 0;
   line-height: 1.1;
@@ -69,22 +80,22 @@
 
 /* The version menu hangs off this title (wireShellV2ModuleTitle); the action
    block must never claim the free space and shrink its hit area. */
-.nachweise-module .ctox-pane-header .ctox-pane-actions { flex: 0 0 auto; }
+[data-app="nachweise"] .nachweise-module .ctox-pane-header .ctox-pane-actions { flex: 0 0 auto; }
 
-.nachweise-module .ctox-pane-header .ctox-pane-icon {
+[data-app="nachweise"] .nachweise-module .ctox-pane-header .ctox-pane-icon {
   width: min(30px, var(--shell-v2-header-row-size, 37px));
   height: min(30px, var(--shell-v2-header-row-size, 37px));
 }
 
 /* First head: keep the 80px app icon clear. Last head: keep the 74px window
    controls clear. */
-.nachweise-rail > .ctox-pane-header {
+[data-app="nachweise"] .nachweise-rail > .ctox-pane-header {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
   padding-right: 14px;
 }
 
-.nachweise-main > .ctox-pane-header {
-  padding-right: 70px;
+[data-app="nachweise"] .nachweise-main > .ctox-pane-header {
+  padding-right: 14px;
 }
 
 /* Second header row: same icon-zone inset as the title row above it. The
@@ -92,8 +103,8 @@
    the filterbar is indented past it and stays unpainted there; the row is one
    header row tall so title row + tool row = 2 x 37px. The filter tray opens
    below the 74px zone and keeps the normal inset. */
-.nachweise-rail-tools { min-width: 0; padding-top: 0; }
-.nachweise-rail-tools > .ctox-filterbar {
+[data-app="nachweise"] .nachweise-rail-tools { min-width: 0; padding-top: 0; }
+[data-app="nachweise"] .nachweise-rail-tools > .ctox-filterbar {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   align-items: center;
@@ -101,17 +112,16 @@
 }
 
 /* Main workbench: header subtitle + scroll rhythm. */
-.nachweise-main > .nachweise-sub {
+[data-app="nachweise"] .nachweise-main > .nachweise-sub {
   margin: 0;
-  padding: 6px 70px 8px 14px;
+  padding: 6px 14px 8px 14px;
   color: var(--muted);
   font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Umbruch statt Ellipse: lange Titel bleiben vollständig lesbar (Geometrie G4). */
+  overflow-wrap: anywhere;
 }
-.nachweise-main > .nachweise-sub:empty { display: none; }
-.nachweise-workbench {
+[data-app="nachweise"] .nachweise-main > .nachweise-sub:empty { display: none; }
+[data-app="nachweise"] .nachweise-workbench {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -122,32 +132,32 @@
    by default (is-actions-hidden on root), revealed on demand via the header
    toggle [data-toggle-actions] — threads' / consent's idiom. All form hooks
    stay intact; only visibility changes. */
-.nachweise-module.is-actions-hidden [data-ats-advanced] { display: none; }
-.nachweise-main [data-toggle-actions][aria-pressed="true"] { color: var(--accent); }
+[data-app="nachweise"] .nachweise-module.is-actions-hidden [data-ats-advanced] { display: none; }
+[data-app="nachweise"] .nachweise-main [data-toggle-actions][aria-pressed="true"] { color: var(--accent); }
 
 /* Auto-reveal detail readout for the selected credential. */
-.nachweise-detail { margin: 0; }
-.nachweise-detail-head {
+[data-app="nachweise"] .nachweise-detail { margin: 0; }
+[data-app="nachweise"] .nachweise-detail-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   margin-bottom: 8px;
 }
-.nachweise-detail-titles { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.nachweise-detail-actions { display: flex; align-items: center; gap: 4px; }
-.nachweise-detail-name {
+[data-app="nachweise"] .nachweise-detail-titles { display: flex; align-items: center; gap: 8px; min-width: 0; }
+[data-app="nachweise"] .nachweise-detail-actions { display: flex; align-items: center; gap: 4px; }
+[data-app="nachweise"] .nachweise-detail-name {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text-strong);
 }
-.nachweise-detail .ats-tag { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
+[data-app="nachweise"] .nachweise-detail .ats-tag { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); }
 
 /* The single card/list switch: one button, no pressed state (the icon names the
    view it switches TO). Sits in the filterbar next to search and filter. */
-.nachweise-view-toggle { flex: 0 0 auto; }
+[data-app="nachweise"] .nachweise-view-toggle { flex: 0 0 auto; }
 
 /* ---------------------------------------------------------------------------
    Two genuinely different row shapes, not one row at two paddings
@@ -156,25 +166,25 @@
 
 /* KARTEN (Shards): three lines on generous padding — title + status, then the
    two meta lines that decide a credential. */
-.nachweise-row--cards {
+[data-app="nachweise"] .nachweise-row--cards {
   display: grid;
   gap: 4px;
   padding: 11px 14px;
   line-height: 1.35;
 }
-.nachweise-row--cards .nachweise-row-title {
+[data-app="nachweise"] .nachweise-row--cards .nachweise-row-title {
   font-size: var(--fs-base, 13px);
   font-weight: 650;
   color: var(--text-strong, var(--text));
 }
-.nachweise-row--cards .nachweise-row-meta {
+[data-app="nachweise"] .nachweise-row--cards .nachweise-row-meta {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 /* LISTE: exactly one dense line — identity left, one short meta right. */
-.nachweise-row--list {
+[data-app="nachweise"] .nachweise-row--list {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -183,44 +193,35 @@
   min-height: 26px;
   line-height: 1.2;
 }
-.nachweise-row--list .nachweise-row-title {
+[data-app="nachweise"] .nachweise-row--list .nachweise-row-title {
   font-size: var(--fs-sm, 12px);
   font-weight: 500;
 }
 /* Density: the badge is the single meta, so it recedes to a compact chip. */
-.nachweise-row--list .ctox-badge {
+[data-app="nachweise"] .nachweise-row--list .ctox-badge {
   flex: 0 0 auto;
   padding: 0 6px;
   font-size: 10px;
   line-height: 16px;
 }
 
-.nachweise-row-head {
+[data-app="nachweise"] .nachweise-row-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
 }
-.nachweise-row-head .ctox-badge { flex: 0 0 auto; }
-.nachweise-row-title {
+[data-app="nachweise"] .nachweise-row-head .ctox-badge { flex: 0 0 auto; }
+[data-app="nachweise"] .nachweise-row-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
 }
-.nachweise-row-meta { color: var(--muted); font-size: 11px; }
+[data-app="nachweise"] .nachweise-row-meta { color: var(--muted); font-size: 11px; }
 
-/* The kit callout has no :empty collapse; the gate starts empty and is cleared
-   between runs, so hide it until JS fills it. */
-.nachweise-main .ctox-callout:empty { display: none; }
-
-/* custom: result rows and blocker list inside the gate callout — the kit has
-   no list-in-callout component. */
-.nachweise-main .ats-result-row { margin-top: 4px; font-size: 12px; color: var(--muted); }
-.nachweise-main .ats-blockers { margin: 6px 0 0; padding-left: 18px; }
-.nachweise-main .ats-blockers li { font-size: 12px; margin: 2px 0; }
 
 /* ---------------------------------------------------------------------------
    Responsive stages. The two breakpoints belong to the SHELL (contract §6):
@@ -246,7 +247,7 @@
    The same block carries the touch sizing, because below it the module is a
    single column on a phone-sized window. */
 @container business-app-window (max-width: 768px) {
-  .nachweise-module {
+  [data-app="nachweise"] .nachweise-module {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(200px, 40vh) minmax(320px, 1fr);
     height: auto;
@@ -257,60 +258,53 @@
     overflow-x: hidden;
     gap: 6px;
   }
-  .nachweise-module > [data-resizer] { display: none !important; }
-  .nachweise-rail { grid-column: 1; min-width: 0; }
-  .nachweise-main { grid-column: 1; min-width: 0; }
+  [data-app="nachweise"] .nachweise-module > [data-resizer] { display: none !important; }
+  [data-app="nachweise"] .nachweise-rail { grid-column: 1; min-width: 0; }
+  [data-app="nachweise"] .nachweise-main { grid-column: 1; min-width: 0; }
 
-  /* Stacked: the rail head is now both the first and the last head of the
-     top row, so it must clear the window controls as well. */
-  .nachweise-rail > .ctox-pane-header { padding-right: 70px; }
-
-  /* Same reservation for the second header row underneath it: the icon zone is
-     74px tall, so the tool row still runs under the icon. */
-  .nachweise-rail-tools > .ctox-filterbar { padding-right: 70px; }
 
   /* Touch operability: >=44px tap targets on every control and a wrapping
      detail header so the record actions never push past the window edge.
      Header icons stay inside the 37px shell row and are exempt. */
-  .nachweise-module .ctox-button,
-  .nachweise-module .ctox-run-control,
-  .nachweise-module .ctox-pane-icon,
-  .nachweise-module .ctox-icon-button,
-  .nachweise-module .ctox-sort-dir {
+  [data-app="nachweise"] .nachweise-module .ctox-button,
+  [data-app="nachweise"] .nachweise-module .ctox-run-control,
+  [data-app="nachweise"] .nachweise-module .ctox-pane-icon,
+  [data-app="nachweise"] .nachweise-module .ctox-icon-button,
+  [data-app="nachweise"] .nachweise-module .ctox-sort-dir {
     min-width: 44px;
     min-height: 44px;
   }
 
   /* ...except inside the 37px shell header row, which the app must not
      outgrow; those two icon buttons keep their row-sized box. */
-  .nachweise-module .ctox-pane-header .ctox-pane-icon {
+  [data-app="nachweise"] .nachweise-module .ctox-pane-header .ctox-pane-icon {
     min-width: 0;
     min-height: 0;
     width: min(30px, var(--shell-v2-header-row-size, 37px));
     height: min(30px, var(--shell-v2-header-row-size, 37px));
   }
 
-  .nachweise-module .ctox-pane-tab {
+  [data-app="nachweise"] .nachweise-module .ctox-pane-tab {
     min-height: 44px;
   }
 
-  .nachweise-module .ctox-input,
-  .nachweise-module .ctox-select,
-  .nachweise-module textarea {
+  [data-app="nachweise"] .nachweise-module .ctox-input,
+  [data-app="nachweise"] .nachweise-module .ctox-select,
+  [data-app="nachweise"] .nachweise-module textarea {
     min-height: 44px;
     font-size: 16px;
   }
 
-  .nachweise-detail-head {
+  [data-app="nachweise"] .nachweise-detail-head {
     flex-wrap: wrap;
   }
 
-  .nachweise-detail-actions {
+  [data-app="nachweise"] .nachweise-detail-actions {
     flex-wrap: wrap;
   }
 
   /* Submit rows go full-width so the primary action is thumb-reachable. */
-  .nachweise-module .ctox-compact-form__actions > .ctox-button {
+  [data-app="nachweise"] .nachweise-module .ctox-compact-form__actions > .ctox-button {
     flex: 1 1 100%;
     min-height: 44px;
   }

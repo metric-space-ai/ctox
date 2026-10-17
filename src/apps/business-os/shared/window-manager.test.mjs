@@ -11,6 +11,7 @@ import {
   shellV2FramePaletteFromRgba,
   shellV2FrameSampleAt,
   shellV2MorphFrameData,
+  LAYOUT_GRID_ORDER,
 } from './window-manager.js';
 
 test('free menu action persists restored geometry before a later reopen', () => {
@@ -268,4 +269,21 @@ test('shell-v2 morph is endpoint-exact, spline-like and geometrically fuses brac
   assert.notEqual(midpoint.top, (anchor.top + finalRect.top) / 2);
   const distance = (point, target) => Math.hypot(point.left - target.left, point.top - target.top);
   assert.ok(distance(midpoint, anchor) < distance(midpoint, finalRect));
+});
+
+// M-01 / Bedienkonzept Shell v4 §Andock-Layouts: räumliches 3×3-Raster, dann „Freie Größe“ und „Minimieren“.
+test('layout grid is spatial: 3x3 (corners, edges, maximize centre) then free and minimize', () => {
+  assert.deepEqual([...LAYOUT_GRID_ORDER], [
+    'top-left', 'top', 'top-right',
+    'left', 'maximize', 'right',
+    'bottom-left', 'bottom', 'bottom-right',
+    'free', 'minimize',
+  ]);
+  const source = readFileSync(new URL('./window-manager.js', import.meta.url), 'utf8');
+  for (const [id, row, col] of [['top-left', 1, 1], ['right', 2, 3], ['bottom-left', 3, 1], ['maximize', 2, 2], ['bottom-right', 3, 3]]) {
+    assert.match(source, new RegExp(`id: '${id}',[^}]*row: ${row}, col: ${col}`), `${id} sits at row ${row}, col ${col}`);
+  }
+  for (const label of ['Oben links anordnen', 'Linke Hälfte', 'Rechte Hälfte', 'Unten rechts anordnen', 'Freie Größe', 'Minimieren', 'Maximieren']) {
+    assert.ok(source.includes(`'${label}'`), `German label ${label}`);
+  }
 });

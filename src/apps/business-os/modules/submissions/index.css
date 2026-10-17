@@ -9,22 +9,34 @@
 /* ---- Explicit workspace pins (design-guide: pin panes to grid tracks so a
    hidden resizer never lets the main view slide onto an empty track). Pane
    rows: header / band / well / footer (left) and header / body / footer. ---- */
-.submissions-module {
+[data-app="submissions"] .submissions-module {
   --ctox-left-width: 320px;
 }
 
-.subs-left {
+[data-app="submissions"] .subs-left {
   grid-column: 1;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
 
-.submissions-module > [data-resizer="left"] {
+[data-app="submissions"] .submissions-module > [data-resizer="left"] {
   grid-column: 2;
 }
 
-.subs-center {
+[data-app="submissions"] .subs-center {
   grid-column: 3;
   grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+/* Shell v4: Fenster-Icon und Fenstersteuerung liegen in einer eigenen
+   Chrome-Zeile UEBER dem App-root (v4/frame/frame.css .shell-window-content
+   grid-row 2), nicht mehr ueber dem Inhalt. Icon-Zone 0 (die calc()-Einzuege
+   fallen auf ihr normales Polster), die 74px-Steuerungszone rechts ist
+   entfernt. Der v4-Rahmen setzt keinen Container je Fenster (nur
+   `container: v4f` am Desktop), deshalb traegt das App-root den
+   Fenster-Container. */
+[data-app="submissions"] {
+  --shell-v2-icon-size: 0px;
+  container: business-app-window / inline-size;
 }
 
 /* ---------------------------------------------------------------------------
@@ -51,7 +63,7 @@
    for "Kandidaten" — and that title is the shell's version-menu trigger. The
    v2 default column is therefore widened to pay the reservation; the resizer
    (260-520px) still overrides it. */
-.shell-window[data-shell-contract="v2"] .submissions-module {
+[data-app="submissions"] .submissions-module {
   --ctox-left-width: 380px;
 }
 
@@ -62,7 +74,7 @@
    The icon clearance sits on the HEAD element itself so its measured
    padding-left pays the 80px contract floor (h2) and rows 1+2 plus the tray
    all inherit the indent. */
-.shell-window[data-shell-contract="v2"] .submissions-module .subs-left > .ctox-pane-header {
+[data-app="submissions"] .submissions-module .subs-left > .ctox-pane-header {
   box-sizing: border-box;
   min-height: calc(2 * var(--shell-v2-header-row-size, 37px));
   padding: 0 0 0 calc(var(--shell-v2-icon-size, 80px) + 14px);
@@ -74,16 +86,16 @@
    element; the title row adds only its ordinary air inside it. (Before this,
    the 80px sat on .ctox-pane-title-row and the measured head padding was 0 —
    h3_ctrlClear failed at 1180, 1000 and 720.) */
-.shell-window[data-shell-contract="v2"] .submissions-module .subs-center > .ctox-pane-header {
+[data-app="submissions"] .submissions-module .subs-center > .ctox-pane-header {
   box-sizing: border-box;
   height: calc(2 * var(--shell-v2-header-row-size, 37px));
   min-height: calc(2 * var(--shell-v2-header-row-size, 37px));
-  padding: 0 calc(2 * var(--shell-v2-header-row-size, 37px)) 0 0;
+  padding: 0 14px 0 0;
 }
 
 /* Row 1 of both heads is the shell header band: identical height. */
-.shell-window[data-shell-contract="v2"] .submissions-module .subs-left > .ctox-pane-header > .ctox-pane-title-row,
-.shell-window[data-shell-contract="v2"] .submissions-module .subs-center > .ctox-pane-header > .ctox-pane-title-row {
+[data-app="submissions"] .submissions-module .subs-left > .ctox-pane-header > .ctox-pane-title-row,
+[data-app="submissions"] .submissions-module .subs-center > .ctox-pane-header > .ctox-pane-title-row {
   box-sizing: border-box;
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
@@ -93,7 +105,7 @@
    band border, so both rows together close at exactly 74px. Its left indent
    comes from the head's own padding; children (icons 30px, search capped
    below) stay inside the 36px row. */
-.shell-window[data-shell-contract="v2"] .submissions-module .subs-left > .ctox-pane-header > .ctox-filterbar {
+[data-app="submissions"] .submissions-module .subs-left > .ctox-pane-header > .ctox-filterbar {
   box-sizing: border-box;
   height: calc(var(--shell-v2-header-row-size, 37px) - 1px);
   min-height: calc(var(--shell-v2-header-row-size, 37px) - 1px);
@@ -101,16 +113,16 @@
   padding: 0 12px 0 0;
 }
 
-.shell-window[data-shell-contract="v2"] .submissions-module .subs-left > .ctox-pane-header .ctox-pane-search {
+[data-app="submissions"] .submissions-module .subs-left > .ctox-pane-header .ctox-pane-search {
   min-height: 30px;
   height: 30px;
 }
 
-.shell-window[data-shell-contract="v2"] .submissions-module .subs-left > .ctox-pane-header > .ctox-pane-title-row {
+[data-app="submissions"] .submissions-module .subs-left > .ctox-pane-header > .ctox-pane-title-row {
   padding-right: 14px;
 }
 
-.shell-window[data-shell-contract="v2"] .submissions-module .subs-center > .ctox-pane-header > .ctox-pane-title-row {
+[data-app="submissions"] .submissions-module .subs-center > .ctox-pane-header > .ctox-pane-title-row {
   padding-left: 14px;
   padding-right: 6px;
 }
@@ -122,11 +134,11 @@
    with the record state (data-subs-wb-kicker). The shell hangs its version menu
    on the first .ctox-pane-header .ctox-pane-title, so that title must stay
    present and hittable. */
-.shell-window[data-shell-contract="v2"] .submissions-module .subs-left > .ctox-pane-header .ctox-pane-kicker {
+[data-app="submissions"] .submissions-module .subs-left > .ctox-pane-header .ctox-pane-kicker {
   display: none;
 }
 
-.shell-window[data-shell-contract="v2"] .submissions-module .ctox-pane-header .ctox-pane-titles {
+[data-app="submissions"] .submissions-module .ctox-pane-header .ctox-pane-titles {
   flex: 1 1 auto;
   flex-direction: row;
   align-items: baseline;
@@ -136,7 +148,7 @@
   overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .submissions-module .ctox-pane-header .ctox-pane-title {
+[data-app="submissions"] .submissions-module .ctox-pane-header .ctox-pane-title {
   flex: 0 1 auto;
   min-width: 44px;
   margin: 0;
@@ -145,17 +157,17 @@
   white-space: nowrap;
 }
 
-.shell-window[data-shell-contract="v2"] .submissions-module .ctox-pane-header .ctox-pane-kicker {
+[data-app="submissions"] .submissions-module .ctox-pane-header .ctox-pane-kicker {
   flex: 0 1 auto;
   min-width: 0;
 }
 
 /* The action block never claims the title's width. */
-.shell-window[data-shell-contract="v2"] .submissions-module .ctox-pane-header .ctox-pane-actions {
+[data-app="submissions"] .submissions-module .ctox-pane-header .ctox-pane-actions {
   flex: 0 0 auto;
 }
 
-.subs-workbench-scroll {
+[data-app="submissions"] .subs-workbench-scroll {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -173,25 +185,25 @@
              line-height. Maximum density, nothing else.
 
    Selection styling stays with .ctox-list-item from the kit. ---- */
-.submissions-module .ctox-list .subs-row {
+[data-app="submissions"] .submissions-module .ctox-list .subs-row {
   padding: 11px 14px;
 }
 
-.subs-shard {
+[data-app="submissions"] .subs-shard {
   display: grid;
   gap: 3px;
   min-width: 0;
   line-height: 1.35;
 }
 
-.subs-shard-title {
+[data-app="submissions"] .subs-shard-title {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
 }
 
-.subs-shard-title strong {
+[data-app="submissions"] .subs-shard-title strong {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -200,7 +212,7 @@
   font-weight: 650;
 }
 
-.subs-shard-meta {
+[data-app="submissions"] .subs-shard-meta {
   min-width: 0;
   overflow: hidden;
   color: var(--muted);
@@ -213,12 +225,12 @@
    app-wide view marker (same convention as placements/customers), `.is-compact`
    on the row says the row was rendered with the one-line markup, so the dense
    rules can never land on a card-shaped row. */
-.submissions-module .ctox-list.is-list-view .subs-row.is-compact {
+[data-app="submissions"] .submissions-module .ctox-list.is-list-view .subs-row.is-compact {
   padding: 4px 14px;
   min-height: 26px;
 }
 
-.subs-row-compact {
+[data-app="submissions"] .subs-row-compact {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -227,7 +239,7 @@
   line-height: 1.2;
 }
 
-.subs-compact-title {
+[data-app="submissions"] .subs-compact-title {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
@@ -237,7 +249,7 @@
   font-weight: 600;
 }
 
-.subs-compact-tag {
+[data-app="submissions"] .subs-compact-tag {
   flex: 0 0 auto;
   max-width: 40%;
   overflow: hidden;
@@ -249,57 +261,37 @@
 }
 
 /* ---- Optional composer fields (Vakanz, Kontakt) behind a native disclosure. -- */
-.submissions-module .subs-more > summary {
+[data-app="submissions"] .submissions-module .subs-more > summary {
   cursor: pointer;
   color: var(--muted);
   font-size: 11px;
 }
 
-.submissions-module .subs-more[open] > summary {
+[data-app="submissions"] .submissions-module .subs-more[open] > summary {
   margin-bottom: 5px;
 }
 
 /* ---- Workbench detail (auto-revealed on selection). ---- */
-.subs-detail:empty {
+[data-app="submissions"] .subs-detail:empty {
   display: none;
 }
 
-.subs-detail-card {
+[data-app="submissions"] .subs-detail-card {
   display: grid;
   gap: 8px;
 }
 
 /* Element actions collected top-right of the card (icons only). */
-.subs-detail-actions {
+[data-app="submissions"] .subs-detail-actions {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
 }
 
-.subs-detail-actions:empty {
+[data-app="submissions"] .subs-detail-actions:empty {
   display: none;
 }
 
-/* ---- Gate callout: collapse when empty (the kit callout has no :empty rule),
-   plus the secondary detail lines and blocker list rendered inside it. ---- */
-.submissions-module [data-subs-gate]:empty {
-  display: none;
-}
-
-.submissions-module .ats-result-row {
-  margin-top: 4px;
-  color: var(--muted);
-}
-
-.submissions-module .ats-blockers {
-  margin: 6px 0 0;
-  padding-left: 18px;
-  color: var(--muted);
-}
-
-.submissions-module .ats-blockers li {
-  margin: 2px 0;
-}
 
 /* ---- Shell breakpoint 768px: one column, stacked. The panes give up the
    workspace inset so the FIRST head reaches the window's top-left corner and
@@ -309,7 +301,7 @@
    and was measured as an intruder. The app defines no breakpoint of its own;
    768px is the shell's 2 -> 1 boundary (contract §6). ---- */
 @container business-app-window (max-width: 768px) {
-  .submissions-module {
+  [data-app="submissions"] .submissions-module {
     grid-template-columns: minmax(0, 1fr);
     /* Window-relative, not screen-relative: the previous 34vh measured the
        display, which is the same mistake as @media in a window shell (§6).
@@ -323,27 +315,22 @@
     gap: 8px;
   }
 
-  .submissions-module > [data-resizer="left"] {
+  [data-app="submissions"] .submissions-module > [data-resizer="left"] {
     display: none !important;
   }
 
-  .subs-left,
-  .subs-center {
+  [data-app="submissions"] .subs-left,
+  [data-app="submissions"] .subs-center {
     grid-column: 1;
   }
 
-  /* Stacked, the left head is also the LAST head of the top row, so it is the
-     one under the window control and must carry that reservation itself. */
-  .shell-window[data-shell-contract="v2"] .submissions-module .subs-left > .ctox-pane-header {
-    padding-right: calc(2 * var(--shell-v2-header-row-size, 37px));
-  }
 
-  .shell-window[data-shell-contract="v2"] .submissions-module .subs-left > .ctox-pane-header > .ctox-pane-title-row {
+  [data-app="submissions"] .submissions-module .subs-left > .ctox-pane-header > .ctox-pane-title-row {
     padding-right: 6px;
   }
 
   /* The filterbar keeps its own right air inside that reservation. */
-  .shell-window[data-shell-contract="v2"] .submissions-module .subs-left > .ctox-pane-header > .ctox-filterbar {
+  [data-app="submissions"] .submissions-module .subs-left > .ctox-pane-header > .ctox-filterbar {
     padding-right: 6px;
   }
 
@@ -351,13 +338,13 @@
      longer under the window control, so it stops paying for the second band:
      one band, no empty half. Only heads of the TOP row must match the icon
      height (contract §7.1), and stacked that row holds the left head alone. */
-  .shell-window[data-shell-contract="v2"] .submissions-module .subs-center > .ctox-pane-header {
+  [data-app="submissions"] .submissions-module .subs-center > .ctox-pane-header {
     height: var(--shell-v2-header-row-size, 37px);
     min-height: var(--shell-v2-header-row-size, 37px);
     padding-right: 0;
   }
 
-  .shell-window[data-shell-contract="v2"] .submissions-module .subs-center > .ctox-pane-header > .ctox-pane-title-row {
+  [data-app="submissions"] .submissions-module .subs-center > .ctox-pane-header > .ctox-pane-title-row {
     padding-right: 14px;
   }
 }
@@ -368,38 +355,41 @@
    Tap-Flaechen. Das Spalten-Stacking steuert die @container-Regel oben
    (768px). ---- */
 @media (pointer: coarse) {
-  .submissions-module button,
-  .submissions-module input,
-  .submissions-module select,
-  .submissions-module textarea {
+  [data-app="submissions"] .submissions-module button,
+  [data-app="submissions"] .submissions-module input,
+  [data-app="submissions"] .submissions-module select,
+  [data-app="submissions"] .submissions-module textarea {
     min-height: 44px;
   }
 
-  .submissions-module .ctox-pane-icon {
+  [data-app="submissions"] .submissions-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .submissions-module .ctox-pane-tab,
-  .submissions-module .ctox-sort-dir {
+  [data-app="submissions"] .submissions-module .ctox-pane-tab,
+  [data-app="submissions"] .submissions-module .ctox-sort-dir {
     min-height: 44px;
   }
 
-  .submissions-module .ctox-sort-dir {
+  [data-app="submissions"] .submissions-module .ctox-sort-dir {
     width: 44px;
     min-width: 44px;
   }
 
-  .submissions-module .ctox-list-item,
-  .submissions-module .subs-shard,
-  .submissions-module .subs-row-compact,
-  .submissions-module .ctox-list.is-list-view .subs-row.is-compact {
+  [data-app="submissions"] .submissions-module .ctox-list-item,
+  [data-app="submissions"] .submissions-module .subs-shard,
+  [data-app="submissions"] .submissions-module .subs-row-compact,
+  [data-app="submissions"] .submissions-module .ctox-list.is-list-view .subs-row.is-compact {
     min-height: 44px;
   }
 
-  .submissions-module .subs-more > summary {
+  [data-app="submissions"] .submissions-module .subs-more > summary {
     display: flex;
     align-items: center;
     min-height: 44px;
   }
 }
+
+/* Anlegeformular nur im Modus „+ Neu“ (FIX9a). */
+[data-app="submissions"] form[data-subs-form][hidden] { display: none; }

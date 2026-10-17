@@ -2,8 +2,6 @@
 // exercise the scheduling, ranking, and command-shaping rules directly.
 
 export const MODULE_ID = 'news';
-export const NEWS_SKILL = 'news-aggregation';
-export const SCRAPE_SKILL = 'universal-scraping';
 export const ISSUE_OUTPUT_CONTRACT = 'ctox.news.issue.v1';
 export const CATEGORIES = Object.freeze(['model', 'tool', 'research', 'debate']);
 export const CADENCES = Object.freeze(['daily', 'weekly', 'deadline', 'manual']);
@@ -112,36 +110,6 @@ export function cronForTopic(topic) {
     return `${minute} ${hour} ${Number(match[3])} ${Number(match[2])} *`;
   }
   return '';
-}
-
-// Weekly digest of a daily topic: built from that week's daily issues.
-export function digestOf(topic) {
-  const raw = topic?.payload?.digest || {};
-  const weekday = Number(raw.weekday);
-  return {
-    enabled: raw.enabled === true,
-    weekday: Number.isInteger(weekday) && weekday >= 0 && weekday <= 6 ? weekday : 5,
-    run_time: /^\d{1,2}:\d{2}$/.test(String(raw.run_time || '')) ? String(raw.run_time) : '17:00',
-  };
-}
-
-export function withDigest(topic, digest, now = Date.now()) {
-  const next = digestOf({ payload: { digest } });
-  return { ...topic, payload: { ...(topic.payload || {}), digest: next }, updated_at_ms: now };
-}
-
-export function digestActive(topic) {
-  return topic?.cadence === 'daily' && topic?.enabled !== false && digestOf(topic).enabled;
-}
-
-export function cronForDigest(topic) {
-  const digest = digestOf(topic);
-  const { hour, minute } = parseTime(digest.run_time);
-  return `${minute} ${hour} * * ${digest.weekday}`;
-}
-
-export function isDigestIssue(issue) {
-  return issue?.payload?.kind === 'weekly_digest';
 }
 
 export function normalizeTopic(input, now = Date.now()) {
@@ -351,8 +319,7 @@ export function issuesForTopic(issues, topicId, limit = 6) {
 
 // Two issues of the same day are told apart by their start time.
 export function issueNodeLabel(issue, siblings, lang = 'de', today = new Date()) {
-  const day = issueLabel(issue.issue_date, lang, today);
-  const label = isDigestIssue(issue) ? `${lang === 'en' ? 'Week' : 'Woche'} · ${day}` : day;
+  const label = issueLabel(issue.issue_date, lang, today);
   const sameDay = siblings.filter((other) => other.issue_date === issue.issue_date).length;
   const created = Number(issue.created_at_ms) || 0;
   if (sameDay < 2 || !created) return label;
@@ -471,62 +438,8 @@ export function topicSnapshot(topic) {
   };
 }
 
-const HOUR_MS = 3_600_000;
-const DAY_MS = 24 * HOUR_MS;
-
-// Same canonical link form as the native writeback (store_news_commands.rs).
-export function normalizeStoryUrl(url) {
-  let rest = String(url || '').trim().split('#')[0];
-  rest = rest.includes('://') ? rest.split('://').slice(1).join('://') : rest;
-  const slash = rest.indexOf('/');
-  let host = (slash >= 0 ? rest.slice(0, slash) : rest).toLowerCase();
-  if (host.startsWith('www.')) host = host.slice(4);
-  const path = (slash >= 0 ? rest.slice(slash + 1) : '').replace(/\/+$/, '');
-  return path ? `${host}/${path}` : host;
-}
-
-// Since the previous issue (never further back than a week), otherwise the
-// last 24 hours for daily topics and 7 days for the rest; plus the links
-// earlier issues of the topic already carried.
-export function issueWindow(topic, issues, posts, now = Date.now()) {
-  const ready = issues.filter((issue) => issue.topic_id === topic.id && issue.status === 'ready'
-    && issue.payload?.kind !== 'weekly_digest' && Number(issue.generated_at_ms) > 0);
-  const previous = ready.reduce((best, issue) => (!best || issue.generated_at_ms > best.generated_at_ms ? issue : best), null);
-  const fallback = topic.cadence === 'daily' ? DAY_MS : 7 * DAY_MS;
-  const startMs = previous && previous.generated_at_ms > now - 7 * DAY_MS
-    ? Math.min(previous.generated_at_ms, now)
-    : now - fallback;
-  const recent = new Set(ready.filter((issue) => issue.generated_at_ms > now - 30 * DAY_MS).map((issue) => issue.id));
-  const covered = [];
-  for (const post of posts) {
-    if (!recent.has(post.issue_id)) continue;
-    const urls = [post.link_card?.url, ...(post.sources || []).filter((source) => source.kind !== 'discussion').map((source) => source.url)];
-    for (const url of urls) {
-      if (!url) continue;
-      const key = normalizeStoryUrl(url);
-      if (!covered.includes(key)) covered.push(key);
-    }
-  }
-  return { startMs, previousIssueId: previous?.id || '', coveredUrls: covered.slice(0, 120) };
-}
-
-export function buildIssueInstruction(topic, sources, previousIssue, commandId = '', window = null) {
-  const enabled = sources.filter((source) => source.enabled !== false);
-  const signedIn = enabled.some((source) => authSourceFor(source));
-  const lines = [
-    `Erstelle die News-Ausgabe für das Thema "${topic.title}" mit dem Skill ${NEWS_SKILL}.`,
-    topic.prompt ? `Fokus: ${topic.prompt}` : '',
-    `Sprache: ${topic.language === 'en' ? 'Englisch' : 'Deutsch'}. Höchstens ${topic.max_posts} Beiträge, Kategorien: ${topic.categories.join(', ')}.`,
-    `Quellen (${enabled.length}): ${enabled.map((source) => `${source.kind}:${source.label}`).join('; ') || 'keine konfiguriert, nutze die Websuche'}.`,
-    signedIn && commandId ? `Angemeldete Quellen (X, Reddit) über das CTOX-Konto lesen; --task-id ${commandId}.` : '',
-    previousIssue ? `Vorherige Ausgabe ${previousIssue.issue_date}: wiederhole keine Meldung aus früheren Ausgaben (covered_urls).` : '',
-    window ? `Zeitfenster: nur Meldungen, deren Primärquelle nach ${new Date(window.startMs).toISOString().replace(/\.\d{3}Z$/, 'Z')} veröffentlicht wurde; ältere Beiträge verwirft die Übernahme.` : '',
-    `Liefere das Ergebnis im Vertrag ${ISSUE_OUTPUT_CONTRACT}; jeder Beitrag braucht mindestens eine Quelle mit Link.`,
-  ];
-  return lines.filter(Boolean).join('\n');
-}
-
-export function buildGenerateCommand(topic, sources, issue, previousIssue, window = null) {
+// Anweisung, Skill und Rueckruf setzt der Handler news.issue.generate (prompts/issue.md, Skill news/news-aggregation).
+export function buildGenerateCommand(topic, sources, issue, previousIssue) {
   const topicSources = sources.filter((source) => source.topic_id === topic.id);
   const commandId = newCommandId(NEWS_ISSUE_GENERATE);
   return commandEnvelope({
@@ -537,16 +450,9 @@ export function buildGenerateCommand(topic, sources, issue, previousIssue, windo
     topic_id: topic.id,
     issue_id: issue.id,
     issue_date: issue.issue_date,
-    instruction: buildIssueInstruction(topic, topicSources, previousIssue, commandId, window),
-    required_skills: [NEWS_SKILL],
     thread_key: `business-os/news/${topic.id}`,
     output_contract: ISSUE_OUTPUT_CONTRACT,
-    previous_issue_id: window?.previousIssueId || previousIssue?.id || '',
-    ...(window ? {
-      window_start: new Date(window.startMs).toISOString(),
-      window_start_ms: window.startMs,
-      covered_urls: window.coveredUrls,
-    } : {}),
+    previous_issue_id: previousIssue?.id || '',
     record_snapshot: {
       topic: topicSnapshot(topic),
       sources: topicSources.filter((source) => source.enabled !== false).map(sourceSnapshot),
@@ -564,9 +470,7 @@ function localTimezone() {
   }
 }
 
-export function buildScheduleCommand(topic, { deleted = false, digest = false } = {}) {
-  const cron = digest ? cronForDigest(topic) : topic.cron_expr;
-  const active = digest ? digestActive(topic) : topic.enabled !== false && Boolean(topic.cron_expr);
+export function buildScheduleCommand(topic, { deleted = false } = {}) {
   return commandEnvelope({
     command_type: NEWS_TOPIC_SCHEDULE,
     record_id: topic.id,
@@ -574,9 +478,8 @@ export function buildScheduleCommand(topic, { deleted = false, digest = false } 
     topic_id: topic.id,
     title: topic.title,
     cadence: topic.cadence,
-    ...(digest ? { mode: 'digest' } : {}),
-    cron_expr: deleted ? '' : cron,
-    enabled: deleted ? false : active,
+    cron_expr: deleted ? '' : topic.cron_expr,
+    enabled: deleted ? false : topic.enabled !== false && Boolean(topic.cron_expr),
     deleted,
     deadline_date: topic.deadline_date || '',
     timezone: localTimezone(),
@@ -595,11 +498,6 @@ export function buildAdapterCommand(topic, source) {
     payload: {
     topic_id: topic?.id || source.topic_id,
     source_id: source.id,
-    instruction: [
-      `Richte für die News-Quelle "${source.label}" (${source.url || source.items?.join(', ') || source.kind}) einen wiederverwendbaren Scraper mit dem Skill ${SCRAPE_SKILL} ein.`,
-      `target_key: ${source.target_key}. Extrahiere je Meldung Titel, Datum, URL und Kurztext; teste den Lauf einmal.`,
-    ].join('\n'),
-    required_skills: [SCRAPE_SKILL],
     thread_key: `business-os/news/${source.topic_id}/sources`,
     record_snapshot: { source: sourceSnapshot(source) },
   },
@@ -607,9 +505,9 @@ export function buildAdapterCommand(topic, source) {
   });
 }
 
-// Account sources: the adapter is CTOX's own account. The run signs in, or
-// registers with the CTOX mailbox when no account exists yet, and answers
-// with ctox.news.source.v1.
+// Account sources: the adapter is CTOX's own account. The handler news.source.adapter
+// fills prompts/source-connect.md (sign in, or register with the CTOX mailbox; reply
+// ctox.news.source.v1); prompts/source-adapter.md for scrape targets.
 function buildConnectCommand(topic, source, authSource) {
   const commandId = newCommandId(NEWS_SOURCE_ADAPTER);
   return commandEnvelope({
@@ -620,12 +518,6 @@ function buildConnectCommand(topic, source, authSource) {
     topic_id: topic?.id || source.topic_id,
     source_id: source.id,
     auth_source: authSource,
-    instruction: [
-      `Verbinde die News-Quelle "${source.label}" über ein CTOX-Konto bei ${authSource} (Skill ${NEWS_SKILL}, Abschnitt "Konto verbinden").`,
-      `source_id: ${source.id}; --task-id ${commandId}.`,
-      `Ohne Konto: mit dem CTOX-Postfach registrieren (auth-assist-signup --generate-credential --confirm-provisioning). Antworte im Vertrag ${SOURCE_REPLY_CONTRACT}.`,
-    ].join('\n'),
-    required_skills: [NEWS_SKILL],
     thread_key: `business-os/news/${source.topic_id}/sources`,
     output_contract: SOURCE_REPLY_CONTRACT,
     record_snapshot: { source: sourceSnapshot(source) },

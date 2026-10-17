@@ -284,38 +284,33 @@ fn check_inbound_strategy_authority(
 }
 
 fn lookup_inbound_sender(db_path: &Path, message_key: &str) -> Result<Option<String>> {
-    let conn = Connection::open(db_path).with_context(|| {
-        format!(
-            "failed to open communication db {} for triggered-by-inbound lookup",
-            db_path.display()
-        )
-    })?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())
-        .ok();
-    // The communication_messages table is created lazily by the channel
-    // module; if it does not exist yet, treat the lookup as a miss rather
-    // than erroring (the gate then classifies the role as unknown and blocks).
-    let table_exists: bool = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='communication_messages'",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?
-        .is_some();
-    if !table_exists {
-        return Ok(None);
-    }
-    let sender = conn
-        .query_row(
-            "SELECT sender_address FROM communication_messages
+    let message_key = message_key.to_owned();
+    crate::lcm::with_lcm_read(db_path, move |conn: &Connection| {
+        // The communication_messages table is created lazily by the channel
+        // module; if it does not exist yet, treat the lookup as a miss rather
+        // than erroring (the gate then classifies the role as unknown and blocks).
+        let table_exists: bool = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='communication_messages'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .is_some();
+        if !table_exists {
+            return Ok(None);
+        }
+        let sender = conn
+            .query_row(
+                "SELECT sender_address FROM communication_messages
              WHERE message_key = ?1 AND direction = 'inbound'
              LIMIT 1",
-            params![message_key],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()?;
-    Ok(sender)
+                params![message_key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        Ok(sender)
+    })
 }
 
 fn resolve_scope(args: &[String]) -> Result<(i64, Option<String>)> {

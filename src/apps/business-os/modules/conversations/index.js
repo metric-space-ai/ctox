@@ -1,12 +1,10 @@
-import { loadModuleMessages } from '../../shared/i18n.js';
-import { CtoxResizer } from '../../shared/resizer.js?v=20260816-browser-sync-guards-v141';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
 
 // This module reads the canonical CTOX channel projection (mirror of the
 // communication_* tables in runtime/ctox.sqlite3). Per-channel threads are the
 // source-of-truth shape; the contact-centric list and channel-tabbed detail
 // view bucket them client-side by participant_keys_json.
 
-const STYLE_BUILD = '20260721-ia-grammar';
 const SUPPORTED_CHANNELS = [
   'whatsapp',
   'email',
@@ -21,18 +19,6 @@ const SUPPORTED_CHANNELS = [
   'zulip',
   'google_chat',
 ];
-const COMMUNICATION_DIAGNOSTIC_COLLECTIONS = [
-  'communication_accounts',
-  'communication_threads',
-  'communication_messages',
-];
-const OUTBOUND_CONTEXT_COLLECTIONS = [
-  'outbound_campaigns',
-  'outbound_pipeline_items',
-  'outbound_engagements',
-  'outbound_messages',
-  'outbound_approvals',
-];
 const OUTBOUND_REPLY_CLASSIFICATIONS = [
   'positive',
   'negative',
@@ -45,6 +31,7 @@ const OUTBOUND_REPLY_CLASSIFICATIONS = [
 const CHANNEL_LABEL_FALLBACK = {
   whatsapp: 'WhatsApp',
   email: 'E-Mail',
+  physical_letter: 'Brief',
   jami: 'Jami',
   teams: 'MS Teams',
   meeting: 'Meeting',
@@ -64,15 +51,16 @@ const ACCOUNT_HEALTH_BAD_MS = 7 * 24 * 60 * 60 * 1000;
 
 const FALLBACK_LABELS = {
   de: {
-    moduleTitle: 'Conversations',
-    moduleSubtitle: 'Audit aus CTOX-Sicht',
+    moduleTitle: 'Konversationen',
+    moduleSubtitle: 'Posteingang',
     footerEntries: 'Konversationen',
     importInvalid: 'Ungültige JSON-Datei.',
     importEmpty: 'Keine Konversationen in der Datei.',
     importedLocal: '{count} Konversationen geladen (nur lokal)',
-    channelAll: 'Alle Channels',
+    channelAll: 'Alle Kanäle',
     channelWhatsapp: 'WhatsApp',
     channelEmail: 'E-Mail',
+    channelPhysicalLetter: 'Brief',
     channelJami: 'Jami',
     channelTeams: 'MS Teams',
     channelMeeting: 'Meeting',
@@ -83,38 +71,18 @@ const FALLBACK_LABELS = {
     channelMattermost: 'Mattermost',
     channelZulip: 'Zulip',
     channelGoogleChat: 'Google Chat',
-    searchPlaceholder: 'Kontakt/Text/Account',
-    emptyListTitle: 'Keine Konversationen',
-    emptyListBody: 'Hier erscheinen Kommunikationen, die CTOX über verbundene Channels führt.',
-    noResultsTitle: 'Keine Treffer',
-    noResultsBody: 'Keine Konversation passt zu den aktiven Filtern.',
-    syncFailureTitle: 'Kommunikation ist gerade nicht verfügbar',
-    syncFailureBody: 'Konversationen erscheinen automatisch, sobald Kommunikationsdaten geladen sind.',
-    syncStartingTitle: 'Kommunikation wird synchronisiert',
-    syncStartingBody: 'Accounts und Nachrichten sind noch nicht vollständig in der lokalen App angekommen.',
-    listSyncingTitle: 'Konversationen werden synchronisiert',
-    listSyncingBody: 'Daten werden synchronisiert. Konversationen erscheinen, sobald die erste Synchronisation abgeschlossen ist.',
-    timelineSyncing: 'Nachrichten werden synchronisiert.',
-    projectionMissingTitle: 'Konversationen werden vorbereitet',
-    projectionMissingBody: 'Accounts und Nachrichten werden gerade für die Kontaktansicht vorbereitet.',
-    diagnosticsLabel: 'Status',
-    accountFilterEmpty: 'Keine Accounts verfügbar',
-    accountFilterCount: 'Accounts verfügbar',
-    accountFilterSyncFailure: 'Accounts gerade nicht verfügbar',
-    emptyDetailTitle: 'Keine Konversation ausgewählt',
-    emptyDetailBody: 'Wähle links eine Konversation, um die Timeline aus CTOX-Sicht zu sehen.',
-    rightEmptyBody: 'Kontaktdaten und verknüpfte Datensätze erscheinen hier.',
-    cardLabelChannels: 'Aktive Channels',
+    searchPlaceholder: 'Suchen…',
+    cardLabelChannels: 'Aktive Kanäle',
     cardLabelOutbound: 'Outbound',
     cardLabelStats: 'Aktivität',
-    cardLabelAccount: 'CTOX-Account',
-    cardLabelAccounts: 'CTOX-Accounts',
-    cardLabelFolder: 'E-Mail-Folder',
+    cardLabelAccount: 'Konto',
+    cardLabelAccounts: 'Konten',
+    cardLabelFolder: 'E-Mail-Ordner',
     statMessages: 'Nachrichten',
     statFirst: 'Erste',
     statLast: 'Letzte',
-    statAccount: 'CTOX-Account',
-    statTrust: 'Trust',
+    statAccount: 'Konto',
+    statTrust: 'Vertrauen',
     directionInbound: 'Eingang',
     directionOutbound: 'Ausgang',
     directionAny: 'Alle Richtungen',
@@ -122,13 +90,13 @@ const FALLBACK_LABELS = {
     dateToday: 'Heute',
     date7d: 'Letzte 7 Tage',
     date30d: 'Letzte 30 Tage',
-    accountAll: 'Alle Accounts',
+    accountAll: 'Alle Konten',
     statusSent: 'gesendet',
     statusDelivered: 'zugestellt',
     statusRead: 'gelesen',
     statusReceived: 'eingegangen',
     statusFailed: 'fehlgeschlagen',
-    statusQueued: 'in Warteschlange',
+    statusQueued: 'in Warteschlange', // v4-allow: label (Nachrichtenstatus 'queued' aus den Daten)
     todayLabel: 'Heute',
     yesterdayLabel: 'Gestern',
     unknownContact: 'Unbekannter Kontakt',
@@ -150,14 +118,8 @@ const FALLBACK_LABELS = {
     seenNo: 'nein',
     loadOlder: 'Ältere Nachrichten laden',
     olderTotal: 'von',
-    contextCopyId: 'Message-Key kopieren',
-    contextCopyBody: 'Inhalt kopieren',
-    contextCopyRemoteId: 'Remote-ID kopieren',
-    contextCopyWorkId: 'Work-ID kopieren',
-    contextOpenAttachment: 'Anhang öffnen',
-    contextOpenFlowview: 'Im CTOX-Flow öffnen',
-    taskBadgeLabel: 'Task',
-    workBadgeLabel: 'Work',
+    taskBadgeLabel: 'Aufgabe',
+    workBadgeLabel: 'Arbeitsauftrag',
     detailRouteStatus: 'Queue-Status',
     detailWorkId: 'Work-ID',
     routeQueued: 'in Queue',
@@ -181,11 +143,10 @@ const FALLBACK_LABELS = {
     trustMedium: 'Mittel',
     trustLow: 'Niedrig',
     trustUnknown: 'Unbekannt',
-    copiedToast: 'In Zwischenablage kopiert',
     outboundOpenCampaign: 'In Outbound öffnen',
     outboundApprove: 'Freigeben',
     outboundReject: 'Ablehnen',
-    outboundAwaitingApproval: 'wartet auf Freigabe',
+    outboundAwaitingApproval: 'wartet auf Freigabe', // v4-allow: label (Freigabestatus aus den Daten)
     outboundReplyLabel: 'Antwort',
     outboundReplyClassify: 'Klassifizieren',
     outboundReplyClassification: 'Reply-Klasse',
@@ -212,26 +173,6 @@ const FALLBACK_LABELS = {
     channelZulip: 'Zulip',
     channelGoogleChat: 'Google Chat',
     searchPlaceholder: 'Contact/text/account',
-    emptyListTitle: 'No conversations',
-    emptyListBody: 'Communications CTOX has on connected channels appear here.',
-    noResultsTitle: 'No matches',
-    noResultsBody: 'No conversation matches the active filters.',
-    syncFailureTitle: 'Communication is unavailable right now',
-    syncFailureBody: 'Conversations appear automatically once communication data is loaded.',
-    syncStartingTitle: 'Communication is syncing',
-    syncStartingBody: 'Accounts and messages have not fully arrived in the local app yet.',
-    listSyncingTitle: 'Syncing conversations',
-    listSyncingBody: 'Syncing data. Conversations appear once the initial sync completes.',
-    timelineSyncing: 'Syncing messages.',
-    projectionMissingTitle: 'Preparing conversations',
-    projectionMissingBody: 'Accounts and messages are being prepared for the contact view.',
-    diagnosticsLabel: 'Status',
-    accountFilterEmpty: 'No accounts available',
-    accountFilterCount: 'accounts available',
-    accountFilterSyncFailure: 'Accounts unavailable right now',
-    emptyDetailTitle: 'No conversation selected',
-    emptyDetailBody: 'Pick a conversation on the left to view the CTOX-side timeline.',
-    rightEmptyBody: 'Contact details and linked records appear here.',
     cardLabelChannels: 'Active channels',
     cardLabelOutbound: 'Outbound',
     cardLabelStats: 'Activity',
@@ -278,14 +219,8 @@ const FALLBACK_LABELS = {
     seenNo: 'no',
     loadOlder: 'Load older messages',
     olderTotal: 'of',
-    contextCopyId: 'Copy message key',
-    contextCopyBody: 'Copy body',
-    contextCopyRemoteId: 'Copy remote ID',
-    contextCopyWorkId: 'Copy work ID',
-    contextOpenAttachment: 'Open attachment',
-    contextOpenFlowview: 'Open in CTOX flow',
     taskBadgeLabel: 'Task',
-    workBadgeLabel: 'Work',
+    workBadgeLabel: 'Work item',
     detailRouteStatus: 'Queue status',
     detailWorkId: 'Work ID',
     routeQueued: 'queued',
@@ -309,7 +244,6 @@ const FALLBACK_LABELS = {
     trustMedium: 'Medium',
     trustLow: 'Low',
     trustUnknown: 'Unknown',
-    copiedToast: 'Copied to clipboard',
     outboundOpenCampaign: 'Open in Outbound',
     outboundApprove: 'Approve',
     outboundReject: 'Reject',
@@ -321,74 +255,52 @@ const FALLBACK_LABELS = {
   },
 };
 
-export async function mount(ctx) {
-  await ensureStyles();
-  const markupVersion = String(import.meta.url).split('?v=')[1] || STYLE_BUILD;
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-  const html = await fetch(markupHref).then((res) => res.text());
-  ctx.host.innerHTML = html;
+// Snapshot (Live-Remount, PORTING §2): Ansicht, Auswahl und offene Eingaben (Suche, Filter, Reply-Klasse).
+const SNAPSHOT_VIEW_KEYS = [
+  'channel',
+  'account',
+  'direction',
+  'dateRange',
+  'search',
+  'listView',
+  'userCollapsedContext',
+  'selectedBucketKey',
+  'selectedChannel',
+  'timelineLimit',
+  'highlightedMessageKey',
+];
+const SNAPSHOT_VERSION = 1;
 
-  const root = ctx.host.querySelector('[data-conv-root]');
-  if (!root) throw new Error('conversations: root missing after fragment mount');
+// App-API 4.0 (§10.2a Nr. 1): mount(root, api, {restored}) → {unmount, snapshot}. Daten nur über
+// api.query/get/patch (live, lokal, vollständig), Befehle über api.command ohne Warten, Zustand nur in die
+// Zustandszone (api.status.report). CSS lädt die Shell aus dem Manifest (styles), Spaltenbreiten verdrahtet und
+// speichert die Shell (v4/shell/column-resizers.js) über data-resizer-var im Markup.
+export async function mount(root, api, { restored } = {}) {
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'conversations';
+  root.innerHTML = await loadModuleMarkup();
 
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
+  const frame = root.querySelector('[data-conv-root]');
+  if (!frame) throw new Error('conversations: root missing after fragment mount');
 
   // Third column = context pane (participant/record context). It is hidden by
   // default and auto-reveals on selection: visible = hasSelection &&
   // !userCollapsed (design-guide "Progressive Disclosure", outbound idiom). The
   // toggle lives in the CENTER detail header so it only appears once a
   // conversation is selected — i.e. once there is something to reveal.
-  const toggleContextEl = root?.querySelector('[data-conv-toggle-context]');
+  const toggleContextEl = frame.querySelector('[data-conv-toggle-context]');
 
-  // Standardised 3-column resizer system
-  const leftResizerEl = ctx.host.querySelector('[data-resizer="left"]');
-  const rightResizerEl = ctx.host.querySelector('[data-resizer="right"]');
+  // Abos und Listener gehören dieser Montage (PORTING §4 Falle 1).
+  const disposers = [];
+  let disposed = false;
 
-  const leftStorageKey = 'ctox.conversations.layout.leftWidth';
-  const rightStorageKey = 'ctox.conversations.layout.rightWidth';
-
-  const savedLeftWidth = ctx.storageScope.get(leftStorageKey) || '320';
-  const savedRightWidth = ctx.storageScope.get(rightStorageKey) || '320';
-
-  root.style.setProperty('--conversations-left-width', `${savedLeftWidth}px`);
-  root.style.setProperty('--conversations-right-width', `${savedRightWidth}px`);
-
-  // Column resizing is now owned by the shell-global resizer (setupModuleResizers
-  // in app.js), which wires the `.ctox-column-resizer[data-resizer-var]` handles in
-  // index.html declaratively (drag + keyboard + shell-scoped persistence). We must
-  // NOT DIY-wire them here or each handle gets double-wired. Leave the references in
-  // place (null) so the unmount cleanup below stays valid.
-  const resizerL = null;
-  const resizerR = null;
-  void leftResizerEl;
-  void rightResizerEl;
-  void CtoxResizer;
-
-  // Wire the context-pane reveal toggle (auto-reveal model). Collapsing only
-  // sets userCollapsed; re-selecting a conversation clears it.
-  if (toggleContextEl) {
-    toggleContextEl.addEventListener('click', () => {
-      view.userCollapsedContext = !view.userCollapsedContext;
-      applyContextReveal();
-    });
-  }
-
-  const messages = await loadModuleMessages(import.meta.url, ctx.locale, FALLBACK_LABELS);
+  let lang = langFrom(api.shell?.locale?.get?.());
+  let messages = messagesFor(api, lang);
   const t = (key, fallback) => messages[key] ?? fallback ?? key;
 
-  applyStaticLabels(root, t);
+  applyStaticLabels(frame, t);
+  api.shell.setTitle(t('moduleTitle', 'Konversationen'));
 
-  const refs = collectRefs(root);
-  const threadsCollection = ctx.db?.collection?.('communication_threads') || null;
-  const messagesCollection = ctx.db?.collection?.('communication_messages') || null;
-  const accountsCollection = ctx.db?.collection?.('communication_accounts') || null;
-  const outboundCampaignsCollection = ctx.db?.collection?.('outbound_campaigns') || null;
-  const outboundPipelineItemsCollection = ctx.db?.collection?.('outbound_pipeline_items') || null;
-  const outboundEngagementsCollection = ctx.db?.collection?.('outbound_engagements') || null;
-  const outboundMessagesCollection = ctx.db?.collection?.('outbound_messages') || null;
-  const outboundApprovalsCollection = ctx.db?.collection?.('outbound_approvals') || null;
-  const businessCommandsCollection = ctx.db?.collection?.('business_commands') || null;
+  const refs = collectRefs(frame);
 
   const view = {
     channel: 'all',
@@ -401,254 +313,277 @@ export async function mount(ctx) {
     importedThreads: [],
     importedMessagesByThread: new Map(),
     threads: [],
+    threadsLoaded: false,
     accountsById: new Map(),
-    messageProbeCount: null,
-    collectionErrors: new Map(),
-    missingCollections: new Set(),
-    syncDiagnostics: ctx.sync?.diagnostics || window.ctoxBusinessOsSyncDiagnostics || null,
-    threadsReadiness: null,
-    messagesReadiness: null,
     buckets: [],
     selectedBucketKey: null,
     selectedChannel: ALL_CHANNELS_TAB,
+    bucketMessages: [],
     timelineMessages: [],
     timelineTotal: 0,
     timelineLimit: MESSAGE_PAGE_SIZE,
-    deepLink: parseConversationDeepLink(),
+    deepLink: parseConversationDeepLink({}),
     highlightedMessageKey: '',
-    outboundContext: null,
-    outboundContextRetryTimer: null,
-    outboundStatus: '',
+    // Outbound-Verknüpfung der Auswahl (Deep Link); null = aus Thread-/Nachrichten-Metadaten der Auswahl ableiten.
+    outboundLink: null,
     outboundReplyMatchKeys: new Set(),
+    classificationDraft: null,
+    pendingSelection: null,
+    pendingTimelineScrollTop: 0,
   };
-  view.highlightedMessageKey = view.deepLink.message_key || '';
 
-  const cleanups = [];
-  let disposed = false;
-  if (resizerL) cleanups.push(() => resizerL.destroy());
-  if (resizerR) cleanups.push(() => resizerR.destroy());
-  cleanups.push(() => {
-    if (view.outboundContextRetryTimer) window.clearTimeout(view.outboundContextRetryTimer);
-    view.outboundContextRetryTimer = null;
-  });
-
-  markMissingCollections();
-  ensureCommunicationCollectionsSync();
+  const restoredView = applyRestoredView(isPlainObject(restored) ? restored : null);
 
   // The left column chrome (search / shard-list toggle / filter tray / reset /
-  // active-dot / channel band) is SHELL-wired from the data-pg-* markup. The
-  // module owns NO chrome wiring: it listens for the bubbling grammar-change
-  // event and re-renders the list from data. Selecting a band/filter/search is
-  // an intentional reset (rebuilding the list is expected there); selecting a
-  // ROW stays an in-place class flip (see markActiveBucket).
-  root.addEventListener('ctox-pane-grammar-change', onLeftGrammarChange);
-  cleanups.push(() => root.removeEventListener('ctox-pane-grammar-change', onLeftGrammarChange));
+  // active-dot / channel band) is wired by the shared pane grammar from the
+  // data-pg-* markup. The module re-renders on the bubbling grammar-change
+  // event. Selecting a band/filter/search is an intentional reset (rebuilding
+  // the list is expected there); selecting a ROW stays an in-place class flip
+  // (see markActiveBucket).
+  autoWirePaneGrammar(frame);
+  listen(frame, 'ctox-pane-grammar-change', onLeftGrammarChange);
+
+  // Wire the context-pane reveal toggle (auto-reveal model). Collapsing only
+  // sets userCollapsed; re-selecting a conversation clears it.
+  if (toggleContextEl) {
+    listen(toggleContextEl, 'click', () => {
+      view.userCollapsedContext = !view.userCollapsedContext;
+      applyContextReveal();
+    });
+  }
 
   // Card/list switch: one button, module-owned (see syncViewToggle).
-  refs.viewToggle?.addEventListener('click', toggleListView);
+  if (refs.viewToggle) listen(refs.viewToggle, 'click', toggleListView);
   syncViewToggle();
 
-  root.querySelector('[data-action="import"]')?.addEventListener('click', importConversations);
-  root.querySelector('[data-action="export"]')?.addEventListener('click', exportConversations);
+  const importButton = frame.querySelector('[data-action="import"]');
+  const exportButton = frame.querySelector('[data-action="export"]');
+  if (importButton) listen(importButton, 'click', importConversations);
+  if (exportButton) listen(exportButton, 'click', exportConversations);
 
-  // A module window must become usable independently of the first native/RxDB
-  // snapshot. Render the empty/loading-capable frame now and hydrate it in the
-  // background; otherwise a cold projection can make the shell believe that
-  // opening Conversations failed.
+  // ----- live data (R3): one subscription per collection; the first emission is the current local state -----
+
+  const outboundRows = { outbound_messages: [], outbound_approvals: [] };
+  let outboundSubscribed = false;
+  const liveDocs = new Map();
+  let timelineUnsubscribe = null;
+  let timelineSubscriptionKey = '';
+  let refreshQueued = false;
+
   rebuildBuckets();
   populateAccountFilter();
   renderList();
 
-  Promise.resolve().then(async () => {
-    await Promise.all([loadAccounts(), loadThreads(), probeMessages()]);
-    if (disposed) return;
+  subscribeCollection('communication_accounts', {}, (rows) => {
+    view.accountsById = new Map(
+      rows
+        .filter((account) => account && account.is_deleted !== true)
+        .map((account) => [account.account_key || account.id, account]),
+    );
+    populateAccountFilter();
+    if (view.selectedBucketKey) renderRightPane();
+  });
+
+  subscribeCollection('communication_threads', { sort: [{ last_message_at: 'desc' }] }, (rows) => {
+    view.threads = rows.slice().sort((a, b) => compareIsoDesc(a.last_message_at, b.last_message_at));
+    view.threadsLoaded = true;
     rebuildBuckets();
     populateAccountFilter();
-    await applyConversationDeepLink();
-    if (disposed) return;
+    applyConversationDeepLink();
     renderList();
-  }).catch((error) => console.error('[conversations] initial hydration failed:', error));
+    if (view.selectedBucketKey) renderDetail();
+  });
 
-  if (threadsCollection?.$) {
-    const sub = threadsCollection.$.subscribe(() => {
-      loadThreads().then(() => {
-        if (disposed) return;
-        rebuildBuckets();
-        populateAccountFilter();
-        renderList();
-        if (view.selectedBucketKey) renderDetail();
-      }).catch((error) => console.error('[conversations] thread refresh failed:', error));
-    });
-    cleanups.push(() => sub.unsubscribe?.());
-  }
-
-  if (messagesCollection?.$) {
-    const sub = messagesCollection.$.subscribe((change) => {
-      probeMessages().then(() => {
-        if (!disposed) renderList();
-      }).catch(() => {});
-      if (disposed) return;
-      const doc = change?.documentData || change?.doc?._data || change?.doc;
-      if (!doc) return;
-      const bucket = view.buckets.find((b) => b.key === view.selectedBucketKey);
-      if (!bucket) return;
-      if (!bucket.threadKeys.has(doc.thread_key)) return;
-      refreshTimelineForActiveBucket();
-    });
-    cleanups.push(() => sub.unsubscribe?.());
-  }
-
-  if (accountsCollection?.$) {
-    const sub = accountsCollection.$.subscribe(() => {
-      loadAccounts().then(() => {
-        if (disposed) return;
-        populateAccountFilter();
-        if (view.selectedBucketKey) renderRightPane();
-      }).catch((error) => console.error('[conversations] account refresh failed:', error));
-    });
-    cleanups.push(() => sub.unsubscribe?.());
-  }
-
-  // Canonical collection readiness: while a backing collection has not
-  // finished its initial replication, the data-driven empty states must show
-  // a sync state instead of "no data". Snapshot + re-render on transitions.
-  if (typeof ctx.sync?.collectionReadiness === 'function') {
-    view.threadsReadiness = ctx.sync.collectionReadiness('communication_threads') || null;
-    view.messagesReadiness = ctx.sync.collectionReadiness('communication_messages') || null;
-  }
-  if (typeof ctx.sync?.subscribeCollectionReadiness === 'function') {
-    const unsubscribeThreadsReadiness = ctx.sync.subscribeCollectionReadiness('communication_threads', (snapshot) => {
-      view.threadsReadiness = snapshot || null;
-      if (!disposed) renderList();
-    });
-    cleanups.push(() => unsubscribeThreadsReadiness?.());
-    const unsubscribeMessagesReadiness = ctx.sync.subscribeCollectionReadiness('communication_messages', (snapshot) => {
-      view.messagesReadiness = snapshot || null;
-      if (disposed) return;
-      if (view.selectedBucketKey) renderTimeline();
-    });
-    cleanups.push(() => unsubscribeMessagesReadiness?.());
-  }
-
-  const syncDiagnosticsHandler = (event) => {
-    view.syncDiagnostics = event.detail || window.ctoxBusinessOsSyncDiagnostics || ctx.sync?.diagnostics || null;
+  disposers.push(api.shell.locale.subscribe((locale) => {
+    const next = langFrom(locale);
+    if (next === lang) return;
+    lang = next;
+    messages = messagesFor(api, lang);
+    applyStaticLabels(frame, t);
+    api.shell.setTitle(t('moduleTitle', 'Konversationen'));
+    syncViewToggle();
     populateAccountFilter();
     renderList();
-    if (view.selectedBucketKey) renderRightPane();
-    else renderRightPane();
-  };
-  window.addEventListener('ctox-business-os-sync-diagnostics', syncDiagnosticsHandler);
-  cleanups.push(() => window.removeEventListener('ctox-business-os-sync-diagnostics', syncDiagnosticsHandler));
+    if (view.selectedBucketKey) renderDetail();
+  }));
 
-  const hashChangeHandler = async () => {
-    if (!String(location.hash || '').startsWith('#conversations')) return;
-    view.deepLink = parseConversationDeepLink();
+  // Deep links (v3: #conversations?…) arrive as route params (R13).
+  disposers.push(api.shell.onRoute((event) => {
+    view.deepLink = parseConversationDeepLink(event?.params || {});
     view.highlightedMessageKey = view.deepLink.message_key || '';
-    await applyConversationDeepLink();
+    applyConversationDeepLink();
     renderList();
-    if (view.selectedBucketKey) await renderDetail();
+    if (view.selectedBucketKey) renderDetail();
+  }));
+
+  if (restoredView?.deepLinkPending) applyConversationDeepLink();
+
+  return {
+    unmount() {
+      disposed = true;
+      timelineUnsubscribe?.();
+      timelineUnsubscribe = null;
+      for (const dispose of disposers.splice(0)) {
+        try { dispose?.(); } catch (error) { console.error('[conversations] cleanup:', error); }
+      }
+      liveDocs.clear();
+      root.replaceChildren();
+    },
+    snapshot,
   };
-  window.addEventListener('hashchange', hashChangeHandler);
-  cleanups.push(() => window.removeEventListener('hashchange', hashChangeHandler));
 
-  return () => {
-    disposed = true;
-    for (const dispose of cleanups) {
-      try { dispose?.(); } catch (error) { console.error('[conversations] cleanup:', error); }
-    }
-  };
+  // ----- mount helpers -----
 
-  // ----- data loaders -----
+  function listen(target, type, handler, options) {
+    target.addEventListener(type, handler, options);
+    disposers.push(() => target.removeEventListener(type, handler, options));
+  }
 
-  async function loadThreads() {
-    if (!threadsCollection) {
-      view.threads = [];
-      view.missingCollections.add('communication_threads');
-      return;
-    }
+  function subscribeCollection(collection, query, onRows) {
     try {
-      const docs = await threadsCollection.find().exec();
-      view.threads = docs
-        .map((doc) => doc.toJSON())
-        .sort((a, b) => compareIsoDesc(a.last_message_at, b.last_message_at));
-      view.collectionErrors.delete('communication_threads');
-      view.missingCollections.delete('communication_threads');
+      const off = api.query(collection, query).subscribe((rows) => {
+        if (disposed) return;
+        api.status.clear(`conversations.data.${collection}`);
+        onRows(Array.isArray(rows) ? rows : []);
+      });
+      disposers.push(off);
+      return off;
     } catch (error) {
-      console.error('[conversations] loadThreads failed:', error);
-      view.collectionErrors.set('communication_threads', error);
-      view.threads = [];
+      api.status.report({ level: 'error', code: `conversations.data.${collection}`, text: `Conversations: ${collection} – ${errorToText(error)}`, ref: collection });
+      return () => {};
     }
   }
 
-  async function loadAccounts() {
-    if (!accountsCollection) {
-      view.accountsById = new Map();
-      view.missingCollections.add('communication_accounts');
-      return;
+  // Live single document (api.get) with one subscription per (collection, id) and mount.
+  function liveDoc(collection, id) {
+    if (!id) return null;
+    const key = `${collection}\n${id}`;
+    let entry = liveDocs.get(key);
+    if (!entry) {
+      entry = { value: null };
+      liveDocs.set(key, entry);
+      try {
+        const doc = api.get(collection, id);
+        entry.value = doc.get();
+        disposers.push(doc.subscribe((value) => {
+          if (disposed || value === entry.value) return;
+          entry.value = value;
+          scheduleRefresh();
+        }));
+      } catch (error) {
+        api.status.report({ level: 'error', code: `conversations.data.${collection}`, text: `Conversations: ${collection} – ${errorToText(error)}`, ref: collection });
+      }
     }
-    try {
-      const docs = await accountsCollection.find().exec();
-      view.accountsById = new Map(
-        docs
-          .map((doc) => doc.toJSON())
-          .filter((account) => account && account._deleted !== true && account.is_deleted !== true)
-          .map((account) => [account.account_key, account]),
-      );
-      view.collectionErrors.delete('communication_accounts');
-      view.missingCollections.delete('communication_accounts');
-    } catch (error) {
-      console.error('[conversations] loadAccounts failed:', error);
-      view.collectionErrors.set('communication_accounts', error);
-      view.accountsById = new Map();
+    return entry.value;
+  }
+
+  function ensureOutboundData() {
+    if (outboundSubscribed) return;
+    outboundSubscribed = true;
+    for (const collection of Object.keys(outboundRows)) {
+      subscribeCollection(collection, {}, (rows) => {
+        outboundRows[collection] = rows;
+        scheduleRefresh();
+      });
     }
   }
 
-  async function probeMessages() {
-    if (!messagesCollection) {
-      view.messageProbeCount = null;
-      view.missingCollections.add('communication_messages');
-      return;
-    }
-    try {
-      const docs = await messagesCollection.find({ limit: 1 }).exec();
-      view.messageProbeCount = docs
-        .map((doc) => doc.toJSON?.() || doc)
-        .filter((message) => message && message._deleted !== true && message.is_deleted !== true)
-        .length;
-      view.collectionErrors.delete('communication_messages');
-      view.missingCollections.delete('communication_messages');
-    } catch (error) {
-      console.error('[conversations] probeMessages failed:', error);
-      view.collectionErrors.set('communication_messages', error);
-      view.messageProbeCount = null;
-    }
+  // Coalesced re-render after outbound/deep-link data changes (no polling, no retry timers).
+  function scheduleRefresh() {
+    if (refreshQueued) return;
+    refreshQueued = true;
+    queueMicrotask(() => {
+      refreshQueued = false;
+      if (disposed) return;
+      const pending = view.deepLink && !view.deepLink.resolved && hasDeepLinkTarget(view.deepLink);
+      if (pending) {
+        applyConversationDeepLink();
+        if (view.deepLink.resolved) {
+          renderList();
+          renderDetail();
+          return;
+        }
+      }
+      if (view.selectedBucketKey) renderRightPane();
+    });
   }
 
-  async function loadTimelineForBucket(bucket) {
+  function snapshot() {
+    const snap = { v: SNAPSHOT_VERSION };
+    for (const key of SNAPSHOT_VIEW_KEYS) snap[key] = view[key];
+    const searchInput = frame.querySelector('[data-pg-search]');
+    snap.searchText = searchInput ? String(searchInput.value || '') : '';
+    snap.deepLink = { ...(view.deepLink || {}) };
+    snap.outboundLink = view.outboundLink ? { ...view.outboundLink } : null;
+    snap.classificationDraft = view.classificationDraft ? { ...view.classificationDraft } : null;
+    snap.timelineScrollTop = refs.timeline?.scrollTop || 0;
+    return snap;
+  }
+
+  // Ansicht sofort setzen; die Auswahl erst übernehmen, wenn sie in den Live-Daten steht (erste Emission kann leer sein).
+  function applyRestoredView(snap) {
+    if (!snap || snap.v !== SNAPSHOT_VERSION) return null;
+    const initial = { channel: 'all', account: '', direction: 'any', dateRange: 'any', search: '', listView: 'cards', userCollapsedContext: false, selectedChannel: ALL_CHANNELS_TAB, timelineLimit: MESSAGE_PAGE_SIZE, highlightedMessageKey: '' };
+    for (const [key, value] of Object.entries(initial)) {
+      if (typeof snap[key] === typeof value) view[key] = snap[key];
+    }
+    if (typeof snap.selectedBucketKey === 'string' && snap.selectedBucketKey) view.pendingSelection = snap.selectedBucketKey;
+    if (isPlainObject(snap.deepLink)) view.deepLink = { ...parseConversationDeepLink({}), ...snap.deepLink };
+    if (isPlainObject(snap.outboundLink)) view.outboundLink = { ...snap.outboundLink };
+    if (isPlainObject(snap.classificationDraft)) view.classificationDraft = { ...snap.classificationDraft };
+    const searchInput = frame.querySelector('[data-pg-search]');
+    if (searchInput && typeof snap.searchText === 'string') searchInput.value = snap.searchText;
+    for (const [selector, value] of [
+      ['[data-conv-direction-filter]', view.direction],
+      ['[data-conv-date-filter]', view.dateRange],
+    ]) {
+      const select = frame.querySelector(selector);
+      if (select) select.value = value;
+    }
+    setActiveBandTab(view.channel);
+    view.pendingTimelineScrollTop = Number(snap.timelineScrollTop) || 0;
+    return { deepLinkPending: Boolean(view.deepLink && !view.deepLink.resolved && hasDeepLinkTarget(view.deepLink)) };
+  }
+
+  // ----- timeline (live query of the selected bucket's threads) -----
+
+  function ensureTimelineSubscription(bucket) {
+    const keys = bucket ? [...bucket.threadKeys].filter(Boolean).sort() : [];
+    const subscriptionKey = keys.join('\n');
+    if (subscriptionKey === timelineSubscriptionKey && (timelineUnsubscribe || !keys.length)) return;
+    timelineUnsubscribe?.();
+    timelineUnsubscribe = null;
+    timelineSubscriptionKey = subscriptionKey;
+    view.bucketMessages = [];
+    if (!keys.length) return;
+    let initial = true;
+    try {
+      timelineUnsubscribe = api.query('communication_messages', { selector: { thread_key: { $in: keys } } }).subscribe((rows) => {
+        if (disposed) return;
+        api.status.clear('conversations.data.communication_messages');
+        view.bucketMessages = Array.isArray(rows) ? rows : [];
+        if (initial) return;
+        refreshTimelineForActiveBucket();
+      });
+    } catch (error) {
+      api.status.report({ level: 'error', code: 'conversations.data.communication_messages', text: `Conversations: communication_messages – ${errorToText(error)}`, ref: 'communication_messages' });
+    }
+    initial = false;
+  }
+
+  function computeTimelineForBucket(bucket) {
     if (!bucket) {
       view.timelineMessages = [];
       view.timelineTotal = 0;
       return view.timelineMessages;
     }
-    const threadKeys = [...bucket.threadKeys];
     let all = [];
     // Local-only imported snapshot messages (offline audit review) come first.
-    for (const key of threadKeys) {
+    for (const key of bucket.threadKeys) {
       const imported = view.importedMessagesByThread.get(key);
       if (imported?.length) all = all.concat(imported);
     }
-    if (messagesCollection) {
-      try {
-        const docs = await messagesCollection
-          .find({ selector: { thread_key: { $in: threadKeys } } })
-          .exec();
-        all = all.concat(docs.map((doc) => doc.toJSON()));
-        view.collectionErrors.delete('communication_messages');
-      } catch (error) {
-        console.error('[conversations] loadTimeline failed:', error);
-        view.collectionErrors.set('communication_messages', error);
-      }
-    }
+    all = all.concat(view.bucketMessages);
     all = applyMessageFilters(all);
     all.sort((a, b) => compareIsoDesc(a.external_created_at, b.external_created_at));
     view.timelineTotal = all.length;
@@ -658,38 +593,9 @@ export async function mount(ctx) {
     return view.timelineMessages;
   }
 
-  function markMissingCollections() {
-    const required = ['communication_accounts', 'communication_threads', 'communication_messages'];
-    for (const name of required) {
-      if (!ctx.db?.collection?.(name)) view.missingCollections.add(name);
-      else view.missingCollections.delete(name);
-    }
-  }
-
-  function ensureCommunicationCollectionsSync() {
-    for (const name of COMMUNICATION_DIAGNOSTIC_COLLECTIONS) {
-      ctx.sync?.startCollection?.(name)?.catch?.((error) => {
-        console.warn(`[conversations] ${name} sync start failed`, error);
-        view.collectionErrors.set(name, error);
-        populateAccountFilter();
-        renderList();
-      });
-    }
-  }
-
-  function ensureOutboundContextCollectionsSync() {
-    for (const name of OUTBOUND_CONTEXT_COLLECTIONS) {
-      if (!ctx.db?.collection?.(name)) continue;
-      ctx.sync?.startCollection?.(name)?.catch?.((error) => {
-        console.warn(`[conversations] ${name} outbound context sync start failed`, error);
-        view.collectionErrors.set(name, error);
-      });
-    }
-  }
-
-  function applyMessageFilters(messages) {
+  function applyMessageFilters(rows) {
     const cutoff = dateCutoff(view.dateRange);
-    return messages.filter((msg) => {
+    return rows.filter((msg) => {
       if (view.selectedChannel !== ALL_CHANNELS_TAB && msg.channel !== view.selectedChannel) return false;
       if (view.direction !== 'any' && msg.direction !== view.direction) return false;
       if (cutoff && isoToMs(msg.external_created_at) < cutoff) return false;
@@ -697,141 +603,96 @@ export async function mount(ctx) {
     });
   }
 
-  async function refreshTimelineForActiveBucket() {
+  function refreshTimelineForActiveBucket() {
     const bucket = view.buckets.find((b) => b.key === view.selectedBucketKey);
     if (!bucket) return;
-    await loadTimelineForBucket(bucket);
+    computeTimelineForBucket(bucket);
     renderTimeline();
     renderRightPane();
   }
 
-  async function applyConversationDeepLink() {
+  // ----- deep link (route params) -----
+
+  function applyConversationDeepLink() {
     const link = view.deepLink;
-    if (!link || link.applied) return;
-    if (hasOutboundDeepLink(link)) ensureOutboundContextCollectionsSync();
-    if (link.channel && (SUPPORTED_CHANNELS.includes(link.channel) || link.channel === 'all')) {
-      view.channel = link.channel === 'all' ? 'all' : link.channel;
-      setActiveBandTab(view.channel);
+    if (!link || link.resolved || !hasDeepLinkTarget(link)) return;
+    if (hasOutboundDeepLink(link)) {
+      view.outboundLink = link;
+      ensureOutboundData();
     }
-    if (link.account_key) {
-      view.account = link.account_key;
-      if (refs.accountFilter) refs.accountFilter.value = link.account_key;
+    if (!link.filtersApplied) {
+      link.filtersApplied = true;
+      if (link.channel && (SUPPORTED_CHANNELS.includes(link.channel) || link.channel === 'all')) {
+        view.channel = link.channel === 'all' ? 'all' : link.channel;
+        setActiveBandTab(view.channel);
+      }
+      if (link.account_key) {
+        view.account = link.account_key;
+        if (refs.accountFilter) refs.accountFilter.value = link.account_key;
+      }
     }
-    if (link.message_key && messagesCollection) {
-      try {
-        const doc = await withTimeout(messagesCollection.findOne(link.message_key).exec(), 5000, null);
-        const message = doc?.toJSON?.();
-        if (message) {
-          link.thread_key ||= message.thread_key || '';
-          link.account_key ||= message.account_key || '';
-          link.channel ||= message.channel || '';
-          view.highlightedMessageKey = message.message_key || link.message_key;
-        }
-      } catch (error) {
-        console.warn('[conversations] deep link message lookup failed:', error);
+    if (link.message_key) {
+      const message = liveDoc('communication_messages', link.message_key);
+      if (message) {
+        link.thread_key ||= message.thread_key || '';
+        link.account_key ||= message.account_key || '';
+        link.channel ||= message.channel || '';
+        view.highlightedMessageKey = message.message_key || link.message_key;
       }
     }
     const bucket = findBucketForDeepLink(link);
     if (bucket) {
       view.selectedBucketKey = bucket.key;
+      view.pendingSelection = null;
       view.selectedChannel = link.channel && bucket.channels.has(link.channel) ? link.channel : ALL_CHANNELS_TAB;
       view.timelineLimit = MESSAGE_PAGE_SIZE;
       link.resolved = true;
-    }
-    view.outboundContext = await waitForOutboundContextForLink(link);
-    if (hasOutboundDeepLink(link) && !outboundContextSatisfiesDeepLink(view.outboundContext, link)) {
-      scheduleOutboundContextRetry(link);
+      api.status.clear('conversations.route.not_found');
       return;
     }
-    link.applied = true;
+    // Kein stiller Rückgriff (R13): solange das Ziel in den lokalen Daten fehlt, steht es in der Zustandszone;
+    // jede weitere Live-Emission versucht es erneut.
+    if (view.threadsLoaded && (link.thread_key || link.message_key || link.account_key)) {
+      api.status.report({ level: 'warn', code: 'conversations.route.not_found', text: `Conversations: Ziel nicht gefunden (${link.message_key || link.thread_key || link.account_key})`, ref: link.message_key || link.thread_key || link.account_key });
+    }
   }
 
   function hasOutboundDeepLink(link = {}) {
     return Boolean(link.outbound_message_id || link.engagement_id || link.campaign_id || link.thread_key || link.message_key);
   }
 
-  function scheduleOutboundContextRetry(link = {}) {
-    if (view.outboundContextRetryTimer) window.clearTimeout(view.outboundContextRetryTimer);
-    let attempts = 0;
-    const retry = async () => {
-      attempts += 1;
-      if (!String(location.hash || '').startsWith('#conversations')) return;
-      ensureOutboundContextCollectionsSync();
-      const context = await loadOutboundContextForLink(link).catch((error) => {
-        console.warn('[conversations] outbound context retry failed:', error);
-        return null;
-      });
-      if (outboundContextSatisfiesDeepLink(context, link)) {
-        view.outboundContext = context;
-        link.applied = true;
-        renderRightPane();
-        return;
-      }
-      if (attempts < 60) {
-        view.outboundContextRetryTimer = window.setTimeout(retry, 500);
-      }
-    };
-    view.outboundContextRetryTimer = window.setTimeout(retry, 500);
+  function hasDeepLinkTarget(link = {}) {
+    return Boolean(hasOutboundDeepLink(link) || link.account_key || link.channel);
   }
 
-  async function waitForOutboundContextForLink(link = {}, timeoutMs = 15000) {
-    const deadline = Date.now() + timeoutMs;
-    let context = null;
-    while (Date.now() < deadline) {
-      context = await loadOutboundContextForLink(link).catch((error) => {
-        console.warn('[conversations] outbound context lookup skipped:', error);
-        return context;
-      });
-      if (outboundContextSatisfiesDeepLink(context, link)) return context;
-      await sleep(250);
-    }
-    return context;
-  }
-
-  function outboundContextSatisfiesDeepLink(context, link = {}) {
-    if (!context) return false;
-    if (link.outbound_message_id) return context.message?.id === link.outbound_message_id;
-    if (link.engagement_id) return context.engagement?.id === link.engagement_id || context.message?.engagement_id === link.engagement_id;
-    if (link.campaign_id) return context.campaign?.id === link.campaign_id || context.message?.campaign_id === link.campaign_id;
-    return Boolean(context.message || context.engagement || context.campaign);
-  }
-
-  async function loadOutboundContextForLink(link = {}) {
-    if (!outboundMessagesCollection && !outboundEngagementsCollection && !outboundCampaignsCollection) return null;
+  // Outbound context from the live outbound collections (foreign, read-only; manifest foreign_collections).
+  function loadOutboundContextForLink(link = {}) {
+    ensureOutboundData();
+    const outboundMessages = outboundRows.outbound_messages;
     let outboundMessage = null;
-    if (link.outbound_message_id && outboundMessagesCollection) {
-      outboundMessage = await findOneJson(outboundMessagesCollection, link.outbound_message_id);
+    if (link.outbound_message_id) {
+      outboundMessage = outboundMessages.find((message) => message.id === link.outbound_message_id) || null;
     }
-    if (!outboundMessage && outboundMessagesCollection && (link.message_key || link.thread_key || link.engagement_id)) {
-      const docs = await withTimeout(outboundMessagesCollection.find().limit(250).exec(), 5000, []);
-      outboundMessage = (docs || [])
-        .map((doc) => doc.toJSON())
-        .find((message) => (
-          (link.message_key && (message.communication_message_key === link.message_key || message.payload?.communication_message_key === link.message_key))
-          || (link.thread_key && (message.thread_key === link.thread_key || message.payload?.thread_key === link.thread_key))
-          || (link.engagement_id && message.engagement_id === link.engagement_id)
-        )) || null;
+    if (!outboundMessage && (link.message_key || link.thread_key || link.engagement_id)) {
+      outboundMessage = outboundMessages.find((message) => (
+        (link.message_key && (message.communication_message_key === link.message_key || message.payload?.communication_message_key === link.message_key))
+        || (link.thread_key && (message.thread_key === link.thread_key || message.payload?.thread_key === link.thread_key))
+        || (link.engagement_id && message.engagement_id === link.engagement_id)
+      )) || null;
     }
-    let engagement = null;
     const engagementId = link.engagement_id || outboundMessage?.engagement_id || '';
-    if (engagementId && outboundEngagementsCollection) {
-      engagement = await findOneJson(outboundEngagementsCollection, engagementId);
-    }
-    let campaign = null;
+    const engagement = engagementId ? liveDoc('outbound_engagements', engagementId) : null;
     const campaignId = link.campaign_id || outboundMessage?.campaign_id || engagement?.campaign_id || '';
-    if (campaignId && outboundCampaignsCollection) {
-      campaign = await findOneJson(outboundCampaignsCollection, campaignId);
-    }
+    const campaign = campaignId ? liveDoc('outbound_campaigns', campaignId) : null;
     let pipeline = null;
     let contact = null;
-    if (engagement?.pipeline_id && outboundPipelineItemsCollection) {
-      pipeline = await findOneJson(outboundPipelineItemsCollection, engagement.pipeline_id);
+    if (engagement?.pipeline_id) {
+      pipeline = liveDoc('outbound_pipeline_items', engagement.pipeline_id);
       contact = contactForOutboundEngagement(pipeline, engagement);
     }
     let approvals = [];
-    if (outboundMessage?.id && outboundApprovalsCollection) {
-      const docs = await withTimeout(outboundApprovalsCollection.find().limit(250).exec(), 5000, []);
-      approvals = (docs || []).map((doc) => doc.toJSON()).filter((item) => item.message_id === outboundMessage.id);
+    if (outboundMessage?.id) {
+      approvals = outboundRows.outbound_approvals.filter((item) => item.message_id === outboundMessage.id);
       approvals.sort((a, b) => (Number(b.updated_at_ms) || 0) - (Number(a.updated_at_ms) || 0));
     }
     if (!outboundMessage && !engagement && !campaign) return null;
@@ -914,21 +775,6 @@ export async function mount(ctx) {
       view.account = '';
     }
     select.disabled = accounts.length === 0;
-    renderAccountFilterStatus(accounts.length);
-  }
-
-  function renderAccountFilterStatus(accountCount) {
-    if (!refs.accountFilterStatus) return;
-    const diagnostics = currentDataDiagnostics();
-    const hasAccountFailure = diagnostics.problemCollections.includes('communication_accounts');
-    refs.accountFilterStatus.dataset.state = hasAccountFailure ? 'error' : '';
-    if (hasAccountFailure) {
-      refs.accountFilterStatus.textContent = t('accountFilterSyncFailure', 'Accounts gerade nicht verfügbar');
-    } else if (accountCount > 0) {
-      refs.accountFilterStatus.textContent = `${accountCount} ${t('accountFilterCount', 'Accounts verfügbar')}`;
-    } else {
-      refs.accountFilterStatus.textContent = t('accountFilterEmpty', 'Keine Communication-Accounts synchronisiert');
-    }
   }
 
   // ----- renderers -----
@@ -954,7 +800,7 @@ export async function mount(ctx) {
   }
 
   function leftPane() {
-    return root.querySelector('.conv-left');
+    return frame.querySelector('.conv-left');
   }
 
   // ONE button, an action rather than a state: it always shows the view it
@@ -990,7 +836,7 @@ export async function mount(ctx) {
     const pg = leftPane()?.__ctoxPaneGrammar;
     if (pg?.setCounts) { pg.setCounts(counts); return; }
     for (const [key, value] of Object.entries(counts || {})) {
-      const node = root.querySelector(`[data-pg-count="${key}"]`);
+      const node = frame.querySelector(`[data-pg-count="${key}"]`);
       if (node) node.textContent = ` (${value})`;
     }
   }
@@ -1034,7 +880,7 @@ export async function mount(ctx) {
   function applyContextReveal() {
     const hasSelection = Boolean(view.selectedBucketKey);
     const visible = conversationContextVisible(hasSelection, view.userCollapsedContext);
-    root.classList.toggle('is-context-hidden', !visible);
+    frame.classList.toggle('is-context-hidden', !visible);
     if (toggleContextEl) {
       toggleContextEl.setAttribute('aria-pressed', String(visible));
       toggleContextEl.setAttribute('aria-label', visible ? 'Kontext ausblenden' : 'Kontext einblenden');
@@ -1051,10 +897,11 @@ export async function mount(ctx) {
     refs.threadList.replaceChildren();
     refs.threadList.classList.toggle('is-list-view', view.listView === 'list');
     renderChannelBand();
-    writeFooter(`${filtered.length} ${t('footerEntries', 'Konversationen')} · ${footerScopeLabel()}`);
+    // Textdiät Regel 5: kein Zähler-Fuß; Zähler stehen an den Kanal-Reitern.
+    writeFooter('');
     if (!filtered.length) {
-      renderListEmptyState(filtered);
-      refs.emptyList.hidden = false;
+      // Leere Liste rendert nichts (R11); die Fußzeile nennt die Anzahl.
+      if (view.pendingSelection && !view.threadsLoaded) return;
       if (view.selectedBucketKey) {
         view.selectedBucketKey = null;
         view.selectedChannel = ALL_CHANNELS_TAB;
@@ -1065,7 +912,6 @@ export async function mount(ctx) {
       }
       return;
     }
-    refs.emptyList.hidden = true;
 
     for (const bucket of filtered) {
       refs.threadList.appendChild(buildBucketItem(bucket));
@@ -1076,6 +922,19 @@ export async function mount(ctx) {
       view.selectedChannel = ALL_CHANNELS_TAB;
       renderDetail();
       return;
+    }
+    if (!view.selectedBucketKey && view.pendingSelection) {
+      // snapshot/restored: Auswahl übernehmen, sobald sie in den Live-Daten steht.
+      const pending = view.pendingSelection;
+      if (filtered.some((b) => b.key === pending)) {
+        view.pendingSelection = null;
+        view.selectedBucketKey = pending;
+        markActiveBucket();
+        applyContextReveal();
+        renderDetail();
+        return;
+      }
+      if (view.threadsLoaded) view.pendingSelection = null;
     }
     if (!view.selectedBucketKey) {
       selectBucket(filtered[0].key);
@@ -1098,7 +957,7 @@ export async function mount(ctx) {
       a.href = url;
       a.download = filename;
       a.rel = 'noopener';
-      (root || document.body)?.appendChild?.(a);
+      frame.appendChild(a);
       a.click();
       a.remove?.();
     } catch (error) {
@@ -1119,12 +978,12 @@ export async function mount(ctx) {
       try {
         parsed = JSON.parse(await file.text());
       } catch {
-        ctx.notifications?.show?.({ type: 'error', title: t('moduleTitle', 'Conversations'), message: t('importInvalid', 'Ungültige JSON-Datei.') });
+        api.status.report({ level: 'error', code: 'conversations.import', text: t('importInvalid', 'Ungültige JSON-Datei.') });
         return;
       }
       const { threads, messagesByThread } = parseConversationsImport(parsed);
       if (!threads.length) {
-        ctx.notifications?.show?.({ type: 'warning', title: t('moduleTitle', 'Conversations'), message: t('importEmpty', 'Keine Konversationen in der Datei.') });
+        api.status.report({ level: 'warn', code: 'conversations.import', text: t('importEmpty', 'Keine Konversationen in der Datei.') });
         return;
       }
       // Local-only overlay: imported conversations are shown for offline review
@@ -1135,39 +994,10 @@ export async function mount(ctx) {
       rebuildBuckets();
       populateAccountFilter();
       renderList();
-      ctx.notifications?.show?.({
-        type: 'info',
-        title: t('moduleTitle', 'Conversations'),
-        message: t('importedLocal', '{count} Konversationen geladen (nur lokal)').replace('{count}', String(threads.length)),
-      });
+      if (view.selectedBucketKey) renderDetail();
+      api.status.report({ level: 'info', code: 'conversations.import', text: t('importedLocal', '{count} Konversationen geladen (nur lokal)').replace('{count}', String(threads.length)) });
     });
     input.click();
-  }
-
-  function renderListEmptyState(filtered) {
-    const state = conversationEmptyState({
-      totalBuckets: view.buckets.length,
-      filteredBuckets: filtered.length,
-      hasActiveFilters: hasActiveListFilters(view),
-      diagnostics: currentDataDiagnostics(),
-      hasLocalCommunicationData: hasLocalCommunicationData(view),
-      readiness: view.threadsReadiness,
-      t,
-    });
-    const syncing = state.kind === 'syncing';
-    refs.emptyList.classList.toggle('ctox-empty', !syncing);
-    refs.emptyList.classList.toggle('ctox-syncing', syncing);
-    if (syncing) {
-      refs.emptyList.setAttribute('role', 'status');
-      refs.emptyList.setAttribute('aria-live', 'polite');
-    } else {
-      refs.emptyList.removeAttribute('role');
-      refs.emptyList.removeAttribute('aria-live');
-    }
-    const title = refs.emptyList.querySelector('[data-empty-list-title]');
-    const body = refs.emptyList.querySelector('[data-empty-list-body]');
-    if (title) title.textContent = state.title;
-    if (body) body.textContent = state.body;
   }
 
   function buildBucketItem(bucket) {
@@ -1195,7 +1025,7 @@ export async function mount(ctx) {
     // exactly the title row — CSS drops preview and meta, nothing is re-rendered.
     body.innerHTML = `
       <div class="conv-thread-top">
-        <span class="conv-thread-name"></span>
+        <span class="conv-thread-name" data-v4-allow-ellipsis></span>
         <span class="conv-thread-time"></span>
       </div>
       <div class="conv-thread-preview">
@@ -1206,12 +1036,17 @@ export async function mount(ctx) {
         <span class="conv-thread-channels"></span>
       </div>
     `;
-    body.querySelector('.conv-thread-name').textContent = bucket.displayName;
+    // FIX11 (G4): Teilnehmerliste einzeilig wie in Mail; der volle Text steht im Tooltip.
+    const nameEl = body.querySelector('.conv-thread-name');
+    nameEl.textContent = bucket.displayName;
+    nameEl.title = bucket.displayName;
     body.querySelector('.conv-thread-time').textContent = formatTimeShort(bucket.lastMessageAt);
     const dir = body.querySelector('.conv-thread-dir');
     dir.textContent = bucket.channels.size > 1 ? `${bucket.channels.size}×` : '·';
     dir.title = `${bucket.channels.size} ${t('threadCountSuffix', 'Threads')}`;
-    body.querySelector('.conv-thread-preview span:last-child').textContent = newestThread?.subject || '';
+    const subjEl = body.querySelector('.conv-thread-preview span:last-child');
+    subjEl.textContent = newestThread?.subject || '';
+    if (subjEl.textContent) { subjEl.title = subjEl.textContent; subjEl.setAttribute('data-v4-allow-ellipsis', ''); }
     const metaRow = body.querySelector('.conv-thread-meta');
     const channelsRow = body.querySelector('.conv-thread-channels');
     for (const channel of [...bucket.channels]) {
@@ -1262,7 +1097,7 @@ export async function mount(ctx) {
     view.selectedBucketKey = bucketKey;
     view.selectedChannel = ALL_CHANNELS_TAB;
     view.timelineLimit = MESSAGE_PAGE_SIZE;
-    view.outboundContext = null;
+    view.outboundLink = null;
     view.highlightedMessageKey = '';
     view.userCollapsedContext = false;
     markActiveBucket();
@@ -1279,31 +1114,35 @@ export async function mount(ctx) {
     }
   }
 
-  async function renderDetail() {
+  function renderDetail() {
     applyContextReveal();
     const bucket = view.buckets.find((b) => b.key === view.selectedBucketKey);
     if (!bucket) {
+      ensureTimelineSubscription(null);
       refs.detailHeader.hidden = true;
       refs.channelTabs.hidden = true;
       refs.channelTabs.replaceChildren();
       refs.timeline.replaceChildren();
-      refs.emptyDetail.hidden = false;
-      renderRightEmptyState();
-      refs.rightEmpty.hidden = false;
       refs.rightDetail.hidden = true;
       return;
     }
     refs.detailHeader.hidden = false;
-    refs.emptyDetail.hidden = true;
     refs.detailAvatar.textContent = avatarGlyphFor(bucket.displayName);
     refs.detailName.textContent = bucket.displayName;
+    // FIX11 (G4): Teilnehmerliste im Kopf einzeilig wie in Mail; der volle Text steht im Tooltip.
+    refs.detailName.title = bucket.displayName;
     refs.detailHandle.textContent = formatParticipantHandles(bucket.participants);
 
     renderChannelTabs(bucket);
 
-    await loadTimelineForBucket(bucket);
+    ensureTimelineSubscription(bucket);
+    computeTimelineForBucket(bucket);
     renderTimeline();
     renderRightPane();
+    if (view.pendingTimelineScrollTop && view.timelineMessages.length) {
+      refs.timeline.scrollTop = view.pendingTimelineScrollTop;
+      view.pendingTimelineScrollTop = 0;
+    }
   }
 
   function renderChannelTabs(bucket) {
@@ -1357,24 +1196,8 @@ export async function mount(ctx) {
 
   function renderTimeline() {
     refs.timeline.replaceChildren();
-    if (!view.timelineMessages.length) {
-      if (view.messagesReadiness?.ready === false) {
-        const syncing = document.createElement('div');
-        syncing.className = 'ctox-syncing conv-syncing';
-        syncing.setAttribute('role', 'status');
-        syncing.setAttribute('aria-live', 'polite');
-        syncing.innerHTML = `<span></span>`;
-        syncing.querySelector('span').textContent = t('timelineSyncing', 'Nachrichten werden synchronisiert.');
-        refs.timeline.appendChild(syncing);
-        return;
-      }
-      const empty = document.createElement('div');
-      empty.className = 'ctox-empty conv-empty';
-      empty.innerHTML = `<span></span>`;
-      empty.querySelector('span').textContent = t('emptyDetailBody', 'Wähle links eine Konversation.');
-      refs.timeline.appendChild(empty);
-      return;
-    }
+    // Keine Nachrichten: die Timeline bleibt leer (R11).
+    if (!view.timelineMessages.length) return;
     if (view.timelineTotal > view.timelineMessages.length) {
       const btn = document.createElement('button');
       btn.type = 'button';
@@ -1554,43 +1377,52 @@ export async function mount(ctx) {
 
     const wrap = document.createElement('div');
     wrap.className = 'conv-message-task';
+    // Chip = Nutzerbegriff + Titel, nie die Kennung (Textdiät Regel 4). Titel aus der Core-Projektion, sonst der
+    // Betreff/Anfang der Nachricht, aus der die Aufgabe entstand. Die Kennungen stehen weiter unter „Details“.
+    const fallbackTitle = compactChipTitle(msg.subject || msg.preview || msg.body_text || '');
 
     if (taskId) {
       wrap.appendChild(buildTaskChip({
         kind: 'task',
-        label: t('taskBadgeLabel', 'Task'),
-        id: taskId,
+        label: t('taskBadgeLabel', 'Aufgabe'),
+        title: compactChipTitle(msg.task_title) || fallbackTitle,
         routeStatus: msg.route_status || '',
-        onActivate: () => navigateToFlowview({ taskId, sourceModule: 'conversations' }),
+        onOpen: () => navigateToFlowview({ taskId, sourceModule: 'conversations' }),
       }));
     }
     if (workId) {
       wrap.appendChild(buildTaskChip({
         kind: 'work',
-        label: t('workBadgeLabel', 'Work'),
-        id: workId,
+        label: t('workBadgeLabel', 'Arbeitsauftrag'),
+        title: compactChipTitle(msg.work_title || msg.ticket_title) || fallbackTitle,
         routeStatus: msg.route_status || '',
-        onActivate: () => navigateToFlowview({ workId, taskId: taskId || msg.message_key, sourceModule: 'conversations' }),
+        onOpen: () => navigateToFlowview({ workId, taskId: taskId || msg.message_key, sourceModule: 'conversations' }),
       }));
     }
     return wrap;
   }
 
-  function buildTaskChip({ kind, label, id, routeStatus, onActivate }) {
+  function compactChipTitle(value) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    return text.length > 48 ? `${text.slice(0, 47)}…` : text;
+  }
+
+  function buildTaskChip({ kind, label, title, routeStatus, onOpen }) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'ctox-chip conv-message-task-chip';
     btn.dataset.kind = kind;
     if (routeStatus) btn.dataset.routeStatus = routeStatus;
-    btn.title = `${label}: ${id}${routeStatus ? ` · ${labelForRouteStatus(routeStatus, t)}` : ''}`;
+    btn.title = `${label}${title ? `: ${title}` : ''}${routeStatus ? ` · ${labelForRouteStatus(routeStatus, t)}` : ''}`;
     btn.innerHTML = `
       <span class="conv-message-task-chip-kind"></span>
-      <span class="conv-message-task-chip-id"></span>
+      <span class="conv-message-task-chip-title"></span>
       <span class="ctox-badge conv-message-task-chip-status"></span>
       <span class="conv-message-task-chip-jump">↗</span>
     `;
     btn.querySelector('.conv-message-task-chip-kind').textContent = label;
-    btn.querySelector('.conv-message-task-chip-id').textContent = shortenId(id);
+    const titleEl = btn.querySelector('.conv-message-task-chip-title');
+    if (title) titleEl.textContent = title; else titleEl.remove();
     const statusEl = btn.querySelector('.conv-message-task-chip-status');
     if (routeStatus) {
       statusEl.textContent = labelForRouteStatus(routeStatus, t);
@@ -1603,19 +1435,18 @@ export async function mount(ctx) {
     btn.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      onActivate();
+      onOpen();
     });
     return btn;
   }
 
   function navigateToFlowview({ taskId = '', workId = '', sourceModule = 'conversations' } = {}) {
     if (!taskId && !workId) return;
-    const params = new URLSearchParams();
-    if (taskId) params.set('task_id', taskId);
-    if (workId) params.set('work_id', workId);
-    if (sourceModule) params.set('source', sourceModule);
-    const next = `#ctox?${params.toString()}`;
-    location.hash = next;
+    const params = {};
+    if (taskId) params.task_id = taskId;
+    if (workId) params.work_id = workId;
+    if (sourceModule) params.source = sourceModule;
+    api.shell.navigate('ctox', params);
   }
 
   function buildRecipientsBlock(msg) {
@@ -1688,197 +1519,21 @@ export async function mount(ctx) {
 
   function openAttachment(msg) {
     const ref = msg.raw_payload_ref || '';
-    if (ctx.openDesktopApp) {
-      ctx.openDesktopApp('file-viewer', {
-        args: {
-          messageKey: msg.message_key,
-          channel: msg.channel,
-          ref,
-          metadata: msg.metadata_json || {},
-        },
-      });
-    }
-  }
-
-  function openMessageContextMenu(event, msg) {
-    if (!ctx.contextMenu) return;
-    const isInbound = msg.direction === 'inbound';
-    const taskId = isInbound ? msg.message_key : '';
-    const workId = msg.ticket_self_work_id || msg.work_id || '';
-
-    const items = [];
-    if (taskId || workId) {
-      items.push({
-        label: t('contextOpenFlowview', 'Im CTOX-Flow öffnen'),
-        icon: '↗',
-        action: () => navigateToFlowview({ taskId, workId, sourceModule: 'conversations' }),
-      });
-      items.push({ type: 'separator' });
-    }
-    items.push({
-      label: 'Chat to CTOX',
-      icon: '💬',
-      action: () => {
-        spawnMessageCtoxForm(event.clientX, event.clientY, msg);
-      }
+    // v3 öffnete den file-viewer mit {args}; dieselben Argumente gehen jetzt als Route-Parameter (R6/R13).
+    api.shell.navigate('file-viewer', {
+      messageKey: msg.message_key,
+      channel: msg.channel,
+      ref,
+      metadata: msg.metadata_json || {},
     });
-    items.push({ type: 'separator' });
-    items.push({
-      label: t('contextCopyId', 'Message-Key kopieren'),
-      icon: '⧉',
-      action: () => copyToClipboard(msg.message_key),
-    });
-    if (workId) {
-      items.push({
-        label: t('contextCopyWorkId', 'Work-ID kopieren'),
-        icon: '⧉',
-        action: () => copyToClipboard(workId),
-      });
-    }
-    if (msg.remote_id) {
-      items.push({
-        label: t('contextCopyRemoteId', 'Remote-ID kopieren'),
-        icon: '⧉',
-        action: () => copyToClipboard(msg.remote_id),
-      });
-    }
-    if (msg.body_text || msg.preview) {
-      items.push({
-        label: t('contextCopyBody', 'Inhalt kopieren'),
-        icon: '⧉',
-        action: () => copyToClipboard(msg.body_text || msg.preview),
-      });
-    }
-    if (Number(msg.has_attachments) > 0 && msg.raw_payload_ref) {
-      items.push({ type: 'separator' });
-      items.push({
-        label: t('contextOpenAttachment', 'Anhang öffnen'),
-        icon: '📎',
-        action: () => openAttachment(msg),
-      });
-    }
-    ctx.contextMenu.show(event, items);
-  }
-
-  function spawnMessageCtoxForm(x, y, msg) {
-    const menu = document.createElement('div');
-    menu.className = 'ctox-context-menu';
-    menu.style.position = 'absolute';
-    menu.hidden = true;
-    root.append(menu);
-
-    const escapeHtml = (val) => String(val || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#39;');
-
-    const label = msg.subject || msg.sender_address || 'Nachricht';
-
-    menu.innerHTML = `
-      <form class="conversations-context-chat" data-conversations-context-form>
-        <header>
-          <div>
-            <strong>Chat to CTOX</strong>
-            <span>Nachricht · ${escapeHtml(msg.channel || 'conversations')}</span>
-          </div>
-          <button type="button" data-context-close aria-label="Schließen">×</button>
-        </header>
-        <div class="conversations-context-mode" role="radiogroup" aria-label="CTOX Aufgabe">
-          <label><input type="radio" name="contextMode" value="data" checked /> Mit Daten arbeiten</label>
-          <label><input type="radio" name="contextMode" value="app" /> App modifizieren</label>
-        </div>
-        <textarea data-context-message placeholder="Was soll CTOX hier tun oder prüfen?"></textarea>
-        <footer>
-          <span data-context-status></span>
-          <button type="submit">Senden</button>
-        </footer>
-      </form>
-    `;
-
-    menu.hidden = false;
-    const rect = menu.getBoundingClientRect();
-    const rootRect = root.getBoundingClientRect();
-    const left = Math.min(x - rootRect.left, rootRect.width - rect.width - 8);
-    const top = Math.min(y - rootRect.top, rootRect.height - rect.height - 8);
-    menu.style.left = `${Math.max(8, left)}px`;
-    menu.style.top = `${Math.max(8, top)}px`;
-
-    const form = menu.querySelector('[data-conversations-context-form]');
-    const textarea = menu.querySelector('[data-context-message]');
-    const status = menu.querySelector('[data-context-status]');
-
-    menu.querySelector('[data-context-close]')?.addEventListener('click', () => {
-      menu.remove();
-    });
-
-    const handleOutside = (e) => {
-      if (!menu.contains(e.target)) {
-        menu.remove();
-        document.removeEventListener('click', handleOutside, true);
-      }
-    };
-    document.addEventListener('click', handleOutside, true);
-
-    form?.addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const instruction = String(textarea?.value || '').trim();
-      if (!instruction) {
-        textarea?.focus();
-        return;
-      }
-      const mode = new FormData(form).get('contextMode') || 'data';
-      status.textContent = 'Gesendet.';
-
-      const title = `${mode === 'app' ? 'Conversations App modifizieren' : 'Nachricht bearbeiten'} · ${msg.channel || 'conversations'}`;
-      const context = {
-        module: 'conversations',
-        column: msg.channel || 'conversations',
-        record_type: 'message',
-        record_id: msg.message_key || '',
-        label,
-        text: (msg.body_text || msg.preview || '').slice(0, 240)
-      };
-
-      await ctx.contextActions.dispatch(mode === 'app' ? 'app' : 'data', {
-        title,
-        prompt: instruction,
-        context,
-      });
-
-      setTimeout(() => {
-        menu.remove();
-        document.removeEventListener('click', handleOutside, true);
-      }, 650);
-    });
-
-    requestAnimationFrame(() => textarea?.focus());
-  }
-
-  function copyToClipboard(value) {
-    if (!value) return;
-    const text = String(value);
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text).then(() => {
-        ctx.notifications?.show?.({
-          type: 'info',
-          title: t('copiedToast', 'In Zwischenablage kopiert'),
-          message: text.length > 60 ? `${text.slice(0, 57)}…` : text,
-        });
-      }).catch((error) => console.error('[conversations] clipboard write failed:', error));
-    }
   }
 
   function renderRightPane() {
     const bucket = view.buckets.find((b) => b.key === view.selectedBucketKey);
     if (!bucket) {
-      renderRightEmptyState();
-      refs.rightEmpty.hidden = false;
       refs.rightDetail.hidden = true;
       return;
     }
-    refs.rightEmpty.hidden = true;
     refs.rightDetail.hidden = false;
 
     refs.channelsBody.replaceChildren();
@@ -1927,26 +1582,9 @@ export async function mount(ctx) {
     renderFolderCard(bucket);
   }
 
-  function renderRightEmptyState() {
-    const state = conversationEmptyState({
-      totalBuckets: view.buckets.length,
-      filteredBuckets: filterBuckets(view.buckets, view, t).length,
-      hasActiveFilters: hasActiveListFilters(view),
-      diagnostics: currentDataDiagnostics(),
-      hasLocalCommunicationData: hasLocalCommunicationData(view),
-      t,
-    });
-    if (refs.rightEmptyTitle) refs.rightEmptyTitle.textContent = state.kind === 'initial-empty' ? '' : state.title;
-    if (refs.rightEmptyBody) refs.rightEmptyBody.textContent = state.kind === 'initial-empty'
-      ? t('rightEmptyBody', 'Kontaktdaten und verknüpfte Datensätze erscheinen hier.')
-      : state.body;
-  }
-
   function renderOutboundCard(bucket) {
     if (!refs.outboundCard || !refs.outboundBody) return;
-    const loadedContext = view.outboundContext || outboundContextFromBucket(bucket);
-    const fallbackContext = outboundContextFromDeepLinkFallback(bucket);
-    const context = mergeOutboundContexts(loadedContext, fallbackContext);
+    const context = currentOutboundContext(bucket);
     if (!context) {
       refs.outboundCard.hidden = true;
       refs.outboundBody.replaceChildren();
@@ -1979,7 +1617,6 @@ export async function mount(ctx) {
       engagement,
       message,
       latestApproval,
-      statusNote: view.outboundStatus,
     });
     refs.outboundBody.appendChild(summary);
 
@@ -2015,7 +1652,7 @@ export async function mount(ctx) {
       approveBtn.dataset.action = 'conv-outbound-approve';
       approveBtn.dataset.messageId = message.id;
       approveBtn.textContent = t('outboundApprove', 'Freigeben');
-      approveBtn.addEventListener('click', () => approveOutboundMessageFromConversations(message.id));
+      approveBtn.addEventListener('click', () => approveOutboundMessageFromConversations(message.id, context));
       actions.appendChild(approveBtn);
 
       const rejectBtn = document.createElement('button');
@@ -2024,7 +1661,7 @@ export async function mount(ctx) {
       rejectBtn.dataset.action = 'conv-outbound-reject';
       rejectBtn.dataset.messageId = message.id;
       rejectBtn.textContent = t('outboundReject', 'Ablehnen');
-      rejectBtn.addEventListener('click', () => rejectOutboundMessageFromConversations(message.id));
+      rejectBtn.addEventListener('click', () => rejectOutboundMessageFromConversations(message.id, context));
       actions.appendChild(rejectBtn);
     }
     refs.outboundBody.appendChild(actions);
@@ -2057,12 +1694,23 @@ export async function mount(ctx) {
       select.appendChild(opt);
     }
     select.value = OUTBOUND_REPLY_CLASSIFICATIONS.includes(current) ? current : 'unclear';
+    // Offene Eingabe (Reply-Klasse vor dem Klick) überlebt Re-Render und Remount (snapshot).
+    const draft = view.classificationDraft;
+    if (draft?.engagementId === context.engagement.id && OUTBOUND_REPLY_CLASSIFICATIONS.includes(draft.value)) select.value = draft.value;
+    select.addEventListener('change', () => {
+      view.classificationDraft = { engagementId: context.engagement.id, value: select.value };
+    });
     wrap.querySelector('button').textContent = t('outboundReplyClassify', 'Klassifizieren');
     wrap.querySelector('button').dataset.action = 'conv-outbound-reply-classify';
     wrap.querySelector('button').dataset.engagementId = context.engagement.id;
-    wrap.querySelector('small').textContent = `${t('outboundReplyLabel', 'Antwort')}: ${shortenId(inboundReply.message_key || inboundReply.remote_id || '')}`;
-    wrap.querySelector('button').addEventListener('click', async () => {
-      await classifyOutboundReply({
+    // Antwort mit Betreff bzw. Absender statt Nachrichten-Kennung (Textdiät Regel 4).
+    const replyTitle = String(inboundReply.subject || inboundReply.sender_display || inboundReply.sender_address || inboundReply.preview || '').replace(/\s+/g, ' ').trim();
+    wrap.querySelector('small').textContent = replyTitle
+      ? `${t('outboundReplyLabel', 'Antwort')}: ${replyTitle.length > 60 ? `${replyTitle.slice(0, 59)}…` : replyTitle}`
+      : t('outboundReplyLabel', 'Antwort');
+    wrap.querySelector('button').addEventListener('click', () => {
+      view.classificationDraft = null;
+      classifyOutboundReply({
         engagementId: context.engagement.id,
         replyMessageKey: inboundReply.message_key || '',
         classification: select.value,
@@ -2071,8 +1719,18 @@ export async function mount(ctx) {
     return wrap;
   }
 
+  // v3 hielt den Outbound-Kontext im Zustand bzw. lud ihn asynchron aus den Metadaten der Auswahl nach; v4 rechnet
+  // ihn bei jedem Render aus den Live-Abos (outbound_*), Änderungen vom Core kommen gepusht.
+  function currentOutboundContext(bucket) {
+    if (!bucket) return null;
+    const loadedContext = outboundContextFromBucket(bucket);
+    const fallbackContext = outboundContextFromDeepLinkFallback(bucket);
+    return mergeOutboundContexts(loadedContext, fallbackContext);
+  }
+
   function outboundContextFromBucket(bucket) {
-    if (view.outboundContext || !bucket) return view.outboundContext;
+    if (view.outboundLink) return loadOutboundContextForLink(view.outboundLink);
+    if (!bucket) return null;
     const threadContext = bucket.threads
       .map((thread) => outboundLinkFromMetadata(thread.metadata_json))
       .find(Boolean);
@@ -2081,11 +1739,7 @@ export async function mount(ctx) {
       .find(Boolean);
     const link = threadContext || messageContext;
     if (!link) return null;
-    loadOutboundContextForLink(link).then((context) => {
-      view.outboundContext = context;
-      renderRightPane();
-    }).catch((error) => console.warn('[conversations] outbound context lookup failed:', error));
-    return null;
+    return loadOutboundContextForLink(link);
   }
 
   function outboundContextFromDeepLinkFallback(bucket) {
@@ -2154,9 +1808,8 @@ export async function mount(ctx) {
     };
   }
 
-  function outboundStatusLine({ engagement = {}, message = {}, latestApproval = null, statusNote = '' } = {}) {
+  function outboundStatusLine({ engagement = {}, message = {}, latestApproval = null } = {}) {
     const parts = [];
-    if (statusNote) parts.push(statusNote);
     const approval = outboundApprovalLabel(message.approval_status || latestApproval?.decision || '', t);
     if (approval) parts.push(approval);
     const send = outboundSendLabel(message.send_status || '', t);
@@ -2179,7 +1832,7 @@ export async function mount(ctx) {
   function outboundApprovalLabel(status, t) {
     switch (String(status || '').toLowerCase()) {
       case 'awaiting_approval':
-        return t('outboundApprovalAwaiting', 'Wartet auf Freigabe');
+        return t('outboundApprovalAwaiting', 'Wartet auf Freigabe'); // v4-allow: label (approval_status der Nachricht)
       case 'approved':
         return t('outboundApprovalApproved', 'Freigegeben');
       case 'rejected':
@@ -2264,60 +1917,35 @@ export async function mount(ctx) {
     if (campaignId) params.set('campaign_id', campaignId);
     if (engagementId) params.set('engagement_id', engagementId);
     if (messageId) params.set('message_id', messageId);
-    const next = params.toString() ? `#outbound?${params.toString()}` : '#outbound';
-    location.hash = next;
+    api.shell.navigate('outbound', Object.fromEntries(params));
   }
 
-  async function approveOutboundMessageFromConversations(messageId) {
-    view.outboundStatus = t('outboundApprovalRequested', 'Freigabe angefordert');
-    renderRightPane();
-    const outcome = await materializeOutboundDecisionLocally(messageId, 'approved');
-    dispatchOutboundCommand('outbound.message.approve', messageId, { message_id: messageId }, { waitForOutcome: false, timeoutMs: 1500 })
-      .catch((error) => console.warn('[conversations] outbound approve command dispatch failed:', error));
-    view.outboundStatus = t('outboundApprove', 'Freigeben');
-    await applyOutboundDecisionToCommunicationMessage(outcome, messageId, 'approved');
-    view.outboundContext = await waitForOutboundContextForLink({ ...view.deepLink, outbound_message_id: messageId });
-    if (!view.outboundContext || view.outboundContext.message?.approval_status === 'awaiting_approval') {
-      scheduleOutboundContextRetry({ ...view.deepLink, outbound_message_id: messageId });
-    }
-    mergeOutboundCommandOutcomeIntoContext(outcome);
-    renderRightPane();
+  // ----- outbound commands (R5): api.command without waiting; failures go to the status zone -----
+  // Die vier Befehlstypen gehören outbound (modules/outbound/handlers/, V4-HANDLERS.md). Die Handler
+  // outbound.message.approve/reject schreiben Entscheidung (outbound_messages) und Audit (outbound_approvals) selbst;
+  // das lokale Upsert der UI (v3 materializeOutboundDecisionLocally) entfällt, die Änderung kommt gepusht.
+
+  function approveOutboundMessageFromConversations(messageId, context = null) {
+    sendOutboundCommand('outbound.message.approve', messageId, { message_id: messageId }, {
+      onDone: () => applyOutboundDecisionToCommunicationMessage(messageId, 'approved', context),
+    });
   }
 
-  async function rejectOutboundMessageFromConversations(messageId) {
-    view.outboundStatus = t('outboundRejectionRequested', 'Ablehnung angefordert');
-    renderRightPane();
-    const outcome = await materializeOutboundDecisionLocally(messageId, 'rejected', 'Rejected from Conversations');
-    dispatchOutboundCommand('outbound.message.reject', messageId, {
+  function rejectOutboundMessageFromConversations(messageId, context = null) {
+    sendOutboundCommand('outbound.message.reject', messageId, {
       message_id: messageId,
       comment: 'Rejected from Conversations',
-    }, { waitForOutcome: false, timeoutMs: 1500 })
-      .catch((error) => console.warn('[conversations] outbound reject command dispatch failed:', error));
-    view.outboundStatus = t('outboundReject', 'Ablehnen');
-    await applyOutboundDecisionToCommunicationMessage(outcome, messageId, 'rejected');
-    view.outboundContext = await waitForOutboundContextForLink({ ...view.deepLink, outbound_message_id: messageId });
-    if (!view.outboundContext || view.outboundContext.message?.approval_status === 'awaiting_approval') {
-      scheduleOutboundContextRetry({ ...view.deepLink, outbound_message_id: messageId });
-    }
-    mergeOutboundCommandOutcomeIntoContext(outcome);
-    renderRightPane();
+    }, {
+      onDone: () => applyOutboundDecisionToCommunicationMessage(messageId, 'rejected', context),
+    });
   }
 
-  async function classifyOutboundReply({ engagementId, replyMessageKey, classification }) {
-    await dispatchOutboundCommand('outbound.reply.classify', engagementId, {
+  function classifyOutboundReply({ engagementId, replyMessageKey, classification }) {
+    sendOutboundCommand('outbound.reply.classify', engagementId, {
       engagement_id: engagementId,
       classification,
       reply_message_id: replyMessageKey,
     });
-    if (view.outboundContext?.engagement?.id === engagementId) {
-      view.outboundContext.engagement.status = 'reply_received';
-      view.outboundContext.engagement.payload = {
-        ...(view.outboundContext.engagement.payload || {}),
-        reply_classification: classification,
-        reply_message_id: replyMessageKey,
-      };
-    }
-    renderRightPane();
   }
 
   function maybeAutoMatchOutboundReply(context = {}, inboundReply = {}) {
@@ -2328,279 +1956,117 @@ export async function mount(ctx) {
     const dedupeKey = `${engagementId}:${replyMessageKey}`;
     if (view.outboundReplyMatchKeys.has(dedupeKey)) return;
     view.outboundReplyMatchKeys.add(dedupeKey);
-    dispatchOutboundCommand('outbound.reply.match', engagementId, {
+    sendOutboundCommand('outbound.reply.match', engagementId, {
       engagement_id: engagementId,
       outbound_message_id: context.message?.id || '',
       reply_message_id: replyMessageKey,
       classification: context.engagement?.payload?.reply_classification || 'unclear',
-    }).then(() => {
-      if (view.outboundContext?.engagement?.id === engagementId) {
-        view.outboundContext.engagement.status = 'reply_received';
-        view.outboundContext.engagement.payload = {
-          ...(view.outboundContext.engagement.payload || {}),
-          reply_message_id: replyMessageKey,
-          reply_classification: context.engagement?.payload?.reply_classification || 'unclear',
-        };
-      }
-      view.outboundStatus = t('outboundReplyMatched', 'Antwort automatisch zugeordnet');
-      renderRightPane();
-    }).catch((error) => {
-      view.outboundReplyMatchKeys.delete(dedupeKey);
-      console.warn('[conversations] outbound reply auto-match failed:', error);
+    }, {
+      onFailed: () => view.outboundReplyMatchKeys.delete(dedupeKey),
     });
   }
 
-  async function dispatchOutboundCommand(type, recordId, payload, options = {}) {
-    const commandId = `cmd_${type.replaceAll('.', '_')}_${crypto.randomUUID()}`;
-    const command = {
-      id: commandId,
-      command_id: commandId,
-      module: 'outbound',
-      type,
-      command_type: type,
-      record_id: recordId || '',
-      payload,
-      inbound_channel: 'business_os.conversations',
-      client_context: {
-        source_module: 'conversations',
-        deep_link: view.deepLink || {},
-      },
-      created_at_ms: Date.now(),
-      updated_at_ms: Date.now(),
-    };
-    if (!ctx.commandBus?.dispatch) {
-      throw new Error('CTOX command bus is unavailable. The outbound action was not submitted.');
-    }
-    const dispatched = options.waitForOutcome === false
-      ? await ctx.commandBus.dispatch(command, { until: 'local' })
-      : await ctx.commandBus.dispatch(command, { timeoutMs: options.timeoutMs || 5000 });
-    if (options.waitForOutcome === false) {
-      return dispatched;
-    }
-    const outcome = await waitForOutboundCommandOutcome(commandId);
-    ctx.notifications?.show?.({
-      type: 'info',
-      title: 'Outbound',
-      message: type,
-    });
-    return outcome;
-  }
-
-  function scheduleOutboundCommandDispatch(type, recordId, payload, attempt = 0) {
-    if (!isBusinessCommandsReadyForDispatch()) {
-      if (attempt < 60) {
-        window.setTimeout(() => scheduleOutboundCommandDispatch(type, recordId, payload, attempt + 1), 1000);
-      }
-      return;
-    }
-    dispatchOutboundCommand(type, recordId, payload, { waitForOutcome: false, timeoutMs: 1500 })
-      .catch((error) => {
-        if (attempt < 60) {
-          window.setTimeout(() => scheduleOutboundCommandDispatch(type, recordId, payload, attempt + 1), 1000);
-          return;
-        }
-        console.warn('[conversations] outbound command dispatch deferred failed:', error);
+  function sendOutboundCommand(type, recordId, payload, { onDone, onFailed } = {}) {
+    const code = `conversations.command.${type}`;
+    let handle;
+    try {
+      handle = api.command(type, {
+        ...payload,
+        record_id: recordId || '',
+        client_context: {
+          source_module: 'conversations',
+          inbound_channel: 'business_os.conversations',
+          deep_link: plainDeepLink(view.deepLink),
+        },
       });
-  }
-
-  function isBusinessCommandsReadyForDispatch() {
-    const diagnostics = view.syncDiagnostics?.collections?.business_commands
-      || ctx.sync?.diagnostics?.collections?.business_commands
-      || window.ctoxBusinessOsSyncDiagnostics?.collections?.business_commands
-      || null;
-    if (!businessCommandsCollection || !diagnostics) return false;
-    const status = diagnostics.connectionStatus || diagnostics.status || '';
-    const activePeerCount = Number(diagnostics.frameTransport?.activePeerCount || 0);
-    return ['connected', 'reused', 'running'].includes(status)
-      && activePeerCount > 0
-      && Boolean(diagnostics.initialReplicationAt || diagnostics.initialReplicationState === 'complete');
-  }
-
-  async function materializeOutboundDecisionLocally(messageId, decision, comment = '') {
-    if (!outboundMessagesCollection) throw new Error('outbound_messages collection is required for Conversations outbound decisions');
-    const doc = await outboundMessagesCollection.findOne(messageId).exec();
-    if (!doc) throw new Error(`Outbound message missing: ${messageId}`);
-    const current = doc.toJSON?.() || {};
-    const approved = decision === 'approved';
-    const now = Date.now();
-    const revisionId = current.revision_id || `rev_${crypto.randomUUID().replaceAll('-', '')}`;
-    const messagePatch = {
-      draft_status: approved ? 'approved' : 'changes_requested',
-      approval_status: approved ? 'approved' : 'rejected',
-      send_status: approved ? 'approved_not_sent' : 'cancelled',
-      revision_id: revisionId,
-      updated_at_ms: now,
-      _meta: {
-        ...(current._meta || {}),
-        lwt: now,
-      },
-    };
-    const message = { ...current, ...messagePatch };
-    await retryRxdbWrite(async () => {
-      await outboundMessagesCollection.upsert(message);
-    }, 'outbound message decision');
-    const approval = {
-      id: `approval_${messageId}_${revisionId}`.slice(0, 180),
-      message_id: messageId,
-      engagement_id: message.engagement_id || view.outboundContext?.engagement?.id || '',
-      revision_id: revisionId,
-      actor_user_id: ctx.session?.user?.id || 'business-os.conversations',
-      decision: approved ? 'approved' : 'rejected',
-      comment,
-      payload: { source_module: 'conversations' },
-      created_at_ms: now,
-      updated_at_ms: now,
-    };
-    if (outboundApprovalsCollection) {
-      await retryRxdbWrite(() => outboundApprovalsCollection.upsert(approval), 'outbound approval audit');
+    } catch (error) {
+      api.status.report({ level: 'error', code, text: `Outbound ${type}: ${errorToText(error)}` });
+      onFailed?.(error);
+      return null;
     }
-    if (view.outboundContext?.message?.id === messageId) {
-      view.outboundContext.message = { ...view.outboundContext.message, ...message };
-      const approvals = Array.isArray(view.outboundContext.approvals)
-        ? view.outboundContext.approvals.filter((item) => item.id !== approval.id)
-        : [];
-      approvals.unshift(approval);
-      view.outboundContext.approvals = approvals;
-    }
-    return { ok: true, message, approval };
-  }
-
-  async function retryRxdbWrite(operation, label, timeoutMs = 60000) {
-    const deadline = Date.now() + timeoutMs;
-    let lastError = null;
-    const timeoutSentinel = Symbol(`${label}.timeout`);
-    while (Date.now() < deadline) {
-      try {
-        const result = await withTimeout(operation(), 10000, timeoutSentinel);
-        if (result === timeoutSentinel) throw new Error(`${label} write timed out`);
-        return result;
-      } catch (error) {
-        lastError = error;
+    let ended = false;
+    let off = null;
+    const stop = () => {
+      ended = true;
+      if (off) {
+        off();
+        const index = disposers.indexOf(off);
+        if (index >= 0) disposers.splice(index, 1);
+        off = null;
       }
-      await sleep(750);
-    }
-    throw lastError || new Error(`${label} timed out`);
-  }
-
-  function withTimeout(promise, timeoutMs, fallback) {
-    return Promise.race([
-      promise,
-      new Promise((resolve) => setTimeout(() => resolve(fallback), timeoutMs)),
-    ]);
-  }
-
-  async function waitForOutboundCommandOutcome(commandId, timeoutMs = 60000) {
-    if (!businessCommandsCollection) return null;
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      const command = await findOneJson(businessCommandsCollection, commandId);
-      const status = String(command?.status || '').toLowerCase();
-      if (status === 'completed') return command;
-      if (status === 'failed') {
-        throw new Error(command?.error || command?.result?.error || `Outbound command failed: ${commandId}`);
-      }
-      await sleep(250);
-    }
-    return {
-      id: commandId,
-      command_id: commandId,
-      status: 'pending_sync',
-      pending: true,
     };
+    off = handle.status.subscribe((state) => {
+      if (ended || disposed) return;
+      if (state?.status === 'failed') {
+        api.status.report({ level: 'error', code, text: `Outbound ${type}: ${state.error || 'failed'}`, ref: handle.id });
+        stop();
+        onFailed?.(state);
+      } else if (state?.status === 'done') {
+        api.status.clear(code);
+        stop();
+        onDone?.(state);
+      }
+    });
+    if (ended) {
+      off?.();
+      off = null;
+    } else {
+      disposers.push(off);
+    }
+    handle.local?.catch?.((error) => {
+      if (disposed) return;
+      api.status.report({ level: 'error', code, text: `Outbound ${type}: ${errorToText(error)}`, ref: handle.id });
+      stop();
+      onFailed?.(error);
+    });
+    return handle;
   }
 
-  function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-
-  function mergeOutboundCommandOutcomeIntoContext(outcome) {
-    const result = outcome?.result || outcome;
-    if (!result || !view.outboundContext) return;
-    if (result.message?.id) {
-      view.outboundContext.message = {
-        ...(view.outboundContext.message || {}),
-        ...result.message,
-      };
-    }
-    if (result.engagement?.id) {
-      view.outboundContext.engagement = {
-        ...(view.outboundContext.engagement || {}),
-        ...result.engagement,
-      };
-    }
-    if (result.approval?.id) {
-      const approvals = Array.isArray(view.outboundContext.approvals)
-        ? view.outboundContext.approvals.filter((approval) => approval.id !== result.approval.id)
-        : [];
-      approvals.unshift(result.approval);
-      view.outboundContext.approvals = approvals;
-    }
-  }
-
-  async function applyOutboundDecisionToCommunicationMessage(outcome, fallbackMessageId, decision) {
-    const result = outcome?.result || outcome || {};
-    const message = result.message || view.outboundContext?.message || {};
+  // Projektion der Entscheidung in die eigene Kommunikationsnachricht (communication_messages.metadata_json),
+  // unverändert aus v3; jetzt nach `done` des Befehls statt nach dem lokalen Upsert, über api.patch (Dokument-id =
+  // message_key, §16.28).
+  function applyOutboundDecisionToCommunicationMessage(messageId, decision, renderedContext = null) {
+    const bucket = view.buckets.find((b) => b.key === view.selectedBucketKey) || null;
+    const liveContext = currentOutboundContext(bucket);
+    const message = outboundRows.outbound_messages.find((item) => item.id === messageId)
+      || (liveContext?.message?.id === messageId ? liveContext.message : null)
+      || renderedContext?.message
+      || {};
     const communicationMessageKey = cleanParam(
       message.communication_message_key
         || message.payload?.communication_message_key
         || view.deepLink?.message_key
         || ''
     );
-    if (!communicationMessageKey || !messagesCollection) return;
-
-    const approved = decision === 'approved';
-    const approvalStatus = approved ? 'approved' : 'rejected';
-    const sendStatus = approved ? 'approved_not_sent' : 'cancelled';
-    const nextAction = approved ? 'In Outbound versenden' : 'Nachricht ueberarbeiten';
-    const nowIso = new Date().toISOString();
-
+    if (!communicationMessageKey) return;
+    let current = null;
     try {
-      const doc = await messagesCollection.findOne(communicationMessageKey).exec();
-      if (!doc) return;
-      const current = doc.toJSON?.() || {};
-      const metadata = {
-        ...(current.metadata_json && typeof current.metadata_json === 'object' ? current.metadata_json : {}),
-        approval_status: approvalStatus,
-        send_status: sendStatus,
-        outbound_message_id: cleanParam(message.id || fallbackMessageId),
-        outbound_engagement_id: cleanParam(message.engagement_id || view.outboundContext?.engagement?.id || ''),
-        outbound_campaign_id: cleanParam(message.campaign_id || view.outboundContext?.campaign?.id || ''),
-        communication_message_key: communicationMessageKey,
-      };
-      await doc.incrementalPatch({
-        status: current.status || 'draft',
-        folder_hint: current.folder_hint || 'drafts',
-        metadata_json: metadata,
-        updated_at: nowIso,
-      });
-
-      const localMessage = view.timelineMessages.find((item) => item.message_key === communicationMessageKey);
-      if (localMessage) {
-        localMessage.metadata_json = metadata;
-        localMessage.status = localMessage.status || 'draft';
-        localMessage.folder_hint = localMessage.folder_hint || 'drafts';
-        localMessage.updated_at = nowIso;
-      }
-      if (view.outboundContext?.message) {
-        view.outboundContext.message = {
-          ...view.outboundContext.message,
-          approval_status: approvalStatus,
-          send_status: sendStatus,
-          communication_message_key: communicationMessageKey,
-        };
-      }
-      view.outboundStatus = approved
-        ? t('outboundApprovalApplied', 'Freigegeben')
-        : t('outboundRejectionApplied', 'Abgelehnt');
-      if (view.outboundContext?.message) {
-        view.outboundContext.message.payload = {
-          ...(view.outboundContext.message.payload || {}),
-          next_action_label: nextAction,
-        };
-      }
+      current = api.get('communication_messages', communicationMessageKey).get();
     } catch (error) {
-      console.warn('[conversations] communication message decision projection failed:', error);
+      api.status.report({ level: 'error', code: 'conversations.data.communication_messages', text: `Conversations: communication_messages – ${errorToText(error)}`, ref: communicationMessageKey });
+      return;
     }
+    if (!current) return;
+    const approved = decision === 'approved';
+    const context = liveContext || renderedContext || {};
+    const metadata = {
+      ...(current.metadata_json && typeof current.metadata_json === 'object' ? current.metadata_json : {}),
+      approval_status: approved ? 'approved' : 'rejected',
+      send_status: approved ? 'approved_not_sent' : 'cancelled',
+      outbound_message_id: cleanParam(message.id || messageId),
+      outbound_engagement_id: cleanParam(message.engagement_id || context.engagement?.id || ''),
+      outbound_campaign_id: cleanParam(message.campaign_id || context.campaign?.id || ''),
+      communication_message_key: communicationMessageKey,
+    };
+    const handle = api.patch('communication_messages', communicationMessageKey, {
+      status: current.status || 'draft',
+      folder_hint: current.folder_hint || 'drafts',
+      metadata_json: metadata,
+      updated_at: new Date().toISOString(),
+    });
+    handle.local?.catch?.((error) => {
+      api.status.report({ level: 'error', code: 'conversations.write.communication_messages', text: `Conversations: communication_messages – ${errorToText(error)}`, ref: communicationMessageKey });
+    });
   }
 
   function renderAccountsCard(bucket) {
@@ -2629,13 +2095,15 @@ export async function mount(ctx) {
       <div class="conv-account-meta">
         <strong></strong>
         <div class="conv-account-meta-line"></div>
-        <div class="conv-account-meta-line"></div>
       </div>
     `;
-    row.querySelector('strong').textContent = `${labelForChannel(account.channel, t)} · ${account.address || account.account_key}`;
-    const lines = row.querySelectorAll('.conv-account-meta-line');
-    const provider = account.provider ? `${account.provider}` : '';
-    lines[0].textContent = provider;
+    const strong = row.querySelector('strong');
+    strong.textContent = `${labelForChannel(account.channel, t)} · ${account.address || account.account_key}`;
+    // Textdiät Regel 4: Anbieter-Rohwert (standard/email/internal) nur als Tooltip.
+    // FIX11 (G4): lange Adressen kuerzen einzeilig; der Tooltip traegt die volle Zeile (plus Anbieter).
+    strong.title = account.provider ? `${strong.textContent} (${account.provider})` : strong.textContent;
+    strong.setAttribute('data-v4-allow-ellipsis', '');
+    const lines = [null, row.querySelector('.conv-account-meta-line')];
     lines[1].innerHTML = '';
     const inboundSpan = document.createElement('span');
     inboundSpan.textContent = `${t('healthInboundLabel', 'Letzter Eingang')}: ${formatRelativeOrNever(account.last_inbound_ok_at, t)}`;
@@ -2683,14 +2151,6 @@ export async function mount(ctx) {
     return [...bucket.threads].sort((a, b) => compareIsoDesc(a.last_message_at, b.last_message_at))[0];
   }
 
-  function currentDataDiagnostics() {
-    return buildConversationDataDiagnostics({
-      requiredCollections: COMMUNICATION_DIAGNOSTIC_COLLECTIONS,
-      missingCollections: view.missingCollections,
-      collectionErrors: view.collectionErrors,
-      syncDiagnostics: view.syncDiagnostics || ctx.sync?.diagnostics || window.ctoxBusinessOsSyncDiagnostics || null,
-    });
-  }
 }
 
 // ----- helpers (pure / DOM-agnostic) -----
@@ -2702,18 +2162,12 @@ function collectRefs(root) {
     viewToggle: root.querySelector('[data-conv-view-toggle]'),
     footer: root.querySelector('[data-conv-footer]'),
     accountFilter: root.querySelector('[data-conv-account-filter]'),
-    accountFilterStatus: root.querySelector('[data-conv-account-filter-status]'),
-    emptyList: root.querySelector('[data-conv-empty-list]'),
-    emptyDetail: root.querySelector('[data-conv-empty-detail]'),
     detailHeader: root.querySelector('[data-conv-detail-header]'),
     detailAvatar: root.querySelector('[data-conv-detail-avatar]'),
     detailName: root.querySelector('[data-conv-detail-name]'),
     detailHandle: root.querySelector('[data-conv-detail-handle]'),
     channelTabs: root.querySelector('[data-conv-channel-tabs]'),
     timeline: root.querySelector('[data-conv-timeline]'),
-    rightEmpty: root.querySelector('[data-conv-right-empty]'),
-    rightEmptyTitle: root.querySelector('[data-right-empty-title]'),
-    rightEmptyBody: root.querySelector('[data-right-empty-body]'),
     rightDetail: root.querySelector('[data-conv-right-detail]'),
     outboundCard: root.querySelector('[data-conv-outbound-card]'),
     outboundBody: root.querySelector('[data-conv-outbound-card-body]'),
@@ -2733,11 +2187,6 @@ function applyStaticLabels(root, t) {
   const map = {
     '[data-conv-title]': 'moduleTitle',
     '[data-conv-sub]': 'moduleSubtitle',
-    '[data-empty-list-title]': 'emptyListTitle',
-    '[data-empty-list-body]': 'emptyListBody',
-    '[data-empty-detail-title]': 'emptyDetailTitle',
-    '[data-empty-detail-body]': 'emptyDetailBody',
-    '[data-right-empty-body]': 'rightEmptyBody',
     '[data-conv-card-label-channels]': 'cardLabelChannels',
     '[data-conv-card-label-outbound]': 'cardLabelOutbound',
     '[data-conv-card-label-stats]': 'cardLabelStats',
@@ -2753,10 +2202,13 @@ function applyStaticLabels(root, t) {
     const el = root.querySelector(selector);
     if (el) el.textContent = t(key);
   }
+  // Voller Titel als Tooltip, falls er im schmalen Kopf gekürzt wird.
+  const titleEl = root.querySelector('[data-conv-title]');
+  if (titleEl) titleEl.title = titleEl.textContent;
   const search = root.querySelector('[data-pg-search]');
   if (search) search.placeholder = t('searchPlaceholder', 'Suche');
   const labelByChannel = {
-    all: t('channelAll', 'Alle Channels'),
+    all: t('channelAll', 'Alle Kanäle'),
     whatsapp: t('channelWhatsapp', 'WhatsApp'),
     email: t('channelEmail', 'E-Mail'),
     jami: t('channelJami', 'Jami'),
@@ -2836,151 +2288,39 @@ function hasActiveListFilters(view = {}) {
   );
 }
 
-function hasLocalCommunicationData(view = {}) {
-  return Boolean(
-    view.accountsById?.size > 0
-    || Number(view.messageProbeCount) > 0
-    || Number(view.threads?.length) > 0,
-  );
-}
-
-function conversationEmptyState({
-  totalBuckets = 0,
-  filteredBuckets = 0,
-  hasActiveFilters = false,
-  diagnostics = {},
-  hasLocalCommunicationData: localData = false,
-  readiness = null,
-  t = (key, fallback) => fallback || key,
-} = {}) {
-  if (diagnostics.hasFailure) {
-    return {
-      kind: 'sync-failure',
-      title: t('syncFailureTitle', 'Kommunikation ist gerade nicht verfügbar'),
-      body: t('syncFailureBody', 'Konversationen erscheinen automatisch, sobald Kommunikationsdaten geladen sind.'),
-    };
-  }
-  if (totalBuckets > 0 && filteredBuckets === 0 && hasActiveFilters) {
-    return {
-      kind: 'no-results',
-      title: t('noResultsTitle', 'Keine Treffer'),
-      body: t('noResultsBody', 'Keine Konversation passt zu den aktiven Filtern.'),
-    };
-  }
-  if (totalBuckets === 0 && localData) {
-    return {
-      kind: 'projection-missing',
-      title: t('projectionMissingTitle', 'Konversationen werden vorbereitet'),
-      body: t('projectionMissingBody', 'Accounts und Nachrichten werden gerade für die Kontaktansicht vorbereitet.'),
-    };
-  }
-  if (diagnostics.isStarting) {
-    return {
-      kind: 'sync-starting',
-      title: t('syncStartingTitle', 'Kommunikation wird synchronisiert'),
-      body: t('syncStartingBody', 'Accounts und Nachrichten sind noch nicht vollständig in der lokalen App angekommen.'),
-    };
-  }
-  // Canonical readiness gate: the unfiltered source collection has not
-  // finished its initial replication, so "no conversations" would be a lie.
-  if (totalBuckets === 0 && readiness?.ready === false) {
-    return {
-      kind: 'syncing',
-      title: t('listSyncingTitle', 'Konversationen werden synchronisiert'),
-      body: t('listSyncingBody', 'Daten werden synchronisiert. Konversationen erscheinen, sobald die erste Synchronisation abgeschlossen ist.'),
-    };
-  }
-  return {
-    kind: 'initial-empty',
-    title: t('emptyListTitle', 'Keine Konversationen'),
-    body: t('emptyListBody', 'Hier erscheinen Kommunikationen, die CTOX über WhatsApp, E-Mail, Jami, MS Teams oder Meeting führt.'),
-  };
-}
-
-function buildConversationDataDiagnostics({
-  requiredCollections = COMMUNICATION_DIAGNOSTIC_COLLECTIONS,
-  missingCollections = new Set(),
-  collectionErrors = new Map(),
-  syncDiagnostics = null,
-} = {}) {
-  const missing = new Set(Array.from(missingCollections || []));
-  const errors = collectionErrors instanceof Map
-    ? collectionErrors
-    : new Map(Object.entries(collectionErrors || {}));
-  const syncCollections = syncDiagnostics?.collections || {};
-  const problemCollections = new Set();
-  const startingCollections = new Set();
-  const details = [];
-
-  for (const name of requiredCollections) {
-    const sync = syncCollections[name] || null;
-    const localError = errors.get(name);
-    if (missing.has(name)) {
-      problemCollections.add(name);
-      details.push(`${name}: collection missing`);
-    }
-    if (localError) {
-      problemCollections.add(name);
-      details.push(`${name}: ${errorToText(localError)}`);
-    }
-    const status = String(sync?.status || '').toLowerCase();
-    const connectionStatus = String(sync?.connectionStatus || '').toLowerCase();
-    if (sync?.lastError) {
-      problemCollections.add(name);
-      details.push(`${name}: ${syncErrorText(sync.lastError)}`);
-    } else if (sync?.lastLifecycleEvent && isProblemLifecycleEvent(sync.lastLifecycleEvent)) {
-      problemCollections.add(name);
-      details.push(`${name}: ${syncErrorText(sync.lastLifecycleEvent)}`);
-    } else if (['failed', 'error'].includes(status) || ['failed', 'error'].includes(connectionStatus)) {
-      problemCollections.add(name);
-      details.push(`${name}: ${status || connectionStatus}`);
-    }
-    if (!problemCollections.has(name) && (!sync || ['pending', 'starting', 'connecting', 'reconnecting'].includes(status) || ['pending', 'starting', 'connecting', 'reconnecting'].includes(connectionStatus))) {
-      startingCollections.add(name);
-    }
-  }
-
-  return {
-    hasFailure: problemCollections.size > 0,
-    isStarting: problemCollections.size === 0 && startingCollections.size > 0,
-    problemCollections: [...problemCollections],
-    startingCollections: [...startingCollections],
-    detail: details.join(' · '),
-  };
-}
-
-function syncErrorText(error) {
-  if (!error) return '';
-  if (typeof error === 'string') return error;
-  return error.message || error.reason || error.code || JSON.stringify(error);
-}
-
-function isProblemLifecycleEvent(event) {
-  const severity = String(event?.severity || '').toLowerCase();
-  const code = String(event?.code || '').toLowerCase();
-  return ['error', 'fatal'].includes(severity) || code.includes('timeout');
-}
-
 function errorToText(error) {
   if (!error) return '';
   if (typeof error === 'string') return error;
   return error.message || String(error);
 }
 
-function parseConversationDeepLink() {
-  const query = String(location.hash || '').split('?')[1] || '';
-  const params = new URLSearchParams(query);
+// Route-Parameter (api.shell.onRoute, v3: #conversations?…) → Deep-Link-Zustand; Parameter-Semantik unverändert.
+function parseConversationDeepLink(params = {}) {
+  const get = (key) => {
+    if (!params || typeof params !== 'object') return '';
+    if (typeof params.get === 'function') return params.get(key);
+    const value = params[key];
+    return value == null || typeof value === 'object' ? '' : value;
+  };
   return {
-    campaign_id: cleanParam(params.get('campaign_id')),
-    engagement_id: cleanParam(params.get('engagement_id')),
-    outbound_message_id: cleanParam(params.get('outbound_message_id') || params.get('message_id')),
-    thread_key: cleanParam(params.get('thread_key')),
-    message_key: cleanParam(params.get('message_key')),
-    account_key: cleanParam(params.get('account_key')),
-    channel: normalizeConversationChannel(params.get('channel')),
-    applied: false,
+    campaign_id: cleanParam(get('campaign_id')),
+    engagement_id: cleanParam(get('engagement_id')),
+    outbound_message_id: cleanParam(get('outbound_message_id') || get('message_id')),
+    thread_key: cleanParam(get('thread_key')),
+    message_key: cleanParam(get('message_key')),
+    account_key: cleanParam(get('account_key')),
+    channel: normalizeConversationChannel(get('channel')),
+    filtersApplied: false,
     resolved: false,
   };
+}
+
+function plainDeepLink(link = {}) {
+  const out = {};
+  for (const key of ['campaign_id', 'engagement_id', 'outbound_message_id', 'thread_key', 'message_key', 'account_key', 'channel']) {
+    if (link?.[key]) out[key] = String(link[key]);
+  }
+  return out;
 }
 
 function metadataMatchesOutboundLink(metadata, link = {}) {
@@ -3052,12 +2392,6 @@ function normalizeConversationChannel(value) {
   const channel = cleanParam(value);
   if (channel === 'physical_letter') return 'email';
   return SUPPORTED_CHANNELS.includes(channel) || channel === 'all' ? channel : '';
-}
-
-async function findOneJson(collection, id) {
-  if (!collection || !id) return null;
-  const doc = await collection.findOne(id).exec();
-  return doc?.toJSON?.() || null;
 }
 
 function contactForOutboundEngagement(pipeline, engagement) {
@@ -3147,7 +2481,8 @@ function labelForStatus(status, t) {
     case 'read': return t('statusRead', 'gelesen');
     case 'received': return t('statusReceived', 'eingegangen');
     case 'failed': return t('statusFailed', 'fehlgeschlagen');
-    case 'queued': return t('statusQueued', 'in Warteschlange');
+    case 'queued': return t('statusQueued', 'in Warteschlange'); // v4-allow: label (Nachrichtenstatus)
+    case 'done': return t('statusDone', 'erledigt');
     default: return status || '';
   }
 }
@@ -3213,13 +2548,6 @@ function labelForRouteStatus(status, t) {
     case 'stale_missing_native': return t('routeBlocked', 'blockiert');
     default: return status || '';
   }
-}
-
-function shortenId(value) {
-  if (!value) return '';
-  const text = String(value);
-  if (text.length <= 16) return text;
-  return `${text.slice(0, 8)}…${text.slice(-4)}`;
 }
 
 function labelForTrust(level, t) {
@@ -3380,17 +2708,33 @@ function pad(value) {
   return String(value).padStart(2, '0');
 }
 
-async function ensureStyles() {
-  const cssVersion = String(import.meta.url).split('?v=')[1] || STYLE_BUILD;
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  let link = document.querySelector('link[data-conversations-style]');
-  if (!link) {
-    link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.dataset.conversationsStyle = 'true';
-    document.head.append(link);
+// Markup relativ und ohne ?v= (§16.15: der Service Worker liefert die Artefaktdatei versioniert). CSS lädt die Shell
+// aus dem Manifest (styles).
+async function loadModuleMarkup() {
+  const response = await fetch(new URL('./index.html', import.meta.url));
+  return response.text();
+}
+
+function langFrom(locale) {
+  return String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+}
+
+// api.shell.t ist live; die eingebetteten Labels sind der Rückfall, solange der Schlüsselraum von t() offen ist
+// (app-api.d.ts OFFEN-B). Schlüsselraum `conversations.<key>`.
+function messagesFor(api, lang) {
+  const base = { ...FALLBACK_LABELS.de, ...(FALLBACK_LABELS[lang] || {}) };
+  const translate = api?.shell?.t;
+  if (typeof translate !== 'function') return base;
+  for (const key of Object.keys(base)) {
+    const scoped = `conversations.${key}`;
+    const value = translate.call(api.shell, scoped);
+    if (typeof value === 'string' && value && value !== scoped) base[key] = value;
   }
-  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
+  return base;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 function conversationRecordContext(bucket = {}) {
@@ -3491,11 +2835,9 @@ function parseConversationsImport(raw) {
 }
 
 export const __conversationsTestHooks = {
-  buildConversationDataDiagnostics,
-  conversationEmptyState,
   filterBuckets,
   hasActiveListFilters,
-  hasLocalCommunicationData,
+  parseConversationDeepLink,
   conversationContextVisible,
   conversationRecordContext,
   messageRecordContext,

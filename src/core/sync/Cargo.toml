@@ -12,6 +12,7 @@ required-features = ["webrtc"]
 webrtc = ["dep:rxdb", "dep:futures-util", "dep:url"]
 
 [dependencies]
+ctox-store = { path = "../store" }
 futures-util = { version = "0.3", optional = true }
 url = { version = "2.5", optional = true }
 rxdb = { package = "ctox-rxdb", path = "../rxdb", optional = true }
@@ -40,4 +41,7 @@ tokio-tungstenite = "0.28"
 
 # Cargo ignores dependency patches; standalone tests must mirror the host.
 [patch.crates-io]
+rtc-turn = { path = "../rxdb/patches/rtc-turn" }
 rtc-ice = { path = "../rxdb/patches/rtc-ice" }
+rtc = { path = "../rxdb/patches/rtc" }
+webrtc = { path = "../rxdb/patches/webrtc" }

@@ -1,0 +1,88 @@
+{
+ "app": "notes",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Notizen",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Zurück zur Liste",
+    "button:Vertrieb",
+    "button:Tags verwalten",
+    "button:Favorit umschalten",
+    "button:Weitere Aktionen",
+    "button:Formatvorlage",
+    "button:Fett",
+    "button:Kursiv",
+    "button:Unterstreichen",
+    "button:Durchgestrichen",
+    "button:Inline Code",
+    "button:Textmarker (Highlight)",
+    "button:Linksbündig",
+    "button:Zentriert",
+    "button:Checkliste",
+    "button:Aufzählungsliste",
+    "button:Tabelle einfügen",
+    "button:Code-Block einfügen",
+    "button:Callout-Block einfügen",
+    "button:Trennlinie",
+    "button:Zeitstempel"
+   ],
+   "shot": "notes/420-01-open.png"
+  },
+  {
+   "step": "button Zurück zur Liste",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "notes/420-02-button_Zur_ck_zur_Liste.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 864,
+   "shot": "notes/420-03-suche_ohne_Treffer.png",
+   "textAfter": 48
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "notes/420-04-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "notes",
+  "Notizen"
+ ]
+}

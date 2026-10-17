@@ -1,7 +1,7 @@
-import * as Lexical from '../../vendor/lexical.mjs';
-import { loadModuleMessages } from '../../shared/i18n.js';
-import { sanitizeRichHtml } from '../../shared/sanitize-rich-html.js';
-import { renderHtmlIfChanged } from '../../shared/stable-dom.js';
+import * as Lexical from './vendor/lexical.mjs';
+import { sanitizeRichHtml } from 'ctox:shared/sanitize-rich-html.js';
+import { renderHtmlIfChanged } from 'ctox:shared/stable-dom.js';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
 
 const ElementNode = Object.getPrototypeOf(Lexical.HeadingNode);
 
@@ -103,6 +103,7 @@ class CustomHTMLNode extends ElementNode {
 
 const SAVE_DEBOUNCE_MS = 250;
 const NOTES_RENDER_DEBOUNCE_MS = 50;
+const HYDRATE_TAG = 'ctox-notes-hydrate';
 const DRAFT_NOTE_MARKER = '__notes_draft';
 
 const labels = {
@@ -112,28 +113,40 @@ const labels = {
     newNote: 'Neue Notiz',
     untitled: 'Unbenannte Notiz',
     search: 'Durchsuche Notizen...',
-    saving: 'Speichern…',
-    saved: 'Gespeichert',
     words: 'Wörter',
     chars: 'Zeichen',
     deleteConfirm: 'Möchtest du diese Notiz wirklich löschen?',
     deleteToTrash: 'Notiz in den Papierkorb verschieben?',
-    draftStatus: 'Entwurf - noch nicht gespeichert',
+    draftStatus: 'Entwurf',
     draftSaved: 'Entwurf gespeichert',
     draftDiscarded: 'Entwurf verworfen',
-    noSearchResults: 'Keine passenden Notizen',
-    dataUnavailable: 'Notizen sind gerade nicht verfügbar.',
-    dataUnavailableHint: 'Die Liste wird automatisch gefüllt, sobald Notizen geladen sind.',
-    usingLocalCache: 'Notizen werden aus dem letzten verfügbaren Stand angezeigt.',
-    seededNotes: 'Beispielnotizen wurden lokal angelegt.',
     newNotebookPrompt: 'Name für das neue Notizbuch:',
     newTagPrompt: 'Name für den neuen Tag:',
     defaultFolder: 'Notizen',
-    noNotes: 'Keine Notizen vorhanden',
-    syncingNotes: 'Notizen werden synchronisiert.',
     readTime: 'Min. Lesezeit',
     showAsList: 'Als Liste anzeigen',
     showAsCards: 'Als Karten anzeigen',
+    lockedNoteTitle: 'Gesperrte Notiz',
+    deleteNote: 'Notiz löschen',
+    kicker: 'Notesnook',
+    favorites: 'Favoriten',
+    trash: 'Papierkorb',
+    notebook: 'Notizbuch',
+    entries: 'Einträge',
+    allNotebooks: 'Alle Notizbücher',
+    allTags: 'Alle Tags',
+    importInvalid: 'Ungültige JSON-Datei.',
+    importEmpty: 'Keine Notizen in der Datei.',
+    imported: '{n} Notizen importiert.',
+    undo: 'Rückgängig',
+    movedToTrash: 'Notiz in den Papierkorb verschoben.',
+    favoriteSet: 'Als Favorit markiert.',
+    favoriteRemoved: 'Favorit entfernt.',
+    unlockFirst: 'Notiz zuerst entsperren, dann Verschlüsselung entfernen.',
+    removeEncryptionConfirm: 'Verschlüsselung für diese Notiz entfernen?',
+    passwordPrompt: 'Gebe ein Passwort für diese Notiz ein (Standard: 1234):',
+    encryptFailed: 'Verschlüsselung fehlgeschlagen!',
+    saveFailed: 'Notiz konnte nicht gespeichert werden',
   },
   en: {
     allNotes: 'All Notes',
@@ -141,33 +154,46 @@ const labels = {
     newNote: 'New Note',
     untitled: 'Untitled Note',
     search: 'Search notes...',
-    saving: 'Saving…',
-    saved: 'Saved',
     words: 'words',
     chars: 'characters',
     deleteConfirm: 'Are you sure you want to delete this note?',
     deleteToTrash: 'Move this note to trash?',
-    draftStatus: 'Draft - not saved yet',
+    draftStatus: 'Draft',
     draftSaved: 'Draft saved',
     draftDiscarded: 'Draft discarded',
-    noSearchResults: 'No matching notes',
-    dataUnavailable: 'Notes are unavailable right now.',
-    dataUnavailableHint: 'The list fills automatically once notes are loaded.',
-    usingLocalCache: 'Showing the last available notes.',
-    seededNotes: 'Sample notes were created locally.',
     newNotebookPrompt: 'Name for the new notebook:',
     newTagPrompt: 'Name for the new tag:',
     defaultFolder: 'Notes',
-    noNotes: 'No notes available',
-    syncingNotes: 'Syncing notes.',
     readTime: 'min read',
     showAsList: 'Show as list',
     showAsCards: 'Show as cards',
+    lockedNoteTitle: 'Locked note',
+    deleteNote: 'Delete note',
+    kicker: 'Notesnook',
+    favorites: 'Favorites',
+    trash: 'Trash',
+    notebook: 'Notebook',
+    entries: 'entries',
+    allNotebooks: 'All notebooks',
+    allTags: 'All tags',
+    importInvalid: 'Invalid JSON file.',
+    importEmpty: 'No notes in the file.',
+    imported: '{n} notes imported.',
+    undo: 'Undo',
+    movedToTrash: 'Note moved to trash.',
+    favoriteSet: 'Marked as favorite.',
+    favoriteRemoved: 'Favorite removed.',
+    unlockFirst: 'Unlock the note first, then remove encryption.',
+    removeEncryptionConfirm: 'Remove encryption for this note?',
+    passwordPrompt: 'Enter a password for this note (default: 1234):',
+    encryptFailed: 'Encryption failed!',
+    saveFailed: 'Note could not be saved',
   }
 };
 
 const state = {
-  ctx: null,
+  api: null,
+  root: null,
   lang: 'de',
   notes: [],
   notebooks: [],
@@ -186,13 +212,11 @@ const state = {
   activeNoteDecrypted: {}, // noteId -> passcode (string)
   activeNoteDecryptedContent: {}, // noteId -> decrypted plainText content (string)
   saveTimer: null,
-  localSubscriptionCleanup: null,
-  notesReadiness: null,
-  readinessCleanup: null,
   renderTimer: null,
   t: (key, fallback) => fallback ?? key,
-  dataDiagnostics: { kind: 'starting', message: '' },
   toastTimer: null,
+  notesLoaded: false,
+  pendingRestore: null,
   renderedNotebooks: '',
   renderedTags: '',
   lexicalEditor: null,
@@ -206,7 +230,11 @@ const state = {
 const els = {};
 
 function getCachePrefix() {
-  return state.ctx?.module?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
+  return state.api?.app?.id === 'notizen' ? 'ctox.notizen' : 'ctox.notes';
+}
+
+function appId() {
+  return state.api?.app?.id || 'notes';
 }
 
 function createDefaultNotes(now = Date.now()) {
@@ -214,6 +242,7 @@ function createDefaultNotes(now = Date.now()) {
     {
       id: 'notes_seed_ops_review',
       title: 'Operations Review',
+      // v4-allow: text – Beispielnotiz (Inhalt, kein Hilfetext)
       content: '<h1>Operations Review</h1><p>Prioritaeten fuer diese Woche pruefen und offene Entscheidungen im Dashboard nachhalten.</p>',
       folder: 'Notes',
       notebook: 'Operations',
@@ -240,6 +269,7 @@ function createDefaultNotes(now = Date.now()) {
     {
       id: 'notes_seed_meeting_followup',
       title: 'Meeting Follow-up',
+      // v4-allow: text – Beispielnotiz (Inhalt, kein Hilfetext)
       content: '<h1>Meeting Follow-up</h1><p>Naechste Schritte, Verantwortliche und offene Risiken fuer den Kundenworkshop sammeln.</p>',
       folder: 'Notes',
       notebook: 'Kunden',
@@ -253,53 +283,99 @@ function createDefaultNotes(now = Date.now()) {
   ];
 }
 
-function getCollection() {
-  const db = state.ctx?.db;
-  return db?.collection?.('notes') || null;
-}
-
 function isBusinessOsPermissionDenied(error) {
   return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
-    || error?.name === 'BusinessOsPermissionError';
+    || error?.name === 'BusinessOsPermissionError'
+    || error?.code === 'forbidden';
 }
 
-function canWriteNotesCollection() {
-  const permissionCheck = state.ctx?.permissions?.canWriteCollection;
-  return typeof permissionCheck === 'function' ? permissionCheck('notes') : true;
-}
-
-export async function mount(ctx) {
-  state.ctx = ctx;
-  state.lang = ctx.locale === 'en' ? 'en' : 'de';
-  
-  // Inject stylesheet dynamically; inherit the JS cache-buster.
-  const cssVersion = String(import.meta.url).split('?v=')[1] || '';
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  const styleId = state.ctx.module?.id === 'notizen' ? 'notizen-module-styles' : 'notes-module-styles';
-  let styleLink = document.getElementById(styleId);
-  if (!styleLink) {
-    styleLink = document.createElement('link');
-    styleLink.rel = 'stylesheet';
-    styleLink.id = styleId;
-    document.head.appendChild(styleLink);
+// Schreiben nur über die App-API (lokal sofort, Outbox). `local` lehnt bei ungültigem Dokument ab → Zustandszone;
+// Ablehnungen des Core meldet der Kernel selbst in die Zone.
+function writeNotes(op, id, body) {
+  const api = state.api;
+  if (!api) return null;
+  let handle;
+  try {
+    handle = op === 'put' ? api.put('notes', body) : op === 'patch' ? api.patch('notes', id, body) : api.remove('notes', id);
+  } catch (error) {
+    reportWriteError(error, id);
+    return null;
   }
-  if (styleLink.getAttribute('href') !== cssHref) styleLink.href = cssHref;
-  
-  // Load dynamic locales
-  const messages = await loadModuleMessages(import.meta.url, ctx.locale, labels);
+  handle.local.then(() => api.status.clear(`${appId()}.write.invalid`), (error) => reportWriteError(error, id));
+  return handle;
+}
+
+function reportWriteError(error, id) {
+  state.api?.status.report({
+    level: 'error',
+    code: `${appId()}.write.invalid`,
+    text: `${state.t('saveFailed', 'Notiz konnte nicht gespeichert werden')}: ${error?.message || error?.code || error}`,
+    ref: id,
+  });
+}
+
+function storedNote(id) {
+  return id ? state.api?.get('notes', id).get() || null : null;
+}
+
+function langFrom(locale) {
+  return String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+}
+
+// api.shell.t schaltet App-Texte um; die eingebetteten labels sind der Rückfall, solange der Schlüsselraum von
+// t() offen ist (app-api.d.ts OFFEN-B).
+function messagesFor(lang) {
+  const base = { ...labels.de, ...labels[lang] };
+  const t = state.api?.shell?.t;
+  if (typeof t !== 'function') return base;
+  for (const key of Object.keys(base)) {
+    const scoped = `notes.${key}`;
+    const value = t.call(state.api.shell, scoped);
+    if (typeof value === 'string' && value && value !== scoped) base[key] = value;
+  }
+  return base;
+}
+
+function applyMessages(messages) {
   state.t = (key, fallback) => messages[key] ?? fallback ?? key;
-  
-  // Set up HTML structure
-  ctx.host.innerHTML = await loadModuleMarkup();
-  ctx.left.replaceChildren();
-  ctx.right.replaceChildren();
-  
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function resetState() {
+  Object.assign(state, {
+    notes: [], notebooks: [], tags: [], activeCategory: 'notes', activeNotebook: '', activeTag: '',
+    activeNoteId: '', searchQuery: '', sortMode: 'updated', viewMode: 'cards', editorCollapsed: false,
+    appLocked: false, pinBuffer: '', activeNoteDecrypted: {}, activeNoteDecryptedContent: {},
+    saveTimer: null, renderTimer: null, toastTimer: null, renderedNotebooks: '', renderedTags: '',
+    lexicalEditor: null, lexicalRichTextCleanup: null, lexicalUpdateListenerCleanup: null, lastLexicalHtml: '',
+    hydratingEditor: false, renderedNoteId: '', notesLoaded: false, pendingRestore: null, initialSelectionDone: false,
+  });
+  for (const key of Object.keys(els)) delete els[key];
+}
+
+export async function mount(root, api, { restored } = {}) {
+  resetState();
+  // Abos gehören dieser Montage (lokal festgehalten), siehe PORTING.md §4 Falle 1.
+  const disposers = [];
+  state.api = api;
+  state.root = root;
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'notes';
+  state.lang = langFrom(api.shell.locale.get());
+  applyMessages(messagesFor(state.lang));
+
+  // CSS lädt die Shell aus dem Manifest; index.html liefert der Service Worker versioniert (§16.15).
+  root.innerHTML = await loadModuleMarkup();
+
   // Apply translation to static labels in mounted DOM
-  applyStaticLabels(ctx.host, state.t);
-  
-  bindElements(ctx.host);
-  normalizeInteractiveLabels(ctx.host);
-  
+  applyStaticLabels(root, state.t);
+
+  bindElements(root);
+  normalizeInteractiveLabels(root);
+  api.shell.setTitle(state.t('notes', 'Notizen'));
+
   // Initialize Lexical Editor
   state.lexicalEditor = Lexical.createEditor({
     theme: {
@@ -339,8 +415,14 @@ export async function mount(ctx) {
   }
   state.lexicalRichTextCleanup = Lexical.registerRichText?.(state.lexicalEditor) || null;
 
-  state.lexicalUpdateListenerCleanup = state.lexicalEditor.registerUpdateListener(({ editorState }) => {
-    if (state.hydratingEditor) return;
+  state.lexicalUpdateListenerCleanup = state.lexicalEditor.registerUpdateListener(({ editorState, tags }) => {
+    // Rundgang RUND2: Das Laden einer Notiz in den Editor ist keine Eingabe. Lexical meldet das Update erst nach
+    // dem Commit (hydratingEditor ist dann schon false) und normalisiert das HTML – ohne diese Ausnahme schrieb schon
+    // das bloße Öffnen/Auswählen einer Notiz per Autosave (patch notes/<id>).
+    if (state.hydratingEditor || tags?.has?.(HYDRATE_TAG)) {
+      editorState.read(() => { state.lastLexicalHtml = Lexical.$generateHtmlFromNodes(state.lexicalEditor); });
+      return;
+    }
     editorState.read(() => {
       const html = Lexical.$generateHtmlFromNodes(state.lexicalEditor);
       if (html !== state.lastLexicalHtml) {
@@ -352,75 +434,151 @@ export async function mount(ctx) {
 
   wireEvents();
 
-  // Column resizing is shell-owned: the .ctox-column-resizer[data-resizer-var]
-  // handles inside [data-resize-frame] are wired by the shell (app.js
-  // setupModuleResizers), including width persistence.
-
-  // The canonical column grammar (search / view toggle / filter tray / reset /
-  // active-dot / counted band / footer) is SHELL-wired from the data-pg-*
-  // markup; seed the module's mirror of that state from the DOM defaults before
-  // the shell fires its first ctox-pane-grammar-change event.
+  // Spaltengrammatik (Suche / Ansicht / Filter / Band / Fußzeile) aus den data-pg-*-Attributen: die App verdrahtet
+  // sie selbst (PORTING.md R14), danach den Spiegelzustand aus den DOM-Vorgaben setzen.
+  autoWirePaneGrammar(root);
   seedGrammarState();
 
   // App lock is an in-session zero-knowledge overlay (no browser storage): it
   // starts unlocked on every mount.
 
-  // Load notes and wire up database merge sync
-  await loadNotesFromLocal();
-  state.localSubscriptionCleanup = wireLocalRealtime();
-  state.readinessCleanup = wireReadiness();
-  
-  // Pre-select first note if available
-  // Presence (advisory UX): show who else has the same note open, and
-  // publish which note this user is editing. Cleared on unmount.
-  state.presenceRemote = [];
-  state.presenceCleanup = null;
-  if (ctx.presence?.subscribe) {
-    state.presenceCleanup = ctx.presence.subscribe((entries) => {
-      state.presenceRemote = Array.isArray(entries) ? entries : [];
-      scheduleRender();
-    });
-  }
+  state.pendingRestore = isPlainObject(restored) ? restored : null;
+  applyRestoredView(state.pendingRestore);
 
-  const initialNotes = getFilteredNotes();
-  if (initialNotes.length > 0) {
-    selectNote(initialNotes[0].id);
-  } else {
-    renderEditor();
-    applyEditorVisibility();
-  }
+  disposers.push(api.query('notes', { sort: [{ updated_at_ms: 'desc' }] }).subscribe((rows) => {
+    handleNotesRows(rows).catch((error) => console.warn('[notes] failed to apply notes', error));
+  }));
+  disposers.push(api.shell.locale.subscribe((locale) => {
+    const lang = langFrom(locale);
+    if (lang === state.lang) return;
+    state.lang = lang;
+    applyMessages(messagesFor(lang));
+    applyStaticLabels(root, state.t);
+    syncViewToggle();
+    scheduleRender();
+  }));
 
-  return () => {
-    state.presenceCleanup?.();
-    state.presenceCleanup = null;
-    try { state.ctx?.presence?.clear?.(); } catch {}
-    if (state.saveTimer) clearTimeout(state.saveTimer);
-    if (state.renderTimer) clearTimeout(state.renderTimer);
-    if (state.toastTimer) clearTimeout(state.toastTimer);
-    
-    state.lexicalUpdateListenerCleanup?.();
-    state.lexicalUpdateListenerCleanup = null;
-    state.lexicalRichTextCleanup?.();
-    state.lexicalRichTextCleanup = null;
-    state.lexicalEditor?.setRootElement(null);
-    state.lexicalEditor = null;
-    state.lastLexicalHtml = '';
-    state.renderedNoteId = '';
-
-    state.localSubscriptionCleanup?.();
-    state.localSubscriptionCleanup = null;
-
-    state.readinessCleanup?.();
-    state.readinessCleanup = null;
-    state.notesReadiness = null;
-
-    state.ctx.host?.querySelector('.nn-action-toast')?.remove();
-
-    unbindEvents();
-    
-    // Clean up stylesheet
-    document.getElementById(state.ctx.module?.id === 'notizen' ? 'notizen-module-styles' : 'notes-module-styles')?.remove();
+  return {
+    unmount() {
+      if (state.saveTimer) clearTimeout(state.saveTimer);
+      if (state.renderTimer) clearTimeout(state.renderTimer);
+      if (state.toastTimer) clearTimeout(state.toastTimer);
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (error) { console.warn('[notes] unsubscribe failed', error); }
+      }
+      if (state.root !== root) { root.replaceChildren(); return; }
+      state.lexicalUpdateListenerCleanup?.();
+      state.lexicalUpdateListenerCleanup = null;
+      state.lexicalRichTextCleanup?.();
+      state.lexicalRichTextCleanup = null;
+      state.lexicalEditor?.setRootElement(null);
+      state.lexicalEditor = null;
+      state.lastLexicalHtml = '';
+      state.renderedNoteId = '';
+      unbindEvents();
+      root.replaceChildren();
+      state.api = null;
+      state.root = null;
+    },
+    snapshot: notesSnapshot,
   };
+}
+
+const SNAPSHOT_VIEW_KEYS = Object.freeze([
+  'activeCategory', 'activeNotebook', 'activeTag', 'activeNoteId', 'searchQuery', 'sortMode', 'viewMode', 'editorCollapsed',
+]);
+
+// Snapshot für den Live-Remount (§10.2a Nr. 1): Ansicht, Auswahl, ungespeicherter Entwurf und offener Inhalt.
+// Entschlüsselte Inhalte und Passwörter verlassen die Montage nie (Zero-Knowledge).
+function notesSnapshot() {
+  const snap = { v: 1 };
+  for (const key of SNAPSHOT_VIEW_KEYS) snap[key] = state[key];
+  const draft = state.notes.find((note) => note[DRAFT_NOTE_MARKER]);
+  if (draft) snap.draft = { ...draft };
+  const active = state.notes.find((note) => note.id === state.activeNoteId);
+  if (active && !active[DRAFT_NOTE_MARKER] && !active.is_locked) {
+    const stored = storedNote(active.id);
+    if (stored && stored.content !== active.content) snap.contentDraft = { id: active.id, content: active.content };
+  }
+  snap.listScrollTop = els.notesList?.scrollTop || 0;
+  return structuredClone(snap);
+}
+
+function applyRestoredView(restored) {
+  if (!restored || restored.v !== 1) return;
+  const initial = { activeCategory: 'notes', activeNotebook: '', activeTag: '', activeNoteId: '', searchQuery: '', sortMode: 'updated', viewMode: 'cards', editorCollapsed: false };
+  for (const key of SNAPSHOT_VIEW_KEYS) {
+    if (key in restored && typeof restored[key] === typeof initial[key]) state[key] = restored[key];
+  }
+  // Die Spaltengrammatik liest ihren Zustand aus dem DOM: wiederhergestellte Werte dort spiegeln.
+  const pane = els.leftPane;
+  const search = pane?.querySelector('[data-pg-search]');
+  if (search) search.value = state.searchQuery;
+  pane?.querySelectorAll('[data-pg-band]').forEach((tab) => {
+    tab.setAttribute('aria-selected', String(tab.dataset.pgBand === state.activeCategory));
+    tab.classList.toggle('is-active', tab.dataset.pgBand === state.activeCategory);
+  });
+  const view = pane?.querySelector('[data-pg-view]');
+  if (view) view.dataset.pgView = state.viewMode;
+  const sort = pane?.querySelector('[data-pg-filter][data-pg-name="sort"]');
+  if (sort) sort.value = state.sortMode;
+  if (els.notebookFilter) els.notebookFilter.value = state.activeNotebook || 'all';
+  if (els.tagFilter) els.tagFilter.value = state.activeTag || 'all';
+  if (isPlainObject(restored.draft) && typeof restored.draft.id === 'string') {
+    state.notes.unshift({ ...restored.draft, [DRAFT_NOTE_MARKER]: true });
+  }
+  syncViewToggle();
+}
+
+// Live-Abo statt Neuladen: jede Emission ist der vollständige lokale Stand (ohne Zeilendeckel). Lokale Entwürfe
+// (noch nicht gespeichert) bleiben erhalten.
+async function handleNotesRows(rows) {
+  const firstEmission = !state.notesLoaded;
+  state.notesLoaded = true;
+  const serverNotes = (Array.isArray(rows) ? rows : []).filter((n) => n?.id).map((n) => ({ ...n }));
+  const drafts = state.notes.filter((note) => note[DRAFT_NOTE_MARKER] && !serverNotes.some((n) => n.id === note.id));
+
+  if (serverNotes.length === 0 && firstEmission && !state.seededThisSession && seedingAllowed()) {
+    // Fachverhalten wie bisher: leere Notizen-Collection einmal mit Beispielnotizen füllen.
+    state.seededThisSession = true;
+    for (const note of createDefaultNotes()) writeNotes('put', note.id, note);
+    return;
+  }
+
+  state.notes = [...drafts, ...serverNotes.sort((a, b) => b.updated_at_ms - a.updated_at_ms)];
+  const restore = state.pendingRestore;
+  if (restore?.contentDraft && typeof restore.contentDraft.id === 'string') {
+    const target = state.notes.find((note) => note.id === restore.contentDraft.id);
+    if (target && typeof restore.contentDraft.content === 'string') {
+      target.content = restore.contentDraft.content;
+      restore.contentDraft = null;
+    }
+  }
+  await decryptLockedNotesInMemory();
+  syncNotebooksAndTags();
+  if (!state.initialSelectionDone && state.notes.length > 0) {
+    // Wie bisher: beim Öffnen die erste Notiz der Ansicht vorwählen (oder die wiederhergestellte Auswahl halten).
+    state.initialSelectionDone = true;
+    if (!state.activeNoteId || !state.notes.some((note) => note.id === state.activeNoteId)) {
+      state.activeNoteId = getFilteredNotes()[0]?.id || '';
+    }
+  }
+  scheduleRender();
+  if (restore && typeof restore.listScrollTop === 'number' && els.notesList) {
+    const top = restore.listScrollTop;
+    setTimeout(() => { if (els.notesList) els.notesList.scrollTop = top; }, NOTES_RENDER_DEBOUNCE_MS + 10);
+    restore.listScrollTop = null;
+  }
+}
+
+// Beispielnotizen nur, wenn der lokale Stand vollständig ist: solange der Erstabgleich Rückstand meldet, ist eine
+// leere erste Emission kein Beweis für eine leere Collection (die Notizen kämen sonst doppelt bzw. überschrieben).
+function seedingAllowed() {
+  try {
+    return Number(state.api?.metrics?.get()?.backlog || 0) === 0;
+  } catch {
+    return false;
+  }
 }
 
 function applyStaticLabels(root, t) {
@@ -442,9 +600,7 @@ function applyStaticLabels(root, t) {
 }
 
 async function loadModuleMarkup() {
-  const markupVersion = String(import.meta.url).split('?v=')[1] || '';
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-  const html = await fetch(markupHref).then((res) => res.text());
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((node) => node.remove());
   return doc.body.innerHTML;
@@ -487,6 +643,8 @@ function bindElements(host) {
   els.createNoteBtn = host.querySelector('[data-action="create-note"]');
   els.noteMetaMenu = host.querySelector('[data-note-meta-menu]');
   els.noteMetaMenuToggle = host.querySelector('[data-action="toggle-note-meta"]');
+  els.listMoreMenu = host.querySelector('[data-list-more-menu]');
+  els.listMoreToggle = host.querySelector('[data-action="toggle-list-more"]');
   
   // Editor Lock Screen
   els.noteLockScreen = host.querySelector('[data-note-lock-screen]');
@@ -511,7 +669,6 @@ function bindElements(host) {
   els.timestampBtn = host.querySelector('[data-action="insert-timestamp"]');
   
   // Footer Stats
-  els.status = host.querySelector('[data-notes-status]');
   els.readTime = host.querySelector('[data-notes-read-time]');
   els.words = host.querySelector('[data-notes-words]');
   els.chars = host.querySelector('[data-notes-chars]');
@@ -558,6 +715,9 @@ function wireEvents() {
   });
   els.createNoteBtn?.addEventListener('click', handleCreateNote);
   els.noteMetaMenuToggle?.addEventListener('click', handleNoteMetaMenuToggle);
+  els.listMoreToggle?.addEventListener('click', handleListMoreToggle);
+  // Ein Menüpunkt schließt das Menü; seine eigene Aktion hängt weiter am Knopf (els.importBtn, …).
+  els.listMoreMenu?.addEventListener('click', handleListMoreItemClick);
   
   // Decrypt locked notes click/keypress handlers
   els.decryptNoteBtn?.addEventListener('click', handleDecryptNoteClick);
@@ -569,7 +729,7 @@ function wireEvents() {
   els.editor?.addEventListener('click', handleEditorClick);
   
   els.formatBtn?.addEventListener('click', handleFormatBtnClick);
-  state.ctx.host?.querySelectorAll('[data-format-cmd]').forEach(btn => {
+  state.root?.querySelectorAll('[data-format-cmd]').forEach(btn => {
     btn.addEventListener('click', handleFormatCommandClick);
   });
   
@@ -596,6 +756,8 @@ function unbindEvents() {
   els.createNotebookBtn?.removeEventListener('click', handleCreateNotebookClick);
   els.createTagBtn?.removeEventListener('click', handleCreateTagClick);
   els.importBtn?.removeEventListener('click', handleImportClick);
+  els.listMoreToggle?.removeEventListener('click', handleListMoreToggle);
+  els.listMoreMenu?.removeEventListener('click', handleListMoreItemClick);
   els.exportBtn?.removeEventListener('click', handleExportClick);
   els.backToListBtn?.removeEventListener('click', handleBackToListClick);
   els.leftPane?.removeEventListener('ctox-pane-grammar-change', handleGrammarChange);
@@ -631,11 +793,8 @@ function normalizeInteractiveLabels(root) {
   });
 }
 
-// Persistence is the shell-provided CTOX Sync Engine / RxDB collection handle
-// (ctx.db) only — no browser storage data path. saveToLocalCache is kept as a
-// no-op so the many call sites stay untouched; the RxDB collection is the
-// single source of truth and the subscription in wireLocalRealtime keeps the UI
-// current.
+// Persistenz nur über die App-API (api.put/patch/remove); saveToLocalCache bleibt als No-op, damit die
+// Aufrufstellen unverändert bleiben – der Live-Abo-Stand ist die einzige Quelle.
 function saveToLocalCache() {}
 
 async function decryptLockedNotesInMemory() {
@@ -657,71 +816,6 @@ async function decryptLockedNotesInMemory() {
   }
 }
 
-async function loadNotesFromLocal() {
-  const collection = getCollection();
-  const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
-  if (!collection) {
-    state.notes = [];
-    state.notebooks = [];
-    state.tags = [];
-    state.dataDiagnostics = { kind: 'missing', message: state.t('dataUnavailable') };
-    syncNotebooksAndTags();
-    scheduleRender();
-    return;
-  }
-  
-  try {
-    const docs = await collection.find().exec();
-    const serverNotes = docs.map(d => d.toJSON()).filter(n => n.id);
-
-    if (serverNotes.length === 0) {
-      if (canWriteNotesCollection() && !state.seededThisSession) {
-        const seedNotes = createDefaultNotes();
-        state.notes = seedNotes.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
-        state.dataDiagnostics = { kind: 'seeded', message: state.t('seededNotes') };
-        let seededCount = 0;
-        for (const note of seedNotes) {
-          try {
-            await collection.insert(note);
-            seededCount += 1;
-          } catch (insertError) {
-            console.warn(`${logPrefix} failed to seed sample note`, insertError);
-          }
-        }
-        if (seededCount > 0) {
-          state.seededThisSession = true;
-        }
-      } else {
-        state.notes = [];
-        state.dataDiagnostics = { kind: 'ok-empty', message: '' };
-      }
-    } else {
-      state.notes = serverNotes.sort((a, b) => b.updated_at_ms - a.updated_at_ms);
-      state.dataDiagnostics = { kind: 'ok', message: '' };
-    }
-    
-    await decryptLockedNotesInMemory();
-    
-    syncNotebooksAndTags();
-    saveToLocalCache(); // Passive write-only mirror purely for Playwright E2E tests to read
-    scheduleRender();
-  } catch (error) {
-    if (isBusinessOsPermissionDenied(error)) {
-      console.log(`${logPrefix} data access locked`, error?.message || error);
-    } else {
-      console.error(`${logPrefix} failed to load notes`, error);
-    }
-    state.notes = [];
-    state.notebooks = [];
-    state.tags = [];
-    state.dataDiagnostics = {
-      kind: isBusinessOsPermissionDenied(error) ? 'missing' : 'error',
-      message: error?.message || state.t('dataUnavailable'),
-    };
-    syncNotebooksAndTags();
-    scheduleRender();
-  }
-}
 function syncNotebooksAndTags() {
   const scannedNotebooks = new Set();
   const scannedTags = new Set();
@@ -738,41 +832,6 @@ function syncNotebooksAndTags() {
   
   state.notebooks = Array.from(scannedNotebooks).sort();
   state.tags = Array.from(scannedTags).sort();
-}
-
-function wireLocalRealtime() {
-  const collection = getCollection();
-  if (!collection) return null;
-
-  const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
-  const sub = collection.$.subscribe(() => {
-    loadNotesFromLocal().catch(err => {
-      console.warn(`${logPrefix} failed to refresh notes`, err);
-    });
-  });
-
-  return () => {
-    sub?.unsubscribe();
-  };
-}
-
-function readNotesReadiness() {
-  const read = state.ctx?.sync?.collectionReadiness;
-  return typeof read === 'function' ? read.call(state.ctx.sync, 'notes') : null;
-}
-
-// Sync readiness is a render hint only: while the notes collection has not
-// finished its initial replication (ready === false), an empty source list is
-// rendered as a syncing shell instead of "no notes". Re-render on every
-// state transition; the snapshot arrives immediately on subscribe.
-function wireReadiness() {
-  const subscribe = state.ctx?.sync?.subscribeCollectionReadiness;
-  if (typeof subscribe !== 'function') return null;
-  const unsubscribe = subscribe.call(state.ctx.sync, 'notes', (snapshot) => {
-    state.notesReadiness = snapshot;
-    scheduleRender();
-  });
-  return typeof unsubscribe === 'function' ? unsubscribe : null;
 }
 
 function scheduleRender() {
@@ -857,7 +916,8 @@ function renderBandCountsAndFooter() {
     }
   }
   const visible = getFilteredNotes().length;
-  const footerText = `${visible} ${state.t('entries', 'Einträge')} · ${getActiveListLabel()}`;
+  // Textdiät Regel 5: kein Zähler-Fuß, die Reiter tragen die Zähler.
+  const footerText = '';
   if (pg && typeof pg.setFooter === 'function') {
     pg.setFooter(footerText);
   } else {
@@ -933,54 +993,6 @@ function getFilteredNotes({ includeSearch = true } = {}) {
   return list;
 }
 
-function buildNotesEmptyState({ totalNotes, scopedNotes, hasSearch, activeLabel, diagnostics, readiness, t }) {
-  const translate = typeof t === 'function' ? t : (_key, fallback) => fallback;
-  const diagnosticKind = diagnostics?.kind || 'ok';
-  if (diagnosticKind === 'missing' || diagnosticKind === 'error') {
-    return {
-      kind: 'unavailable',
-      title: translate('dataUnavailable', 'Notes are unavailable right now.'),
-      body: translate('dataUnavailableHint', 'The list fills automatically once notes are loaded.')
-    };
-  }
-  if (hasSearch) {
-    return {
-      kind: 'no-results',
-      title: translate('noSearchResults', 'No matching notes'),
-      body: translate('clearSearchHint', 'Suche loeschen oder Suchbegriff anpassen.')
-    };
-  }
-  if (totalNotes > 0 && scopedNotes === 0) {
-    return {
-      kind: 'empty-scope',
-      title: translate('noNotes', 'No notes'),
-      body: activeLabel ? `${activeLabel}: ${translate('noNotes', 'No notes')}` : translate('noNotes', 'No notes')
-    };
-  }
-  if (diagnosticKind === 'local-cache' || diagnosticKind === 'seeded') {
-    return {
-      kind: diagnosticKind,
-      title: translate('noNotes', 'No notes'),
-      body: diagnostics?.message || ''
-    };
-  }
-  // Data-driven empty: the unfiltered source from the replicated notes
-  // collection is empty. Until that collection has finished its initial
-  // replication (ready === false), this is a sync state, not "no notes".
-  if (readiness?.ready === false) {
-    return {
-      kind: 'syncing',
-      title: translate('syncingNotes', 'Notizen werden synchronisiert.'),
-      body: ''
-    };
-  }
-  return {
-    kind: 'empty',
-    title: translate('noNotes', 'No notes'),
-    body: ''
-  };
-}
-
 function bandLabel() {
   if (state.activeCategory === 'favorites') return state.t('favorites', 'Favoriten');
   if (state.activeCategory === 'trash') return state.t('trash', 'Papierkorb');
@@ -1001,31 +1013,9 @@ function renderNotesList() {
   const list = getFilteredNotes();
 
   if (list.length === 0) {
-    const scopedNotes = getFilteredNotes({ includeSearch: false }).length;
-    const emptyState = buildNotesEmptyState({
-      totalNotes: state.notes.length,
-      scopedNotes,
-      hasSearch: !!state.searchQuery.trim(),
-      activeLabel: getActiveListLabel(),
-      diagnostics: state.dataDiagnostics,
-      readiness: state.notesReadiness || readNotesReadiness(),
-      t: state.t
-    });
-    if (emptyState.kind === 'syncing') {
-      els.notesList.innerHTML = `
-      <div class="ctox-syncing nn-empty-state-syncing" role="status" aria-live="polite">
-        <strong>${escapeHtml(emptyState.title)}</strong>
-        ${emptyState.body ? `<span>${escapeHtml(emptyState.body)}</span>` : ''}
-      </div>
-    `;
-      return;
-    }
-    els.notesList.innerHTML = `
-      <div class="ctox-empty nn-empty-state-${escapeHtml(emptyState.kind)}">
-        <strong>${escapeHtml(emptyState.title)}</strong>
-        ${emptyState.body ? `<span>${escapeHtml(emptyState.body)}</span>` : ''}
-      </div>
-    `;
+    // Leere Liste rendert nichts (PORTING.md R11): kein Leer-, Such- oder Synchronisierungstext.
+    // Über renderHtmlIfChanged, damit die Signatur stimmt (sonst bleibt die Liste nach einer leeren Suche leer).
+    renderHtmlIfChanged(els.notesList, '', { signature: 'empty' });
     return;
   }
 
@@ -1088,7 +1078,7 @@ function renderNotesList() {
         </div>
         <div class="notes-card-meta">
           <span class="notes-card-date">${dateStr}</span>
-          <span class="notes-card-snippet">${escapeHtml(snippet)}</span>
+          <span class="notes-card-snippet" data-v4-allow-ellipsis>${escapeHtml(snippet)}</span>
         </div>
         ${badgesHtml ? `<div class="nn-card-badges">${badgesHtml}</div>` : ''}
       </div>
@@ -1160,16 +1150,9 @@ function handleNoteListKeydown(event) {
 function renderEditor() {
   const note = state.notes.find(n => n.id === state.activeNoteId);
 
-  // Publish presence for the open note (the editor is live, so "editing").
-  // Only collection + record id go on the wire — never titles or content, so
-  // locked notes stay non-revealing. The registry dedups unchanged sets.
-  try {
-    state.ctx?.presence?.set(note ? [{ collection: 'notes', recordId: note.id, mode: 'editing' }] : []);
-  } catch {}
-
   // Clean up any dynamic restore banner
-  els.editorWorkspace?.querySelector('.nn-restore-banner')?.remove();
-  els.editorWorkspace?.querySelector('.nn-draft-banner')?.remove();
+  els.editorWorkspace?.querySelector('.nn-restore-actions')?.remove();
+  els.editorWorkspace?.querySelector('.nn-draft-actions')?.remove();
   
   updateActionAvailability(note);
   
@@ -1205,17 +1188,6 @@ function renderEditor() {
       badgesHtml += `<span class="ctox-badge is-info">#${escapeHtml(tg)}</span>`;
     });
   }
-  // Presence hint: other users with this note open right now.
-  const ownActorId = state.ctx?.actor?.id || '';
-  const presencePeers = (state.presenceRemote || []).filter((entry) => entry
-    && entry.collection === 'notes'
-    && entry.recordId === note.id
-    && entry.actorId
-    && entry.actorId !== ownActorId);
-  if (presencePeers.length) {
-    const names = [...new Set(presencePeers.map((entry) => entry.actorName || entry.actorId))].join(', ');
-    badgesHtml += `<span class="ctox-badge is-warning">✎ ${escapeHtml(names)} ${escapeHtml(state.t('presenceEditing', 'bearbeitet gerade'))}</span>`;
-  }
   if (els.noteBadgesContainer) {
     els.noteBadgesContainer.innerHTML = badgesHtml;
   }
@@ -1226,10 +1198,10 @@ function renderEditor() {
   // Show Restore banner if trashed
   if (note.is_trashed && els.editorWorkspace) {
     const banner = document.createElement('div');
-    banner.className = 'ctox-callout nn-restore-banner';
+    // Textdiät Regel 1: keine Hinweisbox – nur die Aktion, die Sachinformation als Tooltip.
+    banner.className = 'nn-restore-actions';
     banner.innerHTML = `
-      <span>⚠️ Diese Notiz ist im Papierkorb.</span>
-      <button type="button" class="ctox-button ctox-button--sm is-primary" data-action="restore-note">Wiederherstellen</button>
+      <button type="button" class="ctox-button ctox-button--sm is-primary" data-action="restore-note" title="Diese Notiz ist im Papierkorb.">Wiederherstellen</button>
     `;
     els.editorWorkspace.prepend(banner);
     banner.querySelector('[data-action="restore-note"]')?.addEventListener('click', handleRestoreNoteClick);
@@ -1237,13 +1209,11 @@ function renderEditor() {
 
   if (note[DRAFT_NOTE_MARKER] && els.editorWorkspace) {
     const banner = document.createElement('div');
-    banner.className = 'ctox-callout nn-draft-banner';
+    // Textdiät Regel 1: keine Hinweisbox – Entwurfszustand nur als Tooltip an den Aktionen.
+    banner.className = 'nn-draft-actions';
     banner.innerHTML = `
-      <span>${escapeHtml(state.t('draftStatus'))}</span>
-      <div class="nn-banner-actions">
-        <button type="button" class="ctox-button ctox-button--sm is-primary" data-action="save-draft-note">${escapeHtml(state.t('save', 'Speichern'))}</button>
-        <button type="button" class="ctox-button ctox-button--sm" data-action="discard-draft-note">${escapeHtml(state.t('discard', 'Verwerfen'))}</button>
-      </div>
+      <button type="button" class="ctox-button ctox-button--sm" data-action="discard-draft-note" title="${escapeHtml(state.t('draftStatus'))}">${escapeHtml(state.t('discard', 'Verwerfen'))}</button>
+      <button type="button" class="ctox-button ctox-button--sm is-primary" data-action="save-draft-note" title="${escapeHtml(state.t('draftStatus'))}">${escapeHtml(state.t('save', 'Speichern'))}</button>
     `;
     els.editorWorkspace.prepend(banner);
     banner.querySelector('[data-action="save-draft-note"]')?.addEventListener('click', handleSaveDraftNoteClick);
@@ -1281,7 +1251,7 @@ function renderEditor() {
           if (shouldSelectEditorEnd) {
             selectEditableEnd(root);
           }
-        });
+        }, { tag: HYDRATE_TAG });
         state.hydratingEditor = false;
       }
     }
@@ -1323,7 +1293,7 @@ function updateActionAvailability(note) {
 }
 
 function setToolbarDisabled(disabled, reason = '') {
-  state.ctx?.host?.querySelectorAll('.nn-editor-toolbar button').forEach(btn => {
+  state.root?.querySelectorAll('.nn-editor-toolbar button').forEach(btn => {
     btn.disabled = disabled;
     btn.setAttribute('aria-disabled', disabled ? 'true' : 'false');
     if (reason) btn.setAttribute('data-disabled-reason', reason);
@@ -1494,26 +1464,14 @@ function processContentInput(newHtml) {
   if (els.chars) els.chars.textContent = `${charCount} ${state.t('chars')}`;
   if (els.readTime) els.readTime.textContent = `${readMin} ${state.t('readTime')}`;
   
-  // Syncing display
-  if (els.status) {
-    if (note[DRAFT_NOTE_MARKER]) {
-      els.status.textContent = state.t('draftStatus');
-    } else {
-      els.status.innerHTML = `
-        <svg class="nn-sync-icon pulse" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.42-1.04-1.21-1.92-2.18-2.5A6 6 0 0 0 2 13.5c0 2.2 1.4 3.9 3.5 4.5"></path></svg>
-        <span>${state.t('saving')}</span>
-      `;
-    }
-  }
   if (state.saveTimer) clearTimeout(state.saveTimer);
   if (note[DRAFT_NOTE_MARKER]) return;
   
   state.saveTimer = setTimeout(() => {
     state.saveTimer = null;
     commitSave(note).catch(err => {
-      const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
-      console.error(`${logPrefix} autosave failed`, err);
-      if (els.status) els.status.textContent = 'Save failed';
+      console.error('[notes] autosave failed', err);
+      reportWriteError(err, note.id);
     });
   }, SAVE_DEBOUNCE_MS);
 }
@@ -1539,42 +1497,22 @@ function normalizeStoredContent(content) {
 }
 async function commitSave(note) {
   if (!note || note[DRAFT_NOTE_MARKER]) return;
-  const collection = getCollection();
-  if (!collection) return;
-  
-  try {
-    const doc = await collection.findOne(note.id).exec();
-    if (doc) {
-      let contentToSave = note.content;
-      if (note.is_locked) {
-        const passcode = state.activeNoteDecrypted[note.id];
-        const decrypted = state.activeNoteDecryptedContent[note.id] || '';
-        if (passcode) {
-          const encrypted = await encryptContent(decrypted, passcode);
-          contentToSave = JSON.stringify(encrypted);
-          note.content = contentToSave; // update state note content to match
-        }
-      }
-      
-      await doc.patch({
-        ...buildNotePersistPayload(note),
-        content: contentToSave,
-        updated_at_ms: Date.now()
-      });
-      
-      // Update local storage mirror too so it matches
-      saveToLocalCache();
-      
-      if (els.status) {
-        els.status.innerHTML = `
-          <svg class="nn-sync-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M17.5 19A3.5 3.5 0 0 0 21 15.5c0-2.79-2.54-4.5-5-4.5-.42-1.04-1.21-1.92-2.18-2.5A6 6 0 0 0 2 13.5c0 2.2 1.4 3.9 3.5 4.5"></path></svg>
-          <span>${state.t('saved')}</span>
-        `;
-      }
+  if (!storedNote(note.id)) return;
+  let contentToSave = note.content;
+  if (note.is_locked) {
+    const passcode = state.activeNoteDecrypted[note.id];
+    const decrypted = state.activeNoteDecryptedContent[note.id] || '';
+    if (passcode) {
+      const encrypted = await encryptContent(decrypted, passcode);
+      contentToSave = JSON.stringify(encrypted);
+      note.content = contentToSave; // update state note content to match
     }
-  } catch (err) {
-    console.warn('Background save failed', err);
   }
+  writeNotes('patch', note.id, {
+    ...buildNotePersistPayload(note),
+    content: contentToSave,
+    updated_at_ms: Date.now()
+  });
 }
 async function handleCreateNote() {
   const existingDraft = state.notes.find(note => note[DRAFT_NOTE_MARKER]);
@@ -1620,17 +1558,7 @@ async function handleSaveDraftNoteClick() {
   delete note[DRAFT_NOTE_MARKER];
   note.updated_at_ms = Date.now();
 
-  const collection = getCollection();
-  if (collection) {
-    try {
-      await collection.insert({ ...note });
-    } catch (error) {
-      const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
-      console.warn(`${logPrefix} background draft save failed`, error);
-      const doc = await collection.findOne(note.id).exec().catch(() => null);
-      if (doc) await doc.patch(note);
-    }
-  }
+  writeNotes('put', note.id, { ...note });
 
   syncNotebooksAndTags();
   saveToLocalCache();
@@ -1660,7 +1588,7 @@ async function handleDeleteNote() {
   
   if (note.is_trashed) {
     const confirmMessage = state.t('deleteConfirm');
-    if (!confirm(confirmMessage)) return;
+    if (!(await confirmDialog(confirmMessage))) return;
     
     state.notes = state.notes.filter(n => n.id !== note.id);
     saveToLocalCache();
@@ -1672,19 +1600,10 @@ async function handleDeleteNote() {
     if (list.length > 0) state.activeNoteId = list[0].id;
     scheduleRender();
     
-    const collection = getCollection();
-    if (collection) {
-      try {
-        const doc = await collection.findOne(oldId).exec();
-        if (doc) await doc.remove();
-      } catch (error) {
-        const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
-        console.warn(`${logPrefix} failed to remove note`, error);
-      }
-    }
+    if (storedNote(oldId)) writeNotes('remove', oldId);
   } else {
     const confirmMessage = state.t('deleteToTrash');
-    if (!confirm(confirmMessage)) return;
+    if (!(await confirmDialog(confirmMessage))) return;
 
     note.is_trashed = true;
     note.updated_at_ms = Date.now();
@@ -1695,28 +1614,15 @@ async function handleDeleteNote() {
     if (list.length > 0) state.activeNoteId = list[0].id;
     scheduleRender();
     
-    const collection = getCollection();
-    if (collection) {
-      try {
-        const doc = await collection.findOne(note.id).exec();
-        if (doc) await doc.patch({ is_trashed: true, updated_at_ms: Date.now() });
-      } catch (error) {
-        const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
-        console.warn(`${logPrefix} background trash failed`, error);
-      }
-    }
+    if (storedNote(note.id)) writeNotes('patch', note.id, { is_trashed: true, updated_at_ms: Date.now() });
 
-    showActionToast('Notiz in den Papierkorb verschoben.', 'Rueckgaengig', async () => {
+    showActionToast(state.t('movedToTrash', 'Notiz in den Papierkorb verschoben.'), state.t('undo', 'Rückgängig'), async () => {
       note.is_trashed = false;
       note.updated_at_ms = Date.now();
       state.activeNoteId = note.id;
       saveToLocalCache();
       scheduleRender();
-      const undoCollection = getCollection();
-      if (undoCollection) {
-        const doc = await undoCollection.findOne(note.id).exec().catch(() => null);
-        if (doc) await doc.patch({ is_trashed: false, updated_at_ms: Date.now() });
-      }
+      if (storedNote(note.id)) writeNotes('patch', note.id, { is_trashed: false, updated_at_ms: Date.now() });
     });
   }
 }
@@ -1731,21 +1637,12 @@ async function handleRestoreNoteClick() {
   
   scheduleRender();
   
-  const collection = getCollection();
-  if (collection) {
-    try {
-      const doc = await collection.findOne(note.id).exec();
-      if (doc) await doc.patch({ is_trashed: false, updated_at_ms: Date.now() });
-    } catch (error) {
-      const logPrefix = state.ctx.module?.id === 'notizen' ? '[notizen]' : '[notes]';
-      console.warn(`${logPrefix} background restore failed`, error);
-    }
-  }
+  if (storedNote(note.id)) writeNotes('patch', note.id, { is_trashed: false, updated_at_ms: Date.now() });
 }
 
 async function handleCreateNotebookClick(e) {
   e.stopPropagation();
-  const name = prompt(state.t('newNotebookPrompt', 'Name für das neue Notizbuch:'));
+  const name = await promptDialog(state.t('newNotebookPrompt', 'Name für das neue Notizbuch:'));
   if (!name || !name.trim()) return;
 
   const nb = name.trim();
@@ -1766,7 +1663,7 @@ async function handleCreateNotebookClick(e) {
 
 async function handleCreateTagClick(e) {
   e.stopPropagation();
-  const name = prompt(state.t('newTagPrompt', 'Name für den neuen Tag:'));
+  const name = await promptDialog(state.t('newTagPrompt', 'Name für den neuen Tag:'));
   if (!name || !name.trim()) return;
 
   const tg = name.trim();
@@ -1856,7 +1753,6 @@ function handleImportClick() {
       showActionToast(state.t('importEmpty', 'Keine Notizen in der Datei.'));
       return;
     }
-    const collection = getCollection();
     let count = 0;
     let lastId = '';
     for (const item of candidates) {
@@ -1876,11 +1772,7 @@ function handleImportClick() {
       state.notes.unshift(record);
       lastId = record.id;
       count += 1;
-      if (collection) {
-        try { await collection.insert(record); } catch (error) {
-          console.warn('[notes] import insert failed', error);
-        }
-      }
+      writeNotes('put', record.id, record);
     }
     syncNotebooksAndTags();
     if (lastId) state.activeNoteId = lastId;
@@ -1987,8 +1879,8 @@ function handleStarNoteClick() {
   scheduleRender();
   commitSave(note);
   showActionToast(
-    note.is_favorite ? 'Als Favorit markiert.' : 'Favorit entfernt.',
-    'Rueckgaengig',
+    note.is_favorite ? state.t('favoriteSet', 'Als Favorit markiert.') : state.t('favoriteRemoved', 'Favorit entfernt.'),
+    state.t('undo', 'Rückgängig'),
     async () => {
       note.is_favorite = previousValue;
       note.updated_at_ms = Date.now();
@@ -2009,10 +1901,10 @@ async function handleLockNoteClick() {
   
   if (note.is_locked) {
     if (!state.activeNoteDecrypted[note.id]) {
-      showActionToast('Notiz zuerst entsperren, dann Verschluesselung entfernen.');
+      showActionToast(state.t('unlockFirst', 'Notiz zuerst entsperren, dann Verschlüsselung entfernen.'));
       return;
     }
-    if (!confirm('Verschluesselung fuer diese Notiz entfernen?')) return;
+    if (!(await confirmDialog(state.t('removeEncryptionConfirm', 'Verschlüsselung für diese Notiz entfernen?')))) return;
     let plainText = note.content;
     const passcode = state.activeNoteDecrypted[note.id];
     if (passcode) {
@@ -2031,7 +1923,7 @@ async function handleLockNoteClick() {
     scheduleRender();
     await commitSave(note);
   } else {
-    const entered = prompt('Gebe ein Passwort für diese Notiz ein (Standard: 1234):');
+    const entered = await promptDialog(state.t('passwordPrompt', 'Gebe ein Passwort für diese Notiz ein (Standard: 1234):'), { secret: true });
     if (entered === null) return;
     const pw = entered.trim() || '1234';
     const plainText = note.content;
@@ -2054,7 +1946,7 @@ async function handleLockNoteClick() {
       await commitSave(note);
     } catch (err) {
       console.error('Encryption failed', err);
-      alert('Verschlüsselung fehlgeschlagen!');
+      state.api?.status.report({ level: 'error', code: `${appId()}.encrypt.failed`, text: state.t('encryptFailed', 'Verschlüsselung fehlgeschlagen!'), ref: note.id });
     }
   }
 }
@@ -2437,6 +2329,21 @@ function closeAllDropdowns() {
   if (els.calloutsDropdown) els.calloutsDropdown.hidden = true;
   if (els.noteMetaMenu) els.noteMetaMenu.hidden = true;
   if (els.noteMetaMenuToggle) els.noteMetaMenuToggle.setAttribute('aria-expanded', 'false');
+  if (els.listMoreMenu) els.listMoreMenu.hidden = true;
+  if (els.listMoreToggle) els.listMoreToggle.setAttribute('aria-expanded', 'false');
+}
+
+function handleListMoreItemClick(event) {
+  if (event.target.closest('.nn-dropdown-item')) closeAllDropdowns();
+}
+
+function handleListMoreToggle(e) {
+  e.stopPropagation();
+  if (!els.listMoreMenu) return;
+  const wasHidden = els.listMoreMenu.hidden;
+  closeAllDropdowns();
+  els.listMoreMenu.hidden = !wasHidden;
+  els.listMoreToggle?.setAttribute('aria-expanded', wasHidden ? 'true' : 'false');
 }
 
 function handleNoteMetaMenuToggle(e) {
@@ -2448,18 +2355,19 @@ function handleNoteMetaMenuToggle(e) {
   els.noteMetaMenuToggle?.setAttribute('aria-expanded', wasHidden ? 'true' : 'false');
 }
 
+// Meldungen gehen in die Zustandszone der Shell (Anf. 27). Eine Rückgängig-Aktion bleibt als Knopf im App-Fenster
+// (kein Text), solange die Meldung steht; danach räumt die App ihren Zoneneintrag.
 function showActionToast(message, actionLabel = '', onAction = null) {
-  if (!els.root) return;
+  const api = state.api;
+  if (!api) return;
+  const code = `${appId()}.notice`;
   if (state.toastTimer) clearTimeout(state.toastTimer);
-  els.root.querySelector('.nn-action-toast')?.remove();
+  els.root?.querySelector('.nn-action-toast')?.remove();
+  api.status.report({ level: 'info', code, text: String(message || '') });
 
-  const toast = document.createElement('div');
-  toast.className = 'nn-action-toast';
-  const text = document.createElement('span');
-  text.textContent = message;
-  toast.append(text);
-
-  if (actionLabel && typeof onAction === 'function') {
+  if (actionLabel && typeof onAction === 'function' && els.root) {
+    const toast = document.createElement('div');
+    toast.className = 'nn-action-toast';
     const action = document.createElement('button');
     action.type = 'button';
     action.className = 'ctox-button ctox-button--sm';
@@ -2469,16 +2377,29 @@ function showActionToast(message, actionLabel = '', onAction = null) {
         await onAction();
       } finally {
         toast.remove();
+        api.status.clear(code);
       }
     }, { once: true });
     toast.append(action);
+    els.root.append(toast);
   }
 
-  els.root.append(toast);
   state.toastTimer = setTimeout(() => {
     state.toastTimer = null;
-    toast.remove();
+    els.root?.querySelector('.nn-action-toast')?.remove();
+    api.status.clear(code);
   }, 6500);
+}
+
+// Dialoge nur über die Shell, innerhalb des App-Fensters (R7). Destruktive Fragen mit default:false.
+async function confirmDialog(text) {
+  const answer = await state.api?.shell.dialog({ kind: 'confirm', title: state.t('notes', 'Notizen'), text, default: false });
+  return answer === true;
+}
+
+async function promptDialog(text, { secret = false } = {}) {
+  const answer = await state.api?.shell.dialog({ kind: 'prompt', title: state.t('notes', 'Notizen'), text, secret, default: null });
+  return typeof answer === 'string' ? answer : null;
 }
 
 function handleEditorCheckboxClick(e) {
@@ -2923,7 +2844,6 @@ function noteActionAvailability(note) {
 
 export const __notesTestHooks = {
   DRAFT_NOTE_MARKER,
-  buildNotesEmptyState,
   createDefaultNotes,
   getCachePrefix,
   isBusinessOsPermissionDenied,

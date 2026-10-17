@@ -96,6 +96,8 @@ const INSTANCE_PROXY_CONFIG_TABLE: &str = "cliproxyapi_runtime_config";
 
 #[path = "cliproxyapi_account_controls.rs"]
 pub(crate) mod account_controls;
+#[path = "cliproxyapi_model_probe.rs"]
+pub(crate) mod model_probe;
 const INSTANCE_PROXY_CONFIG_SCHEMA: &str = "ctox.cliproxyapi.runtime-config.v1";
 const INSTANCE_ANTIGRAVITY_CAPABILITY_REFRESH_SECONDS: u64 = 10 * 60;
 const INSTANCE_SIGNATURE_CACHE_TABLE: &str = "cliproxyapi_signature_cache";
@@ -423,6 +425,29 @@ impl ctox_cliproxyapi::internal::api::server_management::ManagementRuntimeStatus
 }
 
 #[derive(Debug, Clone)]
+struct CoreManagementExecutor;
+impl ctox_cliproxyapi::internal::api::server_management::ManagementBlockingExecutor
+    for CoreManagementExecutor
+{
+    fn execute(
+        &self,
+        operation: ctox_cliproxyapi::internal::api::server_management::ManagementJob,
+    ) -> ctox_cliproxyapi::internal::api::server_management::ManagementFuture {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || Ok(operation())).await.map_err(|error| {
+                use ctox_cliproxyapi::internal::api::server_management::ManagementExecutionError;
+                if matches!(error.downcast_ref::<ctox_store::StoreError>(), Some(ctox_store::StoreError::Busy)) {
+                    ManagementExecutionError::Busy
+                } else {
+                    eprintln!("ctox management: Core owner admission unavailable");
+                    ManagementExecutionError::Unavailable
+                }
+            })
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 struct CtoxManagementRuntimeConfigSource {
     root: PathBuf,
 }
@@ -524,7 +549,10 @@ impl ctox_cliproxyapi::internal::api::server_management::ManagementRuntimeConfig
     > {
         load_instance_proxy_config(&self.root)
             .map(|stored| stored.as_ref().map(management_runtime_config_summary))
-            .map_err(|_| {
+            .map_err(|error| {
+                if let Some(reason) = error.downcast_ref::<crate::persistence::CoreSyncError>() {
+                    eprintln!("ctox management config admission failed: {reason}");
+                }
                 ctox_cliproxyapi::internal::api::server_management::ManagementRuntimeConfigError::StoreUnavailable
             })
     }
@@ -545,8 +573,16 @@ impl ctox_cliproxyapi::internal::api::server_management::ManagementRuntimeConfig
         {
             return Err(ManagementRuntimeConfigError::Invalid);
         }
-        ensure_runtime_secrets_available(&self.root, &mutation.runtime)
-            .map_err(|_| ManagementRuntimeConfigError::CredentialUnavailable)?;
+        ensure_runtime_secrets_available(&self.root, &mutation.runtime).map_err(|error| {
+            if let Some(reason) = error.downcast_ref::<crate::persistence::CoreSyncError>() {
+                eprintln!("ctox management credential admission failed: {reason}");
+                ManagementRuntimeConfigError::StoreUnavailable
+            } else if error.downcast_ref::<ctox_store::StoreError>().is_some() {
+                ManagementRuntimeConfigError::StoreUnavailable
+            } else {
+                ManagementRuntimeConfigError::CredentialUnavailable
+            }
+        })?;
         let stored = save_instance_proxy_config(
             &self.root,
             mutation.expected_revision,
@@ -831,6 +867,65 @@ impl fmt::Debug for CtoxClaudeSecretStore {
 }
 
 impl ClaudeSecretStore for CtoxClaudeSecretStore {
+    fn load_credentials_async(
+        self: Arc<Self>,
+        handles: ClaudeCredentialHandles,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<ClaudeStoredCredentials, SecretStoreError>>
+                + Send,
+        >,
+    > {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || Ok(self.load_credentials(&handles)))
+                .await
+                .map_err(|error| {
+                    // Do not include store errors or credential material in logs.
+                    eprintln!(
+                        "[credential-owner] claude load admission failed: {}",
+                        if matches!(
+                            error.downcast_ref::<ctox_store::StoreError>(),
+                            Some(ctox_store::StoreError::Busy)
+                        ) {
+                            "busy"
+                        } else {
+                            "unavailable"
+                        }
+                    );
+                    SecretStoreError::Read
+                })?
+        })
+    }
+
+    fn store_credentials_async(
+        self: Arc<Self>,
+        handles: ClaudeCredentialHandles,
+        credentials: ClaudeStoredCredentials,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), SecretStoreError>> + Send>>
+    {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || {
+                Ok(self.store_credentials(&handles, &credentials))
+            })
+            .await
+            .map_err(|error| {
+                // Do not include store errors or credential material in logs.
+                eprintln!(
+                    "[credential-owner] claude store admission failed: {}",
+                    if matches!(
+                        error.downcast_ref::<ctox_store::StoreError>(),
+                        Some(ctox_store::StoreError::Busy)
+                    ) {
+                        "busy"
+                    } else {
+                        "unavailable"
+                    }
+                );
+                SecretStoreError::Write
+            })?
+        })
+    }
+
     fn load_credentials(
         &self,
         handles: &ClaudeCredentialHandles,
@@ -932,6 +1027,70 @@ impl fmt::Debug for CtoxCodexSecretStore {
 }
 
 impl codex_auth::CodexSecretStore for CtoxCodexSecretStore {
+    fn load_credentials_async(
+        self: Arc<Self>,
+        handles: codex_auth::CodexCredentialHandles,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        codex_auth::CodexStoredCredentials,
+                        codex_auth::SecretStoreError,
+                    >,
+                > + Send,
+        >,
+    > {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || Ok(self.load_credentials(&handles)))
+                .await
+                .map_err(|error| {
+                    // Do not include store errors or credential material in logs.
+                    eprintln!(
+                        "[credential-owner] codex load admission failed: {}",
+                        if matches!(
+                            error.downcast_ref::<ctox_store::StoreError>(),
+                            Some(ctox_store::StoreError::Busy)
+                        ) {
+                            "busy"
+                        } else {
+                            "unavailable"
+                        }
+                    );
+                    codex_auth::SecretStoreError::Read
+                })?
+        })
+    }
+
+    fn store_credentials_async(
+        self: Arc<Self>,
+        handles: codex_auth::CodexCredentialHandles,
+        credentials: codex_auth::CodexStoredCredentials,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), codex_auth::SecretStoreError>> + Send>,
+    > {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || {
+                Ok(self.store_credentials(&handles, &credentials))
+            })
+            .await
+            .map_err(|error| {
+                // Do not include store errors or credential material in logs.
+                eprintln!(
+                    "[credential-owner] codex store admission failed: {}",
+                    if matches!(
+                        error.downcast_ref::<ctox_store::StoreError>(),
+                        Some(ctox_store::StoreError::Busy)
+                    ) {
+                        "busy"
+                    } else {
+                        "unavailable"
+                    }
+                );
+                codex_auth::SecretStoreError::Write
+            })?
+        })
+    }
+
     fn load_credentials(
         &self,
         handles: &codex_auth::CodexCredentialHandles,
@@ -1087,6 +1246,9 @@ fn load_instance_chatgpt_auth(
     serde_json::from_str(&serialized).map_err(|_| codex_auth::SecretStoreError::InvalidValue)
 }
 
+// Legacy account-control apply/finish retain their atomic Runtime fence until
+// their authority callback and exact Secret cleanup have an owner reservation seam.
+// Counted by the opener inventory; migrated proxy/signature paths never call it.
 fn open_instance_proxy_config_db(root: &Path) -> anyhow::Result<Connection> {
     let path = crate::inference::runtime_env::runtime_config_path(root);
     if let Some(parent) = path.parent() {
@@ -1103,22 +1265,46 @@ fn open_instance_proxy_config_db(root: &Path) -> anyhow::Result<Connection> {
     Ok(conn)
 }
 
-fn open_instance_proxy_config_db_read_only(root: &Path) -> anyhow::Result<Option<Connection>> {
+fn with_instance_proxy_write<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce(&Connection) -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    crate::lcm::with_lcm_write(
+        &crate::inference::runtime_env::runtime_config_path(root),
+        move |conn| {
+            conn.execute_batch(&format!(
+                "CREATE TABLE IF NOT EXISTS {INSTANCE_PROXY_CONFIG_TABLE} (\
+         config_id INTEGER PRIMARY KEY CHECK(config_id = 1), \
+         revision INTEGER NOT NULL, default_provider TEXT NOT NULL, \
+         config_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)"
+            ))?;
+            operation(conn)
+        },
+    )
+}
+
+fn with_instance_proxy_read<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce(&Connection) -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<Option<T>> {
     let path = crate::inference::runtime_env::runtime_config_path(root);
     if !path.exists() {
         return Ok(None);
     }
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    let table_exists = conn
-        .query_row(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
-            [INSTANCE_PROXY_CONFIG_TABLE],
-            |_| Ok(()),
-        )
-        .optional()?
-        .is_some();
-    Ok(table_exists.then_some(conn))
+    crate::lcm::with_lcm_read(&path, move |conn| {
+        let table_exists = conn
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [INSTANCE_PROXY_CONFIG_TABLE],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        if !table_exists {
+            return Ok(None);
+        }
+        operation(conn).map(Some)
+    })
 }
 
 /// Provider-scoped durable signature replay state. Keys contain only the
@@ -1139,16 +1325,14 @@ impl CtoxSignatureKvStore {
         }
     }
 
-    fn open(&self) -> Result<Connection, SignatureCacheStoreError> {
-        let conn = open_instance_proxy_config_db(&self.root)
-            .map_err(|_| SignatureCacheStoreError::Unavailable)?;
-        conn.execute_batch(&format!(
-            "CREATE TABLE IF NOT EXISTS {INSTANCE_SIGNATURE_CACHE_TABLE} (\
-             cache_key TEXT PRIMARY KEY, value BLOB NOT NULL, \
-             expires_at_ms INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL)"
-        ))
-        .map_err(|_| SignatureCacheStoreError::Unavailable)?;
-        Ok(conn)
+    fn with_writer<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&Connection) -> anyhow::Result<T> + Send + 'static,
+    ) -> anyhow::Result<T> {
+        with_instance_proxy_write(&self.root, move |conn| {
+            conn.execute_batch(&format!("CREATE TABLE IF NOT EXISTS {INSTANCE_SIGNATURE_CACHE_TABLE} (cache_key TEXT PRIMARY KEY,value BLOB NOT NULL,expires_at_ms INTEGER NOT NULL,updated_at_ms INTEGER NOT NULL)"))?;
+            operation(conn).map_err(|_| anyhow::Error::new(SignatureOperationRejected))
+        })
     }
 
     fn now_ms() -> Result<i64, SignatureCacheStoreError> {
@@ -1186,6 +1370,25 @@ impl fmt::Debug for CtoxSignatureKvStore {
     }
 }
 
+#[derive(Debug)]
+struct SignatureOperationRejected;
+impl fmt::Display for SignatureOperationRejected {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("signature cache operation failed")
+    }
+}
+impl std::error::Error for SignatureOperationRejected {}
+fn signature_store_error(
+    error: anyhow::Error,
+    operation: SignatureCacheStoreError,
+) -> SignatureCacheStoreError {
+    if error.downcast_ref::<SignatureOperationRejected>().is_some() {
+        operation
+    } else {
+        SignatureCacheStoreError::Unavailable
+    }
+}
+
 impl SignatureKvStore for CtoxSignatureKvStore {
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, SignatureCacheStoreError> {
         if !Self::valid_key(key) {
@@ -1195,34 +1398,13 @@ impl SignatureKvStore for CtoxSignatureKvStore {
             .operation_lock
             .lock()
             .map_err(|_| SignatureCacheStoreError::Read)?;
-        let mut conn = self.open()?;
-        let now_ms = Self::now_ms()?;
-        let transaction = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| SignatureCacheStoreError::Read)?;
-        transaction
-            .execute(
-                &format!(
-                    "DELETE FROM {INSTANCE_SIGNATURE_CACHE_TABLE} \
-                     WHERE cache_key = ?1 AND expires_at_ms <= ?2"
-                ),
-                params![key, now_ms],
-            )
-            .map_err(|_| SignatureCacheStoreError::Read)?;
-        let value = transaction
-            .query_row(
-                &format!("SELECT value FROM {INSTANCE_SIGNATURE_CACHE_TABLE} WHERE cache_key = ?1"),
-                [key],
-                |row| row.get::<_, Vec<u8>>(0),
-            )
-            .optional()
-            .map_err(|_| SignatureCacheStoreError::Read)?;
-        transaction
-            .commit()
-            .map_err(|_| SignatureCacheStoreError::Read)?;
-        Ok(value)
+        let key = key.to_owned();
+        let now = Self::now_ms()?;
+        self.with_writer(move |conn| {
+            conn.execute(&format!("DELETE FROM {INSTANCE_SIGNATURE_CACHE_TABLE} WHERE cache_key=?1 AND expires_at_ms<=?2"),params![key,now])?;
+            Ok(conn.query_row(&format!("SELECT value FROM {INSTANCE_SIGNATURE_CACHE_TABLE} WHERE cache_key=?1"),[key],|row|row.get::<_,Vec<u8>>(0)).optional()?)
+        }).map_err(|error|signature_store_error(error,SignatureCacheStoreError::Read))
     }
-
     fn set(
         &self,
         key: &str,
@@ -1239,23 +1421,12 @@ impl SignatureKvStore for CtoxSignatureKvStore {
             .operation_lock
             .lock()
             .map_err(|_| SignatureCacheStoreError::Write)?;
-        let conn = self.open()?;
-        let now_ms = Self::now_ms()?;
-        let expires_at_ms = Self::deadline_ms(now_ms, ttl)?;
-        let changed = conn
-            .execute(
-                &format!(
-                    "INSERT INTO {INSTANCE_SIGNATURE_CACHE_TABLE} \
-                     (cache_key, value, expires_at_ms, updated_at_ms) VALUES (?1, ?2, ?3, ?4) \
-                     ON CONFLICT(cache_key) DO UPDATE SET value = excluded.value, \
-                     expires_at_ms = excluded.expires_at_ms, updated_at_ms = excluded.updated_at_ms"
-                ),
-                params![key, value, expires_at_ms, now_ms],
-            )
-            .map_err(|_| SignatureCacheStoreError::Write)?;
-        Ok(changed == 1)
+        let now = Self::now_ms()?;
+        let expires = Self::deadline_ms(now, ttl)?;
+        let key = key.to_owned();
+        let value = value.to_vec();
+        self.with_writer(move |conn|Ok(conn.execute(&format!("INSERT INTO {INSTANCE_SIGNATURE_CACHE_TABLE}(cache_key,value,expires_at_ms,updated_at_ms) VALUES(?1,?2,?3,?4) ON CONFLICT(cache_key) DO UPDATE SET value=excluded.value,expires_at_ms=excluded.expires_at_ms,updated_at_ms=excluded.updated_at_ms"),params![key,value,expires,now])?==1)).map_err(|error|signature_store_error(error,SignatureCacheStoreError::Write))
     }
-
     fn delete(&self, key: &str) -> Result<bool, SignatureCacheStoreError> {
         if !Self::valid_key(key) {
             return Err(SignatureCacheStoreError::Delete);
@@ -1264,15 +1435,15 @@ impl SignatureKvStore for CtoxSignatureKvStore {
             .operation_lock
             .lock()
             .map_err(|_| SignatureCacheStoreError::Delete)?;
-        let conn = self.open()?;
-        conn.execute(
-            &format!("DELETE FROM {INSTANCE_SIGNATURE_CACHE_TABLE} WHERE cache_key = ?1"),
-            [key],
-        )
-        .map(|changed| changed == 1)
-        .map_err(|_| SignatureCacheStoreError::Delete)
+        let key = key.to_owned();
+        self.with_writer(move |conn| {
+            Ok(conn.execute(
+                &format!("DELETE FROM {INSTANCE_SIGNATURE_CACHE_TABLE} WHERE cache_key=?1"),
+                [key],
+            )? == 1)
+        })
+        .map_err(|error| signature_store_error(error, SignatureCacheStoreError::Delete))
     }
-
     fn expire(
         &self,
         key: &str,
@@ -1285,35 +1456,13 @@ impl SignatureKvStore for CtoxSignatureKvStore {
             .operation_lock
             .lock()
             .map_err(|_| SignatureCacheStoreError::Expire)?;
-        let mut conn = self.open()?;
-        let now_ms = Self::now_ms()?;
-        let expires_at_ms =
-            Self::deadline_ms(now_ms, ttl).map_err(|_| SignatureCacheStoreError::Expire)?;
-        let transaction = conn
-            .transaction_with_behavior(TransactionBehavior::Immediate)
-            .map_err(|_| SignatureCacheStoreError::Expire)?;
-        transaction
-            .execute(
-                &format!(
-                    "DELETE FROM {INSTANCE_SIGNATURE_CACHE_TABLE} \
-                     WHERE cache_key = ?1 AND expires_at_ms <= ?2"
-                ),
-                params![key, now_ms],
-            )
-            .map_err(|_| SignatureCacheStoreError::Expire)?;
-        let changed = transaction
-            .execute(
-                &format!(
-                    "UPDATE {INSTANCE_SIGNATURE_CACHE_TABLE} SET expires_at_ms = ?2, \
-                     updated_at_ms = ?3 WHERE cache_key = ?1"
-                ),
-                params![key, expires_at_ms, now_ms],
-            )
-            .map_err(|_| SignatureCacheStoreError::Expire)?;
-        transaction
-            .commit()
-            .map_err(|_| SignatureCacheStoreError::Expire)?;
-        Ok(changed == 1)
+        let now = Self::now_ms()?;
+        let expires = Self::deadline_ms(now, ttl).map_err(|_| SignatureCacheStoreError::Expire)?;
+        let key = key.to_owned();
+        self.with_writer(move |conn| {
+            conn.execute(&format!("DELETE FROM {INSTANCE_SIGNATURE_CACHE_TABLE} WHERE cache_key=?1 AND expires_at_ms<=?2"),params![key,now])?;
+            Ok(conn.execute(&format!("UPDATE {INSTANCE_SIGNATURE_CACHE_TABLE} SET expires_at_ms=?2,updated_at_ms=?3 WHERE cache_key=?1"),params![key,expires,now])?==1)
+        }).map_err(|error|signature_store_error(error,SignatureCacheStoreError::Expire))
     }
 }
 
@@ -1385,25 +1534,26 @@ fn validate_persisted_proxy_topology(config: &CliproxyRuntimeConfig) -> anyhow::
 pub fn load_instance_proxy_config(
     root: &Path,
 ) -> anyhow::Result<Option<StoredInstanceProxyConfig>> {
-    let Some(conn) = open_instance_proxy_config_db_read_only(root)? else {
-        return Ok(None);
-    };
-    let row = conn
-        .query_row(
-            &format!(
-                "SELECT revision, default_provider, config_json \
+    let row = with_instance_proxy_read(root, |conn| {
+        let row = conn
+            .query_row(
+                &format!(
+                    "SELECT revision, default_provider, config_json \
                  FROM {INSTANCE_PROXY_CONFIG_TABLE} WHERE config_id = 1"
-            ),
-            [],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            },
-        )
-        .optional()?;
+                ),
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        Ok(row)
+    })?
+    .flatten();
     let Some((revision, default_provider, config_json)) = row else {
         return Ok(None);
     };
@@ -1426,6 +1576,50 @@ pub fn load_instance_proxy_config(
 /// The immediate transaction makes configuration replacement a single-writer
 /// operation and prevents a stale Business OS/Management mutation from
 /// silently overwriting a newer operator choice.
+fn save_instance_proxy_config_row(
+    root: &Path,
+    expected_revision: u64,
+    default_provider: String,
+    config_json: String,
+) -> anyhow::Result<u64> {
+    with_instance_proxy_write(root, move |tx| {
+        let current = tx
+            .query_row(
+                &format!("SELECT revision FROM {INSTANCE_PROXY_CONFIG_TABLE} WHERE config_id = 1"),
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .map(u64::try_from)
+            .transpose()
+            .map_err(|_| anyhow::anyhow!("invalid proxy revision"))?
+            .unwrap_or(0);
+        if current != expected_revision {
+            return Err(anyhow::Error::new(ProxyConfigRevisionConflict));
+        }
+        let revision = current
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("proxy runtime config revision overflow"))?;
+        let updated_at_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let updated_at_ms = i64::try_from(updated_at_ms).unwrap_or(i64::MAX);
+        tx.execute(
+            &format!(
+                "INSERT INTO {INSTANCE_PROXY_CONFIG_TABLE} \
+             (config_id, revision, default_provider, config_json, updated_at_ms) \
+             VALUES (1, ?1, ?2, ?3, ?4) \
+             ON CONFLICT(config_id) DO UPDATE SET revision=excluded.revision, \
+             default_provider=excluded.default_provider, config_json=excluded.config_json, \
+             updated_at_ms=excluded.updated_at_ms"
+            ),
+            params![revision, default_provider, config_json, updated_at_ms],
+        )?;
+        Ok(revision)
+    })
+}
+
 pub fn save_instance_proxy_config(
     root: &Path,
     expected_revision: u64,
@@ -1435,42 +1629,12 @@ pub fn save_instance_proxy_config(
     validate_persisted_proxy_topology(&runtime)?;
     let default_provider = validate_default_provider(default_provider, &runtime)?;
     let config_json = serde_json::to_string(&runtime)?;
-    let mut conn = open_instance_proxy_config_db(root)?;
-    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    let current = tx
-        .query_row(
-            &format!("SELECT revision FROM {INSTANCE_PROXY_CONFIG_TABLE} WHERE config_id = 1"),
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?
-        .map(u64::try_from)
-        .transpose()
-        .map_err(|_| anyhow::anyhow!("invalid proxy revision"))?
-        .unwrap_or(0);
-    if current != expected_revision {
-        return Err(anyhow::Error::new(ProxyConfigRevisionConflict));
-    }
-    let revision = current
-        .checked_add(1)
-        .ok_or_else(|| anyhow::anyhow!("proxy runtime config revision overflow"))?;
-    let updated_at_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    let updated_at_ms = i64::try_from(updated_at_ms).unwrap_or(i64::MAX);
-    tx.execute(
-        &format!(
-            "INSERT INTO {INSTANCE_PROXY_CONFIG_TABLE} \
-             (config_id, revision, default_provider, config_json, updated_at_ms) \
-             VALUES (1, ?1, ?2, ?3, ?4) \
-             ON CONFLICT(config_id) DO UPDATE SET revision=excluded.revision, \
-             default_provider=excluded.default_provider, config_json=excluded.config_json, \
-             updated_at_ms=excluded.updated_at_ms"
-        ),
-        params![revision, default_provider, config_json, updated_at_ms],
+    let revision = save_instance_proxy_config_row(
+        root,
+        expected_revision,
+        default_provider.clone(),
+        config_json,
     )?;
-    tx.commit()?;
     Ok(StoredInstanceProxyConfig {
         schema: INSTANCE_PROXY_CONFIG_SCHEMA.to_owned(),
         revision,
@@ -2275,7 +2439,7 @@ impl CodexAlphaSearchRefresher for CtoxCodexAlphaSearchAuthority {
                 retry_delay_ms: None,
                 observed_at_ms: self.clock.now_ms(),
             };
-            tokio::task::spawn_blocking(move || conductor.record(result))
+            crate::persistence::run_core_sync(move || Ok(conductor.record(result)))
                 .await
                 .map_err(|_| CodexAlphaSearchError::RefreshUnavailable)?
                 .map(|_| ())
@@ -2313,7 +2477,7 @@ impl CodexAlphaSearchRefresher for CtoxCodexAlphaSearchAuthority {
                 retry_delay_ms: None,
                 observed_at_ms: self.clock.now_ms(),
             };
-            tokio::task::spawn_blocking(move || conductor.record(result))
+            crate::persistence::run_core_sync(move || Ok(conductor.record(result)))
                 .await
                 .map_err(|_| CodexAlphaSearchError::RefreshUnavailable)?
                 .map(|_| ())
@@ -2841,19 +3005,37 @@ async fn refresh_instance_antigravity_capabilities(
                 continue;
             }
         };
-        let credentials = match antigravity_auth::AntigravitySecretStore::load_credentials(
-            &CtoxAntigravitySecretStore::new(root),
-            &handles,
-        ) {
-            Ok(credentials) => credentials,
-            Err(_) => {
-                catalog.clear();
-                continue;
+        let selected = account.clone();
+        let prepared = instance_proxy_owner_phase(root, move |work| {
+            let credentials = antigravity_auth::AntigravitySecretStore::load_credentials(
+                &CtoxAntigravitySecretStore::new(&work),
+                &handles,
+            )
+            .map_err(|_| anyhow::anyhow!("Antigravity credential read failed"))?;
+            let proxy_url = runtime_proxy_url(&work, selected.proxy_url_secret.as_ref())?;
+            let mut available_models = selected.models;
+            if available_models.is_empty() {
+                let state = crate::inference::runtime_state::load_or_resolve_runtime_state(&work)?;
+                let env = crate::inference::runtime_env::effective_runtime_env_map(&work)?;
+                if let Some(model) = state
+                    .active_model
+                    .or_else(|| env.get("CTOX_ACTIVE_MODEL").cloned())
+                    .or(state.base_model)
+                    .or(state.requested_model)
+                    .or_else(|| env.get("CTOX_CHAT_MODEL_BASE").cloned())
+                    .or_else(|| env.get("CTOX_CHAT_MODEL").cloned())
+                    .filter(|model| !model.trim().is_empty())
+                {
+                    available_models.push(model.trim().to_owned());
+                }
             }
-        };
-        let proxy_url = match runtime_proxy_url(root, account.proxy_url_secret.as_ref()) {
-            Ok(proxy_url) => proxy_url,
+            Ok((credentials, proxy_url, available_models))
+        })
+        .await;
+        let (credentials, proxy_url, available_models) = match prepared {
+            Ok(prepared) => prepared,
             Err(_) => {
+                eprintln!("[credential-owner] Antigravity capability preparation unavailable");
                 catalog.clear();
                 continue;
             }
@@ -2872,15 +3054,6 @@ async fn refresh_instance_antigravity_capabilities(
                 continue;
             }
         };
-        let mut available_models = account.models.clone();
-        if available_models.is_empty() {
-            if let Some(model) = crate::inference::runtime_env::effective_chat_model(root) {
-                let model = model.trim();
-                if !model.is_empty() {
-                    available_models.push(model.to_owned());
-                }
-            }
-        }
         if available_models.is_empty() {
             catalog.clear();
             continue;
@@ -3007,6 +3180,15 @@ fn routes_for_connection_admission(
     )?))
 }
 
+// Only local preparation enters Core; no listener/network await holds a slot.
+async fn instance_proxy_owner_phase<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce(PathBuf) -> anyhow::Result<T> + Send + 'static,
+) -> anyhow::Result<T> {
+    let work = root.to_owned();
+    crate::persistence::run_core_sync(move || operation(work)).await
+}
+
 async fn run_instance_codex_proxy_supervisor(root: PathBuf) {
     // Client identity comes from the reviewed release fallback. No metadata
     // network fetch is bound until the proposed CTOX-owned source is available.
@@ -3024,61 +3206,67 @@ async fn run_instance_codex_proxy_supervisor(root: PathBuf) {
     ));
 
     loop {
-        let config = match effective_instance_proxy_config(&root) {
-            Ok(Some(config)) => config,
-            Ok(None) => {
-                set_instance_codex_proxy_status(
-                    &root,
-                    InstanceCodexProxyPhase::WaitingForSubscription,
-                    None,
-                );
-                tokio::time::sleep(std::time::Duration::from_secs(
-                    INSTANCE_CODEX_PROXY_RETRY_SECONDS,
-                ))
-                .await;
-                continue;
-            }
-            Err(error) => {
-                set_instance_codex_proxy_status(
-                    &root,
-                    InstanceCodexProxyPhase::Faulted,
-                    Some(error.to_string()),
-                );
-                tokio::time::sleep(std::time::Duration::from_secs(
-                    INSTANCE_CODEX_PROXY_RETRY_SECONDS,
-                ))
-                .await;
-                continue;
-            }
-        };
+        let config =
+            match instance_proxy_owner_phase(&root, |work| effective_instance_proxy_config(&work))
+                .await
+            {
+                Ok(Some(config)) => config,
+                Ok(None) => {
+                    set_instance_codex_proxy_status(
+                        &root,
+                        InstanceCodexProxyPhase::WaitingForSubscription,
+                        None,
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(
+                        INSTANCE_CODEX_PROXY_RETRY_SECONDS,
+                    ))
+                    .await;
+                    continue;
+                }
+                Err(error) => {
+                    set_instance_codex_proxy_status(
+                        &root,
+                        InstanceCodexProxyPhase::Faulted,
+                        Some(error.to_string()),
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(
+                        INSTANCE_CODEX_PROXY_RETRY_SECONDS,
+                    ))
+                    .await;
+                    continue;
+                }
+            };
         set_instance_codex_proxy_status(&root, InstanceCodexProxyPhase::Starting, None);
-        let routes = match build_instance_provider_routes(&root) {
-            Ok(Some(routes)) => routes,
-            Ok(None) => {
-                // The configuration is re-read here, so it can disappear
-                // between the check above and this call. Without the same
-                // backoff every other branch uses, that race turns the
-                // supervisor into a busy loop that reopens the runtime SQLite
-                // databases as fast as the CPU allows.
-                tokio::time::sleep(std::time::Duration::from_secs(
-                    INSTANCE_CODEX_PROXY_RETRY_SECONDS,
-                ))
-                .await;
-                continue;
-            }
-            Err(error) => {
-                set_instance_codex_proxy_status(
-                    &root,
-                    InstanceCodexProxyPhase::Faulted,
-                    Some(error.to_string()),
-                );
-                tokio::time::sleep(std::time::Duration::from_secs(
-                    INSTANCE_CODEX_PROXY_RETRY_SECONDS,
-                ))
-                .await;
-                continue;
-            }
-        };
+        let routes =
+            match instance_proxy_owner_phase(&root, |work| build_instance_provider_routes(&work))
+                .await
+            {
+                Ok(Some(routes)) => routes,
+                Ok(None) => {
+                    // The configuration is re-read here, so it can disappear
+                    // between the check above and this call. Without the same
+                    // backoff every other branch uses, that race turns the
+                    // supervisor into a busy loop that reopens the runtime SQLite
+                    // databases as fast as the CPU allows.
+                    tokio::time::sleep(std::time::Duration::from_secs(
+                        INSTANCE_CODEX_PROXY_RETRY_SECONDS,
+                    ))
+                    .await;
+                    continue;
+                }
+                Err(error) => {
+                    set_instance_codex_proxy_status(
+                        &root,
+                        InstanceCodexProxyPhase::Faulted,
+                        Some(error.to_string()),
+                    );
+                    tokio::time::sleep(std::time::Duration::from_secs(
+                        INSTANCE_CODEX_PROXY_RETRY_SECONDS,
+                    ))
+                    .await;
+                    continue;
+                }
+            };
         let listener = match tokio::net::TcpListener::bind(instance_codex_proxy_addr()).await {
             Ok(listener) => listener,
             Err(error) => {
@@ -3126,7 +3314,8 @@ async fn run_instance_codex_proxy_supervisor(root: PathBuf) {
             tokio::select! {
                 accepted = listener.accept() => match accepted {
                     Ok((mut stream, _peer)) => {
-                        let refreshed = match routes_for_connection_admission(&root, &config) {
+                        let retained = config.clone();
+                        let refreshed = match instance_proxy_owner_phase(&root, move |work| routes_for_connection_admission(&work, &retained)).await {
                             Ok(routes) => routes,
                             Err(error) => {
                                 set_instance_codex_proxy_status(&root, InstanceCodexProxyPhase::Faulted, Some(error.to_string()));
@@ -3167,9 +3356,13 @@ async fn run_instance_codex_proxy_supervisor(root: PathBuf) {
                     }
                 },
                 _ = config_poll.tick() => {
-                    match effective_instance_proxy_config(&root) {
+                    match instance_proxy_owner_phase(&root, |work| effective_instance_proxy_config(&work)).await {
                         Ok(Some(current)) if current == config => {}
-                        _ => break,
+                        Ok(_) => break,
+                        Err(error) => {
+                            set_instance_codex_proxy_status(&root, InstanceCodexProxyPhase::Faulted, Some(error.to_string()));
+                            break;
+                        }
                     }
                 }
             }
@@ -3235,7 +3428,12 @@ async fn run_instance_management_supervisor(root: PathBuf) {
     };
 
     loop {
-        let snapshot = match InstanceManagementKeySnapshot::load(&root) {
+        let work = root.clone();
+        let snapshot = match crate::persistence::run_core_sync(move || {
+            InstanceManagementKeySnapshot::load(&work)
+        })
+        .await
+        {
             Ok(Some(snapshot)) => snapshot,
             Ok(None) => {
                 set_instance_management_status(
@@ -3286,11 +3484,10 @@ async fn run_instance_management_supervisor(root: PathBuf) {
         drop(snapshot);
         let runtime_status = Arc::new(CtoxManagementRuntimeStatusSource::new(root.clone()));
         let runtime_config = Arc::new(CtoxManagementRuntimeConfigSource::new(root.clone()));
-        let handler = Arc::new(ManagementHandler::with_runtime_sources(
-            authenticator,
-            runtime_status,
-            runtime_config,
-        ));
+        let handler = Arc::new(
+            ManagementHandler::with_runtime_sources(authenticator, runtime_status, runtime_config)
+                .with_blocking_executor(Arc::new(CoreManagementExecutor)),
+        );
         let listener = match tokio::net::TcpListener::bind(instance_management_addr()).await {
             Ok(listener) => listener,
             Err(error) => {
@@ -3335,9 +3532,14 @@ async fn run_instance_management_supervisor(root: PathBuf) {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(
                     INSTANCE_MANAGEMENT_RETRY_SECONDS,
                 )) => {
-                    match InstanceManagementKeySnapshot::load(&root) {
+                    let work = root.clone();
+                    match crate::persistence::run_core_sync(move || InstanceManagementKeySnapshot::load(&work)).await {
                         Ok(Some(current)) if current.fingerprint == key_fingerprint => {}
-                        _ => break,
+                        Ok(_) => break,
+                        Err(error) => {
+                            set_instance_management_status(&root, InstanceManagementPhase::Faulted, Some(error.to_string()));
+                            break;
+                        }
                     }
                 }
             }
@@ -3383,6 +3585,73 @@ struct AntigravityStoredState {
 }
 
 impl antigravity_auth::AntigravitySecretStore for CtoxAntigravitySecretStore {
+    fn load_credentials_async(
+        self: Arc<Self>,
+        handles: antigravity_auth::AntigravityCredentialHandles,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        antigravity_auth::AntigravityStoredCredentials,
+                        antigravity_auth::AntigravityTokenError,
+                    >,
+                > + Send,
+        >,
+    > {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || Ok(self.load_credentials(&handles)))
+                .await
+                .map_err(|error| {
+                    // Do not include store errors or credential material in logs.
+                    eprintln!(
+                        "[credential-owner] antigravity load admission failed: {}",
+                        if matches!(
+                            error.downcast_ref::<ctox_store::StoreError>(),
+                            Some(ctox_store::StoreError::Busy)
+                        ) {
+                            "busy"
+                        } else {
+                            "unavailable"
+                        }
+                    );
+                    antigravity_auth::AntigravityTokenError::Read
+                })?
+        })
+    }
+
+    fn store_credentials_async(
+        self: Arc<Self>,
+        handles: antigravity_auth::AntigravityCredentialHandles,
+        credentials: antigravity_auth::AntigravityStoredCredentials,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<(), antigravity_auth::AntigravityTokenError>>
+                + Send,
+        >,
+    > {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || {
+                Ok(self.store_credentials(&handles, &credentials))
+            })
+            .await
+            .map_err(|error| {
+                // Do not include store errors or credential material in logs.
+                eprintln!(
+                    "[credential-owner] antigravity store admission failed: {}",
+                    if matches!(
+                        error.downcast_ref::<ctox_store::StoreError>(),
+                        Some(ctox_store::StoreError::Busy)
+                    ) {
+                        "busy"
+                    } else {
+                        "unavailable"
+                    }
+                );
+                antigravity_auth::AntigravityTokenError::Write
+            })?
+        })
+    }
+
     fn load_credentials(
         &self,
         handles: &antigravity_auth::AntigravityCredentialHandles,
@@ -3560,6 +3829,28 @@ impl fmt::Debug for CtoxCooldownStateStore {
     }
 }
 
+/// Async provider outcomes must use the same real Core owner admission as
+/// their synchronous payload adapters. Merely spawning a blocking task does
+/// not carry CUTOVER's private run_core_sync token to that new thread.
+fn native_cooldown_conductor(store: Arc<CtoxCooldownStateStore>) -> CooldownConductor {
+    CooldownConductor::new(store).with_record_dispatcher(Arc::new(|conductor, result| {
+        Box::pin(async move {
+            if crate::persistence::require_sync_owner_context().is_ok() {
+                // Already on the bounded native caller: do not acquire a
+                // second semaphore slot while that same caller awaits us.
+                return conductor.record(result);
+            }
+            crate::persistence::run_core_sync(move || {
+                conductor
+                    .record(result)
+                    .map_err(|_| anyhow::anyhow!("native cooldown persistence failed"))
+            })
+            .await
+            .map_err(|_| CooldownStoreError::Write)
+        })
+    }))
+}
+
 impl CooldownStateStore for CtoxCooldownStateStore {
     fn load(&self) -> Result<Vec<CooldownStateRecord>, CooldownStoreError> {
         let _guard = self
@@ -3697,7 +3988,7 @@ impl CtoxCliproxyRuntimeFactory {
         account_clock: Arc<dyn AccountStateClock>,
     ) -> Result<ClaudeSubscriptionAccountPool, CtoxCliproxyRuntimeBuildError> {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
-        let conductor = Arc::new(CooldownConductor::new(cooldown_store.clone()));
+        let conductor = Arc::new(native_cooldown_conductor(cooldown_store.clone()));
         let router = Arc::new(AccountRouter::with_account_state_stores(
             cooldown_store,
             Arc::new(CtoxAccountSessionStore::new(&self.root)),
@@ -3801,7 +4092,7 @@ impl CtoxCliproxyRuntimeFactory {
         CtoxCliproxyRuntimeBuildError,
     > {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
-        let conductor = Arc::new(CooldownConductor::new(cooldown_store.clone()));
+        let conductor = Arc::new(native_cooldown_conductor(cooldown_store.clone()));
         let router = Arc::new(AccountRouter::with_account_state_stores(
             cooldown_store,
             Arc::new(CtoxAccountSessionStore::new(&self.root)),
@@ -3863,7 +4154,7 @@ impl CtoxCliproxyRuntimeFactory {
         account_clock: Arc<dyn AccountStateClock>,
     ) -> Result<AntigravitySubscriptionAccountPool, CtoxCliproxyRuntimeBuildError> {
         let cooldown_store = Arc::new(CtoxCooldownStateStore::new(&self.root));
-        let conductor = Arc::new(CooldownConductor::new(cooldown_store.clone()));
+        let conductor = Arc::new(native_cooldown_conductor(cooldown_store.clone()));
         let router = Arc::new(AccountRouter::with_account_state_stores(
             cooldown_store,
             Arc::new(CtoxAccountSessionStore::new(&self.root)),
@@ -4254,6 +4545,16 @@ mod tests {
         )
     }
 
+    fn with_owned_test_root(operation: impl FnOnce(&Path) + Send + 'static) {
+        let root = Arc::new(tempfile::tempdir().unwrap());
+        let work = Arc::clone(&root);
+        crate::persistence::run_cli_owned(root.path(), move || {
+            operation(work.path());
+            Ok(())
+        })
+        .unwrap();
+    }
+
     #[test]
     fn business_os_subscription_projection_tracks_installed_claude_account() {
         let root = tempfile::tempdir().unwrap();
@@ -4556,33 +4857,32 @@ mod tests {
 
     #[test]
     fn typed_proxy_config_store_is_revisioned_and_secret_free() {
-        let root = tempfile::tempdir().unwrap();
-        let first =
-            save_instance_proxy_config(root.path(), 0, "claude", stored_claude_runtime()).unwrap();
-        assert_eq!(first.revision, 1);
-        assert_eq!(
-            load_instance_proxy_config(root.path()).unwrap(),
-            Some(first.clone())
-        );
-        assert!(
-            save_instance_proxy_config(root.path(), 0, "claude", stored_claude_runtime(),).is_err()
-        );
+        with_owned_test_root(move |root| {
+            let first =
+                save_instance_proxy_config(root, 0, "claude", stored_claude_runtime()).unwrap();
+            assert_eq!(first.revision, 1);
+            assert_eq!(
+                load_instance_proxy_config(root).unwrap(),
+                Some(first.clone())
+            );
+            assert!(
+                save_instance_proxy_config(root, 0, "claude", stored_claude_runtime(),).is_err()
+            );
 
-        let conn = Connection::open(crate::inference::runtime_env::runtime_config_path(
-            root.path(),
-        ))
-        .unwrap();
-        let json: String = conn
-            .query_row(
-                &format!(
-                    "SELECT config_json FROM {INSTANCE_PROXY_CONFIG_TABLE} WHERE config_id = 1"
-                ),
-                [],
-                |row| row.get(0),
-            )
+            let json: String = with_instance_proxy_read(root, |conn| {
+                Ok(conn.query_row(
+                    &format!(
+                        "SELECT config_json FROM {INSTANCE_PROXY_CONFIG_TABLE} WHERE config_id = 1"
+                    ),
+                    [],
+                    |row| row.get(0),
+                )?)
+            })
+            .unwrap()
             .unwrap();
-        assert!(json.contains("persisted-claude-access"));
-        assert!(!json.contains("access-token-do-not-store"));
+            assert!(json.contains("persisted-claude-access"));
+            assert!(!json.contains("access-token-do-not-store"));
+        });
     }
 
     #[test]
@@ -4891,8 +5191,8 @@ mod tests {
         assert!(!response.contains(key));
     }
 
-    #[tokio::test]
-    async fn management_put_atomically_activates_secret_free_provider_topology() {
+    #[test]
+    fn management_put_atomically_activates_secret_free_provider_topology() {
         use ctox_cliproxyapi::internal::api::handlers::management::{
             ManagementAuthenticator, SystemManagementAuthClock,
         };
@@ -4901,7 +5201,11 @@ mod tests {
         };
         use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
-        let root = tempfile::tempdir().unwrap();
+        let fixture = Arc::new(tempfile::tempdir().unwrap());
+        let work = fixture.path().to_owned();
+        let root = Arc::clone(&fixture);
+        crate::persistence::with_cli_owners(&work, || {
+            crate::persistence::run_core_blocking_at(&work, move || {
         for (name, value) in [
             ("persisted-claude-access", "access-token-do-not-store"),
             ("persisted-claude-refresh", "refresh-token-do-not-store"),
@@ -4928,7 +5232,7 @@ mod tests {
             Arc::new(CtoxManagementRuntimeConfigSource::new(
                 root.path().to_path_buf(),
             )),
-        );
+        ).with_blocking_executor(Arc::new(CoreManagementExecutor));
         let body = serde_json::to_vec(&serde_json::json!({
             "schema": INSTANCE_PROXY_CONFIG_SCHEMA,
             "expected_revision": 0,
@@ -4936,6 +5240,7 @@ mod tests {
             "runtime": stored_claude_runtime(),
         }))
         .unwrap();
+        let response = tokio::runtime::Handle::current().block_on(async move {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
@@ -4958,6 +5263,8 @@ mod tests {
         let mut response = Vec::new();
         client.read_to_end(&mut response).await.unwrap();
         server.await.unwrap();
+        response
+        });
 
         let split = response
             .windows(4)
@@ -4992,6 +5299,9 @@ mod tests {
             stale.unwrap_err(),
             ManagementRuntimeConfigError::RevisionConflict
         );
+                    Ok::<(), anyhow::Error>(())
+            })
+        }).unwrap();
     }
 
     #[test]
@@ -5451,7 +5761,8 @@ mod tests {
     }
 
     fn opaque_subscription_preset(root: &Path, provider: &str, model: &str) -> String {
-        let capabilities = crate::coding_agents::pi_sidecar::coding_model_capabilities(root);
+        let capabilities = crate::coding_agents::pi_sidecar::coding_model_capabilities(root)
+            .expect("coding capabilities available");
         capabilities["presets"]
             .as_array()
             .and_then(|presets| {
@@ -5680,7 +5991,8 @@ mod tests {
         let dist = crate::coding_agents::pi_sidecar::sidecar_dist_path(Path::new(env!(
             "CARGO_MANIFEST_DIR"
         )));
-        let capabilities = crate::coding_agents::pi_sidecar::coding_model_capabilities(root.path());
+        let capabilities = crate::coding_agents::pi_sidecar::coding_model_capabilities(root.path())
+            .expect("coding capabilities available");
         let preset_id = capabilities["presets"]
             .as_array()
             .and_then(|presets| {
@@ -6112,6 +6424,87 @@ mod tests {
         assert!(!serialized.contains(&proxy_addr.to_string()));
     }
 
+    // Exercise native SDK callbacks on an async task with no inherited TLS.
+    // The real CLI fixture retains all three registered file owners until drain.
+    #[test]
+    fn vendor_credential_callbacks_use_registered_owners() {
+        use antigravity_auth::AntigravitySecretStore as _;
+        use codex_auth::CodexSecretStore as _;
+        let root = Arc::new(tempfile::tempdir().unwrap());
+        let work = Arc::clone(&root);
+        crate::persistence::run_cli_owned(root.path(), move || {
+            tokio::runtime::Handle::current()
+                .block_on(tokio::spawn(async move {
+                    let claude = Arc::new(CtoxClaudeSecretStore::new(work.path()));
+                    let codex = Arc::new(CtoxCodexSecretStore::new(work.path()));
+                    let antigravity = Arc::new(CtoxAntigravitySecretStore::new(work.path()));
+                    for revision in ["initial", "rotated"] {
+                        let c = credentials(
+                            &format!("fake-access-{revision}"),
+                            &format!("fake-refresh-{revision}"),
+                        );
+                        Arc::clone(&claude)
+                            .store_credentials_async(handles(), c.clone())
+                            .await
+                            .unwrap();
+                        assert_eq!(
+                            ClaudeSubscriptionAuth::new(
+                            handles(), claude.clone(), Arc::new(UnusedRefreshTransport),
+                            Arc::new(FixedRuntimeClock), Arc::new(ClaudeRefreshCoordinator::default()),
+                        ).load().await.unwrap(),
+                            c
+                        );
+                        let c = codex_auth::CodexStoredCredentials::new(
+                            codex_auth::SecretString::new(format!("fake-id-{revision}")).unwrap(),
+                            codex_auth::SecretString::new(format!("fake-access-{revision}"))
+                                .unwrap(),
+                            codex_auth::SecretString::new(format!("fake-refresh-{revision}"))
+                                .unwrap(),
+                        );
+                        Arc::clone(&codex)
+                            .store_credentials_async(codex_handles(), c.clone())
+                            .await
+                            .unwrap();
+                        assert_eq!(
+                            CodexSubscriptionAuth::new(
+                            codex_handles(), codex.clone(), Arc::new(UnusedCodexRefreshTransport),
+                            Arc::new(FixedCodexRuntimeClock), Arc::new(codex_auth::CodexRefreshCoordinator::default()),
+                        ).load().await.unwrap(),
+                            c
+                        );
+                        let c = antigravity_credentials(
+                            &format!("fake-access-{revision}"),
+                            &format!("fake-refresh-{revision}"),
+                            SystemTime::UNIX_EPOCH + Duration::from_secs(10_000),
+                            "fake-project",
+                        );
+                        Arc::clone(&antigravity)
+                            .store_credentials_async(antigravity_handles(), c.clone())
+                            .await
+                            .unwrap();
+                        assert_eq!(
+                            AntigravitySubscriptionAuth::new(
+                            antigravity_handles(), antigravity.clone(), Arc::new(UnusedAntigravityRefreshTransport),
+                            Arc::new(FixedAntigravityRuntimeClock), Arc::new(antigravity_auth::AntigravityRefreshCoordinator::default()),
+                        ).load().await.unwrap(),
+                            c
+                        );
+                    }
+                    assert!(instance_proxy_owner_phase(work.path(), |root| load_instance_proxy_config(&root)).await.unwrap().is_none());
+                    // A callback cannot substitute absence for missing ownership.
+                    let absent = work.path().join("unowned");
+                    let missing = Arc::new(CtoxClaudeSecretStore::new(absent));
+                    assert_eq!(
+                        missing.load_credentials_async(handles()).await,
+                        Err(SecretStoreError::Read)
+                    );
+                }))
+                .unwrap();
+            Ok(())
+        })
+        .unwrap();
+    }
+
     #[test]
     fn missing_secret_returns_redacted_typed_error() {
         let root = tempfile::tempdir().unwrap();
@@ -6124,16 +6517,15 @@ mod tests {
 
     #[test]
     fn failed_refresh_write_rolls_back_both_credentials() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxClaudeSecretStore::new(root.path());
-        let handles = handles();
-        let initial = credentials("access-initial-do-not-leak", "refresh-initial-do-not-leak");
-        store.store_credentials(&handles, &initial).unwrap();
+        with_owned_test_root(move |root| {
+            let store = CtoxClaudeSecretStore::new(root);
+            let handles = handles();
+            let initial = credentials("access-initial-do-not-leak", "refresh-initial-do-not-leak");
+            store.store_credentials(&handles, &initial).unwrap();
 
-        let conn =
-            rusqlite::Connection::open(crate::secrets::secret_store_path(root.path())).unwrap();
-        conn.execute_batch(
-            r#"
+            crate::lcm::with_lcm_write(&crate::secrets::secret_store_path(root), |conn| {
+                conn.execute_batch(
+                    r#"
             CREATE TRIGGER reject_claude_refresh_rotation
             BEFORE UPDATE ON ctox_secret_records
             WHEN NEW.secret_name = 'claude-primary-refresh'
@@ -6141,24 +6533,26 @@ mod tests {
                 SELECT RAISE(ABORT, 'forced refresh rollback');
             END;
             "#,
-        )
-        .unwrap();
-        drop(conn);
+                )?;
+                Ok(())
+            })
+            .unwrap();
 
-        let rotated = credentials("access-rotated-do-not-leak", "refresh-rotated-do-not-leak");
-        assert_eq!(
-            store.store_credentials(&handles, &rotated),
-            Err(SecretStoreError::Write)
-        );
-        let retained = store.load_credentials(&handles).unwrap();
-        assert_eq!(
-            retained.access_token().expose_secret(),
-            "access-initial-do-not-leak"
-        );
-        assert_eq!(
-            retained.refresh_token().expose_secret(),
-            "refresh-initial-do-not-leak"
-        );
+            let rotated = credentials("access-rotated-do-not-leak", "refresh-rotated-do-not-leak");
+            assert_eq!(
+                store.store_credentials(&handles, &rotated),
+                Err(SecretStoreError::Write)
+            );
+            let retained = store.load_credentials(&handles).unwrap();
+            assert_eq!(
+                retained.access_token().expose_secret(),
+                "access-initial-do-not-leak"
+            );
+            assert_eq!(
+                retained.refresh_token().expose_secret(),
+                "refresh-initial-do-not-leak"
+            );
+        });
     }
 
     #[test]
@@ -6185,20 +6579,19 @@ mod tests {
 
     #[test]
     fn codex_store_rolls_back_all_three_credentials_when_refresh_write_fails() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxCodexSecretStore::new(root.path());
-        let handles = codex_handles();
-        let initial = codex_auth::CodexStoredCredentials::new(
-            codex_auth::SecretString::new("id-initial").unwrap(),
-            codex_auth::SecretString::new("access-initial").unwrap(),
-            codex_auth::SecretString::new("refresh-initial").unwrap(),
-        );
-        store.store_credentials(&handles, &initial).unwrap();
+        with_owned_test_root(move |root| {
+            let store = CtoxCodexSecretStore::new(root);
+            let handles = codex_handles();
+            let initial = codex_auth::CodexStoredCredentials::new(
+                codex_auth::SecretString::new("id-initial").unwrap(),
+                codex_auth::SecretString::new("access-initial").unwrap(),
+                codex_auth::SecretString::new("refresh-initial").unwrap(),
+            );
+            store.store_credentials(&handles, &initial).unwrap();
 
-        let conn =
-            rusqlite::Connection::open(crate::secrets::secret_store_path(root.path())).unwrap();
-        conn.execute_batch(
-            r#"
+            crate::lcm::with_lcm_write(&crate::secrets::secret_store_path(root), |conn| {
+                conn.execute_batch(
+                    r#"
             CREATE TRIGGER reject_codex_refresh_rotation
             BEFORE UPDATE ON ctox_secret_records
             WHEN NEW.secret_name = 'codex-primary-refresh'
@@ -6206,23 +6599,25 @@ mod tests {
                 SELECT RAISE(ABORT, 'forced Codex refresh rollback');
             END;
             "#,
-        )
-        .unwrap();
-        drop(conn);
+                )?;
+                Ok(())
+            })
+            .unwrap();
 
-        let rotated = codex_auth::CodexStoredCredentials::new(
-            codex_auth::SecretString::new("id-rotated").unwrap(),
-            codex_auth::SecretString::new("access-rotated").unwrap(),
-            codex_auth::SecretString::new("refresh-rotated").unwrap(),
-        );
-        assert_eq!(
-            store.store_credentials(&handles, &rotated),
-            Err(codex_auth::SecretStoreError::Write)
-        );
-        let retained = store.load_credentials(&handles).unwrap();
-        assert_eq!(retained.id_token().expose_secret(), "id-initial");
-        assert_eq!(retained.access_token().expose_secret(), "access-initial");
-        assert_eq!(retained.refresh_token().expose_secret(), "refresh-initial");
+            let rotated = codex_auth::CodexStoredCredentials::new(
+                codex_auth::SecretString::new("id-rotated").unwrap(),
+                codex_auth::SecretString::new("access-rotated").unwrap(),
+                codex_auth::SecretString::new("refresh-rotated").unwrap(),
+            );
+            assert_eq!(
+                store.store_credentials(&handles, &rotated),
+                Err(codex_auth::SecretStoreError::Write)
+            );
+            let retained = store.load_credentials(&handles).unwrap();
+            assert_eq!(retained.id_token().expose_secret(), "id-initial");
+            assert_eq!(retained.access_token().expose_secret(), "access-initial");
+            assert_eq!(retained.refresh_token().expose_secret(), "refresh-initial");
+        });
     }
 
     #[test]
@@ -6256,25 +6651,24 @@ mod tests {
 
     #[test]
     fn antigravity_store_rolls_back_all_records_when_state_write_fails() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxAntigravitySecretStore::new(root.path());
-        let handles = antigravity_handles();
-        let initial_expiry = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
-        store
-            .store_credentials(
-                &handles,
-                &antigravity_credentials(
-                    "access-initial",
-                    "refresh-initial",
-                    initial_expiry,
-                    "project-initial",
-                ),
-            )
-            .unwrap();
-        let conn =
-            rusqlite::Connection::open(crate::secrets::secret_store_path(root.path())).unwrap();
-        conn.execute_batch(
-            r#"
+        with_owned_test_root(move |root| {
+            let store = CtoxAntigravitySecretStore::new(root);
+            let handles = antigravity_handles();
+            let initial_expiry = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+            store
+                .store_credentials(
+                    &handles,
+                    &antigravity_credentials(
+                        "access-initial",
+                        "refresh-initial",
+                        initial_expiry,
+                        "project-initial",
+                    ),
+                )
+                .unwrap();
+            crate::lcm::with_lcm_write(&crate::secrets::secret_store_path(root), |conn| {
+                conn.execute_batch(
+                    r#"
             CREATE TRIGGER reject_antigravity_state_rotation
             BEFORE UPDATE ON ctox_secret_records
             WHEN NEW.secret_name = 'antigravity-primary-state'
@@ -6282,24 +6676,26 @@ mod tests {
                 SELECT RAISE(ABORT, 'forced state rollback');
             END;
             "#,
-        )
-        .unwrap();
-        drop(conn);
-        let error = store.store_credentials(
-            &handles,
-            &antigravity_credentials(
-                "access-rotated",
-                "refresh-rotated",
-                initial_expiry + Duration::from_secs(3_600),
-                "project-rotated",
-            ),
-        );
-        assert_eq!(error, Err(antigravity_auth::AntigravityTokenError::Write));
-        let retained = store.load_credentials(&handles).unwrap();
-        assert_eq!(retained.access_token().expose_secret(), "access-initial");
-        assert_eq!(retained.refresh_token().expose_secret(), "refresh-initial");
-        assert_eq!(retained.project_id(), "project-initial");
-        assert_eq!(retained.expires_at(), initial_expiry);
+                )?;
+                Ok(())
+            })
+            .unwrap();
+            let error = store.store_credentials(
+                &handles,
+                &antigravity_credentials(
+                    "access-rotated",
+                    "refresh-rotated",
+                    initial_expiry + Duration::from_secs(3_600),
+                    "project-rotated",
+                ),
+            );
+            assert_eq!(error, Err(antigravity_auth::AntigravityTokenError::Write));
+            let retained = store.load_credentials(&handles).unwrap();
+            assert_eq!(retained.access_token().expose_secret(), "access-initial");
+            assert_eq!(retained.refresh_token().expose_secret(), "refresh-initial");
+            assert_eq!(retained.project_id(), "project-initial");
+            assert_eq!(retained.expires_at(), initial_expiry);
+        });
     }
 
     #[test]
@@ -6339,40 +6735,33 @@ mod tests {
 
     #[test]
     fn signature_store_persists_refreshes_expires_and_deletes_exact_keys() {
-        let root = tempfile::tempdir().unwrap();
-        let store = CtoxSignatureKvStore::new(root.path());
-        let key = "cpa:signature:claude:0123456789abcdef";
-        let value = b"provider-signature";
+        with_owned_test_root(move |root| {
+            let store = CtoxSignatureKvStore::new(root);
+            let key = "cpa:signature:claude:0123456789abcdef";
+            let value = b"provider-signature";
 
-        assert!(store.set(key, value, Duration::from_secs(60)).unwrap());
-        assert_eq!(store.get(key).unwrap(), Some(value.to_vec()));
-        assert!(store.expire(key, Duration::from_secs(120)).unwrap());
-        assert!(store.delete(key).unwrap());
-        assert_eq!(store.get(key).unwrap(), None);
+            assert!(store.set(key, value, Duration::from_secs(60)).unwrap());
+            assert_eq!(store.get(key).unwrap(), Some(value.to_vec()));
+            assert!(store.expire(key, Duration::from_secs(120)).unwrap());
+            assert!(store.delete(key).unwrap());
+            assert_eq!(store.get(key).unwrap(), None);
 
-        assert!(store.set(key, value, Duration::from_secs(60)).unwrap());
-        let conn = Connection::open(crate::inference::runtime_env::runtime_config_path(
-            root.path(),
-        ))
-        .unwrap();
-        conn.execute(
-            &format!(
-                "UPDATE {INSTANCE_SIGNATURE_CACHE_TABLE} SET expires_at_ms = 0 WHERE cache_key = ?1"
-            ),
-            [key],
-        )
-        .unwrap();
-        drop(conn);
-        assert_eq!(store.get(key).unwrap(), None);
+            assert!(store.set(key, value, Duration::from_secs(60)).unwrap());
+            with_instance_proxy_write(root, move |conn| {
+            conn.execute(&format!("UPDATE {INSTANCE_SIGNATURE_CACHE_TABLE} SET expires_at_ms = 0 WHERE cache_key = ?1"), [key])?;
+            Ok(())
+        }).unwrap();
+            assert_eq!(store.get(key).unwrap(), None);
 
-        assert_eq!(
-            store.set("", value, Duration::from_secs(60)),
-            Err(SignatureCacheStoreError::Write)
-        );
-        assert_eq!(
-            store.set(key, b"", Duration::from_secs(60)),
-            Err(SignatureCacheStoreError::Write)
-        );
+            assert_eq!(
+                store.set("", value, Duration::from_secs(60)),
+                Err(SignatureCacheStoreError::Write)
+            );
+            assert_eq!(
+                store.set(key, b"", Duration::from_secs(60)),
+                Err(SignatureCacheStoreError::Write)
+            );
+        });
     }
 
     struct UnusedRefreshTransport;
@@ -6894,3 +7283,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "runtime_config_owner_tests.rs"]
+mod runtime_config_owner_tests;

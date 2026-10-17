@@ -359,7 +359,7 @@ impl NativeSyncSession {
                     data_client,
                 })
             }
-            Ok(Ok(Err(error))) => io::Error::other(format!("native sync bring-up failed: {error}")),
+            Ok(Ok(Err(error))) => io::Error::other(error),
             Ok(Err(_)) => io::Error::other("native sync bring-up panicked"),
             Err(_) => io::Error::new(
                 io::ErrorKind::TimedOut,

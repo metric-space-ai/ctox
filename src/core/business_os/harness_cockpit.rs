@@ -13,6 +13,8 @@ mod chat;
 #[path = "harness_cockpit_projections.rs"]
 mod projections;
 pub(crate) use chat::{queued_chat_text, trim_messages};
+#[cfg(test)]
+pub(crate) use projections::refresh_plan_projection_for_test;
 pub(crate) use projections::{
     publish_service_stopped, publish_worker_snapshot, refresh_after_finalization,
     schedule_flow_refresh, schedule_refresh, schedule_runs_refresh, WorkerSnapshot,

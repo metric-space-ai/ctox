@@ -5,6 +5,25 @@ use std::sync::Mutex;
 fn identity() -> Arc<SigningIdentity> {
     Arc::new(SigningIdentity::from_pkcs8(&SigningIdentity::generate_pkcs8().unwrap()).unwrap())
 }
+
+#[test]
+fn instance_packet_signing_requires_encoder_output() {
+    let key = identity();
+    let value = serde_json::json!({"z":1,"a":{"z":2,"a":3}});
+    let packet = CanonicalInstancePacket::encode_stream(value).unwrap();
+    let signature = key.sign_instance_packet(&packet);
+    UnparsedPublicKey::new(&ED25519, public_key(&key.public_identity()).unwrap())
+        .verify(&packet.0, &signature)
+        .unwrap();
+    assert!(CanonicalInstancePacket::from_stream_bytes(
+        b"ctox.sync.v4.stream\0{ \"z\": 1, \"a\": 2 }"
+    )
+    .is_err());
+    assert!(key
+        .sign_canonical_bytes(b"{ \"z\": 1, \"a\": 2 }")
+        .is_empty());
+    assert_eq!(key.sign_canonical_bytes(&packet.0), signature);
+}
 fn body(sender: &SigningIdentity, recipient: &SigningIdentity) -> Body {
     Body {
         version: 1,

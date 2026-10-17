@@ -1,0 +1,786 @@
+[
+  {
+    "bridge": "project",
+    "action": "project.list",
+    "command_types": [
+      "ctox.workjet.project.list"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.list @ actions/project.js:93"
+  },
+  {
+    "bridge": "project",
+    "action": "project.worker.add",
+    "command_types": [
+      "ctox.workjet.project.worker.add"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.worker.add @ actions/project.js:234"
+  },
+  {
+    "bridge": "project",
+    "action": "project.create",
+    "command_types": [
+      "ctox.workjet.project.upsert",
+      "ctox.workjet.working_copy.upsert"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.upsert @ actions/project.js:409 | ctox.workjet.working_copy.upsert @ actions/project.js:434"
+  },
+  {
+    "bridge": "project",
+    "action": "project.configure",
+    "command_types": [
+      "ctox.workjet.project.upsert"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.upsert @ actions/project.js:502"
+  },
+  {
+    "bridge": "project",
+    "action": "project.chat.create",
+    "command_types": [
+      "ctox.workjet.project.chat.create"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.chat.create @ actions/project.js:234"
+  },
+  {
+    "bridge": "project",
+    "action": "project.kpis.read",
+    "command_types": [
+      "ctox.workjet.project.kpis.read"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.kpis.read @ actions/project.js:621"
+  },
+  {
+    "bridge": "project",
+    "action": "project.kpis.configure",
+    "command_types": [
+      "ctox.workjet.project.kpis.configure"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.kpis.configure @ actions/project.js:621"
+  },
+  {
+    "bridge": "project",
+    "action": "project.kpis.refresh",
+    "command_types": [
+      "ctox.workjet.project.kpis.refresh"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.kpis.refresh @ actions/project.js:621"
+  },
+  {
+    "bridge": "project",
+    "action": "project.exit_model.read",
+    "command_types": [
+      "ctox.workjet.exit_model.read"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.exit_model.read @ actions/project.js:694"
+  },
+  {
+    "bridge": "project",
+    "action": "project.exit_model.refresh",
+    "command_types": [
+      "ctox.workjet.exit_model.refresh"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.exit_model.refresh @ actions/project.js:694"
+  },
+  {
+    "bridge": "project",
+    "action": "project.exit_model.submit",
+    "command_types": [
+      "ctox.workjet.exit_model.submit"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.exit_model.submit @ actions/project.js:694"
+  },
+  {
+    "bridge": "project",
+    "action": "project.init",
+    "command_types": [
+      "ctox.workjet.project.init"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.init @ actions/project.js:566"
+  },
+  {
+    "bridge": "project",
+    "action": "project.presentation.read",
+    "command_types": [
+      "ctox.workjet.presentation.read"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.presentation.read @ actions/project.js:753"
+  },
+  {
+    "bridge": "project",
+    "action": "project.presentation.content.read",
+    "command_types": [
+      "ctox.workjet.presentation.read"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.presentation.read @ actions/project.js:753",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): PRESENTATION_SCOPE_CHANGED: The requested presentation is no longer current."
+  },
+  {
+    "bridge": "project",
+    "action": "project.presentation.canvas.save",
+    "command_types": [
+      "ctox.workjet.presentation.canvas.save"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.presentation.canvas.save @ actions/project.js:765"
+  },
+  {
+    "bridge": "project",
+    "action": "project.supervisor.bind",
+    "command_types": [
+      "ctox.workjet.project.supervisor.bind"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.supervisor.bind @ actions/supervisor.js:358"
+  },
+  {
+    "bridge": "project",
+    "action": "project.supervisor.turn.submit",
+    "command_types": [
+      "ctox.workjet.project.supervisor.turn.submit"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.supervisor.turn.submit @ actions/supervisor.js:205",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Workjet supervisor turn returned an invalid or unmatched confirmation."
+  },
+  {
+    "bridge": "project",
+    "action": "project.supervisor.turn.input",
+    "command_types": [
+      "ctox.workjet.project.supervisor.turn.input"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.supervisor.turn.input @ actions/supervisor.js:208",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Workjet supervisor turn returned an invalid or unmatched confirmation."
+  },
+  {
+    "bridge": "project",
+    "action": "project.supervisor.turn.cancel",
+    "command_types": [
+      "ctox.workjet.project.supervisor.turn.cancel"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.supervisor.turn.cancel @ actions/supervisor.js:207",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Workjet supervisor turn returned an invalid or unmatched confirmation."
+  },
+  {
+    "bridge": "project",
+    "action": "project.supervisor.turn.watch",
+    "command_types": [
+      "ctox.workjet.project.supervisor.turn.watch"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.supervisor.turn.watch @ actions/supervisor.js:206",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Workjet supervisor turn returned an invalid or unmatched confirmation."
+  },
+  {
+    "bridge": "project",
+    "action": "project.supervisor.turn.capabilities",
+    "command_types": [
+      "ctox.workjet.project.supervisor.turn.capabilities"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.supervisor.turn.capabilities @ actions/supervisor.js:204",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Workjet supervisor capabilities returned an invalid or unmatched confirmation."
+  },
+  {
+    "bridge": "project",
+    "action": "project.supervisor.route.read.v1",
+    "command_types": [
+      "ctox.workjet.project.supervisor.route.read.v1"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.supervisor.route.read.v1 @ actions/supervisor.js:48",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Supervisor route returned incomplete native result status."
+  },
+  {
+    "bridge": "project",
+    "action": "project.supervisor.route.read.v2",
+    "command_types": [
+      "ctox.workjet.project.supervisor.route.read.v2"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.supervisor.route.read.v2 @ actions/supervisor.js:48",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Supervisor route returned incomplete native result status."
+  },
+  {
+    "bridge": "project",
+    "action": "project.supervisor.route.capabilities.v1",
+    "command_types": [
+      "ctox.workjet.project.supervisor.route.capabilities.v1"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.supervisor.route.capabilities.v1 @ actions/supervisor.js:48",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Supervisor route returned incomplete native result status."
+  },
+  {
+    "bridge": "project",
+    "action": "project.supervisor.route.capabilities.v2",
+    "command_types": [
+      "ctox.workjet.project.supervisor.route.capabilities.v2"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.project.supervisor.route.capabilities.v2 @ actions/supervisor.js:48",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Supervisor route returned incomplete native result status."
+  },
+  {
+    "bridge": "project",
+    "action": "ctox.plan.step.retry",
+    "command_types": [
+      "ctox.plan.step.retry"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.plan.step.retry @ actions/supervisor.js:414"
+  },
+  {
+    "bridge": "project",
+    "action": "project.jour_fixe.meeting.read",
+    "command_types": [
+      "ctox.workjet.jour_fixe.meeting.read"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.jour_fixe.meeting.read @ actions/meeting.js:618"
+  },
+  {
+    "bridge": "project",
+    "action": "project.jour_fixe.meeting.start",
+    "command_types": [
+      "ctox.workjet.jour_fixe.meeting.start"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.jour_fixe.meeting.start @ actions/meeting.js:515"
+  },
+  {
+    "bridge": "project",
+    "action": "project.jour_fixe.meeting.end",
+    "command_types": [
+      "ctox.workjet.jour_fixe.meeting.end"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.jour_fixe.meeting.end @ actions/meeting.js:515"
+  },
+  {
+    "bridge": "project",
+    "action": "project.jour_fixe.todos.revise",
+    "command_types": [
+      "ctox.workjet.jour_fixe.todos.revise"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.jour_fixe.todos.revise @ actions/meeting.js:515"
+  },
+  {
+    "bridge": "project",
+    "action": "project.jour_fixe.todos.confirm",
+    "command_types": [
+      "ctox.workjet.jour_fixe.todos.confirm"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.jour_fixe.todos.confirm @ actions/meeting.js:515"
+  },
+  {
+    "bridge": "project",
+    "action": "project.jour_fixe.comment.add",
+    "command_types": [
+      "ctox.workjet.jour_fixe.comment.add"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.jour_fixe.comment.add @ actions/meeting.js:515"
+  },
+  {
+    "bridge": "project",
+    "action": "project.jour_fixe.transcript.append",
+    "command_types": [
+      "ctox.workjet.jour_fixe.transcript.append"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.jour_fixe.transcript.append @ actions/meeting.js:515"
+  },
+  {
+    "bridge": "project",
+    "action": "project.jour_fixe.speech",
+    "command_types": [
+      "ctox.workjet.jour_fixe.speech.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.jour_fixe.speech.v1 @ actions/meeting.js:204; actions/meeting.js:217; actions/meeting.js:246",
+    "note": "Ops mit Befehl: open(e26-session-open), write, finish; Ops ohne Befehl: read"
+  },
+  {
+    "bridge": "project",
+    "action": "project.calendar.accounts.read",
+    "command_types": [
+      "ctox.workjet.calendar.read.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.calendar.read.v1 @ actions/meeting.js:150; actions/meeting.js:175"
+  },
+  {
+    "bridge": "project",
+    "action": "project.calendar.events.read",
+    "command_types": [
+      "ctox.workjet.calendar.read.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.calendar.read.v1 @ actions/meeting.js:150; actions/meeting.js:175"
+  },
+  {
+    "bridge": "project",
+    "action": "speech.dictation",
+    "command_types": [
+      "ctox.workjet.speech.dictation.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.speech.dictation.v1 @ actions/meeting.js:28; actions/meeting.js:85; actions/meeting.js:246",
+    "note": "Ops mit Befehl: open(e26-session-open), write, finish, open(e26-session-open), cancel; Ops ohne Befehl: read"
+  },
+  {
+    "bridge": "project",
+    "action": "speech.settings.read",
+    "command_types": [
+      "ctox.workjet.speech.settings.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.speech.settings.v1 @ actions/meeting.js:105"
+  },
+  {
+    "bridge": "project",
+    "action": "speech.settings.configure",
+    "command_types": [
+      "ctox.workjet.speech.settings.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.speech.settings.v1 @ actions/meeting.js:105"
+  },
+  {
+    "bridge": "project",
+    "action": "speech.settings.key",
+    "command_types": [
+      "ctox.workjet.speech.settings.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.speech.settings.v1 @ actions/meeting.js:105"
+  },
+  {
+    "bridge": "project",
+    "action": "speech.settings.playback",
+    "command_types": [
+      "ctox.workjet.speech.settings.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.speech.settings.v1 @ actions/meeting.js:105"
+  },
+  {
+    "bridge": "project",
+    "action": "speech.settings.voices",
+    "command_types": [
+      "ctox.workjet.speech.settings.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.speech.settings.v1 @ actions/meeting.js:105"
+  },
+  {
+    "bridge": "project",
+    "action": "speech.settings.check",
+    "command_types": [
+      "ctox.workjet.speech.settings.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.speech.settings.v1 @ actions/meeting.js:105"
+  },
+  {
+    "bridge": "project",
+    "action": "speech.settings.check.transcription",
+    "command_types": [
+      "ctox.workjet.speech.settings.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.speech.settings.v1 @ actions/meeting.js:105"
+  },
+  {
+    "bridge": "project",
+    "action": "project.jour_fixe.narration.read",
+    "command_types": [
+      "ctox.workjet.jour_fixe.meeting.read"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.jour_fixe.meeting.read @ actions/meeting.js:618; actions/meeting.js:687",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Workjet explicitly requested meeting was not confirmed."
+  },
+  {
+    "bridge": "project",
+    "action": "project.calendar.account.connect.start",
+    "command_types": [
+      "ctox.workjet.calendar.connect.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.calendar.connect.v1 @ actions/calendar-connect.js:11; actions/calendar-connect.js:66"
+  },
+  {
+    "bridge": "project",
+    "action": "project.calendar.account.connect.complete",
+    "command_types": [
+      "ctox.workjet.calendar.connect.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.calendar.connect.v1 @ actions/calendar-connect.js:11; actions/calendar-connect.js:66"
+  },
+  {
+    "bridge": "project",
+    "action": "instance.grok.read",
+    "command_types": [
+      "ctox.workjet.grok.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.grok.v1 @ actions/instance.js:18; actions/instance.js:32"
+  },
+  {
+    "bridge": "project",
+    "action": "instance.grok.start",
+    "command_types": [
+      "ctox.workjet.grok.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.grok.v1 @ actions/instance.js:18; actions/instance.js:32"
+  },
+  {
+    "bridge": "project",
+    "action": "instance.grok.poll",
+    "command_types": [
+      "ctox.workjet.grok.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.grok.v1 @ actions/instance.js:18; actions/instance.js:32"
+  },
+  {
+    "bridge": "project",
+    "action": "instance.grok.cancel",
+    "command_types": [
+      "ctox.workjet.grok.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.grok.v1 @ actions/instance.js:18; actions/instance.js:32"
+  },
+  {
+    "bridge": "project",
+    "action": "instance.grok.check",
+    "command_types": [
+      "ctox.workjet.grok.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.grok.v1 @ actions/instance.js:18; actions/instance.js:32"
+  },
+  {
+    "bridge": "project",
+    "action": "instance.grok.remove",
+    "command_types": [
+      "ctox.workjet.grok.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.grok.v1 @ actions/instance.js:18; actions/instance.js:32"
+  },
+  {
+    "bridge": "project",
+    "action": "instance.providers.read",
+    "command_types": [
+      "ctox.workjet.providers.list"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.providers.list @ actions/instance.js:49; actions/instance.js:192"
+  },
+  {
+    "bridge": "project",
+    "action": "instance.providers.adopt",
+    "command_types": [
+      "ctox.workjet.providers.adopt_native"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.providers.adopt_native @ actions/instance.js:50; actions/instance.js:192"
+  },
+  {
+    "bridge": "project",
+    "action": "instance.providers.observe",
+    "command_types": [
+      "ctox.workjet.providers.observe_native"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.providers.observe_native @ actions/instance.js:51; actions/instance.js:192"
+  },
+  {
+    "bridge": "project",
+    "action": "instance.providers.models.select",
+    "command_types": [
+      "ctox.workjet.providers.models.select"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.providers.models.select @ actions/instance.js:52; actions/instance.js:192"
+  },
+  {
+    "bridge": "project",
+    "action": "instance.providers.models.exclude",
+    "command_types": [
+      "ctox.workjet.providers.models.exclude"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.providers.models.exclude @ actions/instance.js:53; actions/instance.js:192"
+  },
+  {
+    "bridge": "project",
+    "action": "instance.providers.account.enable",
+    "command_types": [
+      "ctox.workjet.providers.account.enable"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.providers.account.enable @ actions/instance.js:54; actions/instance.js:192"
+  },
+  {
+    "bridge": "project",
+    "action": "instance.providers.account.remove",
+    "command_types": [
+      "ctox.workjet.providers.account.remove"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.providers.account.remove @ actions/instance.js:55; actions/instance.js:192"
+  },
+  {
+    "bridge": "computer",
+    "action": "computer.list",
+    "command_types": [],
+    "via": "query (E32, lokale Kernel-Abfrage workjet_computers)",
+    "source": "measured",
+    "evidence": "E32 workjet_computers @ actions/computer.js:87; actions/computer.js:417 (entfallen: ctox.workjet.computer.list)",
+    "e32": {
+      "query": "workjet_computers",
+      "dropped_command_type": "ctox.workjet.computer.list"
+    }
+  },
+  {
+    "bridge": "computer",
+    "action": "computer.assign",
+    "command_types": [
+      "ctox.workjet.computer.assign"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.computer.assign @ actions/computer.js:155",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): TIMEOUT 5000 ms"
+  },
+  {
+    "bridge": "computer",
+    "action": "computer.unassign",
+    "command_types": [
+      "ctox.workjet.computer.unassign"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.computer.unassign @ actions/computer.js:273",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): TIMEOUT 5000 ms"
+  },
+  {
+    "bridge": "computer",
+    "action": "computer.endpoint.upsert",
+    "command_types": [
+      "ctox.workjet.computer.endpoint.upsert"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.computer.endpoint.upsert @ actions/computer.js:206",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Workjet connection change was not confirmed."
+  },
+  {
+    "bridge": "computer",
+    "action": "computer.endpoint.disable",
+    "command_types": [
+      "ctox.workjet.computer.endpoint.disable"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.computer.endpoint.disable @ actions/computer.js:207",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Workjet connection change was not confirmed."
+  },
+  {
+    "bridge": "computer",
+    "action": "computer.ssh_key.ensure",
+    "command_types": [
+      "ctox.workjet.computer.ssh_key.ensure"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.computer.ssh_key.ensure @ actions/computer.js:232",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): Workjet computer SSH key was not confirmed."
+  },
+  {
+    "bridge": "session",
+    "action": "session.list",
+    "command_types": [],
+    "via": "query (E32, lokale Kernel-Abfrage workjet_sessions)",
+    "source": "measured",
+    "evidence": "E32 workjet_sessions @ actions/session.js:215; actions/session.js:400 (entfallen: ctox.workjet.session.list)",
+    "e32": {
+      "query": "workjet_sessions",
+      "dropped_command_type": "ctox.workjet.session.list"
+    }
+  },
+  {
+    "bridge": "session",
+    "action": "session.create",
+    "command_types": [
+      "ctox.workjet.session.create"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.session.create @ actions/session.js:242",
+    "note": "Aktion endete nach den Befehlen mit Fehler (Antwortform/Projektion im Stub): TIMEOUT 5000 ms"
+  },
+  {
+    "bridge": "session",
+    "action": "session.transfer.start",
+    "command_types": [
+      "ctox.workjet.session.transfer.start"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.session.transfer.start @ actions/session.js:272"
+  },
+  {
+    "bridge": "session",
+    "action": "session.transfer.status",
+    "command_types": [
+      "ctox.workjet.session.transfer.status"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.session.transfer.status @ actions/session.js:335"
+  },
+  {
+    "bridge": "session",
+    "action": "session.transfer.abort",
+    "command_types": [
+      "ctox.workjet.session.transfer.abort"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.session.transfer.abort @ actions/session.js:354"
+  },
+  {
+    "bridge": "session",
+    "action": "session.transfer.pause_ack",
+    "command_types": [
+      "ctox.workjet.session.transfer.pause_ack"
+    ],
+    "via": "dispatch",
+    "source": "measured",
+    "evidence": "ctox.workjet.session.transfer.pause_ack @ actions/session.js:304"
+  },
+  {
+    "bridge": "device",
+    "action": "invite.create",
+    "command_types": [
+      "ctox.workjet.device.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.device.v1 @ actions/device.js:45"
+  },
+  {
+    "bridge": "device",
+    "action": "invite.revoke",
+    "command_types": [
+      "ctox.workjet.device.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.device.v1 @ actions/device.js:45"
+  },
+  {
+    "bridge": "device",
+    "action": "binding.list",
+    "command_types": [
+      "ctox.workjet.device.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.device.v1 @ actions/device.js:45"
+  },
+  {
+    "bridge": "device",
+    "action": "binding.revoke",
+    "command_types": [
+      "ctox.workjet.device.v1"
+    ],
+    "via": "requestNative",
+    "source": "measured",
+    "evidence": "ctox.workjet.device.v1 @ actions/device.js:45"
+  }
+]

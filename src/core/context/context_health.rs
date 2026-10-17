@@ -75,7 +75,7 @@ pub fn assess_for_conversation(
     token_budget: i64,
     latest_user_prompt: Option<&str>,
 ) -> Result<ContextHealthSnapshot> {
-    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(db_path)?;
     let snapshot = engine.snapshot(conversation_id)?;
     let continuity = engine.continuity_show_all(conversation_id)?;
     let forgotten_entries = engine.continuity_forgotten(conversation_id, None, None)?;

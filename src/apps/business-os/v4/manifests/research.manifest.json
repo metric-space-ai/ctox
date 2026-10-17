@@ -1,0 +1,595 @@
+{
+  "_capability_evidence": {
+    "agent.queue.task.for_command": [
+      "handlers/research.systematic.run.complete.js"
+    ],
+    "agent.queue.task.get": [
+      "handlers/research.systematic.run.complete.js"
+    ],
+    "agent.task.enqueue": [
+      "handlers/_lib/enqueue.js"
+    ],
+    "agent.task.get": [
+      "handlers/_lib/callback.js",
+      "handlers/research.systematic.run.complete.js"
+    ],
+    "agent.task.workspace.read": [
+      "handlers/_lib/callback.js",
+      "handlers/_lib/systematic.js"
+    ],
+    "dataframe.window": [
+      "handlers/_lib/systematic.js"
+    ],
+    "knowledge.query": [
+      "handlers/_lib/systematic.js"
+    ]
+  },
+  "_commands_out_evidence": {
+    "ctox ctox.app.modify.request": [
+      "index.js:4916"
+    ],
+    "ctox ctox.chat.task": [
+      "index.js:4916"
+    ],
+    "documents research.systematic.report.create": [
+      "index.js:2551",
+      "index.js:2552"
+    ],
+    "knowledge knowledge.book.ingest": [
+      "handlers/_lib/callback.js:212"
+    ]
+  },
+  "_declaration": "modules/research/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/research/index.html",
+  "_rust_basis": "keine eigene Datei; `research.systematic.run` in `rs:store.rs:23766,41702` (156 Fundstellen „research“), 85 in `rs:mcp_channel.rs`. (`person_research_*` gehört zu outbound.)",
+  "_source_dir": "src/apps/business-os/modules/research",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "research",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "agent.queue.task.for_command",
+    "agent.queue.task.get",
+    "agent.task.enqueue",
+    "agent.task.get",
+    "agent.task.workspace.read",
+    "dataframe.window",
+    "knowledge.query"
+  ],
+  "collections": {
+    "research_notes": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/research.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "task_id",
+          "kind",
+          "title",
+          "payload",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "research_runs": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/research.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "accepted_count": {
+            "type": "number"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "identified_count": {
+            "type": "number"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "task_queue_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "used_count": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "task_id",
+          "status",
+          "payload",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "research_tasks": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/research.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "created_at_ms": {
+            "type": "number"
+          },
+          "criteria": {
+            "type": "string"
+          },
+          "curated_table_key": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "knowledge_domain": {
+            "type": "string"
+          },
+          "measurements_table_key": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "prompt": {
+            "type": "string"
+          },
+          "source_catalog_key": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "x_axis": {
+            "type": "string"
+          },
+          "y_axis": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status",
+          "knowledge_domain",
+          "payload",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [
+    {
+      "app": "ctox",
+      "type": "ctox.app.modify.request"
+    },
+    {
+      "app": "ctox",
+      "type": "ctox.chat.task"
+    },
+    {
+      "app": "documents",
+      "type": "research.systematic.report.create"
+    },
+    {
+      "app": "knowledge",
+      "type": "knowledge.book.ingest"
+    }
+  ],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "research_runs": [
+      "read"
+    ],
+    "research_tasks": [
+      "read"
+    ]
+  },
+  "files": {
+    "V4-HANDLERS.md": "e3e58313dbe3ebe06d7519f1c404cc9f53adb353c6bbd3df2be5226f10f89d11",
+    "V4-PORT.md": "552777ab2bbd40335888442bbda72f554a8d7556814adff9a6558962680fca69",
+    "assets/icon.jpg": "a24ed0d616301530ec6444b12a07b808711341dce0f04d6c4baed13a277a1cf1",
+    "assets/icon@512.jpg": "4b1b5a5704ff7e69c53e0dd39056a59bcc8ceb632178f62e6fd2e823b2a27b45",
+    "collections.schema.json": "07660238426e42713f11a538bb07048d69e2ba1fa5f2b51415ca2b56a7f49e03",
+    "handlers/_lib/callback.js": "db5b7895347fb66aff367b379a6c9f6f3a85cb1bf53cdc2f18b0914fab305b9f",
+    "handlers/_lib/enqueue.js": "b274359443e473e563c44ff2f04d6ad70944b0109bb7aabc239d93c3ff9daa8c",
+    "handlers/_lib/errors.js": "7438ffa06346f5e8edab02ca70339861877985442c5ca0862819ed70e3853b17",
+    "handlers/_lib/records.js": "f4da8f0a07ec1868ef5fc2b877b61baaef3005917271da8180ed3f55a41c7817",
+    "handlers/_lib/systematic.js": "e8b47694d5688bfb510555d98572fdb232565d7fc7c40e0044770d2f0034658b",
+    "handlers/_lib/util.js": "0548e4320903fcc9cdfd7707ab424f92d233123a51bd3a765e4233aeaf0d0057",
+    "handlers/research.knowledge.refresh.complete.js": "fdbfcb72e9d3986cfb2003254c1c41ee5c9fc5eef0d27108d919d909e012f815",
+    "handlers/research.knowledge.refresh.failed.js": "5e810608b5694b03d47083dc68e8c92b25f6accf4d5ab5adaeaa12a89126ffb0",
+    "handlers/research.knowledge.refresh.js": "3ee72198ac5ef7bcd4d334ff9c85d7c99b7be9730946bdeb053a8789da85c324",
+    "handlers/research.systematic.run.complete.js": "6af908a4d2fdc03efff9c14d7859f4305a0a16f0853b1b9608cf5c346c057903",
+    "handlers/research.systematic.run.failed.js": "cf7f6eddb0c164a840244372e4283dfdcf58a358122c37ea6d0dd07413e10a26",
+    "handlers/research.systematic.run.js": "1cd3014f36fa0fd322be285274e1cdfb009c48a62ae21ebc55fb730dd9843ad1",
+    "icon.svg": "2d8b8ef72e461476f16ddd2cba18ead04097970c06bd0fe4594254650a6a3f7a",
+    "index.css": "150e49cd3fcceb10a1dd47585b2438b538f10c99c9c43382125e1036e0ff8572",
+    "index.html": "25f868d023f9ac56d329d88c0df53247094d5cb600e8faef8673ceba0709c7e6",
+    "index.js": "68214f9e8b5daafd09f63ae7a7c395a4dd6e6d15704f7cada1626b1a4b4eef89",
+    "locales/de.json": "cd71d3819ba3e17d7ba944d1d6256dcc6fe09983dd4bb7e6aa2fdaa486414562",
+    "locales/en.json": "dfe78bce15c01f0413162edc264ca10dcd229623a873c8a38fd6daab5cc98f65",
+    "module.json": "cb7c1e9e8fa99ecc6ab3ad3165639d6f06a8c360a0332d0db9928b79b843956d",
+    "prompts/graph-gap.md": "c0b2ca686b03f6fd2732fa7fa9d7e2fef963186d457d58cebd1738e169908faa",
+    "prompts/knowledge-refresh.md": "c741bacaa4a5b84b5f213bc6fc0b813b003fd2c182c628d4a654a75a64da0b6e",
+    "prompts/systematic-run.md": "db269eefba120f88f9279cfd4b172e6ae65e22806e6c2fd3e6ac886938522100",
+    "research-graph-data.mjs": "c6d388fd102ffd6d972fd9225d33b02155f29064e7b19ebe6b22b3ae6d46aa36",
+    "research-graph.mjs": "bc9a051cb10c03e073272beba131635d4117200250fef02305baff17e9034a42",
+    "skills/knowledge-refresh/SKILL.md": "6f50b2f3318e0d5d135e9c07af66f0254523833142da23bc3cd60d59676d5e67",
+    "v4-manifest.json": "95d80630321bcd8169a7463231f2d334aac503aeab293bbb3d91de988938c63c",
+    "vendor/research-graph.LICENSES.txt": "570a5b33dd0cdd984b710a8cb1bc3a509353f710cf4fed2a8a579b8ac5b40ccf",
+    "vendor/research-graph.mjs": "f99f8d4f705336be3d6e5b674bcb5c46385de507cdad8e4c18f1c6bfb05c3ec5",
+    "vendor/research-graph.provenance.json": "d27037569481b697a7915673ff3a11f3d97f2931418a0f58a6364d0f442c03ff"
+  },
+  "foreign_collections": {
+    "business_chats": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox"
+    },
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/records.js:3",
+          "handlers/research.systematic.run.complete.js:28",
+          "index.js:23"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/research/V4-HANDLERS.md „Manifest-Deklarationen“; modules/research/V4-PORT.md OFFEN 1",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "ctox_queue_tasks": {
+      "_evidence": {
+        "code_read": [
+          "index.js:24",
+          "index.js:606",
+          "index.js:5093"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/research/V4-HANDLERS.md „Manifest-Deklarationen“; modules/research/V4-PORT.md OFFEN 1",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "document_blob_chunks": {
+      "_evidence": {
+        "code_read": [
+          "index.js:17",
+          "index.js:5935",
+          "index.js:5950"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "documents"
+    },
+    "document_versions": {
+      "_evidence": {
+        "code_read": [
+          "index.js:17",
+          "index.js:5935",
+          "index.js:5947"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "documents"
+    },
+    "documents": {
+      "_evidence": {
+        "code_read": [
+          "index.js:25",
+          "index.js:2552",
+          "index.js:2590"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "documents"
+    },
+    "files": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/systematic.js:431"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "knowledge_items": {
+      "_evidence": {
+        "code_read": [
+          "index.js:4661"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "knowledge"
+    },
+    "knowledge_runbooks": {
+      "_evidence": {
+        "code_read": [
+          "index.js:4661"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "knowledge"
+    },
+    "knowledge_table_rows": {
+      "_evidence": {
+        "code_read": [
+          "index.js:29",
+          "index.js:656",
+          "index.js:689"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/research/V4-HANDLERS.md „Manifest-Deklarationen“; modules/research/V4-PORT.md OFFEN 1",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "knowledge"
+    },
+    "knowledge_tables": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_lib/systematic.js:12",
+          "handlers/_lib/systematic.js:325",
+          "handlers/_lib/systematic.js:336"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "knowledge"
+    }
+  },
+  "handlers": {
+    "research.knowledge.refresh": "handlers/research.knowledge.refresh.js",
+    "research.knowledge.refresh.complete": "handlers/research.knowledge.refresh.complete.js",
+    "research.knowledge.refresh.failed": "handlers/research.knowledge.refresh.failed.js",
+    "research.systematic.run": "handlers/research.systematic.run.js",
+    "research.systematic.run.complete": "handlers/research.systematic.run.complete.js",
+    "research.systematic.run.failed": "handlers/research.systematic.run.failed.js"
+  },
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/research.jpg (shared/operator-icon-selection.js, sha256 a888d0b6ca20…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "category": "Research",
+    "drawers": {
+      "bottom": "Knowledge table diagnostics and raw row evidence",
+      "right": "task setup, scoring model, and selected source detail"
+    },
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-research\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-research\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0891b2\" /><stop offset=\"100%\" stop-color=\"#10b981\" /></linearGradient></defs><path d=\"M6 3h12\" stroke=\"url(#grad-research)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><path d=\"M8 3v4c0 1.66-1.34 3-3 3v0a7 7 0 0 0-2 4.9V20a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-5.1a7 7 0 0 0-2-4.9v0c-1.66 0-3-1.34-3-3V3\" fill=\"url(#grad-research)\" fill-opacity=\"0.12\" stroke=\"url(#grad-research)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><line x1=\"8.5\" y1=\"11\" x2=\"15.5\" y2=\"11\" stroke=\"url(#grad-research)\" stroke-width=\"2\"></line><circle cx=\"12\" cy=\"16\" r=\"2.5\" fill=\"url(#grad-research)\"></circle><circle cx=\"9\" cy=\"18\" r=\"1\" fill=\"#ffffff\"></circle><circle cx=\"15\" cy=\"15\" r=\"1\" fill=\"#ffffff\"></circle></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 820,
+        "width": 1280
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#6366f1",
+        "category": "Knowledge",
+        "iconAssetId": "workjet.business-os.research",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "list-detail",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Research"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "prompts": [
+    {
+      "name": "graph-gap",
+      "path": "prompts/graph-gap.md"
+    },
+    {
+      "name": "knowledge-refresh",
+      "path": "prompts/knowledge-refresh.md"
+    },
+    {
+      "name": "systematic-run",
+      "path": "prompts/systematic-run.md"
+    }
+  ],
+  "provenance": {
+    "base_hash": "ad3eafdf28c2647dbb8ed30c2bb118fe49147e619304257d3b6d02a89769f41d",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "skills": [
+    {
+      "name": "knowledge-refresh",
+      "path": "skills/knowledge-refresh/SKILL.md"
+    }
+  ],
+  "styles": [
+    "index.css"
+  ],
+  "title": "Web Research",
+  "triggers": [],
+  "version": "1.0.16"
+}

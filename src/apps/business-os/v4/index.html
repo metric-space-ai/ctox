@@ -1,0 +1,32 @@
+<!doctype html>
+<!-- Shell v4 – Einstiegsseite (E38). Der Daemon liefert sie unter GET / aus, v4/sw.js unter GET /sw.js und
+     kernel/** unter /kernel/*. Die Seite enthält keine Oberfläche: boot.js startet den Kern (bootV4), der Kern
+     lädt die aktive Shell-Version (v4/frame/index.js) und die Shell baut den Rahmen. Das V2-index.html bleibt für
+     release/v2 unverändert. -->
+<html lang="de" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>CTOX Business OS</title>
+    <link rel="icon" href="/business-os/assets/ctox-app-icon.png" />
+    <script>
+      // Wie V2: Thema und Sprache vor dem ersten Bild setzen, damit nichts hell aufblitzt.
+      (() => {
+        try {
+          const prefs = JSON.parse(localStorage.getItem('ctox.businessOs.accountPreferences') || '{}') || {};
+          document.documentElement.dataset.theme = prefs.theme === 'light' ? 'light' : 'dark';
+          document.documentElement.lang = prefs.language === 'en' ? 'en' : 'de';
+        } catch {
+          document.documentElement.dataset.theme = 'dark';
+        }
+      })();
+    </script>
+    <style>
+      html[data-theme="dark"] { background: #0e1417; color: #eef3f5; color-scheme: dark; }
+      html[data-theme="light"] { background: #eef5f8; color: #162127; color-scheme: light; }
+      html, body { margin: 0; height: 100%; }
+    </style>
+    <script type="module" src="/business-os/v4/boot.js"></script>
+  </head>
+  <body></body>
+</html>

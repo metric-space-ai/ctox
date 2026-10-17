@@ -1,6 +1,10 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+#[path = "../store/business_store_adapter.rs"]
+pub(crate) mod business_store_adapter;
+#[path = "store_chat_blob.rs"]
+mod chat_blob;
 #[path = "store_peer_revocations.rs"]
 mod peer_revocations;
 #[path = "store_security_projections.rs"]
@@ -107,6 +111,7 @@ use crate::capabilities::scrape;
 use crate::mission::channels;
 use anyhow::Context;
 use base64::Engine;
+pub(super) use chat_blob::failure_outcome as chat_blob_failure_outcome;
 use ctox_app_server_protocol::AuthMode as ApiAuthMode;
 pub use peer_revocations::is_business_peer_revoked;
 use ring::rand::{SecureRandom, SystemRandom};
@@ -1362,50 +1367,18 @@ fn upsert_attached_rxdb_record(
     }
     redact_document_client_context_secrets(&mut payload);
     let table_columns = attached_rxdb_table_columns(conn, &table)?;
-    let mut columns = vec!["id".to_string(), "data".to_string()];
-    let mut values = vec![
-        SqlValue::Text(record_id.to_string()),
-        SqlValue::Text(serde_json::to_string(&payload)?),
-    ];
-    let mut updates = vec!["data = excluded.data".to_string()];
-    if let Some(deleted_column) = ["deleted", "_deleted"]
-        .into_iter()
-        .find_map(|column| table_columns.contains(column).then_some(column))
-    {
-        columns.push(deleted_column.to_string());
-        values.push(SqlValue::Integer(0));
-        updates.push(format!("{deleted_column} = excluded.{deleted_column}"));
-    }
-    if let Some(revision_column) = ["revision", "_rev"]
-        .into_iter()
-        .find_map(|column| table_columns.contains(column).then_some(column))
-    {
-        columns.push(revision_column.to_string());
-        values.push(SqlValue::Text(rev));
-        updates.push(format!("{revision_column} = excluded.{revision_column}"));
-    }
-    if table_columns.contains("lastWriteTime") {
-        columns.push("lastWriteTime".to_string());
-        values.push(SqlValue::Real(updated_at_ms as f64));
-        updates.push("lastWriteTime = excluded.lastWriteTime".to_string());
-    }
-    let placeholders = (1..=columns.len())
-        .map(|index| format!("?{index}"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    conn.execute(
-        &format!(
-            "INSERT INTO {qualified_table} ({columns}) VALUES ({placeholders})
-             ON CONFLICT(id) DO UPDATE SET {updates}{guard}",
-            columns = columns.join(", "),
-            updates = updates.join(", "),
-            guard = canonical_rxdb_table_upsert_guard_sql(&table, "data")
-                .map(|guard| format!(" WHERE {guard}"))
-                .unwrap_or_default(),
-        ),
-        params_from_iter(values),
-    )?;
-    Ok(())
+    business_store_adapter::write_legacy_projection(
+        conn,
+        business_store_adapter::LegacyProjection {
+            qualified_table: &qualified_table,
+            table_columns: &table_columns,
+            id: record_id,
+            payload: &payload,
+            revision: rev,
+            write_time: now_ms() as f64,
+            guard: canonical_rxdb_table_upsert_guard_sql(&table, "data"),
+        },
+    )
 }
 
 fn queue_projection_status_fields_match(payload: &Value, task: &channels::QueueTaskView) -> bool {
@@ -1461,6 +1434,110 @@ fn stamp_attached_canonical_mirror_versions(
         channels::communication_projection_clock_version(conn)?,
     );
     Ok(())
+}
+
+/// Called only inside the native queue writer transaction. Tombstones carry
+/// no previous payload; neither queue refresh nor command replay can revive it.
+pub(crate) fn delete_attached_queue_projections(
+    conn: &Connection,
+    task_id: &str,
+    command_id: Option<&str>,
+) -> anyhow::Result<()> {
+    let now = now_ms() as i64;
+    for (collection, id) in std::iter::once(("ctox_queue_tasks", task_id))
+        .chain(command_id.map(|id| ("business_commands", id)))
+    {
+        let rev = format!("rev_{}", Uuid::new_v4());
+        let payload = serde_json::json!({"id":id,"_rev":rev,"_deleted":true,"updated_at_ms":now});
+        conn.execute(
+            "INSERT INTO business_os_projection.business_records
+             (collection,record_id,rev,deleted,updated_at_ms,payload_json)
+             VALUES (?1,?2,?3,1,?4,?5)
+             ON CONFLICT(collection,record_id) DO UPDATE SET
+             rev=excluded.rev,deleted=1,updated_at_ms=excluded.updated_at_ms,payload_json=excluded.payload_json",
+            params![collection,id,rev,now,serde_json::to_string(&payload)?],
+        )?;
+        if let Some(table) = attached_rxdb_collection_table(conn, collection)? {
+            let qualified_table = format!(
+                "business_os_rxdb_projection.{}",
+                sqlite_quote_identifier(&table)
+            );
+            let previous: Option<String> = conn
+                .query_row(
+                    &format!("SELECT data FROM {qualified_table} WHERE id=?1"),
+                    params![id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let previous = previous.and_then(|raw| serde_json::from_str::<Value>(&raw).ok());
+            let revision = next_direct_rxdb_revision(
+                previous
+                    .as_ref()
+                    .and_then(|v| v.get("_rev"))
+                    .and_then(Value::as_str),
+            );
+            let payload =
+                serde_json::json!({"id":id,"_rev":revision,"_deleted":true,"updated_at_ms":now});
+            business_store_adapter::write_legacy_projection(
+                conn,
+                business_store_adapter::LegacyProjection {
+                    qualified_table: &qualified_table,
+                    table_columns: &attached_rxdb_table_columns(conn, &table)?,
+                    id,
+                    payload: &payload,
+                    revision,
+                    write_time: now_ms() as f64,
+                    guard: None,
+                },
+            )?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn retain_owner_projection_extras(canonical: &mut Value, existing: &Value) {
+    retain_noncanonical_queue_projection_fields(canonical, existing);
+}
+
+/// Capture queue/command facts from the Core owner's existing transaction.
+/// No private BOS projection is read or attached to manufacture source truth.
+pub(crate) fn owner_queue_projection_effect(
+    conn: &Connection,
+    task: &channels::QueueTaskView,
+    updated_at_ms: i64,
+) -> anyhow::Result<Value> {
+    let command_id: Option<String> = conn
+        .query_row(
+            "SELECT command_id FROM business_command_task_links WHERE task_id=?1",
+            [&task.message_key],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let snapshot = command_id
+        .as_deref()
+        .map(|id| {
+            channels::load_business_os_queue_mirror_snapshot_from_conn(conn, id, &task.message_key)
+        })
+        .transpose()?
+        .flatten();
+    let terminal = snapshot.as_ref().and_then(|s| s.terminal_status.as_deref());
+    let command = snapshot
+        .as_ref()
+        .and_then(|s| s.command_projection.as_ref());
+    let clock = channels::communication_projection_clock_version(conn)?;
+    let mut queue = queue_task_payload(command_id.as_deref(), task, terminal, updated_at_ms);
+    stamp_canonical_queue_mirror_versions(&mut queue, command, clock);
+    redact_document_client_context_secrets(&mut queue);
+    let mut command = command.cloned();
+    if let Some(body) = command.as_mut() {
+        stamp_canonical_queue_mirror_versions(body, None, clock);
+        redact_document_client_context_secrets(body);
+    }
+    let queue = crate::service::queue_projection::capture(conn, queue)?;
+    let command = command
+        .map(|body| crate::service::queue_projection::capture(conn, body))
+        .transpose()?;
+    Ok(serde_json::json!({"queue":queue,"command":command}))
 }
 
 fn refresh_attached_queue_projections(
@@ -6797,6 +6874,7 @@ fn record_command_inner(
     if let (Some(authority), Some(receipt)) = (authority, native_authorization.as_mut()) {
         receipt["managed_mcp_authority"] = authority.receipt()?;
     }
+    chat_blob::preflight(root, &command_id, &command, native_authorization.as_ref())?;
     {
         let conn = open_store(root)?;
         if let Some(denied) = claim_or_reject_business_chat(root, &conn, &command_id, &command)? {
@@ -8647,7 +8725,7 @@ pub(super) fn queue_command_policy_target(
     )
 }
 
-fn queue_command_native_authorization(
+pub(super) fn queue_command_native_authorization(
     root: &Path,
     command: &BusinessCommand,
     authenticated_session: Option<&BusinessOsSession>,
@@ -8784,10 +8862,37 @@ pub(crate) fn revalidate_business_command_execution_authorization(
     root: &Path,
     command_id: &str,
 ) -> anyhow::Result<Value> {
-    let conn = open_store(root)?;
-    let command = load_business_command(&conn, command_id)?;
-    let canonical = channels::business_command_projection(root, command_id)?;
+    // Authorization needs the immutable native snapshot, not presentation progress.
+    let lookup_id = command_id.to_owned();
+    let canonical = crate::persistence::read_core_snapshot_blocking(root, move |core| {
+        Ok(channels::business_command_projection_from_conn(
+            core, &lookup_id,
+        ))
+    })??;
     let native_authorization = canonical.get("native_authorization");
+    let command = if native_authorization.is_some() {
+        // Native tasks have no V3 business_commands shadow row.
+        BusinessCommand {
+            id: Some(command_id.to_owned()),
+            module: canonical["module"]
+                .as_str()
+                .context("native command module missing")?
+                .into(),
+            command_type: canonical["command_type"]
+                .as_str()
+                .context("native command type missing")?
+                .into(),
+            record_id: canonical["record_id"]
+                .as_str()
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned),
+            payload: canonical["payload"].clone(),
+            client_context: canonical["client_context"].clone(),
+            origin: CommandOrigin::ReplicatedPeer,
+        }
+    } else {
+        load_business_command(&open_store(root)?, command_id)?
+    };
     let (session, native_policy_decision) = if let Some(authorization) = native_authorization {
         let (session, decision) =
             revalidate_queue_native_authorization(root, &command, authorization)?;
@@ -15350,6 +15455,18 @@ pub(crate) fn install_replicated_secret_sanitizer() {
     ));
 }
 
+/// CAP-3b: the detached intake value of exactly this command and field, for
+/// the Core capability host (`cap3::secrets::CoreSecretIntake`). Consumes it.
+pub(crate) fn take_detached_secret_intake(command_id: &str, field: &str) -> Option<String> {
+    let field: &'static str = ["value", "password"].into_iter().find(|f| *f == field)?;
+    SECRET_INTAKE_VALUES
+        .get()?
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&(command_id.to_string(), field))
+        .map(|(value, _)| value)
+}
+
 /// The secret a handler needs: the value detached at intake, or — for callers
 /// that bypass RxDB intake (CLI, tests) — the value still in the payload.
 pub(super) fn take_secret_intake_value(command: &BusinessCommand) -> Option<String> {
@@ -15919,7 +16036,8 @@ pub(super) fn handle_workspace_control_command(
                     ))
                 },
                 |_session| {
-                    let outcome = crate::coding_agents::pi_sidecar::coding_model_capabilities(root);
+                    let outcome =
+                        crate::coding_agents::pi_sidecar::coding_model_capabilities(root)?;
                     write_rxdb_control_command_outcome(
                         root,
                         &command,
@@ -25476,6 +25594,7 @@ fn materialize_business_chat_attachments(
     root: &Path,
     command_id: &str,
     command: &BusinessCommand,
+    native_authorization: Option<&Value>,
 ) -> anyhow::Result<Vec<MaterializedBusinessChatAttachment>> {
     let refs = business_chat_attachment_refs(command);
     if refs.is_empty() {
@@ -25484,6 +25603,16 @@ fn materialize_business_chat_attachments(
     let mut attachments = Vec::with_capacity(refs.len());
     let mut seen = HashSet::new();
     for attachment_ref in refs {
+        if attachment_ref.get("kind").and_then(Value::as_str) == Some("blob") {
+            attachments.push(chat_blob::materialize(
+                root,
+                command_id,
+                command,
+                native_authorization,
+                &attachment_ref,
+            )?);
+            continue;
+        }
         let file_id = attachment_ref_string(&attachment_ref, &["file_id", "fileId"])
             .with_context(|| "Business OS attachment reference is missing file_id")?;
         let generation_id =
@@ -25515,6 +25644,9 @@ fn business_chat_attachment_refs(command: &BusinessCommand) -> Vec<Value> {
                 refs.extend(items.iter().filter_map(|item| {
                     if !item.is_object() {
                         return None;
+                    }
+                    if item.get("kind").and_then(Value::as_str) == Some("blob") {
+                        return Some(item.clone());
                     }
                     let file_id = attachment_ref_string(item, &["file_id", "fileId"])?;
                     let kind = attachment_ref_string(item, &["kind"])
@@ -26730,10 +26862,22 @@ fn create_ctox_queue_task(
     command: &BusinessCommand,
     native_authorization: Option<&Value>,
 ) -> anyhow::Result<Option<channels::BusinessCommandQueueClaim>> {
+    create_native_target_queue_task(root, command_id, command, native_authorization, None)
+}
+
+/// The target is a server-authorized native argument, never a client_context field.
+pub(super) fn create_native_target_queue_task(
+    root: &Path,
+    command_id: &str,
+    command: &BusinessCommand,
+    native_authorization: Option<&Value>,
+    native_crew_target: Option<&str>,
+) -> anyhow::Result<Option<channels::BusinessCommandQueueClaim>> {
     if !is_cv_print_parse_command(command) {
         command_instruction(command)?;
     }
-    let attachments = materialize_business_chat_attachments(root, command_id, command)?;
+    let attachments =
+        materialize_business_chat_attachments(root, command_id, command, native_authorization)?;
     let prompt_enrichment = business_command_prompt_enrichment(root, command_id, command)?;
     let title = command_title(command);
     let prompt = command_prompt(
@@ -26786,6 +26930,7 @@ fn create_ctox_queue_task(
                 "business_os_command_type": command.command_type,
                 "business_os_record_id": command.record_id,
                 "business_os_attachments": attachments,
+                "native_crew_target": native_crew_target,
                 "business_os_import_source_kind": import_source,
                 "client_context": policy_audit_client_context(command)
             })),
@@ -26924,7 +27069,11 @@ pub(crate) fn rebuild_business_command_queue_prompt_for_task(
     if !is_cv_print_parse_command(&command) {
         command_instruction(&command)?;
     }
-    let attachments = materialize_business_chat_attachments(root, command_id, &command)?;
+    let authorization = command_value
+        .get("native_authorization")
+        .or_else(|| context.get("native_authorization"));
+    let attachments =
+        materialize_business_chat_attachments(root, command_id, &command, authorization)?;
     let prompt_enrichment = business_command_prompt_enrichment(root, command_id, &command)?;
     Ok(Some(command_prompt(
         command_id,
@@ -27667,19 +27816,29 @@ fn business_chat_attachment_prompt_manifest(
         return String::new();
     }
     let mut output = String::from(
-        "\n\nBusiness OS attachments:\nThe files below were uploaded in the Business OS chat, reconstructed from RxDB desktop_file_chunks, and verified before this task was queued. Inspect relevant images/PDFs via the available local file/image tools before relying on their visual contents.\n",
+        "\n\nBusiness OS attachments:\nThe files below were uploaded in the Business OS chat and verified before this task was queued. Inspect relevant images/PDFs via the available local file/image tools before relying on their visual contents.\n",
     );
     for (idx, attachment) in attachments.iter().enumerate() {
+        let source = if attachment.generation_id == "cas" {
+            format!(
+                "files/{} ref {}",
+                attachment.file_id, attachment.content_hash
+            )
+        } else {
+            format!(
+                "desktop_files/{} generation {}",
+                attachment.file_id, attachment.generation_id
+            )
+        };
         output.push_str(&format!(
-            "- attachment_{}: {}\n  mime_type: {}\n  size_bytes: {}\n  local_path: {}\n  sha256: {}\n  source: desktop_files/{} generation {}\n",
+            "- attachment_{}: {}\n  mime_type: {}\n  size_bytes: {}\n  local_path: {}\n  sha256: {}\n  source: {}\n",
             idx + 1,
             attachment.name,
             attachment.mime_type,
             attachment.size_bytes,
             attachment.local_path,
             attachment.content_hash,
-            attachment.file_id,
-            attachment.generation_id
+            source
         ));
     }
     output
@@ -28771,7 +28930,7 @@ pub(super) fn existing_instance_id(root: &Path) -> anyhow::Result<String> {
     Ok(trimmed.to_string())
 }
 
-pub(super) fn stable_instance_id(root: &Path) -> anyhow::Result<String> {
+pub(crate) fn stable_instance_id(root: &Path) -> anyhow::Result<String> {
     let runtime = root.join("runtime");
     std::fs::create_dir_all(&runtime)
         .with_context(|| format!("failed to create runtime dir {}", runtime.display()))?;

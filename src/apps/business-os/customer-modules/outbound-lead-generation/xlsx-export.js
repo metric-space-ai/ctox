@@ -109,7 +109,7 @@ function feldStatusStil(field) {
 function empfaengerZelle(decision) {
   if (!decision) return { v: 'Sperrvermerk nicht geprüft', s: S.open };
   const status = String(decision.status || '');
-  if (decision.pending) return { v: 'Sperrvermerk wird geprüft', s: S.open };
+  if (decision.pending) return { v: 'Sperrvermerk wird geprüft', s: S.open }; // v4-allow: label
   if (status === 'free') return { v: 'frei', s: S.ok };
   const grund = textOf(decision.label || decision.reason);
   const quelle = textOf(decision.originalRemark);

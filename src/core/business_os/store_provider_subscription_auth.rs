@@ -876,11 +876,15 @@ fn start_kimi_subscription_login(root: &Path, account_id: &str) -> anyhow::Resul
                 .block_on(auth.wait_for_authorization(&cancellation, &worker_device_code))
                 .map_err(|error| anyhow::anyhow!(error.to_string()))?;
             let storage = auth.create_token_storage(&bundle);
-            crate::execution::cliproxyapi_integration::install_kimi_subscription(
-                &root,
-                &worker_account_id,
-                &storage,
-            )?;
+            let callback_root = root.clone();
+            run_subscription_persistence(&root, move || {
+                crate::execution::cliproxyapi_integration::install_kimi_subscription(
+                    &callback_root,
+                    &worker_account_id,
+                    &storage,
+                )
+                .map(|_| ())
+            })?;
             Ok(())
         })();
         if let Err(error) = result {
@@ -990,11 +994,15 @@ fn start_claude_subscription_login(root: &Path, account_id: &str) -> anyhow::Res
                     tokens.access_token().clone(),
                     tokens.refresh_token().clone(),
                 );
-            crate::execution::cliproxyapi_host::install_claude_subscription(
-                &root,
-                &worker_account_id,
-                &credentials,
-            )?;
+            let callback_root = root.clone();
+            run_subscription_persistence(&root, move || {
+                crate::execution::cliproxyapi_host::install_claude_subscription(
+                    &callback_root,
+                    &worker_account_id,
+                    &credentials,
+                )
+                .map(|_| ())
+            })?;
             Ok(())
         })();
         if let Err(error) = result {
@@ -1071,11 +1079,15 @@ fn start_antigravity_subscription_login(root: &Path, account_id: &str) -> anyhow
                     expiry,
                     project_id,
                 )?;
-            crate::execution::cliproxyapi_host::install_antigravity_subscription(
-                &root,
-                &worker_account_id,
-                &credentials,
-            )?;
+            let callback_root = root.clone();
+            run_subscription_persistence(&root, move || {
+                crate::execution::cliproxyapi_host::install_antigravity_subscription(
+                    &callback_root,
+                    &worker_account_id,
+                    &credentials,
+                )
+                .map(|_| ())
+            })?;
             Ok(())
         })();
         if let Err(error) = result {
@@ -1473,7 +1485,28 @@ fn exchange_chatgpt_authorization_code(
     }
 }
 
+/// Provider callback threads retain no admission while waiting for the network.
+/// Only their final local persistence phase borrows the existing Core runtime.
+pub(crate) fn run_subscription_persistence(
+    root: &Path,
+    operation: impl FnOnce() -> anyhow::Result<()> + Send + 'static,
+) -> anyhow::Result<()> {
+    crate::persistence::run_core_blocking_at(root, operation)
+}
+
 fn persist_chatgpt_subscription_auth(
+    root: &Path,
+    codex_home: &Path,
+    tokens: ChatgptTokenExchangeResponse,
+) -> anyhow::Result<()> {
+    let work = root.to_owned();
+    let codex_home = codex_home.to_owned();
+    run_subscription_persistence(root, move || {
+        persist_admitted_chatgpt_subscription_auth(&work, &codex_home, tokens)
+    })
+}
+
+fn persist_admitted_chatgpt_subscription_auth(
     root: &Path,
     codex_home: &Path,
     tokens: ChatgptTokenExchangeResponse,

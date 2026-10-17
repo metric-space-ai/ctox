@@ -1,0 +1,219 @@
+{
+ "intake@1280": {
+  "app": "intake",
+  "width": 1280,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:28:14.085Z"
+ },
+ "intake@420": {
+  "app": "intake",
+  "width": 420,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:28:18.567Z"
+ },
+ "interviews@1280": {
+  "app": "interviews",
+  "width": 1280,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:28:23.258Z"
+ },
+ "interviews@420": {
+  "app": "interviews",
+  "width": 420,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:28:27.750Z"
+ },
+ "placements@1280": {
+  "app": "placements",
+  "width": 1280,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T19:05:28.740Z"
+ },
+ "placements@420": {
+  "app": "placements",
+  "width": 420,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T19:05:33.758Z"
+ },
+ "submissions@1280": {
+  "app": "submissions",
+  "width": 1280,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:28:41.060Z"
+ },
+ "submissions@420": {
+  "app": "submissions",
+  "width": 420,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:28:45.484Z"
+ },
+ "matching@1280": {
+  "app": "matching",
+  "width": 1280,
+  "steps": 8,
+  "clicks": 5,
+  "flags": [],
+  "at": "2026-10-15T18:28:51.064Z"
+ },
+ "matching@420": {
+  "app": "matching",
+  "width": 420,
+  "steps": 8,
+  "clicks": 5,
+  "flags": [],
+  "at": "2026-10-15T18:28:56.711Z"
+ },
+ "cv-print-builder@1280": {
+  "app": "cv-print-builder",
+  "width": 1280,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:29:01.232Z"
+ },
+ "cv-print-builder@420": {
+  "app": "cv-print-builder",
+  "width": 420,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:29:05.631Z"
+ },
+ "nachweise@1280": {
+  "app": "nachweise",
+  "width": 1280,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:29:10.562Z"
+ },
+ "nachweise@420": {
+  "app": "nachweise",
+  "width": 420,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:29:15.142Z"
+ },
+ "consent@1280": {
+  "app": "consent",
+  "width": 1280,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:29:19.398Z"
+ },
+ "consent@420": {
+  "app": "consent",
+  "width": 420,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:29:24.234Z"
+ },
+ "esign@1280": {
+  "app": "esign",
+  "width": 1280,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T19:05:38.570Z"
+ },
+ "esign@420": {
+  "app": "esign",
+  "width": 420,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T19:05:43.418Z"
+ },
+ "buchhaltung@1280": {
+  "app": "buchhaltung",
+  "width": 1280,
+  "steps": 8,
+  "clicks": 5,
+  "flags": [],
+  "at": "2026-10-15T18:31:42.878Z"
+ },
+ "buchhaltung@420": {
+  "app": "buchhaltung",
+  "width": 420,
+  "steps": 8,
+  "clicks": 5,
+  "flags": [],
+  "at": "2026-10-15T18:31:48.169Z"
+ },
+ "invoices@1280": {
+  "app": "invoices",
+  "width": 1280,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T19:05:18.557Z"
+ },
+ "invoices@420": {
+  "app": "invoices",
+  "width": 420,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [
+   {
+    "step": 1,
+    "label": "geöffnet",
+    "probs": [
+     "horizontal scrollbar"
+    ],
+    "shot": "420-01.jpg"
+   },
+   {
+    "step": 2,
+    "label": "Suche „Müller“ in Suchen...",
+    "probs": [
+     "horizontal scrollbar"
+    ],
+    "shot": "420-02.jpg"
+   },
+   {
+    "step": 3,
+    "label": "Suche geleert",
+    "probs": [
+     "horizontal scrollbar"
+    ],
+    "shot": "420-03.jpg"
+   }
+  ],
+  "at": "2026-10-15T19:05:23.442Z"
+ },
+ "shiftflow@1280": {
+  "app": "shiftflow",
+  "width": 1280,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:29:56.218Z"
+ },
+ "shiftflow@420": {
+  "app": "shiftflow",
+  "width": 420,
+  "steps": 6,
+  "clicks": 3,
+  "flags": [],
+  "at": "2026-10-15T18:30:00.341Z"
+ }
+}

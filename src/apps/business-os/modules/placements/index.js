@@ -1,6 +1,3 @@
-import { renderListOrState } from '../../shared/list-state.js';
-
-const MOD_BUILD = '20260831-shellv2';
 const MODULE_ID = 'placements';
 const PRIMARY = 'placements';
 const CREATE_COMMAND = 'ats.placement.create';
@@ -11,71 +8,102 @@ const TERMINAL_STATUSES = new Set(['early_leave', 'cancelled']);
 
 export const COPY = {
   de: {
-    kicker: 'ATS', listTitle: 'Vermittlungen', candidate: 'Kandidat-ID', client: 'Kunden-Account-ID', placementType: 'Vermittlungsart', directHire: 'Festanstellung (Personalvermittlung)', temporary: 'Arbeitnehmerüberlassung (Zeitarbeit)', qualifications: 'Pflicht-Qualifikationen (Komma)', fee: 'Honorar', guarantee: 'Garantie (Tage)', create: 'Anlegen', more: 'Weitere Angaben', entries: 'Einträge', empty: 'Noch keine Einträge.', syncing: 'Daten werden synchronisiert.', earlyLeaveBooked: 'Frühausstieg verbucht.', clawback: 'Clawback', credit: 'Gutschrift', offlineService: 'Offline: Befehlsdienst nicht verfügbar.', offlineSend: 'Offline: Befehl konnte nicht gesendet werden.', candidateRequired: 'Kandidat-ID erforderlich.', blocked: 'Blockiert.', placementCreated: 'Placement angelegt.', placement: 'Placement', feeInvoice: 'Honorar-Rechnung', invoice: 'Rechnung', cancellation: 'Storno', earlyLeave: 'Frühausstieg', status: 'Status',
-    allTypes: 'Alle Arten', viewAll: 'Alle', viewActive: 'Aktiv', viewEnded: 'Beendet', composerKicker: 'NEUE VERMITTLUNG', composerTitle: 'Vermittlung anlegen', composerHint: 'Eintrag wählen oder neue Vermittlung anlegen.', recordKicker: 'VERMITTLUNG', importDone: 'Import abgeschlossen.', exportDone: 'Export erstellt.', invalidFile: 'Datei konnte nicht gelesen werden (JSON erwartet).',
+    title: 'Vermittlungen', kicker: 'ATS', listTitle: 'Vermittlungen', candidate: 'Kandidat', client: 'Kunde', placementType: 'Vermittlungsart', directHire: 'Festanstellung (Personalvermittlung)', temporary: 'Arbeitnehmerüberlassung (Zeitarbeit)', qualifications: 'Pflicht-Qualifikationen (Komma)', fee: 'Honorar', guarantee: 'Garantie (Tage)', create: 'Anlegen', more: 'Weitere Angaben', entries: 'Einträge', earlyLeaveBooked: 'Frühausstieg verbucht.', clawback: 'Clawback', credit: 'Gutschrift', candidateRequired: 'Kandidat-ID erforderlich.', blocked: 'Blockiert.', placement: 'Placement', feeInvoice: 'Honorar-Rechnung', invoice: 'Rechnung', cancellation: 'Storno', earlyLeave: 'Frühausstieg', status: 'Status',
+    allTypes: 'Alle Arten', viewAll: 'Alle', viewActive: 'Aktiv', viewEnded: 'Beendet', composerKicker: 'NEUE VERMITTLUNG', composerTitle: 'Vermittlung anlegen', cancelNew: 'Abbrechen', recordKicker: 'VERMITTLUNG', importDone: 'Import:', invalidFile: 'Datei konnte nicht gelesen werden (JSON erwartet).',
     statusConfirmed: 'bestätigt', statusEarlyLeave: 'Frühausstieg', statusCancelled: 'storniert',
     showAsList: 'Als Liste anzeigen', showAsCards: 'Als Karten anzeigen', localeTag: 'de-DE', start: 'Start',
   },
   en: {
-    kicker: 'ATS', listTitle: 'Placements', candidate: 'Candidate ID', client: 'Client account ID', placementType: 'Placement type', directHire: 'Permanent placement', temporary: 'Temporary staffing', qualifications: 'Required qualifications (comma-separated)', fee: 'Fee', guarantee: 'Guarantee (days)', create: 'Create', more: 'More details', entries: 'records', empty: 'No placements yet.', syncing: 'Syncing data.', earlyLeaveBooked: 'Early leave recorded.', clawback: 'Clawback', credit: 'Credit note', offlineService: 'Offline: command service unavailable.', offlineSend: 'Offline: command could not be sent.', candidateRequired: 'Candidate ID is required.', blocked: 'Blocked.', placementCreated: 'Placement created.', placement: 'Placement', feeInvoice: 'Fee invoice', invoice: 'Invoice', cancellation: 'Cancellation', earlyLeave: 'Early leave', status: 'Status',
-    allTypes: 'All types', viewAll: 'All', viewActive: 'Active', viewEnded: 'Ended', composerKicker: 'NEW PLACEMENT', composerTitle: 'Create placement', composerHint: 'Select a record or start a new placement.', recordKicker: 'PLACEMENT', importDone: 'Import complete.', exportDone: 'Export created.', invalidFile: 'File could not be read (JSON expected).',
+    title: 'Placements', kicker: 'ATS', listTitle: 'Placements', candidate: 'Candidate ID', client: 'Client account ID', placementType: 'Placement type', directHire: 'Permanent placement', temporary: 'Temporary staffing', qualifications: 'Required qualifications (comma-separated)', fee: 'Fee', guarantee: 'Guarantee (days)', create: 'Create', more: 'More details', entries: 'records', earlyLeaveBooked: 'Early leave recorded.', clawback: 'Clawback', credit: 'Credit note', candidateRequired: 'Candidate ID is required.', blocked: 'Blocked.', placement: 'Placement', feeInvoice: 'Fee invoice', invoice: 'Invoice', cancellation: 'Cancellation', earlyLeave: 'Early leave', status: 'Status',
+    allTypes: 'All types', viewAll: 'All', viewActive: 'Active', viewEnded: 'Ended', composerKicker: 'NEW PLACEMENT', composerTitle: 'Create placement', cancelNew: 'Cancel', recordKicker: 'PLACEMENT', importDone: 'Import:', invalidFile: 'File could not be read (JSON expected).', // v4-allow: en
     statusConfirmed: 'confirmed', statusEarlyLeave: 'early leave', statusCancelled: 'cancelled',
     showAsList: 'Show as list', showAsCards: 'Show as cards', localeTag: 'en-GB', start: 'Start',
   },
 };
 let text = COPY.de;
 
-export async function mount(ctx) {
-  text = COPY[ctx.locale === 'en' ? 'en' : 'de'];
-  await ensureStyles();
-  ctx.host.innerHTML = await loadMarkup();
-  ctx.host.dataset.atsModule = MODULE_ID;
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
+// App-API 4.0 (Shell v4): mount(root, api, {restored}) -> {unmount, snapshot}.
+const SNAPSHOT_VERSION = 1;
+const FORM_FIELDS = ['candidate_id', 'client_account_id', 'placement_type', 'required_types', 'fee', 'guarantee_days'];
 
-  const root = ctx.host.querySelector('[data-ats-root]');
+export async function mount(host, api, { restored } = {}) {
+  if (!host.dataset.app) host.dataset.app = api.app?.id || MODULE_ID;
+  setLocale(api, api.shell.locale.get());
+  // CSS laedt die Shell aus dem Manifest; index.html liefert der Service Worker versioniert (§16.15).
+  host.innerHTML = await loadMarkup();
+  const disposers = [];
+  const root = host.querySelector('[data-ats-root]');
   applyStaticCopy(root);
+  api.shell.setTitle(text.title);
 
   const listPane = root?.querySelector('[data-placements-list-pane]');
   const listEl = root?.querySelector('[data-ats-list]');
   const formEl = root?.querySelector('[data-ats-form]');
-  const gateEl = root?.querySelector('[data-ats-gate]');
   const detailEl = root?.querySelector('[data-ats-detail]');
-  const wbKicker = root?.querySelector('[data-ats-wb-kicker]');
   const wbTitle = root?.querySelector('[data-ats-wb-title]');
-  const wbFooter = root?.querySelector('[data-ats-wb-footer]');
   const collapseBtn = root?.querySelector('[data-ats-collapse]');
   const newBtn = root?.querySelector('[data-action="new"]');
   const importBtn = root?.querySelector('[data-action="import"]');
   const exportBtn = root?.querySelector('[data-action="export"]');
+  const restore = isPlainObject(restored) && restored.v === SNAPSHOT_VERSION ? restored : null;
+  if (restore) restoreView(restore);
 
-  const state = { records: [], visible: [], selectedId: '', userCollapsed: false, grammar: readGrammarState(listPane) };
-  const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
+  const state = {
+    records: [], visible: [],
+    selectedId: restore && typeof restore.selectedId === 'string' ? restore.selectedId : '',
+    // Anlegen nur über „+ Neu“ (FIX9a): das leere Formular ist ein eigener Modus, nie über einem Datensatz.
+    composing: Boolean(restore && restore.composing === true),
+    userCollapsed: Boolean(restore && restore.userCollapsed === true),
+    grammar: readGrammarState(listPane),
+  };
+  let pendingScrollTop = restore && Number(restore.listScrollTop) > 0 ? Number(restore.listScrollTop) : 0;
 
-  // Shell-owned readiness for the primary collection; absent API (older
-  // shells, tests) reads as null → the previous empty-state behaviour.
-  function readPlacementsReadiness() {
-    const read = ctx.sync?.collectionReadiness;
-    if (typeof read !== 'function') return null;
-    try { return read.call(ctx.sync, PRIMARY) || null; } catch { return null; }
+  // Die Spalten-Grammatik verdrahtet die App selbst (keine DOM-Heuristik der Shell).
+  const { autoWirePaneGrammar } = await import('ctox:shared/pane-grammar.js');
+  autoWirePaneGrammar(root);
+
+  // Zustand nur ueber die Zustandszone der Shell, stabile Codes je Fall.
+  const report = (level, code, str, ref) => api.status.report(ref ? { level, code, text: str, ref } : { level, code, text: str });
+  const clear = (code) => api.status.clear(code);
+
+  function restoreView(snap) {
+    const search = listPane?.querySelector('[data-pg-search]');
+    if (search && typeof snap.search === 'string') search.value = snap.search;
+    if (listPane && (snap.view === 'list' || snap.view === 'cards')) listPane.dataset.pgDefaultView = snap.view;
+    const tabs = [...(listPane?.querySelectorAll('[data-pg-band]') || [])];
+    if (typeof snap.band === 'string' && tabs.some((tab) => tab.dataset.pgBand === snap.band)) {
+      tabs.forEach((tab) => {
+        const on = tab.dataset.pgBand === snap.band;
+        tab.setAttribute('aria-selected', String(on));
+        tab.classList.toggle('is-active', on);
+      });
+    }
+    const typeSel = listPane?.querySelector('[data-pg-filter][data-pg-name="placement_type"]');
+    const type = isPlainObject(snap.filters) ? snap.filters.placement_type : null;
+    if (typeSel && typeof type === 'string' && [...typeSel.options].some((o) => o.value === type)) typeSel.value = type;
+    const tray = listPane?.querySelector('[data-pg-tray]');
+    if (tray && snap.trayOpen === true) { tray.hidden = false; listPane.querySelector('[data-pg-tray-toggle]')?.setAttribute('aria-expanded', 'true'); }
+    if (isPlainObject(snap.form)) {
+      for (const name of FORM_FIELDS) {
+        const el = formEl?.querySelector('[name="' + name + '"]');
+        if (el && typeof snap.form[name] === 'string') el.value = snap.form[name];
+      }
+    }
+    const more = formEl?.querySelector('details.ats-more');
+    if (more && snap.moreOpen === true) more.open = true;
   }
-  // Collection readiness snapshot for the record list (shell-owned sync
-  // contract); null when the shell exposes no readiness API.
-  let placementReadiness = readPlacementsReadiness();
 
-  // Gate feedback renders in the kit callout; kinds map onto its variants.
-  const GATE_VARIANTS = { ok: 'is-success', block: 'is-danger', offline: 'is-warning' };
-  function setGate(html, kind) {
-    if (!gateEl) return;
-    gateEl.className = 'ctox-callout' + (GATE_VARIANTS[kind] ? ' ' + GATE_VARIANTS[kind] : '');
-    gateEl.innerHTML = html || '';
+  function formValues() {
+    const out = {};
+    for (const name of FORM_FIELDS) out[name] = formEl?.querySelector('[name="' + name + '"]')?.value ?? '';
+    return out;
   }
 
   function selectedRecord() {
     return state.records.find((r) => recordKey(r) === state.selectedId) || null;
   }
 
-  // ---- LEFT column: reactive record list under the shell-wired grammar ------
+  // ---- LEFT column: reactive record list under the pane grammar ------------
   function renderListRegion() {
     const counts = bandCounts(state.records);
     state.visible = filterRecords(state.records, state.grammar);
@@ -85,14 +113,11 @@ export async function mount(ctx) {
     // in renderList) says the row carries the one-line compact markup, so the
     // dense rules can never land on a card-shaped row.
     listEl?.classList.toggle('is-list-view', view === 'list');
-    if (listEl) listEl.innerHTML = renderList(state.visible, {
-      view,
-      selectedId: state.selectedId,
-      sourceEmpty: state.records.length === 0,
-      readiness: placementReadiness,
-    }, text);
+    if (listEl) listEl.innerHTML = renderList(state.visible, { view, selectedId: state.selectedId }, text);
     writeCounts(listPane, counts);
     writeFooter(listPane, `${state.visible.length} ${text.entries} · ${bandLabel(state.grammar, text)}`);
+    const scroller = listEl?.closest('.ctox-pane-body') || listEl;
+    if (pendingScrollTop && scroller && state.records.length) { scroller.scrollTop = pendingScrollTop; pendingScrollTop = 0; }
   }
 
   // ---- MAIN column: workbench bound to the selected record ------------------
@@ -104,34 +129,16 @@ export async function mount(ctx) {
       collapseBtn.hidden = !hasSel; // only show the reveal control when there is something to reveal
       collapseBtn.setAttribute('aria-pressed', String(hasSel && state.userCollapsed));
     }
-    if (wbKicker) wbKicker.textContent = hasSel ? text.recordKicker : text.composerKicker;
-    if (wbTitle) wbTitle.textContent = hasSel ? placementTitle(rec) : text.composerTitle;
+    if (formEl) formEl.hidden = hasSel || !state.composing;
+    if (wbTitle) wbTitle.textContent = hasSel ? placementTitle(rec) : (state.composing ? text.composerTitle : '');
     if (detailEl) detailEl.innerHTML = showDetail ? renderDetail(rec, text) : '';
-    if (wbFooter) wbFooter.textContent = hasSel ? `${text.placement}: ${rec.id || '—'}` : text.composerHint;
   }
 
-  function fillForm(r) {
-    if (!formEl) return;
-    const candidate = formEl.querySelector('[name="candidate_id"]');
-    const client = formEl.querySelector('[name="client_account_id"]');
-    const type = formEl.querySelector('[name="placement_type"]');
-    const fee = formEl.querySelector('[name="fee"]');
-    const guarantee = formEl.querySelector('[name="guarantee_days"]');
-    const required = formEl.querySelector('[name="required_types"]');
-    if (candidate) candidate.value = r.candidate_id || '';
-    if (client) client.value = r.client_account_id || '';
-    if (type) type.value = r.placement_type === 'arbeitnehmerueberlassung' ? 'arbeitnehmerueberlassung' : '';
-    if (fee) fee.value = r.fee == null ? '' : String(r.fee);
-    if (guarantee) guarantee.value = r.guarantee_days == null ? '' : String(r.guarantee_days);
-    if (required) required.value = ''; // required_types is a create-only input, not persisted on the record
-  }
 
   function selectRecord(id) {
     state.selectedId = id;
     state.userCollapsed = false;
-    const rec = selectedRecord();
-    if (rec) fillForm(rec);
-    setGate('');
+    state.composing = false;
     // Selection is an in-place class flip — a list rebuild resets the
     // operator's scroll (design-guide: re-renders never move the operator).
     applyListSelection();
@@ -149,11 +156,17 @@ export async function mount(ctx) {
   function startNew() {
     state.selectedId = '';
     state.userCollapsed = false;
+    state.composing = true;
     try { formEl?.reset(); } catch {}
-    setGate('');
     renderListRegion();
     renderWorkbench();
     try { formEl?.querySelector('[name="candidate_id"]')?.focus(); } catch {}
+  }
+
+  function cancelNew() {
+    state.composing = false;
+    try { formEl?.reset(); } catch {}
+    renderWorkbench();
   }
 
   function onCollapseToggle() {
@@ -162,21 +175,10 @@ export async function mount(ctx) {
     renderWorkbench();
   }
 
-  async function loadRecords() {
-    const col = collection();
-    let rows = [];
-    if (col?.find) {
-      try {
-        const docs = await col.find({ selector: {} }).exec();
-        rows = docs.map((d) => (typeof d.toJSON === 'function' ? d.toJSON() : d)).filter((r) => !r._deleted);
-      } catch (e) { console.error('[placements] load failed:', e); }
-    }
-    rows.sort((a, b) => (b.updated_at_ms || 0) - (a.updated_at_ms || 0));
-    state.records = rows;
-  }
-
-  async function refresh() {
-    await loadRecords();
+  function setRecords(rows) {
+    const list = (Array.isArray(rows) ? rows : []).filter((r) => r && !r._deleted);
+    list.sort((a, b) => (b.updated_at_ms || 0) - (a.updated_at_ms || 0));
+    state.records = list;
     renderListRegion();
     renderWorkbench();
   }
@@ -187,22 +189,19 @@ export async function mount(ctx) {
     if (!row || !listEl?.contains(row)) return;
     selectRecord(row.getAttribute('data-ats-row') || '');
   }
-  listEl?.addEventListener('click', onListClick);
 
   // ---- View: ONE button, one action (Betreiber-Direktive 31.08.2026) --------
-  // The shell grammar models the view as N aria-pressed buttons, which a
-  // single action button cannot express, so the module owns the flip and
-  // republishes it through the pane's data-pg-default-view.
+  // The grammar models the view as N aria-pressed buttons, which a single
+  // action button cannot express, so the module owns the flip and republishes
+  // it through the pane's data-pg-default-view.
   const viewToggleBtn = root?.querySelector('[data-placements-view-toggle]');
   function onViewToggle() {
     state.grammar = { ...state.grammar, view: state.grammar.view === 'list' ? 'cards' : 'list' };
     syncViewToggle(listPane, state.grammar.view, text);
     renderListRegion();
   }
-  viewToggleBtn?.addEventListener('click', onViewToggle);
-  syncViewToggle(listPane, state.grammar.view, text);
 
-  // Re-render the list on any shell-wired grammar change (search/view/tray/band).
+  // Re-render the list on any grammar change (search/view/tray/band).
   function onGrammarChange(event) {
     if (!listPane || !listPane.contains(event.target)) return;
     const detail = event.detail || readGrammarState(listPane);
@@ -212,50 +211,58 @@ export async function mount(ctx) {
     state.grammar = { ...detail, view };
     renderListRegion();
   }
-  root?.addEventListener('ctox-pane-grammar-change', onGrammarChange);
+
+  // Befehl: api.command legt das Befehlsdokument lokal an und liefert sofort; die UI wartet nie.
+  // Fehlschlag → Zone (error). Ergebnis (done) wertet onDone aus.
+  function sendCommand(type, payload, onDone) {
+    const handle = api.command(type, payload);
+    const code = 'placements.command.' + type;
+    let off = null;
+    let finished = false;
+    const stop = () => { finished = true; off?.(); off = null; };
+    off = handle.status.subscribe((s) => {
+      if (s?.status === 'failed') {
+        report('error', code, type + ': ' + (s.error || 'failed'), handle.id);
+        stop();
+      } else if (s?.status === 'done') {
+        clear(code);
+        try { onDone?.(s.result, handle); } catch (e) { console.error('[placements] result failed:', e); }
+        stop();
+      }
+    });
+    if (finished) off?.();
+    handle.local.catch((e) => report('error', code, type + ': ' + (e?.code || 'local') + ' ' + (e?.message || e), handle.id));
+    disposers.push(stop);
+    return handle;
+  }
 
   // ---- Early-leave flow (unchanged command type + payload) ------------------
-  async function onDetailClick(event) {
+  // Statuswechsel und Gutschrift erscheinen live am Datensatz; der Clawback-Betrag steht nur im
+  // Befehlsergebnis → Zustandszone (info).
+  function onDetailClick(event) {
     const btn = event.target?.closest?.('[data-early-leave]');
     if (!btn) return;
     const placementId = btn.getAttribute('data-early-leave');
     if (!placementId) return;
-    setGate('');
-    try {
-      const result = await ctx.commandBus?.dispatch?.({
-        module: MODULE_ID,
-        command_type: EARLY_LEAVE_COMMAND,
-        payload: { placement_id: placementId, left_at_ms: Date.now() },
-      });
+    sendCommand(EARLY_LEAVE_COMMAND, { placement_id: placementId, left_at_ms: Date.now() }, (result) => {
       const cn = result?.credit_note_id ?? result?.data?.credit_note_id ?? null;
       const clawback = result?.clawback ?? result?.data?.clawback ?? null;
-      setGate(
-        `<strong>${esc(text.earlyLeaveBooked)}</strong>`
-        + (clawback != null ? `<div class="ats-result-row">${esc(text.clawback)}: ` + esc(String(clawback)) + '</div>' : '')
-        + (cn ? `<div class="ats-result-row">${esc(text.credit)}: ` + esc(cn) + '</div>' : ''),
-        'ok',
-      );
-      await refresh();
-    } catch (e) {
-      console.error('[placements] early_leave dispatch failed:', e);
-      setGate(text.offlineSend, 'offline');
-    }
+      report('info', 'placements.early_leave.result', [
+        text.earlyLeaveBooked,
+        clawback != null ? `${text.clawback}: ${clawback}` : '',
+        cn ? `${text.credit}: ${cn}` : '',
+      ].filter(Boolean).join(' · '), placementId);
+    });
   }
-  detailEl?.addEventListener('click', onDetailClick);
 
   // ---- Create flow (unchanged command type + payload) -----------------------
-  async function onSubmit(event) {
+  function onSubmit(event) {
     event.preventDefault();
-    setGate('');
-    const dispatch = ctx.commandBus?.dispatch;
-    if (typeof dispatch !== 'function') {
-      setGate(text.offlineService, 'offline');
-      return;
-    }
     const data = new FormData(formEl);
     const f = Object.fromEntries(data.entries());
     const candidate_id = String(f.candidate_id || '').trim();
-    if (!candidate_id) { setGate(text.candidateRequired, 'block'); return; }
+    if (!candidate_id) { report('warn', 'placements.form.candidate_required', text.candidateRequired); return; }
+    clear('placements.form.candidate_required');
     const placementType = String(f.placement_type || '').trim();
     const requiredTypes = String(f.required_types || '')
       .split(',')
@@ -269,38 +276,24 @@ export async function mount(ctx) {
       fee: f.fee === '' || f.fee == null ? null : Number(f.fee),
       guarantee_days: f.guarantee_days === '' || f.guarantee_days == null ? null : Number(f.guarantee_days),
     };
-
-    let result;
-    try {
-      result = await ctx.commandBus?.dispatch?.({
-        module: MODULE_ID,
-        command_type: CREATE_COMMAND,
-        payload,
-      });
-    } catch (e) {
-      console.error('[placements] dispatch failed:', e);
-      setGate(text.offlineSend, 'offline');
-      return;
-    }
-
-    if (renderBlocked(result, setGate)) return;
-
-    const placementId = result?.placement_id ?? result?.data?.placement_id ?? null;
-    const feeInvoiceId = result?.fee_invoice_id ?? result?.data?.fee_invoice_id ?? null;
-    setGate(
-      `<strong>${esc(text.placementCreated)}</strong>`
-      + `<div class="ats-result-row">${esc(text.placement)}: ` + esc(placementId ?? '—') + '</div>'
-      + `<div class="ats-result-row">${esc(text.feeInvoice)}: ` + esc(feeInvoiceId ?? '—') + '</div>',
-      'ok'
-    );
-    try { formEl.reset(); } catch {}
-    await refresh();
+    if (payload.required_types === undefined) delete payload.required_types;
+    const submitted = JSON.stringify(formValues());
+    sendCommand(CREATE_COMMAND, payload, (result) => {
+      const blockers = blockedReasons(result);
+      if (blockers) {
+        report('warn', 'placements.create.blocked', text.blocked + (blockers.length ? ' ' + blockers.join(' · ') : ''), candidate_id);
+        return;
+      }
+      clear('placements.create.blocked');
+      // Die neue Vermittlung erscheint live in der Liste (Rechnungs-ID am Datensatz); Formular
+      // nur leeren, wenn seit dem Absenden nichts Neues eingegeben wurde.
+      if (JSON.stringify(formValues()) === submitted) {
+        try { formEl.reset(); } catch {}
+        state.composing = false;
+        renderWorkbench();
+      }
+    });
   }
-  formEl?.addEventListener('submit', onSubmit);
-
-  // ---- Header actions: Neu / Import / Export --------------------------------
-  newBtn?.addEventListener('click', startNew);
-  collapseBtn?.addEventListener('click', onCollapseToggle);
 
   function onExport() {
     const rows = state.visible.length ? state.visible : state.records;
@@ -312,79 +305,140 @@ export async function mount(ctx) {
       anchor.href = url;
       anchor.download = `placements-${rows.length}.json`;
       anchor.style.display = 'none';
-      (ctx.host || document.documentElement).appendChild(anchor);
+      host.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      ctx.notifications?.info?.(text.exportDone);
     } catch (e) {
       console.error('[placements] export failed:', e);
     } finally {
       if (url) { try { URL.revokeObjectURL(url); } catch {} }
     }
   }
-  exportBtn?.addEventListener('click', onExport);
+
+  async function importFile(file) {
+    let parsed;
+    try {
+      parsed = JSON.parse(await file.text());
+    } catch (e) {
+      console.error('[placements] import parse failed:', e);
+      report('error', 'placements.import.invalid', text.invalidFile);
+      return;
+    }
+    clear('placements.import.invalid');
+    const items = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.records) ? parsed.records : [parsed]);
+    let ok = 0;
+    for (const item of items) {
+      const record = normalizePlacement(item, { nowMs: Date.now() });
+      if (!record.candidate_id) continue;
+      try { await api.put(PRIMARY, record).local; ok += 1; } catch (e) { console.error('[placements] import write failed:', e); }
+    }
+    if (ok < items.length) report('warn', 'placements.import.partial', `${text.importDone} ${ok}/${items.length} ${text.entries}`);
+    else clear('placements.import.partial');
+  }
 
   function onImport() {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'application/json,.json';
-    input.addEventListener('change', async () => {
+    input.addEventListener('change', () => {
       const file = input.files && input.files[0];
-      if (!file) return;
-      const col = collection();
-      if (!col?.upsert) { setGate(text.offlineService, 'offline'); return; }
-      let parsed;
-      try {
-        parsed = JSON.parse(await file.text());
-      } catch (e) {
-        console.error('[placements] import parse failed:', e);
-        setGate(text.invalidFile, 'block');
-        return;
-      }
-      const items = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.records) ? parsed.records : [parsed]);
-      let ok = 0;
-      for (const item of items) {
-        const record = normalizePlacement(item, { nowMs: Date.now() });
-        if (!record.candidate_id) continue;
-        try { await col.upsert(record); ok += 1; } catch (e) { console.error('[placements] import upsert failed:', e); }
-      }
-      setGate(`<strong>${esc(text.importDone)}</strong><div class="ats-result-row">${ok} ${esc(text.entries)}</div>`, 'ok');
-      await refresh();
+      if (file) importFile(file);
     }, { once: true });
     input.click();
   }
+
+  listEl?.addEventListener('click', onListClick);
+  viewToggleBtn?.addEventListener('click', onViewToggle);
+  syncViewToggle(listPane, state.grammar.view, text);
+  root?.addEventListener('ctox-pane-grammar-change', onGrammarChange);
+  detailEl?.addEventListener('click', onDetailClick);
+  formEl?.addEventListener('submit', onSubmit);
+  newBtn?.addEventListener('click', startNew);
+  const cancelBtn = root?.querySelector('[data-action="cancel-new"]');
+  cancelBtn?.addEventListener('click', cancelNew);
+  collapseBtn?.addEventListener('click', onCollapseToggle);
+  exportBtn?.addEventListener('click', onExport);
   importBtn?.addEventListener('click', onImport);
 
-  // ---- Reactive backbone ----------------------------------------------------
-  let sub = null;
-  let readinessUnsub = null;
-  const col = collection();
-  if (col?.find) { try { sub = col.find({ selector: {} }).$?.subscribe?.(() => { refresh().catch(() => {}); }); } catch {} }
-  // Re-render the record list when the primary collection flips its
-  // replication state so the empty list swaps between the syncing shell and
-  // the real empty state without waiting for data changes.
-  if (typeof ctx.sync?.subscribeCollectionReadiness === 'function') {
-    try {
-      const unsubscribe = ctx.sync.subscribeCollectionReadiness(PRIMARY, (snapshot) => {
-        placementReadiness = snapshot || null;
-        renderListRegion();
-      });
-      if (typeof unsubscribe === 'function') readinessUnsub = unsubscribe;
-    } catch {}
-  }
-  await refresh();
+  // ---- Reactive backbone: Live-Abo statt Laden/Polling ----------------------
+  disposers.push(api.query(PRIMARY, {}).subscribe(setRecords));
+  disposers.push(api.shell.locale.subscribe((next) => {
+    if (!setLocale(api, next)) return;
+    applyStaticCopy(root);
+    api.shell.setTitle(text.title);
+    syncViewToggle(listPane, state.grammar.view, text);
+    renderListRegion();
+    renderWorkbench();
+  }));
 
-  return () => {
-    try { sub?.unsubscribe?.(); } catch {}
-    try { readinessUnsub?.(); } catch {}
-    formEl?.removeEventListener('submit', onSubmit);
-    listEl?.removeEventListener('click', onListClick);
-    viewToggleBtn?.removeEventListener('click', onViewToggle);
-    detailEl?.removeEventListener('click', onDetailClick);
-    root?.removeEventListener('ctox-pane-grammar-change', onGrammarChange);
-    ctx.host.replaceChildren();
-    delete ctx.host.dataset.atsModule;
+  return {
+    unmount() {
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (e) { console.warn('[placements] unsubscribe failed', e); }
+      }
+      formEl?.removeEventListener('submit', onSubmit);
+      listEl?.removeEventListener('click', onListClick);
+      viewToggleBtn?.removeEventListener('click', onViewToggle);
+      detailEl?.removeEventListener('click', onDetailClick);
+      root?.removeEventListener('ctox-pane-grammar-change', onGrammarChange);
+      newBtn?.removeEventListener('click', startNew);
+      cancelBtn?.removeEventListener('click', cancelNew);
+      collapseBtn?.removeEventListener('click', onCollapseToggle);
+      exportBtn?.removeEventListener('click', onExport);
+      importBtn?.removeEventListener('click', onImport);
+      host.replaceChildren();
+    },
+    snapshot() {
+      const g = readGrammarState(listPane);
+      return {
+        v: SNAPSHOT_VERSION,
+        selectedId: state.selectedId,
+        userCollapsed: state.userCollapsed,
+        search: listPane?.querySelector('[data-pg-search]')?.value || '',
+        view: state.grammar.view === 'list' ? 'list' : 'cards',
+        band: g.band,
+        filters: { ...g.filters },
+        trayOpen: listPane?.querySelector('[data-pg-tray]')?.hidden === false,
+        form: formValues(),
+        composing: state.composing,
+        moreOpen: Boolean(formEl?.querySelector('details.ats-more')?.open),
+        listScrollTop: (listEl?.closest('.ctox-pane-body') || listEl)?.scrollTop || 0,
+      };
+    },
   };
+}
+
+function isPlainObject(v) { return Boolean(v) && typeof v === 'object' && !Array.isArray(v); }
+
+// Sprache: api.shell.locale (live) + api.shell.t('placements.<key>') uebersteuert die eingebetteten Texte.
+let currentLang = 'de';
+function setLocale(api, value) {
+  const next = String(value || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+  const changed = next !== currentLang || text === COPY[currentLang];
+  currentLang = next;
+  const base = COPY[next];
+  const out = {};
+  for (const key of Object.keys(base)) {
+    const k = MODULE_ID + '.' + key;
+    let v = null;
+    try { v = api?.shell?.t?.(k); } catch {}
+    out[key] = typeof v === 'string' && v && v !== k ? v : base[key];
+  }
+  text = out;
+  return changed;
+}
+
+// Ergebnis von ats.placement.create: blockiert → Liste der Gruende (ggf. leer), sonst null.
+export function blockedReasons(result) {
+  const decision = result?.gate || result?.decision || null;
+  const blockers = result?.blockers || decision?.blockers || result?.errors || null;
+  const blocked = result?.ok === false || result?.status === 'blocked'
+    || decision?.status === 'blocked' || decision?.decision === 'block'
+    || (Array.isArray(blockers) && blockers.length > 0);
+  if (!blocked) return null;
+  return (Array.isArray(blockers) ? blockers : [blockers])
+    .filter(Boolean)
+    .map((b) => (typeof b === 'string' ? b : (b?.message || b?.reason || JSON.stringify(b))));
 }
 
 // ---------------------------------------------------------------------------
@@ -457,24 +511,25 @@ export function normalizePlacement(raw, opts = {}) {
   return record;
 }
 
+// Record list: rows only. An empty list renders nothing (App-API 4.0: no
+// state text in the content; state lives only in the shell status zone).
 export function renderList(records, opts = {}, t = text) {
   const view = opts.view === 'list' ? 'list' : 'cards';
   const selectedId = opts.selectedId || '';
-  // Readiness gates only the source-empty branch (unfiltered collection has
-  // no rows yet); filter-empties (source holds rows) stay plain ctox-empty.
-  return renderListOrState(records, opts.sourceEmpty ? (opts.readiness ?? null) : null, {
-    renderRows: (rows) => rows.map((r) => (view === 'list' ? shardCompact(r, selectedId, t) : shardCard(r, selectedId, t))).join(''),
-    empty: t.empty,
-    syncing: t.syncing,
-  });
+  return (records || []).map((r) => (view === 'list' ? shardCompact(r, selectedId, t) : shardCard(r, selectedId, t))).join('');
 }
 
 function recordKey(r) { return (r && r.id) || ''; }
 
+// Namen statt IDs (Textdiät Regel 4): Anzeigename aus dem Datensatz (<basis>_name / <basis>.name / <basis>_title),
+// sonst „Unbekannt“ – nie die technische ID.
+function refName(r, base) {
+  const v = r?.[base + '_name'] ?? r?.[base]?.name ?? r?.[base + '_title'];
+  return v ? String(v) : (currentLang === 'en' ? 'Unknown' : 'Unbekannt'); // v4-allow: en
+}
+
 function placementTitle(r) {
-  const candidate = (r && r.candidate_id) || '—';
-  const client = (r && r.client_account_id) || '—';
-  return `${candidate} → ${client}`;
+  return `${refName(r, 'candidate')} → ${refName(r, 'client')}`;
 }
 
 function typeLabel(placement_type, t) {
@@ -558,8 +613,8 @@ function renderDetail(r, t) {
   const status = String(r.status || 'confirmed');
   const active = !TERMINAL_STATUSES.has(status);
   const fields = [
-    detailField(t.candidate, r.candidate_id || '—'),
-    detailField(t.client, r.client_account_id || '—'),
+    detailField(t.candidate, refName(r, 'candidate')),
+    detailField(t.client, refName(r, 'client')),
     detailField(t.placementType, typeLabel(r.placement_type, t)),
     detailField(t.fee, r.fee == null ? '—' : String(r.fee)),
     detailField(t.guarantee, r.guarantee_days == null ? '—' : String(r.guarantee_days)),
@@ -587,22 +642,6 @@ function bandLabel(grammar, t) {
   if (type && type !== 'all') parts.push(type === 'arbeitnehmerueberlassung' ? t.temporary : t.directHire);
   if (grammar.search) parts.push(`"${grammar.search}"`);
   return parts.join(' · ');
-}
-
-// Shared blocked-decision renderer for the create flow.
-function renderBlocked(result, setGate) {
-  const decision = result?.gate || result?.decision || null;
-  const blockers = result?.blockers || decision?.blockers || result?.errors || null;
-  const blocked = result?.ok === false || result?.status === 'blocked'
-    || decision?.status === 'blocked' || decision?.decision === 'block'
-    || (Array.isArray(blockers) && blockers.length > 0);
-  if (!blocked) return false;
-  const items = (Array.isArray(blockers) ? blockers : [blockers])
-    .filter(Boolean)
-    .map((b) => '<li>' + esc(typeof b === 'string' ? b : (b?.message || b?.reason || JSON.stringify(b))) + '</li>')
-    .join('');
-  setGate(`<strong>${esc(text.blocked)}</strong>` + (items ? '<ul class="ats-blockers">' + items + '</ul>' : ''), 'block');
-  return true;
 }
 
 // Ein-Knopf-Umschalter: das Icon zeigt die Ansicht, zu der gewechselt wird.
@@ -669,15 +708,8 @@ function applyStaticCopy(root) {
   root?.querySelectorAll?.('[data-copy]').forEach((node) => { node.textContent = text[node.dataset.copy] || node.textContent; });
 }
 
-async function ensureStyles() {
-  const href = new URL('./index.css', import.meta.url).pathname + '?v=' + MOD_BUILD;
-  if (document.querySelector('link[href="' + href + '"]')) return;
-  const link = document.createElement('link'); link.rel = 'stylesheet'; link.href = href; document.head.append(link);
-}
-
 async function loadMarkup() {
-  const url = new URL('./index.html', import.meta.url).pathname + '?v=' + MOD_BUILD;
-  const html = await fetch(url).then((r) => r.text());
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((r) => r.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((n) => n.remove());
   return doc.body.innerHTML;

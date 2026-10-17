@@ -41,150 +41,148 @@ pub(super) fn page(
     owned_turn: &Value,
     request: &wire::ExecutionPageRequest,
 ) -> anyhow::Result<wire::ExecutionPage> {
-    request.validate().map_err(anyhow::Error::msg)?;
-    let include_public_text = request.include_public_text == Some(true) && cfg!(unix);
-    let include_native_text = request.include_native_message_text == Some(true) && cfg!(unix);
-    let mut event_kinds = EVENT_KINDS.to_owned();
-    if include_public_text {
-        event_kinds.push_str(",'worker.assistant_text'");
-    }
-    if include_native_text {
-        event_kinds.push_str(",'worker.native_message_text'");
-    }
-    let command_id = owned_turn["command_id"]
-        .as_str()
-        .context("authorized native command missing")?;
-    let task_id = owned_turn["task_id"]
-        .as_str()
-        .context("authorized native task missing")?;
-    let mut result = wire::ExecutionPage {
-        command_id: command_id.into(),
-        task_id: task_id.into(),
-        attempt: None,
-        events: vec![],
-        next_cursor: None,
-        has_more: false,
-        public_text_supported: (request.include_public_text == Some(true)).then_some(cfg!(unix)),
-        native_message_text_supported: (request.include_native_message_text == Some(true))
-            .then_some(cfg!(unix)),
-    };
-    let mut conn = Connection::open_with_flags(
-        crate::paths::core_db(root),
-        OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
-    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-    // A DEFERRED read snapshot, without schema initialization or a writer fence.
-    let tx = conn.transaction()?;
-    if !table(&tx, "ctox_harness_flow_events")? {
-        ensure!(
-            request.attempt_id.is_none() && request.cursor.is_none(),
-            "native attempt is unavailable to this supervisor task"
-        );
-        return Ok(result);
-    }
-    let selection = format!(
-        "SELECT json_extract(metadata_json,'$.attempt_id'),
+    let owned_turn = owned_turn.clone();
+    let request: wire::ExecutionPageRequest =
+        serde_json::from_value(serde_json::to_value(request)?)?;
+    crate::lcm::with_lcm_read(&crate::paths::core_db(root), move |tx: &Connection| {
+        request.validate().map_err(anyhow::Error::msg)?;
+        let include_public_text = request.include_public_text == Some(true) && cfg!(unix);
+        let include_native_text = request.include_native_message_text == Some(true) && cfg!(unix);
+        let mut event_kinds = EVENT_KINDS.to_owned();
+        if include_public_text {
+            event_kinds.push_str(",'worker.assistant_text'");
+        }
+        if include_native_text {
+            event_kinds.push_str(",'worker.native_message_text'");
+        }
+        let command_id = owned_turn["command_id"]
+            .as_str()
+            .context("authorized native command missing")?;
+        let task_id = owned_turn["task_id"]
+            .as_str()
+            .context("authorized native task missing")?;
+        let mut result = wire::ExecutionPage {
+            command_id: command_id.into(),
+            task_id: task_id.into(),
+            attempt: None,
+            events: vec![],
+            next_cursor: None,
+            has_more: false,
+            public_text_supported: (request.include_public_text == Some(true))
+                .then_some(cfg!(unix)),
+            native_message_text_supported: (request.include_native_message_text == Some(true))
+                .then_some(cfg!(unix)),
+        };
+        if !table(&tx, "ctox_harness_flow_events")? {
+            ensure!(
+                request.attempt_id.is_none() && request.cursor.is_none(),
+                "native attempt is unavailable to this supervisor task"
+            );
+            return Ok(result);
+        }
+        let selection = format!(
+            "SELECT json_extract(metadata_json,'$.attempt_id'),
         COALESCE(attempt_index,json_extract(metadata_json,'$.attempt'))
         FROM ctox_harness_flow_events WHERE message_key=?1
           AND event_kind IN ({event_kinds})
           AND length(trim(COALESCE(json_extract(metadata_json,'$.attempt_id'),'')))>0
           AND (?2 IS NULL OR json_extract(metadata_json,'$.attempt_id')=?2)
         ORDER BY rowid DESC LIMIT 1"
-    );
-    let selected: Option<(String, Option<i64>)> = tx
-        .query_row(
-            &selection,
-            rusqlite::params![task_id, request.attempt_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?;
-    let Some((attempt_id, attempt_index)) = selected else {
-        ensure!(
-            request.attempt_id.is_none() && request.cursor.is_none(),
-            "native attempt is unavailable to this supervisor task"
         );
-        return Ok(result);
-    };
-    let started: Option<String> = tx.query_row(
-        "SELECT MIN(created_at) FROM ctox_harness_flow_events
+        let selected: Option<(String, Option<i64>)> = tx
+            .query_row(
+                &selection,
+                rusqlite::params![task_id, request.attempt_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let Some((attempt_id, attempt_index)) = selected else {
+            ensure!(
+                request.attempt_id.is_none() && request.cursor.is_none(),
+                "native attempt is unavailable to this supervisor task"
+            );
+            return Ok(result);
+        };
+        let started: Option<String> = tx.query_row(
+            "SELECT MIN(created_at) FROM ctox_harness_flow_events
        WHERE message_key=?1 AND event_kind='worker.turn_started'
          AND json_extract(metadata_json,'$.attempt_id')=?2",
-        rusqlite::params![task_id, attempt_id],
-        |r| r.get(0),
-    )?;
-    let run: Option<(String, Option<String>)> = if table(&tx, "worker_attempt_finalizations")? {
-        tx.query_row(
-            "SELECT status,terminal_at FROM worker_attempt_finalizations WHERE attempt_id=?1",
-            [&attempt_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .optional()?
-    } else {
-        None
-    };
-    let registered_run: Option<String> = if table(&tx, "worker_run_identities")? {
-        tx.query_row(
-            "SELECT r.run_id FROM worker_run_identities r
-             WHERE r.attempt_id=?1 AND EXISTS (
-                SELECT 1 FROM json_each(r.task_ids_json) WHERE value=?2)",
-            rusqlite::params![attempt_id, task_id],
-            |row| row.get(0),
-        )
-        .optional()?
-    } else {
-        None
-    };
-    // A legacy finalization retains its historical run key. For a new registered
-    // attempt, the exact native task binding must match before exposing its ID.
-    let registered_attempt: bool = if table(&tx, "worker_run_identities")? {
-        tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM worker_run_identities WHERE attempt_id=?1)",
-            [&attempt_id],
-            |row| row.get(0),
-        )?
-    } else {
-        false
-    };
-    ensure!(
-        !registered_attempt || registered_run.is_some(),
-        "native run belongs to another task"
-    );
-    let run_id = registered_run
-        .or_else(|| (!registered_attempt && run.is_some()).then(|| attempt_id.clone()));
-    result.attempt = Some(wire::AttemptRef {
-        attempt_id: attempt_id.clone(),
-        run_id,
-        attempt_index: ordinal(attempt_index)?,
-        // A historical start is not proof that a worker remains live.
-        status: run.as_ref().map(|r| r.0.clone()),
-        started_at_ms: started.as_deref().map(millis).transpose()?,
-        finished_at_ms: run
-            .as_ref()
-            .and_then(|r| r.1.as_deref())
-            .map(terminal_millis)
-            .transpose()?,
-    });
-    let after = if let Some(cursor) = &request.cursor {
-        let anchored: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM ctox_harness_flow_events
-          WHERE rowid=?1 AND event_id=?2 AND message_key=?3
-            AND json_extract(metadata_json,'$.attempt_id')=?4)",
-            rusqlite::params![
-                cursor.after_sequence,
-                cursor.after_event_id,
-                task_id,
-                attempt_id
-            ],
+            rusqlite::params![task_id, attempt_id],
             |r| r.get(0),
         )?;
-        ensure!(anchored,"native event cursor is unavailable or belongs to another attempt; restart this attempt's page");
-        cursor.after_sequence
-    } else {
-        0
-    };
-    let limit = request.limit.unwrap_or(25);
-    let sql = format!(
-        "SELECT rowid,event_id,event_kind,substr(title,1,256),created_at,
+        let run: Option<(String, Option<String>)> = if table(&tx, "worker_attempt_finalizations")? {
+            tx.query_row(
+                "SELECT status,terminal_at FROM worker_attempt_finalizations WHERE attempt_id=?1",
+                [&attempt_id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?
+        } else {
+            None
+        };
+        let registered_run: Option<String> = if table(&tx, "worker_run_identities")? {
+            tx.query_row(
+                "SELECT r.run_id FROM worker_run_identities r
+             WHERE r.attempt_id=?1 AND EXISTS (
+                SELECT 1 FROM json_each(r.task_ids_json) WHERE value=?2)",
+                rusqlite::params![attempt_id, task_id],
+                |row| row.get(0),
+            )
+            .optional()?
+        } else {
+            None
+        };
+        // A legacy finalization retains its historical run key. For a new registered
+        // attempt, the exact native task binding must match before exposing its ID.
+        let registered_attempt: bool = if table(&tx, "worker_run_identities")? {
+            tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM worker_run_identities WHERE attempt_id=?1)",
+                [&attempt_id],
+                |row| row.get(0),
+            )?
+        } else {
+            false
+        };
+        ensure!(
+            !registered_attempt || registered_run.is_some(),
+            "native run belongs to another task"
+        );
+        let run_id = registered_run
+            .or_else(|| (!registered_attempt && run.is_some()).then(|| attempt_id.clone()));
+        result.attempt = Some(wire::AttemptRef {
+            attempt_id: attempt_id.clone(),
+            run_id,
+            attempt_index: ordinal(attempt_index)?,
+            // A historical start is not proof that a worker remains live.
+            status: run.as_ref().map(|r| r.0.clone()),
+            started_at_ms: started.as_deref().map(millis).transpose()?,
+            finished_at_ms: run
+                .as_ref()
+                .and_then(|r| r.1.as_deref())
+                .map(terminal_millis)
+                .transpose()?,
+        });
+        let after = if let Some(cursor) = &request.cursor {
+            let anchored: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM ctox_harness_flow_events
+          WHERE rowid=?1 AND event_id=?2 AND message_key=?3
+            AND json_extract(metadata_json,'$.attempt_id')=?4)",
+                rusqlite::params![
+                    cursor.after_sequence,
+                    cursor.after_event_id,
+                    task_id,
+                    attempt_id
+                ],
+                |r| r.get(0),
+            )?;
+            ensure!(anchored,"native event cursor is unavailable or belongs to another attempt; restart this attempt's page");
+            cursor.after_sequence
+        } else {
+            0
+        };
+        let limit = request.limit.unwrap_or(25);
+        let sql = format!(
+            "SELECT rowid,event_id,event_kind,substr(title,1,256),created_at,
           json_extract(metadata_json,'$.tool.name'),json_extract(metadata_json,'$.tool.call_id'),
           json_extract(metadata_json,'$.tool.success'),
           CASE WHEN ?5=1 AND event_kind='worker.assistant_text'
@@ -197,92 +195,92 @@ pub(super) fn page(
             OR (?5=1 AND event_kind='worker.assistant_text')
             OR (?6=1 AND event_kind='worker.native_message_text'))
           AND event_kind IN ({event_kinds}) ORDER BY rowid LIMIT ?4"
-    );
-    let mut statement = tx.prepare(&sql)?;
-    let rows = statement
-        .query_map(
-            rusqlite::params![
-                task_id,
-                attempt_id,
-                after,
-                limit + 1,
-                include_public_text,
-                include_native_text
-            ],
-            |r| {
-                Ok((
-                    r.get::<_, i64>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
-                    r.get::<_, Option<String>>(5)?,
-                    r.get::<_, Option<String>>(6)?,
-                    r.get::<_, Option<bool>>(7)?,
-                    r.get::<_, Option<String>>(8)?,
-                    r.get::<_, Option<String>>(9)?,
-                ))
-            },
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    result.has_more = rows.len() > limit as usize;
-    for (
-        sequence,
-        id,
-        kind,
-        title,
-        created,
-        tool_name,
-        call_id,
-        success,
-        public_text,
-        native_text,
-    ) in rows.into_iter().take(limit as usize)
-    {
-        let public_text: Option<wire::PublicAssistantText> = public_text
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()?;
-        if kind == "worker.assistant_text" {
-            let chunk = public_text
-                .as_ref()
-                .context("public assistant text chunk missing")?;
-            ensure!(
-                ["assistant", "commentary", "final_answer"].contains(&chunk.phase.as_str()),
-                "public assistant text has an unsupported phase"
-            );
-        }
-        let native_message_text: Option<wire::NativeMessageText> = native_text
-            .as_deref()
-            .map(serde_json::from_str)
-            .transpose()?;
-        ensure!(
-            kind != "worker.native_message_text" || native_message_text.is_some(),
-            "native public message chunk missing"
         );
-        result.events.push(wire::ExecutionEvent {
+        let mut statement = tx.prepare(&sql)?;
+        let rows = statement
+            .query_map(
+                rusqlite::params![
+                    task_id,
+                    attempt_id,
+                    after,
+                    limit + 1,
+                    include_public_text,
+                    include_native_text
+                ],
+                |r| {
+                    Ok((
+                        r.get::<_, i64>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                        r.get::<_, String>(4)?,
+                        r.get::<_, Option<String>>(5)?,
+                        r.get::<_, Option<String>>(6)?,
+                        r.get::<_, Option<bool>>(7)?,
+                        r.get::<_, Option<String>>(8)?,
+                        r.get::<_, Option<String>>(9)?,
+                    ))
+                },
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        result.has_more = rows.len() > limit as usize;
+        for (
+            sequence,
             id,
-            sequence: u64::try_from(sequence)?,
             kind,
             title,
-            created_at_ms: millis(&created)?,
+            created,
             tool_name,
             call_id,
             success,
             public_text,
-            native_message_text,
-        });
-    }
-    result.next_cursor = result
-        .events
-        .last()
-        .map(|event| wire::EventCursor {
-            after_sequence: event.sequence,
-            after_event_id: event.id.clone(),
-        })
-        .or_else(|| request.cursor.clone());
-    result.validate().map_err(anyhow::Error::msg)?;
-    drop(statement);
-    tx.commit()?;
-    Ok(result)
+            native_text,
+        ) in rows.into_iter().take(limit as usize)
+        {
+            let public_text: Option<wire::PublicAssistantText> = public_text
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()?;
+            if kind == "worker.assistant_text" {
+                let chunk = public_text
+                    .as_ref()
+                    .context("public assistant text chunk missing")?;
+                ensure!(
+                    ["assistant", "commentary", "final_answer"].contains(&chunk.phase.as_str()),
+                    "public assistant text has an unsupported phase"
+                );
+            }
+            let native_message_text: Option<wire::NativeMessageText> = native_text
+                .as_deref()
+                .map(serde_json::from_str)
+                .transpose()?;
+            ensure!(
+                kind != "worker.native_message_text" || native_message_text.is_some(),
+                "native public message chunk missing"
+            );
+            result.events.push(wire::ExecutionEvent {
+                id,
+                sequence: u64::try_from(sequence)?,
+                kind,
+                title,
+                created_at_ms: millis(&created)?,
+                tool_name,
+                call_id,
+                success,
+                public_text,
+                native_message_text,
+            });
+        }
+        result.next_cursor = result
+            .events
+            .last()
+            .map(|event| wire::EventCursor {
+                after_sequence: event.sequence,
+                after_event_id: event.id.clone(),
+            })
+            .or_else(|| request.cursor.clone());
+        result.validate().map_err(anyhow::Error::msg)?;
+        drop(statement);
+        Ok(result)
+    })
 }

@@ -81,10 +81,9 @@ fn remove_runtime_settings_volatile_metadata(value: &mut Value) {
 
 fn build_runtime_settings_for_rxdb(root: &Path) -> anyhow::Result<Value> {
     let env_map = crate::inference::runtime_env::effective_operator_env_map(root)
-        .unwrap_or_else(|_| BTreeMap::new());
+        .context("runtime settings configuration read failed")?;
     let runtime_state = crate::inference::runtime_state::load_runtime_state(root)
-        .ok()
-        .flatten();
+        .context("runtime settings state read failed")?;
     let configured_auth_mode = env_map
         .get("CTOX_OPENAI_AUTH_MODE")
         .or_else(|| env_map.get("OPENAI_AUTH_MODE"))

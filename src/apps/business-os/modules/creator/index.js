@@ -1,7 +1,14 @@
-import { showBusinessConfirm } from '../../shared/dialogs.js?v=20260816-browser-sync-guards-v141';
+// App-API 4.0 (Shell v4): mount(root, api, {restored}) -> {unmount, snapshot}. Protokoll: V4-PORT.md.
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
+// Eingebettete Texte (relativer Modul-Import, kein HTTP-Ladeweg); api.shell.t('creator.<key>') übersteuert.
+import messagesDe from './locales/de.json' with { type: 'json' };
+import messagesEn from './locales/en.json' with { type: 'json' };
 
 const state = {
-  ctx: null,
+  api: null,
+  root: null,
+  lang: 'de',
+  disposers: [],
   t: (key, fallback) => fallback ?? key,
   appId: '',
   appTitle: '',
@@ -12,13 +19,6 @@ const state = {
   appCollections: [],
   inspirationUrls: [],
   appVersion: '0.1.0',
-  catalogSubscription: null,
-  commandSubscription: null,
-  catalogReadiness: null,
-  commandReadiness: null,
-  catalogReadinessSubscription: null,
-  commandReadinessSubscription: null,
-  streamGeneration: 0,
   installedApps: [],
   creatorRequests: [],
   importedRequests: [],
@@ -46,7 +46,7 @@ export const CREATOR_PROMPT_EXAMPLES = Object.freeze([
   {
     id: 'support',
     de: { title: 'Support Desk', hint: 'Tickets priorisieren und bearbeiten', prompt: 'Erstelle eine Support-Desk-App. Links brauche ich Ticketliste, Suche sowie Filter für offen, wartend und gelöst. Die Hauptansicht zeigt Beschreibung, Kunde, Priorität, Verlauf und Antwortentwurf. Ergänze Statuswechsel, Zuweisung und eine Aktion, mit der CTOX eine Antwort vorbereitet.' },
-    en: { title: 'Support desk', hint: 'Prioritize and resolve tickets', prompt: 'Create a support desk app. The left side needs a ticket list, search, and filters for open, waiting, and resolved. The main view should show description, customer, priority, history, and reply draft. Add status changes, assignment, and an action for CTOX to prepare a reply.' },
+    en: { title: 'Support desk', hint: 'Prioritize and resolve tickets', prompt: 'Create a support desk app. The left side needs a ticket list, search, and filters for open, on hold, and resolved. The main view should show description, customer, priority, history, and reply draft. Add status changes, assignment, and an action for CTOX to prepare a reply.' },
   },
   {
     id: 'inventory',
@@ -157,33 +157,39 @@ export function computeCreatorActionState({ request, appId, appTitle, appDesc, a
   const deployReady = hasRequest && validationErrors.length === 0 && !isBusy;
   const en = lang === 'en';
   let diagnostic = en ? 'Job missing. Describe the app first.' : 'Auftrag fehlt. Beschreibe zuerst die App.';
-  if (isDeploying) diagnostic = en ? 'CTOX app job is running.' : 'CTOX App-Auftrag läuft.';
+  // v4: kein Lauf-/Bereit-Zustandstext (Befehle warten nicht; Zustand nur in der Zustandszone).
+  if (isDeploying || deployReady) diagnostic = '';
   else if (hasRequest && validationErrors.length > 0) diagnostic = validationErrors[0];
-  else if (deployReady) diagnostic = en ? 'Ready. CTOX builds the app from this job.' : 'Bereit. CTOX baut die App aus diesem Auftrag.';
 
   return { hasRequest, validationErrors, deployReady, diagnostic };
+}
+
+// v4 (ctox-platform-Schema business_apps: id, app_id, title, active_ver, layout, provenance, …): Eigenbau = App ohne
+// Release-Basis (provenance.base_release leer), also auf dieser Instanz angelegt; Kern-Apps aus dem Release tragen sie.
+// V2-Katalogzeilen (entry/source) bleiben für die V2-Linie unverändert.
+function isV4AppRow(mod) {
+  return mod && typeof mod === 'object' && !('entry' in mod) && !('source' in mod) && !('store' in mod)
+    && ('active_ver' in mod || 'app_id' in mod || 'provenance' in mod);
 }
 
 export function normalizeCreatorInstalledApps(catalog) {
   const modules = Array.isArray(catalog?.modules) ? catalog.modules : [];
   return modules
     .filter((mod) => {
+      if (!mod?.id || mod.id === 'creator') return false;
+      if (isV4AppRow(mod)) return !mod.provenance?.base_release && mod.id !== 'shell' && mod.id !== 'ctox-platform' && !String(mod.id).startsWith('lib:');
       const entry = String(mod?.entry || '');
       const source = String(mod?.source || mod?.store?.distribution || '').toLowerCase();
-      return mod?.id
-        && mod.id !== 'creator'
-        && (
-          entry.startsWith('installed-modules/')
+      return entry.startsWith('installed-modules/')
           || source === 'installed'
-          || source.includes('installed-module')
-        );
+          || source.includes('installed-module');
     })
     .map((mod) => ({
       id: normalizeModuleId(mod.id),
       title: String(mod.title || mod.id),
       description: String(mod.description || mod.store?.summary || ''),
-      category: String(mod.category || mod.source || 'Custom'),
-      version: String(mod.version || '0.1.0'),
+      category: String(mod.category || mod.layout?.category || mod.source || 'Custom'),
+      version: String(mod.version || mod.active_ver || '0.1.0'),
       entry: String(mod.entry || ''),
     }))
     .filter((mod) => mod.id)
@@ -280,9 +286,12 @@ export function prepareCreatorRequestImport(raw, index = 0) {
   };
 }
 
-export async function mount(ctx) {
-  const streamGeneration = ++state.streamGeneration;
-  state.ctx = ctx;
+export async function mount(root, api, { restored } = {}) {
+  // Abos gehören dieser Montage (PORTING.md §4 Falle 1).
+  const disposers = [];
+  state.disposers = disposers;
+  state.api = api;
+  state.root = root;
   state.appId = '';
   state.appTitle = '';
   state.appDesc = '';
@@ -291,139 +300,111 @@ export async function mount(ctx) {
   state.appLayout = 'windowed';
   state.appCollections = [];
   state.inspirationUrls = [];
+  state.installedApps = [];
+  state.creatorRequests = [];
+  state.selectedLibraryId = null;
+  state.selectedLibraryKind = null;
+  if (!root.dataset.app) root.dataset.app = api.app?.id || 'creator';
+  state.lang = String(api.shell.locale.get() || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+  state.t = creatorTranslator();
 
-  // 1. Inject module scoped stylesheet dynamically
-  await ensureStyles();
+  // Markup relativ (Service Worker liefert versioniert, §16.15); CSS lädt die Shell aus dem Manifest.
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((res) => res.text());
+  root.innerHTML = html;
+  applyCreatorTranslations(root, state.t);
+  wireUi(root);
+  wireLibrary(root);
+  autoWirePaneGrammar(root);
+  api.shell.setTitle(state.t('title', 'App Creator'));
+  applyRestored(root, restored);
+  renderLibrary(root);
 
-  // 1b. Load locale messages (German markup text is the fallback)
-  const messages = await loadCreatorMessages(ctx.locale);
-  state.t = (key, fallback) => messages[key] ?? fallback ?? key;
+  // App-Katalog = je App ein Dokument in business_apps (§16.14); App-Aufträge = business_commands.
+  disposers.push(api.query('business_apps', { sort: [{ title: 'asc' }] }).subscribe((rows) => {
+    state.installedApps = normalizeCreatorInstalledApps({ modules: Array.isArray(rows) ? rows : [] });
+    renderLibrary(root);
+  }));
+  disposers.push(api.query('business_commands', {}).subscribe((rows) => {
+    state.creatorRequests = normalizeCreatorRequestSuggestions(Array.isArray(rows) ? rows : []);
+    renderLibrary(root);
+  }));
+  disposers.push(api.shell.locale.subscribe((locale) => {
+    const lang = String(locale || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+    if (lang === state.lang) return;
+    state.lang = lang;
+    state.t = creatorTranslator();
+    applyCreatorTranslations(root, state.t);
+    renderLibrary(root);
+  }));
+  // Upgrade-Einstieg über die Route der Shell (Parameter upgrade=<app-id>).
+  disposers.push(api.shell.onRoute((event) => {
+    const upgrade = event?.params?.upgrade;
+    if (upgrade) void state.composer?.prefillUpgrade(String(upgrade));
+  }));
 
-  // 2. Fetch and render raw index.html structure
-  const markupVersion = String(import.meta.url).split('?v=')[1] || '';
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-  const html = await fetch(markupHref).then(res => res.text());
-  ctx.host.innerHTML = html;
-  applyCreatorTranslations(ctx.host, state.t);
-
-  // 3. Wire UI events
-  wireUi(ctx.host);
-  wireLibrary(ctx.host);
-
-  // 3b. Track collection readiness so the library wells show a sync state
-  // instead of "no data" while their backing collection has not finished the
-  // initial replication. Re-emit only happens on state transitions.
-  state.catalogReadiness = null;
-  state.commandReadiness = null;
-  state.catalogReadinessSubscription = subscribeCollectionReadiness(ctx, 'business_module_catalog', (snapshot) => {
-    if (streamGeneration !== state.streamGeneration) return;
-    state.catalogReadiness = snapshot;
-    renderLibrary(ctx.host);
-  });
-  state.commandReadinessSubscription = subscribeCollectionReadiness(ctx, 'business_commands', (snapshot) => {
-    if (streamGeneration !== state.streamGeneration) return;
-    state.commandReadiness = snapshot;
-    renderLibrary(ctx.host);
-  });
-
-  // 4. Render the operable shell immediately. Catalog and command hydration
-  // can wait for a cold WebRTC lease without blocking the window from opening.
-  renderLibrary(ctx.host);
-  void startCreatorDataStreams(ctx, ctx.host, streamGeneration).catch((error) => {
-    if (streamGeneration !== state.streamGeneration) return;
-    addConsoleLog(`[WARN] Creator-Daten konnten nicht geladen werden: ${error.message}`, 'warning');
-  });
-
-  return () => {
-    if (streamGeneration === state.streamGeneration) state.streamGeneration += 1;
-    cleanupSubscription(state.catalogSubscription);
-    cleanupSubscription(state.commandSubscription);
-    cleanupSubscription(state.catalogReadinessSubscription);
-    cleanupSubscription(state.commandReadinessSubscription);
-    state.catalogSubscription = null;
-    state.commandSubscription = null;
-    state.catalogReadinessSubscription = null;
-    state.commandReadinessSubscription = null;
-    state.catalogReadiness = null;
-    state.commandReadiness = null;
-    console.log('[creator] Module unmounted and cleaned up.');
+  return {
+    unmount() {
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (error) { console.warn('[creator] unsubscribe failed', error); }
+      }
+      root.replaceChildren();
+      if (state.root === root) { state.api = null; state.root = null; }
+    },
+    snapshot: creatorSnapshot,
   };
 }
 
-async function ensureStyles() {
-  const cssVersion = String(import.meta.url).split('?v=')[1] || '';
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  let link = document.querySelector('link[data-module-styles="creator"]');
-  if (!link) {
-    link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.dataset.moduleStyles = 'creator';
-    document.head.append(link);
-  }
-  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
+function creatorTranslator() {
+  const messages = { ...messagesDe, ...(state.lang === 'en' ? messagesEn : {}) };
+  return (key, fallback) => {
+    let value = messages[key] ?? fallback ?? key;
+    const shellT = state.api?.shell?.t;
+    if (typeof shellT === 'function') {
+      const scoped = `creator.${key}`;
+      const v = shellT.call(state.api.shell, scoped);
+      if (typeof v === 'string' && v && v !== scoped) value = v;
+    }
+    return value;
+  };
 }
 
-async function startCreatorDataStreams(ctx, host, streamGeneration) {
-  await Promise.allSettled([
-    ctx.sync?.startCollection?.('business_module_catalog'),
-    ctx.sync?.startCollection?.('business_commands'),
-  ]);
-  if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
+const SNAPSHOT_FIELDS = Object.freeze({
+  request: '#app-request-input', appId: '#input-app-id', appTitle: '#input-app-title', appDesc: '#input-app-desc',
+  category: '#select-app-category', archetype: '#select-app-archetype', layout: '#select-app-layout',
+  newCollection: '#input-new-collection', inspiration: '#creator-inspiration-url',
+});
 
-  const catalogColl = getCollection(ctx, 'business_module_catalog');
-  const commandColl = getCollection(ctx, 'business_commands');
-
-  try {
-    const catalogDoc = await catalogColl?.findOne?.('module-catalog')?.exec?.();
-    if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
-    state.installedApps = normalizeCreatorInstalledApps(catalogDoc?.toJSON?.() || {});
-  } catch (error) {
-    addConsoleLog(`[WARN] Modulkatalog konnte nicht geladen werden: ${error.message}`, 'warning');
+// Snapshot für den Live-Remount: der ganze offene Auftrag (Formular, Datentabellen, Inspirations-URLs) und Auswahl.
+function creatorSnapshot() {
+  const snap = { v: 1, fields: {} };
+  for (const [key, sel] of Object.entries(SNAPSHOT_FIELDS)) {
+    const el = state.root?.querySelector(sel);
+    if (el) snap.fields[key] = el.value;
   }
-
-  try {
-    const commandDocs = await commandColl?.find?.()?.exec?.();
-    if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
-    state.creatorRequests = normalizeCreatorRequestSuggestions(commandDocs?.map((doc) => doc?.toJSON?.() || doc) || []);
-  } catch (error) {
-    addConsoleLog(`[WARN] CTOX App-Auftraege konnten nicht geladen werden: ${error.message}`, 'warning');
-  }
-
-  if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
-  state.catalogSubscription = catalogColl?.findOne?.('module-catalog')?.$?.subscribe?.((doc) => {
-    if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
-    state.installedApps = normalizeCreatorInstalledApps(doc?.toJSON?.() || {});
-    renderLibrary(host);
-  }) || null;
-
-  state.commandSubscription = commandColl?.find?.()?.$?.subscribe?.((docs) => {
-    if (streamGeneration !== state.streamGeneration || !host.isConnected) return;
-    state.creatorRequests = normalizeCreatorRequestSuggestions(docs?.map((doc) => doc?.toJSON?.() || doc) || []);
-    renderLibrary(host);
-  }) || null;
-
-  renderLibrary(host);
+  snap.appCollections = [...state.appCollections];
+  snap.inspirationUrls = [...state.inspirationUrls];
+  snap.appVersion = state.appVersion;
+  snap.selectedLibraryId = state.selectedLibraryId;
+  snap.selectedLibraryKind = state.selectedLibraryKind;
+  snap.advancedOpen = Boolean(state.root?.querySelector('details.creator-options')?.open);
+  return snap;
 }
 
-function getCollection(ctx, name) {
-  return ctx.db?.collection?.(name) || null;
-}
-
-function cleanupSubscription(subscription) {
-  if (typeof subscription === 'function') {
-    subscription();
-    return;
+function applyRestored(root, restored) {
+  if (!restored || typeof restored !== 'object') return;
+  const fields = restored.fields && typeof restored.fields === 'object' ? restored.fields : {};
+  for (const [key, sel] of Object.entries(SNAPSHOT_FIELDS)) {
+    const el = root.querySelector(sel);
+    if (el && typeof fields[key] === 'string') el.value = fields[key];
   }
-  subscription?.unsubscribe?.();
-}
-
-// Canonical shell readiness: immediate snapshot + re-emit on state change.
-// Returns an unsubscribe function or null when the shell exposes no sync API.
-function subscribeCollectionReadiness(ctx, name, listener) {
-  const subscribe = ctx?.sync?.subscribeCollectionReadiness;
-  if (typeof subscribe !== 'function') return null;
-  const unsubscribe = subscribe.call(ctx.sync, name, listener);
-  return typeof unsubscribe === 'function' ? unsubscribe : null;
+  if (Array.isArray(restored.appCollections)) state.appCollections = restored.appCollections.map(String);
+  if (Array.isArray(restored.inspirationUrls)) state.inspirationUrls = restored.inspirationUrls.map(String);
+  if (typeof restored.appVersion === 'string') state.appVersion = restored.appVersion;
+  if (typeof restored.selectedLibraryId === 'string') state.selectedLibraryId = restored.selectedLibraryId;
+  if (typeof restored.selectedLibraryKind === 'string') state.selectedLibraryKind = restored.selectedLibraryKind;
+  const advanced = root.querySelector('details.creator-options');
+  if (advanced && restored.advancedOpen) advanced.open = true;
+  state.composer?.restore?.();
 }
 
 // Merge server-synced requests with locally imported drafts (imports never
@@ -510,28 +491,13 @@ function renderLibrary(host) {
   const g = readLibraryGrammar(rail);
   const items = filterCreatorLibrary({ apps, requests }, g);
 
-  const bandTotal = g.band === 'auftraege' ? requests.length : apps.length;
-  const emptyKey = g.band === 'auftraege' ? 'requestsEmpty' : 'installedEmpty';
-  const emptyText = bandTotal === 0 ? state.t(emptyKey) : state.t('libEmptyFiltered', 'Kein Eintrag passt zum Filter.');
-  // Data-driven empty (the band's backing collection is truly empty) is gated
-  // on that collection's readiness: while the initial replication is pending,
-  // show a sync state instead of "no data". Filter-empties (bandTotal > 0)
-  // stay plain — data exists, the filter just hides it.
-  const readiness = g.band === 'auftraege' ? state.commandReadiness : state.catalogReadiness;
-  let listHtml;
-  if (items.length) {
-    listHtml = items.map((item) => renderLibraryShard(item, g.view)).join('');
-  } else if (bandTotal === 0 && readiness?.ready === false) {
-    listHtml = `<div class="ctox-syncing" role="status" aria-live="polite">${escapeHtml(state.t('libSyncing', 'Daten werden synchronisiert.'))}</div>`;
-  } else {
-    listHtml = `<div class="ctox-empty"><strong>${escapeHtml(emptyText)}</strong></div>`;
-  }
-  listEl.innerHTML = listHtml;
+  // Leere Liste rendert nichts (Zustand nur in der Zustandszone).
+  listEl.innerHTML = items.map((item) => renderLibraryShard(item, g.view)).join('');
 
   applyLibrarySelection(listEl);
   writeLibraryCounts(rail, creatorLibraryCounts(apps, requests));
-  const bandLabel = g.band === 'auftraege' ? state.t('bandAuftraege', 'Aufträge') : state.t('bandApps', 'Apps');
-  writeLibraryFooter(rail, `${items.length} ${state.t('libEntries', 'Einträge')} · ${bandLabel}`);
+  // Textdiät Regel 3/5: Anzahl steht im Reiter – kein Fußzähler.
+  writeLibraryFooter(rail, '');
 }
 
 // Ein Shard ist ein reiner Selektor (keine Zeilenknöpfe). Die beiden Ansichten
@@ -549,7 +515,7 @@ function creatorShardDate(ms) {
   const value = Number(ms) || 0;
   if (!value) return '';
   try {
-    return new Date(value).toLocaleDateString(state.ctx?.locale === 'en' ? 'en-GB' : 'de-DE', {
+    return new Date(value).toLocaleDateString(state.lang === 'en' ? 'en-GB' : 'de-DE', {
       day: '2-digit', month: '2-digit', year: 'numeric',
     });
   } catch { return ''; }
@@ -580,11 +546,11 @@ function renderAppShard(app, view) {
       + '</div>';
   }
   // KARTE: Titel plus Zuordnung/Version und, wenn vorhanden, die Beschreibung.
-  const meta = [state.t('rightKicker', 'Deine Apps'), app.category, app.version ? `v${app.version}` : '']
+  const meta = [app.category, app.version ? `v${app.version}` : '']
     .filter(Boolean).join(' · ');
   const sub = creatorShardExcerpt(app.description);
   return `<div ${attrs}><div class="creator-shard-head"><span class="creator-shard-title">${escapeHtml(app.title)}</span></div>`
-    + `<div class="creator-shard-meta">${escapeHtml(meta)}</div>`
+    + (meta ? `<div class="creator-shard-meta">${escapeHtml(meta)}</div>` : '')
     + (sub ? `<div class="creator-shard-meta creator-shard-sub">${escapeHtml(sub)}</div>` : '')
     + '</div>';
 }
@@ -605,7 +571,7 @@ function renderRequestShard(item, view) {
     .filter(Boolean).join(' · ');
   const sub = creatorShardExcerpt(item.request);
   return `<div ${attrs}><div class="creator-shard-head"><span class="creator-shard-title">${escapeHtml(item.title)}</span>${badge}</div>`
-    + `<div class="creator-shard-meta">${escapeHtml(meta)}</div>`
+    + (meta ? `<div class="creator-shard-meta">${escapeHtml(meta)}</div>` : '')
     + (sub ? `<div class="creator-shard-meta creator-shard-sub">${escapeHtml(sub)}</div>` : '')
     + '</div>';
 }
@@ -710,7 +676,7 @@ function exportCreatorRequests() {
     a.style.display = 'none';
     // Der Host des Moduls liegt im state, weil der Export ausserhalb von
     // mount() laeuft und dort kein ctx im Gueltigkeitsbereich ist.
-    (state.ctx?.host || document.documentElement).appendChild(a);
+    (state.root || document.documentElement).appendChild(a);
     a.click();
     a.remove();
     addConsoleLog(`[INFO] ${payload.length} App-Auftraege exportiert.`, 'info');
@@ -752,10 +718,8 @@ function importCreatorRequests(host) {
 }
 
 // Monochrome stroke icon in the shared action-icon style. Falls back to the
-// shell-provided ctx.getActionIcon when available (same glyph set).
+// App-lokale Glyphen (4.0 hat keine Icon-API, app-api.d.ts OFFEN-D).
 function creatorActionIcon(name, size = 16) {
-  const shellIcon = state.ctx?.getActionIcon?.(name, size);
-  if (shellIcon) return shellIcon;
   const paths = {
     open: 'M14 5h5v5M19 5l-8 8M11 5H5v14h14v-6',
     upload: 'M12 15V4M12 4 8 8M12 4l4 4M5 19h14',
@@ -781,8 +745,6 @@ function wireUi(host) {
   const addInspirationButton = host.querySelector('#btn-add-inspiration');
   const inspirationList = host.querySelector('[data-inspiration-list]');
   const exampleList = host.querySelector('[data-example-prompts]');
-  const syncDot = host.querySelector('#deploy-sync-dot');
-  const syncText = host.querySelector('#deploy-sync-text');
   state.isDeploying = false;
 
   renderPromptExamples();
@@ -808,19 +770,15 @@ function wireUi(host) {
       appDesc: inputDesc.value,
       appCollections: state.appCollections,
       isDeploying: state.isDeploying,
-      lang: state.ctx?.locale === 'en' ? 'en' : 'de'
+      lang: state.lang === 'en' ? 'en' : 'de'
     });
     btnDeploy.disabled = !actionState.deployReady;
     btnDeploy.setAttribute('aria-disabled', String(btnDeploy.disabled));
     btnDeploy.title = actionState.deployReady
-      ? (state.ctx?.locale === 'en' ? 'Start app creation through CTOX' : 'App-Erstellung durch CTOX starten')
+      ? (state.lang === 'en' ? 'Start app creation through CTOX' : 'App-Erstellung durch CTOX starten')
       : actionState.diagnostic;
     btnDeploy.dataset.state = actionState.deployReady ? 'ready' : 'blocked';
-    if (!state.isDeploying && syncText && syncDot) {
-      syncDot.style.background = '';
-      syncText.textContent = actionState.diagnostic;
-      syncDot.className = actionState.deployReady ? 'sync-dot is-ready' : 'sync-dot is-blocked';
-    }
+    // Kein Statusfeld im Inhalt: der Grund steht nur im Titel des gesperrten Knopfs.
     return actionState;
   };
 
@@ -845,7 +803,7 @@ function wireUi(host) {
     if (!button) return;
     const example = CREATOR_PROMPT_EXAMPLES.find((item) => item.id === button.dataset.exampleId);
     if (!example) return;
-    const locale = state.ctx?.locale === 'en' ? 'en' : 'de';
+    const locale = state.lang === 'en' ? 'en' : 'de';
     inputRequest.value = example[locale].prompt;
     if (!inputTitle.value.trim()) inputTitle.value = example[locale].title;
     syncStateFromInputs();
@@ -873,13 +831,16 @@ function wireUi(host) {
       row.querySelector('[data-remove-idx]').addEventListener('click', async (e) => {
         const removeIdx = parseInt(e.currentTarget.getAttribute('data-remove-idx'), 10);
         const name = state.appCollections[removeIdx];
-        const confirmed = await showBusinessConfirm(`Datentabelle "${name}" aus den optionalen Vorgaben entfernen?`, {
+        const confirmed = await state.api?.shell.dialog({
+          kind: 'confirm',
           title: 'Datentabelle entfernen',
-          confirmLabel: 'Entfernen',
-          cancelLabel: 'Abbrechen',
-          kind: 'danger'
+          text: `Datentabelle "${name}" aus den optionalen Vorgaben entfernen?`,
+          confirm_label: 'Entfernen',
+          cancel_label: 'Abbrechen',
+          danger: true,
+          default: false,
         });
-        if (!confirmed) return;
+        if (confirmed !== true) return;
         state.appCollections.splice(removeIdx, 1);
         renderCollectionsList(h);
         syncStateFromInputs();
@@ -923,45 +884,30 @@ function wireUi(host) {
     async prefillUpgrade(appId) {
       const id = String(appId || '').trim();
       if (!id) return;
-      addConsoleLog(`[INFO] Lade bestehende App für Änderung von '${id}'...`, 'info');
-      try {
-        const manifest = await fetch(`installed-modules/${id}/module.json`).then((res) => {
-          if (!res.ok) throw new Error(`App '${id}' konnte nicht geladen werden.`);
-          return res.json();
-        });
-        inputId.value = manifest.id || id;
-        inputTitle.value = manifest.title || '';
-        inputDesc.value = manifest.description || '';
-        selectCategory.value = manifest.category || 'Management';
-        selectArchetype.value = manifest.archetype || manifest.store?.archetype || 'record-workbench';
-        selectLayout.value = manifest.layout?.shell || 'windowed';
-        inputRequest.value = `Ändere ${manifest.title || id}: ${manifest.description || ''}`;
-        state.appVersion = /^\d+\.\d+\.\d+$/.test(String(manifest.version || '')) ? String(manifest.version) : '0.1.0';
-        state.appCollections = Array.isArray(manifest.collections) ? manifest.collections : [];
+      // v4: kein HTTP-Ladeweg auf installed-modules/<id>/module.json – der Kontext kommt aus dem App-Katalog
+      // (business_apps). Quelltext/Manifest einer App liest nur die Shell (kernel.source, V4-PORT.md OFFEN-1).
+      const app = state.installedApps.find((entry) => entry.id === id);
+      if (app) {
+        inputId.value = app.id;
+        inputTitle.value = app.title || '';
+        inputDesc.value = app.description || '';
+        if (app.category) selectCategory.value = app.category;
+        inputRequest.value = `Ändere ${app.title || id}: ${app.description || ''}`;
+        state.appVersion = /^\d+\.\d+\.\d+$/.test(String(app.version || '')) ? String(app.version) : '0.1.0';
+        state.appCollections = [];
         renderCollectionsList(host);
         syncStateFromInputs();
-        addConsoleLog(`[SUCCESS] App-Kontext für '${manifest.title || id}' geladen. Passe den Auftrag an und starte CTOX.`, 'success');
-      } catch (err) {
-        // Fall back to the catalog entry we already hold (source apps are not
-        // always fetchable as an installed manifest).
-        const app = state.installedApps.find((entry) => entry.id === id);
-        if (app) {
-          inputId.value = app.id;
-          inputTitle.value = app.title || '';
-          inputDesc.value = app.description || '';
-          if (app.category) selectCategory.value = app.category;
-          inputRequest.value = `Ändere ${app.title || id}: ${app.description || ''}`;
-          state.appVersion = /^\d+\.\d+\.\d+$/.test(String(app.version || '')) ? String(app.version) : '0.1.0';
-          state.appCollections = [];
-          renderCollectionsList(host);
-          syncStateFromInputs();
-          addConsoleLog(`[INFO] App-Kontext für '${app.title || id}' aus dem Katalog geladen.`, 'info');
-        } else {
-          addConsoleLog(`[ERROR] Fehler beim Laden des Upgrades: ${err.message}`, 'error');
-        }
+      } else {
+        addConsoleLog(`App '${id}' ist im Katalog nicht vorhanden.`, 'error', 'creator.upgrade.unknown');
       }
       updateCreatorActionState();
       inputRequest.focus();
+    },
+    // Remount: Datentabellen, Inspirations-URLs und Knopfzustand aus dem wiederhergestellten Stand zeichnen.
+    restore() {
+      renderCollectionsList(host);
+      renderInspirationUrls();
+      syncStateFromInputs();
     },
   };
 
@@ -971,14 +917,11 @@ function wireUi(host) {
   function addInspirationUrl() {
     const url = normalizeInspirationUrl(inspirationInput.value);
     if (!url) {
-      state.ctx.notifications?.show?.({
-        type: 'warning',
-        title: state.t('invalidUrlTitle', 'URL prüfen'),
-        message: state.t('invalidUrlMessage', 'Bitte füge eine vollständige http- oder https-URL ein.'),
-      });
+      addConsoleLog(`${state.t('invalidUrlTitle', 'URL prüfen')}: ${state.t('invalidUrlMessage', 'Bitte füge eine vollständige http- oder https-URL ein.')}`, 'warning', 'creator.inspiration.invalid');
       inspirationInput.focus();
       return;
     }
+    state.api?.status.clear('creator.inspiration.invalid');
     if (!state.inspirationUrls.includes(url)) state.inspirationUrls.push(url);
     inspirationInput.value = '';
     renderInspirationUrls();
@@ -994,7 +937,7 @@ function wireUi(host) {
   }
 
   function renderPromptExamples() {
-    const locale = state.ctx?.locale === 'en' ? 'en' : 'de';
+    const locale = state.lang === 'en' ? 'en' : 'de';
     exampleList.innerHTML = CREATOR_PROMPT_EXAMPLES.map((example) => `
       <button class="creator-example" type="button" data-example-id="${escapeHtml(example.id)}">
         <strong>${escapeHtml(example[locale].title)}</strong>
@@ -1008,19 +951,14 @@ function wireUi(host) {
     try {
       const currentRequest = inputRequest.value.trim();
       if (!currentRequest) {
-        state.ctx.notifications.show({
-          title: 'Auftrag fehlt',
-          message: 'Bitte beschreibe die App, bevor du den CTOX-Auftrag startest.',
-          type: 'warning'
-        });
-        addConsoleLog('[BLOCKED] App-Auftrag verhindert: Beschreibung fehlt.', 'warning');
+        addConsoleLog('Auftrag fehlt: Bitte beschreibe die App, bevor du den CTOX-Auftrag startest.', 'warning', 'creator.request.missing');
         updateCreatorActionState();
         return;
       }
 
       const actionState = updateCreatorActionState();
       if (!actionState.deployReady) {
-        addConsoleLog(`[BLOCKED] App-Auftrag verhindert: ${actionState.diagnostic}`, 'warning');
+        addConsoleLog(`App-Auftrag verhindert: ${actionState.diagnostic}`, 'warning', 'creator.request.invalid');
         return;
       }
 
@@ -1038,34 +976,23 @@ function wireUi(host) {
         actor: null,
       });
       addConsoleLog(`[INFO] Erstelle '${previewCommand.payload.app_title}' als ${previewCommand.payload.archetype}.`, 'info');
-      await triggerAppDeployment(host, updateCreatorActionState);
+      state.api?.status.clear('creator.request.missing');
+      state.api?.status.clear('creator.request.invalid');
+      triggerAppDeployment(host, updateCreatorActionState);
     } catch (e) {
       console.error('[ERROR] triggerAppDeployment failed:', e);
       state.isDeploying = false;
       updateCreatorActionState();
     }
   });
-
-  // Hash-based upgrade entry point (e.g. #creator?upgrade=<id>) reuses the same
-  // composer prefill path as selecting an app shard in the left column.
-  const hash = window.location.hash || '';
-  const queryStr = hash.includes('?') ? hash.split('?')[1] : '';
-  const upgradeAppId = state.ctx?.args?.upgrade || new URLSearchParams(queryStr).get('upgrade');
-  if (upgradeAppId) void state.composer.prefillUpgrade(upgradeAppId);
 }
 
-function addConsoleLog(text, type = '') {
+// Protokollzeilen gehen in die Konsole; Warnungen und Fehler in die Zustandszone der Shell (kein Protokoll-
+// oder Statusfeld im Inhalt).
+function addConsoleLog(text, type = '', code = '') {
   console.log(text);
-  const container = document.querySelector('#console-logs-container');
-  if (!container) return;
-  const el = document.createElement('div');
-  el.className = `console-log-entry ${type}`;
-  el.textContent = text;
-  // Follow the log only while the reader is at the bottom. Scrolling up to read
-  // an earlier line is an explicit intent that a new entry must not override.
-  const wasAtBottom = container.scrollHeight - container.scrollTop - container.clientHeight <= 24;
-  container.appendChild(el);
-  if (wasAtBottom) container.scrollTop = container.scrollHeight;
+  if (type !== 'warning' && type !== 'error') return;
+  state.api?.status.report({ level: type === 'error' ? 'error' : 'warn', code: code || `creator.${type}`, text: String(text) });
 }
 
 export function buildAppCreateCommand({
@@ -1097,8 +1024,9 @@ export function buildAppCreateCommand({
     .map(normalizeInspirationUrl)
     .filter(Boolean))];
 
+  // v4: die Befehls-ID vergibt api.command.
+  void now;
   return {
-    command_id: `app-create-${moduleId}-${now}`,
     module: 'creator',
     command_type: 'ctox.business_os.app.create',
     record_id: moduleId,
@@ -1142,100 +1070,62 @@ export function buildAppCreateCommand({
   };
 }
 
-async function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
-  const syncDot = host.querySelector('#deploy-sync-dot');
-  const syncText = host.querySelector('#deploy-sync-text');
-  const btnDeploy = host.querySelector('#btn-deploy-app');
-
+// Befehl absetzen, nie warten (R5): der Auftrag erscheint live unter „Aufträge“, Fehler in der Zustandszone.
+function triggerAppDeployment(host, updateCreatorActionState = () => {}) {
+  const api = state.api;
+  if (!api) return;
   const request = host.querySelector('#app-request-input')?.value?.trim() || '';
-  const appId = state.appId;
-  const appTitle = state.appTitle;
-  const appDesc = state.appDesc;
-  const collections = state.appCollections;
-  const appLayout = state.appLayout;
   const appVersion = /^\d+\.\d+\.\d+$/.test(String(state.appVersion || '').trim())
     ? String(state.appVersion).trim()
     : '0.1.0';
-
   if (!request) {
-    state.ctx.notifications.show({
-      title: 'Fehler beim Vorbereiten',
-      message: 'Bitte beschreibe die gewünschte App.',
-      type: 'error'
-    });
-    addConsoleLog('[FEHLER] App-Auftrag fehlt.', 'error');
+    addConsoleLog('Bitte beschreibe die gewünschte App.', 'error', 'creator.request.missing');
     return;
   }
-
-  // Visual lock UI
-  state.isDeploying = true;
-  btnDeploy.disabled = true;
-  syncDot.className = 'sync-dot is-saving';
-  syncText.textContent = state.t('deploySaving', 'Lege CTOX-Auftrag an...');
-  updateCreatorActionState();
-
-  addConsoleLog('==================================================', 'info');
-  addConsoleLog('[START] Übergabe an CTOX App Creator Agent...', 'info');
-
+  const command = buildAppCreateCommand({
+    appId: state.appId,
+    appTitle: state.appTitle,
+    appDesc: state.appDesc,
+    appCategory: state.appCategory,
+    appArchetype: state.appArchetype,
+    appLayout: state.appLayout,
+    appCollections: state.appCollections,
+    appVersion,
+    inspirationUrls: state.inspirationUrls,
+    instruction: request,
+    actor: {
+      id: api.actor?.id || '',
+      display_name: api.actor?.display_name || api.actor?.id || '',
+      role: api.actor?.role || 'user',
+      is_admin: api.actor?.role === 'admin',
+    },
+  });
+  const code = `creator.command.${command.command_type}`;
+  const failText = (error) => `App-Erstellung fehlgeschlagen: Der CTOX-Auftrag konnte nicht angelegt werden${error ? `: ${error}` : '.'}`;
+  let handle;
   try {
-    const actorContext = (session) => {
-      const user = session?.user || {};
-      return {
-        id: user.id || 'admin',
-        display_name: user.display_name || user.name || 'Admin',
-        role: user.role || 'admin',
-        is_admin: user.is_admin !== undefined ? Boolean(user.is_admin) : true,
-      };
-    };
-
-    const command = buildAppCreateCommand({
-      appId,
-      appTitle,
-      appDesc,
-      appCategory: state.appCategory,
-      appArchetype: state.appArchetype,
-      appLayout,
-      appCollections: collections,
-      appVersion,
-      inspirationUrls: state.inspirationUrls,
-      instruction: request,
-      actor: actorContext(state.ctx.session),
-    });
-
-    addConsoleLog(`[QUEUE] Sende ${command.command_type} für ${command.payload.module_id}...`, 'info');
-    const result = await state.ctx.commandBus.dispatch(command, { until: 'terminal' });
-
-    addConsoleLog('==================================================', 'success');
-    addConsoleLog(`[SUCCESS] CTOX App-Erstellung für '${command.payload.app_title}' wurde gestartet.`, 'success');
-    if (result?.task_id) addConsoleLog(`[TASK] ${result.task_id}`, 'info');
-
-    state.ctx.notifications.show({
-      title: 'App erstellt',
-      message: `'${command.payload.app_title}' ist jetzt als Business-OS-App verfügbar.`,
-      type: 'success'
-    });
-
-    syncDot.className = 'sync-dot';
-    syncText.textContent = state.t('deployInstalled', 'App erstellt');
-    state.isDeploying = false;
-    updateCreatorActionState();
-
+    handle = api.command(command.command_type, {
+      ...command.payload,
+      module: command.module,
+      record_id: command.record_id,
+      client_context: command.client_context,
+    }, { record_id: command.record_id });
   } catch (error) {
-    addConsoleLog(`[FEHLER] App-Auftrag konnte nicht angelegt werden: ${error.message}`, 'error');
-    console.error(error);
-
-    state.ctx.notifications.show({
-      title: 'App-Erstellung fehlgeschlagen',
-      message: `Der CTOX-Auftrag konnte nicht angelegt werden: ${error.message}`,
-      type: 'error'
-    });
-
-    syncDot.className = 'sync-dot';
-    syncDot.style.background = 'var(--danger)';
-    syncText.textContent = state.t('deployFailed', 'Fehler beim Speichern');
-    state.isDeploying = false;
-    updateCreatorActionState();
+    api.status.report({ level: 'error', code, text: failText(error?.message || String(error)) });
+    return;
   }
+  console.log(`[QUEUE] ${command.command_type} für ${command.payload.module_id} (${handle.id})`);
+  handle.local?.catch?.((error) => api.status.report({ level: 'error', code, text: failText(error?.message || String(error)), ref: handle.id }));
+  let off = null;
+  let finished = false;
+  off = handle.status.subscribe((st) => {
+    if (finished) return;
+    if (st?.status === 'failed') { finished = true; api.status.report({ level: 'error', code, text: failText(st.error || ''), ref: handle.id }); off?.(); }
+    else if (st?.status === 'done') { finished = true; api.status.clear(code); off?.(); }
+  });
+  if (finished) off?.();
+  else state.disposers.push(() => off?.());
+  updateCreatorActionState();
 }
 
 function escapeHtml(value) {
@@ -1248,19 +1138,6 @@ function escapeHtml(value) {
 }
 
 
-// --- Creator module i18n -----------------------------------------------------
-// Loads locales/<lang>.json for the creator UI itself (the request templates
-// carry their own labels). German markup text is the fallback.
-async function loadCreatorMessages(locale) {
-  const lang = locale === 'en' ? 'en' : 'de';
-  try {
-    const response = await fetch(new URL(`./locales/${lang}.json`, import.meta.url));
-    if (!response.ok) throw new Error(String(response.status));
-    return await response.json();
-  } catch {
-    return {};
-  }
-}
 
 function applyCreatorTranslations(root, t) {
   root.querySelectorAll('[data-t]').forEach((el) => {

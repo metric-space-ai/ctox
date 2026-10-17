@@ -3781,6 +3781,17 @@ pub(super) fn queue_task_count_cache_miss_count_for_tests(
     counts.get(&key).copied().unwrap_or(0)
 }
 
+/// Owner-backed read entry point. The supplied pool executes exactly one
+/// query-only snapshot and never creates a database.
+pub(super) async fn read_channel_store<T: Send + 'static>(
+    store: &crate::lcm::owner_adapter::OwnerAdapter,
+    options: ctox_store::JobOptions,
+    read: impl FnOnce(&Connection) -> std::result::Result<T, ctox_store::StoreError> + Send + 'static,
+) -> std::result::Result<T, ctox_store::StoreError> {
+    store.read(options, read).await
+}
+
+// Compatibility opener while retained-Connection callers are migrated.
 pub(super) fn open_channel_db_read_only(path: &Path) -> Result<Option<Connection>> {
     if !path.exists() {
         return Ok(None);
@@ -3823,11 +3834,25 @@ pub(super) fn empty_business_os_projection(collection: &str) -> Value {
 }
 
 pub(super) fn ensure_schema(conn: &Connection) -> Result<()> {
-    let busy_timeout_ms = crate::persistence::sqlite_busy_timeout_millis();
+    ensure_schema_with_setup(
+        conn,
+        &format!(
+            "PRAGMA journal_mode=WAL; PRAGMA busy_timeout={};",
+            crate::persistence::sqlite_busy_timeout_millis()
+        ),
+    )
+}
+
+/// The daemon owner already applied ConnectionConfig. Domain DDL must not
+/// replace its busy_timeout/checkpoint policy with legacy opener pragmas.
+pub(crate) fn ensure_owned_schema(conn: &Connection) -> Result<()> {
+    ensure_schema_with_setup(conn, "")
+}
+
+fn ensure_schema_with_setup(conn: &Connection, setup: &str) -> Result<()> {
     conn.execute_batch(&format!(
         r#"
-        PRAGMA journal_mode=WAL;
-        PRAGMA busy_timeout={busy_timeout_ms};
+        {setup}
 
         CREATE TABLE IF NOT EXISTS communication_accounts (
             account_key TEXT PRIMARY KEY,
@@ -4146,6 +4171,14 @@ pub(super) fn ensure_schema(conn: &Connection) -> Result<()> {
             ON business_command_aggregates(module, record_id,
                 json_extract(intent_json,'$.payload.configuration_digest'), created_at_ms, command_id)
             WHERE command_type='outbound.research.adapters.reconcile' AND execution_phase!='terminal';
+
+        -- Durable native deletion receipts retain callback retry authority and
+        -- distinguish intentional removals from genuinely broken task links.
+        CREATE TABLE IF NOT EXISTS capability_deleted_queue_tasks (
+            task_id TEXT PRIMARY KEY,
+            snapshot_json TEXT NOT NULL,
+            deleted_at_ms INTEGER NOT NULL
+        );
 
         CREATE TABLE IF NOT EXISTS business_command_task_links (
             command_id TEXT PRIMARY KEY,

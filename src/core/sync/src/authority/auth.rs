@@ -73,6 +73,123 @@ pub fn validate_public_identity(identity: &str) -> io::Result<()> {
 pub struct SigningIdentity {
     key: Ed25519KeyPair,
 }
+
+/// Encoder-owned bytes. The private field prevents callers from labelling
+/// arbitrary memory as a canonical instance packet.
+#[path = "auth/app_grant_packet.rs"]
+mod app_grant_packet;
+pub struct CanonicalInstancePacket(Vec<u8>);
+impl CanonicalInstancePacket {
+    const DOMAIN: &'static [u8] = b"ctox.sync.v4.stream\0";
+    /// E41's full signed hello has its own fixed domain. Decode and re-encode
+    /// through the canonical encoder; this is never a raw signing bypass.
+    pub fn from_launch_bytes(bytes: &[u8]) -> io::Result<Self> {
+        const DOMAIN: &[u8] = b"ctox.launch-context.v4\0";
+        if bytes.len() > 16 * 1024 {
+            return Err(invalid("launch exceeds bootstrap budget"));
+        }
+        let payload = bytes
+            .strip_prefix(DOMAIN)
+            .ok_or_else(|| invalid("launch domain required"))?;
+        let value: Value =
+            serde_json::from_slice(payload).map_err(|_| invalid("invalid launch packet"))?;
+        if value["type"] != "hello"
+            || value["protocol_ver"] != 4
+            || !value["device_proof"].is_object()
+        {
+            return Err(invalid("launch hello required"));
+        }
+        let stream = Self::encode_stream(value)?;
+        let mut encoded = DOMAIN.to_vec();
+        encoded.extend_from_slice(&stream.0[Self::DOMAIN.len()..]);
+        if encoded != bytes {
+            return Err(invalid("noncanonical launch packet"));
+        }
+        Ok(Self(encoded))
+    }
+    /// Scope claims use the existing fixed wire domain and exact canonical JSON.
+    /// This boundary never grants authority; Core validates the live claims.
+    pub fn from_scope_bytes(bytes: &[u8]) -> io::Result<Self> {
+        const DOMAIN: &[u8] = b"ctox:v4:scope\0";
+        if bytes.len() > 16 * 1024 {
+            return Err(invalid("scope budget"));
+        }
+        let value: Value = serde_json::from_slice(
+            bytes
+                .strip_prefix(DOMAIN)
+                .ok_or_else(|| invalid("scope domain"))?,
+        )
+        .map_err(|_| invalid("scope claims"))?;
+        let legacy = value.as_object().is_some_and(|m| m.len() == 5)
+            && value["instance_id"].as_str().is_some_and(|s| !s.is_empty())
+            && value["device_id"].as_str().is_some_and(|s| !s.is_empty())
+            && value["scope_hash"].as_str().is_some_and(|s| !s.is_empty())
+            && value["rights_ver"].as_u64().is_some()
+            && value["exp"].as_u64().is_some();
+        if !legacy && !app_grant_packet::valid(&value) {
+            return Err(invalid("scope claims contract"));
+        }
+        let stream = Self::encode_stream(value)?;
+        let mut encoded = DOMAIN.to_vec();
+        encoded.extend_from_slice(&stream.0[Self::DOMAIN.len()..]);
+        if encoded != bytes {
+            return Err(invalid("noncanonical scope claims"));
+        }
+        Ok(Self(encoded))
+    }
+    /// Existing app catalog signatures cover canonical manifest JSON. Only a
+    /// manifest-shaped encoder output is eligible, never arbitrary raw JSON.
+    pub fn from_manifest_bytes(bytes: &[u8]) -> io::Result<Self> {
+        if bytes.len() > MAX_ENVELOPE_BYTES {
+            return Err(invalid("manifest exceeds budget"));
+        }
+        let value: Value =
+            serde_json::from_slice(bytes).map_err(|_| invalid("invalid manifest"))?;
+        if value["app_id"].as_str().is_none_or(str::is_empty)
+            || value["app_ver"].as_str().is_none_or(str::is_empty)
+            || !value["capabilities_required"].is_array()
+            || !value["collections"].is_object()
+        {
+            return Err(invalid("manifest contract required"));
+        }
+        let stream = Self::encode_stream(value)?;
+        let encoded = &stream.0[Self::DOMAIN.len()..];
+        if encoded != bytes {
+            return Err(invalid("noncanonical manifest"));
+        }
+        Ok(Self(encoded.to_vec()))
+    }
+    pub fn encode_stream(mut value: Value) -> io::Result<Self> {
+        if !value.is_object() {
+            return Err(invalid("instance stream object required"));
+        }
+        value.sort_all_objects();
+        let payload = serde_json::to_vec(&value).map_err(|_| invalid("invalid instance stream"))?;
+        if payload.len() > MAX_ENVELOPE_BYTES {
+            return Err(invalid("instance stream exceeds budget"));
+        }
+        let mut bytes = Self::DOMAIN.to_vec();
+        bytes.extend(payload);
+        Ok(Self(bytes))
+    }
+    /// The legacy signer trait carries bytes, so cross that boundary by
+    /// decoding and re-encoding, then require exact encoder equivalence.
+    pub fn from_stream_bytes(bytes: &[u8]) -> io::Result<Self> {
+        if bytes.len() > MAX_ENVELOPE_BYTES + Self::DOMAIN.len() {
+            return Err(invalid("instance stream exceeds budget"));
+        }
+        let payload = bytes
+            .strip_prefix(Self::DOMAIN)
+            .ok_or_else(|| invalid("instance stream domain required"))?;
+        let value =
+            serde_json::from_slice(payload).map_err(|_| invalid("invalid instance stream"))?;
+        let encoded = Self::encode_stream(value)?;
+        if encoded.0 != bytes {
+            return Err(invalid("noncanonical instance stream"));
+        }
+        Ok(encoded)
+    }
+}
 impl SigningIdentity {
     /// Import an existing host key without replacing its confirmed public identity.
     /// Node/OpenSSL PKCS#8 v1 lacks the public half, so require an independent pin.
@@ -100,6 +217,17 @@ impl SigningIdentity {
     }
     pub fn public_identity(&self) -> String {
         format!("ed25519:{}", hex(self.key.public_key().as_ref()))
+    }
+    /// Compatibility entry: rejected input produces no signature. Production
+    /// adapters use the fallible encoder boundary and propagate its error.
+    pub fn sign_canonical_bytes(&self, canonical: &[u8]) -> Vec<u8> {
+        CanonicalInstancePacket::from_stream_bytes(canonical)
+            .map(|encoded| self.sign_instance_packet(&encoded))
+            .unwrap_or_default()
+    }
+    /// The raw Ed25519 primitive only receives an encoder-owned packet.
+    pub fn sign_instance_packet(&self, canonical: &CanonicalInstancePacket) -> Vec<u8> {
+        self.key.sign(&canonical.0).as_ref().to_vec()
     }
     /// A peer signs its own durable, complete copy, never a sender's replica list.
     /// The caller must run filesystem verification off the async control loop.

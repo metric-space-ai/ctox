@@ -1,0 +1,278 @@
+{
+  "_capability_evidence": {
+    "agent.task.enqueue": [
+      "handlers/ctox.cv_print.apply_parse.js"
+    ],
+    "agent.task.get": [
+      "handlers/ctox.cv_print.apply_parse.failed.js"
+    ],
+    "doc.extract": [
+      "handlers/ctox.cv_print.apply_parse.js"
+    ]
+  },
+  "_declaration": "modules/cv-print-builder/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/cv-print-builder/index.html",
+  "_rust_basis": "`store.rs` cv_print-Funktionen ~0,55k (`writeback_cv_print_parse` `:23866`, 225; `process_cv_print_parse_command` `:24092`, 99; `cv_print_pdf_text_prompt_enrichment` `:25926`; `complete_cv_print_command_from_reply` `:10484`; 39 Treffer `cv_",
+  "_source_dir": "src/apps/business-os/modules/cv-print-builder",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "cv-print-builder",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "agent.task.enqueue",
+    "agent.task.get",
+    "doc.extract"
+  ],
+  "collections": {},
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {},
+  "files": {
+    "V4-HANDLERS.md": "cd6cdd7a2088fad3f2cb2b6deb6ae15a4d4b09b3ba0e2af000885dc52f260398",
+    "V4-PORT.md": "f284517ff26246e39246c5f42f614150810fe07f95ff4b672a678cc4a60c3704",
+    "assets/icon.jpg": "80f0f7dc56dafbdc81f49d11c6bea63dc35c68e5945bb9452dd6e02dd87d891a",
+    "assets/icon@512.jpg": "3fea8c7044b49a9df49f9b40d2222d7306140945edd2d86a885af7a96bc765a3",
+    "collections.schema.json": "1a88e3e5b61107c6aea1d01408a055aad13e0ae9577d0848bfe9da49b5f9cbd3",
+    "handlers/_base.js": "9150293c4a852db693ac102df849ffdad84fcd36c6f1d93aa25a083706263d69",
+    "handlers/ctox.cv_print.apply_parse.done.js": "3c18dccf9a13c8dffdde4f02fa88318b7bd85599081ac4b89551c78738730caa",
+    "handlers/ctox.cv_print.apply_parse.failed.js": "05c08ba37a2696ff75fd9594ee30ce1aff7bcca53e0b22adc7105bc9f56bd853",
+    "handlers/ctox.cv_print.apply_parse.js": "de6f98a6f79542747635bc4e3307cc466ff3f828223908fb73a99ffaee857401",
+    "icon.svg": "524bd59c6a35bc933c3cbea20b1b7ae2402ae6c21f8bad28c76e7510820f63cb",
+    "index.css": "68c4e5bc98a6105da544cc64d03a4ca407c6408ab382ba06796ca4635d270667",
+    "index.html": "e64a40fd4690c2272949dbb6319ad95988776c78ff3c93c4afd2bf46ac2de3a8",
+    "index.js": "c77e462cb2944a6fa5a6ea21b815b08fbf1c5783e44905e8b0c9322736964b48",
+    "locales/de.json": "0533cfa5e35f7850e5f3ef0546b331099de41b870dc36cb5b1271d2731e45359",
+    "locales/en.json": "3087e2a9a5ab5e779573b4490538f1ff7660309e0ba10b3a77140195e8f55eea",
+    "module.json": "b262d4b87b208d4866d6a1011a0ca12837f3462c37517f5f06b9fb9cb57dd4a5",
+    "prompts/parse.md": "4f243fc8cdaf2f7eafda24855a2ce79606bc18dff23dc98517ae042279176d52",
+    "skills/parser/SKILL.md": "707e2125b879d3d4d93cc876e69a4334f6d647673c2f16a98a081adb90a31ae6",
+    "v4-manifest.json": "3456fb56e76513f18b223a519b2eb099552a7380ef7f73f00ff9b35be35a99ff"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "index.js:17",
+          "index.js:506"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "ctox_queue_tasks": {
+      "_evidence": {
+        "code_read": [
+          "index.js:18",
+          "index.js:507"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "desktop_file_chunks": {
+      "_evidence": {
+        "code_read": [
+          "index.js:3",
+          "index.js:11",
+          "index.js:1564"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/cv-print-builder/V4-HANDLERS.md „Fremdzugriffe (Manifest foreign_collections, für den Manifest-Generator)“; modules/cv-print-builder/V4-PORT.md OFFEN 2",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "desktop"
+    },
+    "desktop_files": {
+      "_evidence": {
+        "code_read": [
+          "handlers/ctox.cv_print.apply_parse.js:16",
+          "handlers/ctox.cv_print.apply_parse.js:104",
+          "handlers/ctox.cv_print.apply_parse.js:105"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/cv-print-builder/V4-HANDLERS.md „Fremdzugriffe (Manifest foreign_collections, für den Manifest-Generator)“; modules/cv-print-builder/V4-PORT.md OFFEN 2",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "desktop"
+    },
+    "document_versions": {
+      "_evidence": {
+        "code_read": [
+          "handlers/ctox.cv_print.apply_parse.js:12",
+          "handlers/ctox.cv_print.apply_parse.js:238",
+          "handlers/ctox.cv_print.apply_parse.js:239"
+        ],
+        "code_write": [
+          "handlers/ctox.cv_print.apply_parse.js:254",
+          "handlers/ctox.cv_print.apply_parse.js:308",
+          "index.js:1601"
+        ],
+        "declaration_basis": "modules/cv-print-builder/V4-HANDLERS.md „Fremdzugriffe (Manifest foreign_collections, für den Manifest-Generator)“; modules/cv-print-builder/V4-PORT.md OFFEN 2",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "documents"
+    },
+    "documents": {
+      "_evidence": {
+        "code_read": [
+          "handlers/ctox.cv_print.apply_parse.js:268",
+          "handlers/ctox.cv_print.apply_parse.js:309",
+          "index.js:15"
+        ],
+        "code_write": [
+          "handlers/ctox.cv_print.apply_parse.js:278",
+          "handlers/ctox.cv_print.apply_parse.js:316",
+          "index.js:1613"
+        ],
+        "declaration_basis": "modules/cv-print-builder/V4-HANDLERS.md „Fremdzugriffe (Manifest foreign_collections, für den Manifest-Generator)“; modules/cv-print-builder/V4-PORT.md OFFEN 2",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read",
+        "write"
+      ],
+      "owner_app": "documents"
+    },
+    "files": {
+      "_evidence": {
+        "code_read": [
+          "handlers/ctox.cv_print.apply_parse.js:90",
+          "handlers/ctox.cv_print.apply_parse.js:93",
+          "handlers/ctox.cv_print.apply_parse.js:97"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/cv-print-builder/V4-HANDLERS.md „Fremdzugriffe (Manifest foreign_collections, für den Manifest-Generator)“; modules/cv-print-builder/V4-PORT.md OFFEN 2",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    }
+  },
+  "handlers": {
+    "ctox.cv_print.apply_parse": "handlers/ctox.cv_print.apply_parse.js",
+    "ctox.cv_print.apply_parse.done": "handlers/ctox.cv_print.apply_parse.done.js",
+    "ctox.cv_print.apply_parse.failed": "handlers/ctox.cv_print.apply_parse.failed.js"
+  },
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/cv-print-builder.jpg (shared/operator-icon-selection.js, sha256 bfda9b1a6210…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; modules/cv-print-builder/V4-PORT.md OFFEN 8; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Recruiting",
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-cv-print-builder\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-cv-print-builder\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0f766e\"/><stop offset=\"100%\" stop-color=\"#64748b\"/></linearGradient></defs><path d=\"M6 3h8l4 4v14H6z\" fill=\"url(#grad-cv-print-builder)\" fill-opacity=\"0.12\" stroke=\"url(#grad-cv-print-builder)\" stroke-width=\"2\" stroke-linejoin=\"round\"/><path d=\"M14 3v5h4\" stroke=\"url(#grad-cv-print-builder)\" stroke-width=\"2\" stroke-linejoin=\"round\"/><path d=\"M8.5 12h7M8.5 15h7M8.5 18h4\" stroke=\"url(#grad-cv-print-builder)\" stroke-width=\"1.8\" stroke-linecap=\"round\"/></svg>",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 800,
+        "width": 1180
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#475569",
+        "category": "People",
+        "iconAssetId": "workjet.business-os.cv-print-builder",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "document",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "CV Print Builder"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "prompts": [
+    {
+      "name": "parse",
+      "path": "prompts/parse.md"
+    }
+  ],
+  "provenance": {
+    "base_hash": "e7e52f781f7e27c513e00e4aae166f3c0ea6e7a4473b790558c7d19f58f0e634",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "skills": [
+    {
+      "name": "parser",
+      "path": "skills/parser/SKILL.md"
+    }
+  ],
+  "styles": [
+    "index.css"
+  ],
+  "title": "CV Print Builder",
+  "triggers": [],
+  "version": "0.1.2"
+}

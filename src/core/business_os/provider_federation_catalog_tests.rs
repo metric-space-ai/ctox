@@ -236,3 +236,51 @@ fn native_private_catalog_binding_cannot_enter_public_metadata() -> Result<()> {
     assert!(!public.to_string().contains(&"a".repeat(64)));
     Ok(())
 }
+
+#[test]
+fn native_model_probe_target_uses_actual_owner_holder_and_revision() -> Result<()> {
+    crate::business_os::project_chats::plan_state::run_contract(|root| {
+        let f = Fixture::with_root(root)?;
+        let holder = store::stable_instance_id(f.root.path())?;
+        let state = f.adopt(&[account("holder-native-account")])?;
+        let id = account_id(&state);
+        f.conn.execute(
+            "UPDATE business_provider_federation_accounts SET holder_instance_id=?1",
+            [&holder],
+        )?;
+        let target = model_probe_target(f.root.path(), "owner", id, 1)?;
+        assert_eq!(target.local_account_id, "holder-native-account");
+        store::issue_business_os_capability_token_for_managed_user(
+            f.root.path(),
+            "foreign",
+            "Foreign",
+            "admin",
+            store::now_ms() as i64,
+        )?;
+        assert!(
+            model_probe_target(f.root.path(), "foreign", id, 1).is_err(),
+            "foreign admin must not select this account"
+        );
+        assert!(
+            model_probe_target(f.root.path(), "owner", id, 2).is_err(),
+            "stale revision must reject"
+        );
+        f.conn.execute(
+            "UPDATE business_provider_federation_accounts SET holder_instance_id='foreign-holder'",
+            [],
+        )?;
+        assert!(
+            model_probe_target(f.root.path(), "owner", id, 1).is_err(),
+            "remote holder must not dispatch locally"
+        );
+        f.conn.execute(
+            "UPDATE business_provider_federation_accounts SET holder_instance_id=?1,enabled=0",
+            [&holder],
+        )?;
+        assert!(
+            model_probe_target(f.root.path(), "owner", id, 1).is_err(),
+            "disabled account must not dispatch"
+        );
+        Ok(())
+    })
+}

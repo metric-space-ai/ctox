@@ -1,0 +1,323 @@
+{
+ "at": "2026-10-15T13:31:58.299Z",
+ "variant": "shared-css",
+ "stub": "/Users/michaelwelsch/.local/state/shell-v4/stub-pins/cff5ba5",
+ "widths": [
+  1280,
+  420
+ ],
+ "ported": [
+  "documents",
+  "knowledge",
+  "placements"
+ ],
+ "skipped": [
+  {
+   "id": "conversations",
+   "reason": "kein mount(root, api) (kein mount-Export); Scan 102"
+  },
+  {
+   "id": "cv-print-builder",
+   "reason": "kein mount(root, api) (kein mount-Export); Scan 66"
+  }
+ ],
+ "results": [
+  {
+   "app": "documents",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    560,
+    360
+   ],
+   "G1": [
+    "Labor-Fehler: page.evaluate: TypeError: Cannot read properties of null (reading 'handle')"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {},
+   "g6": null,
+   "errors": [
+    "console: Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME"
+   ],
+   "pushErrors": [],
+   "shot": "documents/1280.png"
+  },
+  {
+   "app": "documents",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G6"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    560,
+    360
+   ],
+   "G1": [
+    "Labor-Fehler: page.evaluate: TypeError: Cannot read properties of null (reading 'handle')"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [
+    "nicht messbar (Lauf fehlgeschlagen)"
+   ],
+   "notes": [],
+   "info": {},
+   "g6": null,
+   "errors": [
+    "console: Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME"
+   ],
+   "pushErrors": [],
+   "shot": "documents/420.png"
+  },
+  {
+   "app": "knowledge",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G2",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [
+    "Titel ist die App-ID „Knowledge“"
+   ],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (2 in Listen): Liste strong „Rahmenvertrag über Wartung und Instandha“; Liste small.bundle-meta „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 194,
+    "visibleElements": 105,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 793,
+    "scrollTop": 0,
+    "title": "Knowledge",
+    "titleCalls": [
+     "Knowledge"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/knowledge@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--knowledge-accent×24",
+     "--knowledge-surface×22",
+     "--knowledge-line×17",
+     "--knowledge-muted×16",
+     "--knowledge-control-radius×15",
+     "--knowledge-text×10",
+     "--knowledge-bg×4",
+     "--knowledge-surface-muted×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "knowledge/1280.png"
+  },
+  {
+   "app": "knowledge",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G2",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [
+    "Titel ist die App-ID „Knowledge“"
+   ],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (2 in Listen): Liste strong „Rahmenvertrag über Wartung und Instandha“; Liste small.bundle-meta „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 194,
+    "visibleElements": 98,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 793,
+    "scrollTop": 0,
+    "title": "Knowledge",
+    "titleCalls": [
+     "Knowledge"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/knowledge@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--knowledge-accent×24",
+     "--knowledge-surface×22",
+     "--knowledge-line×17",
+     "--knowledge-muted×16",
+     "--knowledge-control-radius×15",
+     "--knowledge-text×10",
+     "--knowledge-bg×4",
+     "--knowledge-surface-muted×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "knowledge/420.png"
+  },
+  {
+   "app": "placements",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"placements\"] → section#desk_win_14xj02l1f9f041.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 122,
+    "visibleElements": 85,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 693,
+    "scrollTop": 0,
+    "title": "Vermittlungen",
+    "titleCalls": [
+     "Vermittlungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/placements@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "placements/1280.png"
+  },
+  {
+   "app": "placements",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"placements\"] → section#desk_win_rkpsom170qcuw.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 122,
+    "visibleElements": 84,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 693,
+    "scrollTop": 0,
+    "title": "Vermittlungen",
+    "titleCalls": [
+     "Vermittlungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/placements@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "placements/420.png"
+  }
+ ]
+}

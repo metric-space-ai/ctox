@@ -161,6 +161,44 @@ impl ClaudeCredentialHandles {
 /// The portable proxy never opens credential files and never consults process
 /// environment. CTOX implements this trait against its encrypted SQLite store.
 pub trait ClaudeSecretStore: Send + Sync {
+    /// Async host boundary. Native stores override this to admit the job on
+    /// their existing file owners; the portable default performs no Core IO.
+    fn load_credentials_async(
+        self: std::sync::Arc<Self>,
+        handles: ClaudeCredentialHandles,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<ClaudeStoredCredentials, SecretStoreError>>
+                + Send,
+        >,
+    >
+    where
+        Self: 'static,
+    {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || self.load_credentials(&handles))
+                .await
+                .map_err(|_| SecretStoreError::Read)?
+        })
+    }
+
+    /// Async host boundary. Native stores override this to admit the job on
+    /// their existing file owners; the portable default performs no Core IO.
+    fn store_credentials_async(
+        self: std::sync::Arc<Self>,
+        handles: ClaudeCredentialHandles,
+        credentials: ClaudeStoredCredentials,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), SecretStoreError>> + Send>>
+    where
+        Self: 'static,
+    {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || self.store_credentials(&handles, &credentials))
+                .await
+                .map_err(|_| SecretStoreError::Write)?
+        })
+    }
+
     /// Loads both values from one consistent host-store snapshot.
     fn load_credentials(
         &self,

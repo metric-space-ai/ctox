@@ -1,0 +1,734 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/browser/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/browser/index.html",
+  "_rust_basis": "`rxdb_peer_browser.rs` (4906, Live-Kanal `ctox.browser.live.v1`, browser.*-Handler), `browser_runtime.rs` (1233), `browser_control.rs` (529), `store.rs` (~111: `browser_upload_path`, `authorize_rxdb_browser_command`, `browser_context_artifa",
+  "_source_dir": "src/apps/business-os/modules/browser",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "browser",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {
+    "browser_frames": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/browser.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "session_id",
+          "expires_at_ms",
+          [
+            "session_id",
+            "seq"
+          ],
+          [
+            "session_id",
+            "expires_at_ms"
+          ],
+          [
+            "tab_id",
+            "seq"
+          ],
+          [
+            "tenant_id",
+            "owner_user_id",
+            "seq"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "allowed_observer_user_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "base_frame_id": {
+            "type": "string"
+          },
+          "captured_at_ms": {
+            "type": "number"
+          },
+          "data": {
+            "type": "string"
+          },
+          "encoding": {
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "type": "number"
+          },
+          "frame_hash": {
+            "type": "string"
+          },
+          "frame_kind": {
+            "type": "string"
+          },
+          "height": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 220,
+            "type": "string"
+          },
+          "mime_type": {
+            "type": "string"
+          },
+          "owner_user_id": {
+            "type": "string"
+          },
+          "quality": {
+            "type": "number"
+          },
+          "seq": {
+            "type": "number"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "size_bytes": {
+            "type": "number"
+          },
+          "tab_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "viewport_h": {
+            "type": "number"
+          },
+          "viewport_w": {
+            "type": "number"
+          },
+          "width": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "session_id",
+          "tab_id",
+          "seq",
+          "mime_type",
+          "encoding",
+          "data",
+          "width",
+          "height",
+          "captured_at_ms",
+          "expires_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 1
+      }
+    },
+    "browser_input_events": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/browser.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "session_id",
+          [
+            "session_id",
+            "seq"
+          ],
+          [
+            "session_id",
+            "status",
+            "seq"
+          ],
+          [
+            "status",
+            "created_at_ms"
+          ],
+          [
+            "tenant_id",
+            "owner_user_id",
+            "status",
+            "seq"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "ack_at_ms": {
+            "type": "number"
+          },
+          "ack_status": {
+            "type": "string"
+          },
+          "button": {
+            "type": "string"
+          },
+          "buttons": {
+            "type": "number"
+          },
+          "client_seq": {
+            "type": "number"
+          },
+          "code": {
+            "type": "string"
+          },
+          "consumed_at_ms": {
+            "type": "number"
+          },
+          "controller_user_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "dx": {
+            "type": "number"
+          },
+          "dy": {
+            "type": "number"
+          },
+          "error": {
+            "type": "string"
+          },
+          "error_code": {
+            "type": "string"
+          },
+          "frame_seq": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 220,
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "lease_id": {
+            "type": "string"
+          },
+          "modifiers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "owner_user_id": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "seq": {
+            "type": "number"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tab_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "x": {
+            "type": "number"
+          },
+          "y": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "session_id",
+          "seq",
+          "type",
+          "status",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 1
+      }
+    },
+    "browser_sessions": {
+      "_class_proposal": "heute demand-only (shared/sync.js:3867 isDemandOnlyPullCollection)",
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/browser.collections.schema.json",
+      "byte_budget": null,
+      "class": "window",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "updated_at_ms",
+          [
+            "status",
+            "updated_at_ms"
+          ],
+          [
+            "tenant_id",
+            "owner_user_id",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "active_frame_id": {
+            "type": "string"
+          },
+          "allowed_observer_user_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "controller_lease_expires_at_ms": {
+            "type": "number"
+          },
+          "controller_lease_id": {
+            "type": "string"
+          },
+          "controller_user_id": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "current_tab_id": {
+            "type": "string"
+          },
+          "current_url": {
+            "type": "string"
+          },
+          "device_scale_factor": {
+            "type": "number"
+          },
+          "error": {
+            "type": "string"
+          },
+          "frame_rate_target": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "last_frame_seq": {
+            "type": "number"
+          },
+          "last_input_seq": {
+            "type": "number"
+          },
+          "owner_user_id": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "pending_input_count": {
+            "type": "number"
+          },
+          "profile_mode": {
+            "type": "string"
+          },
+          "runtime_status": {
+            "type": "string"
+          },
+          "security_status": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "viewport_h": {
+            "type": "number"
+          },
+          "viewport_w": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 1
+      }
+    },
+    "browser_tabs": {
+      "_class_proposal": "heute demand-only (shared/sync.js:3868 isDemandOnlyPullCollection)",
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/browser.collections.schema.json",
+      "byte_budget": null,
+      "class": "window",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "indexes": [
+          "session_id",
+          [
+            "session_id",
+            "updated_at_ms"
+          ],
+          [
+            "tenant_id",
+            "owner_user_id",
+            "updated_at_ms"
+          ]
+        ],
+        "primaryKey": "id",
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "allowed_observer_user_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "can_go_back": {
+            "type": "boolean"
+          },
+          "can_go_forward": {
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "error": {
+            "type": "string"
+          },
+          "frame_seq": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "last_frame_at_ms": {
+            "type": "number"
+          },
+          "last_frame_id": {
+            "type": "string"
+          },
+          "loading": {
+            "type": "boolean"
+          },
+          "oauth_popup": {
+            "type": "boolean"
+          },
+          "opener_tab_id": {
+            "type": "string"
+          },
+          "owner_user_id": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "position": {
+            "type": "number"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "session_id",
+          "status",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 1
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {},
+  "files": {
+    "V4-HANDLERS.md": "a5dd217413770a2cbfcbab00b6812d49790f49bd60797cb8000e60849fb1a222",
+    "V4-PORT.md": "6ed4d6f8022125d24709ec04a67ec215cec20b252a0aa11d0974100b23510699",
+    "assets/icon.jpg": "eafafdd5c47fbd6a83f8a84e9e0d7e76aa30bf750e791dc30fc81a7e969ba936",
+    "assets/icon@512.jpg": "196bbacaebde44b726a7873ffbafd026a589f7135171243805425eea9348fad2",
+    "collections.schema.json": "107c0f3e2fb2178a9c774524ba4d43567e620217f06f34de61a087be7c24ee81",
+    "handlers/_lib/browser.js": "9d6b8a2fd82b54567b26a77b5e54afd8a07d545bf9dc2b2eb36fc27fe1a14f35",
+    "handlers/_lib/run.js": "5800042cbc5f325abc1f2593c528a35a9a2a40bae32a531576e2b5d147b22d4c",
+    "handlers/browser.back.js": "976e86ae53dbafcd320db4318cb44e695dcaf3c891a9dd76bfc20f2da86a567e",
+    "handlers/browser.clipboard.clear.js": "439eeb2ba2568f4b804712afaa870f0f13a41727190a7dd16d98ee9f9511ec06",
+    "handlers/browser.clipboard.copy.js": "e80e829f56ca932b08a231d9bd0ddc0111d35bd3dfe30ab18781bb657c8aef99",
+    "handlers/browser.clipboard.paste.js": "3ed1217a99f045c916f49a9ce2a01898ed00f2de0dd39e45882a84c25860d4fd",
+    "handlers/browser.controller.acquire.js": "ecfcd7ed06447381df9963f91e1a7b45fb54c1dcf15d6b551a4f66c1178de21a",
+    "handlers/browser.controller.release.js": "642025e53384bc017dbc57282b8310338d4146505dcdb331bc4820d46e202ece",
+    "handlers/browser.controller.renew.js": "67eb187dc06fa98a60e07b76c3a9095728032b7977c7e521f0c1ef0f5317a2c9",
+    "handlers/browser.credential.fill.js": "d285f8eba884bd5841015722354ad863890b038fe055b6fa6404931884c8ae09",
+    "handlers/browser.dialog.respond.js": "3357c8b42c6019402927145fb3c4085b8cebbbc17a5aa9c816fc73fb0e0efee5",
+    "handlers/browser.forward.js": "8c10c4cfe658276f01d8df59ecc69913368b5112a3a0c9b3b43a29e669654966",
+    "handlers/browser.navigate.js": "d45508f2a1aed29c4f98b712973d3e9c8784d058b46689ad7202dcb030c791d7",
+    "handlers/browser.permission.respond.js": "2d115ad418d8229d87b5c1ad718fa2a4c88bde3bb082637ffa5783114ce744d5",
+    "handlers/browser.reload.js": "fd9a170e039b345506e4ef60819faa9186659b5fdc1feaefb551e12d35241861",
+    "handlers/browser.reset.js": "8b7bee46569e394c4c2b4f2b218a41c37e6972c54b40f87b82fd3d38273bb63d",
+    "handlers/browser.session.start.js": "a43d995561e216b38c6fa00e8c0e5733450a78aa346ace0313c2c361b5e1bd80",
+    "handlers/browser.session.stop.js": "e42c353791490ce8d8ad0cac152f756e2f228ce17a6dd62571b3858c8b2c754b",
+    "handlers/browser.tab.activate.js": "d627794cde40ffd9864a53795139118190c3796ca3a86d9e21e40e5536951f19",
+    "handlers/browser.tab.close.js": "948fabd9fbf2057bc560e93f02680411559f58121dab1e2180c10d018349c293",
+    "handlers/browser.tab.open.js": "161f78b93c7c8993a74cbfad38234dbb783a2ff192fe4a4aad0333df0644bc11",
+    "handlers/web_stack.auth_assist.complete.js": "329a61254e0a141f416be5af55147ba28095e049fe54cd5b99aa7e5df119fa98",
+    "icon.svg": "1d93361daa8125b7ecf09b0ac528afd907a3ff0755e3a989cd6ce8f2a42274d1",
+    "index.css": "2f985c1a44b49075c34824da0715bec993b70d549395f7525722511e924d2cfc",
+    "index.html": "5e2d339ae0bd4c038c1663b3e9bac68479ac8b7649a40f5882a768ee0cb5e284",
+    "index.js": "f9c9ee40b995c8e72d56177cd8c0ef414713b7928f057d32fed98148f1bf7f0e",
+    "locales/de.json": "c4fb07795c02d2f14628c0b895eca38fcc122068febfa4ba5f36d8cf61c11ac0",
+    "locales/en.json": "6ebac11f2f69a6a7a5d835180812cc22b965b8f0048961328eb06407635f817b",
+    "module.json": "f5d5d977d9c248529303977a375d61251e6b0646efc2760450f5089fdd736ebb",
+    "v4-manifest.json": "a5779794512dbf722759854dda9ad3edde3ccbbab0d0976b46df672474013ec8"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "index.js:179",
+          "index.js:934"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "ctox_queue_tasks": {
+      "_evidence": {
+        "code_read": [
+          "index.js:184",
+          "index.js:956"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/browser/V4-PORT.md OFFEN 5 (browser liest die Adapter nur, schreibt sie nicht – :104-107)",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "outbound_lead_generation_adapters": {
+      "_evidence": {
+        "code_read": [
+          "index.js:191"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/browser/V4-PORT.md OFFEN 5 (browser liest die Adapter nur, schreibt sie nicht – :104-107)",
+        "sources": [
+          "code",
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "outbound-lead-generation"
+    },
+    "outbound_research_adapters": {
+      "_evidence": {
+        "code_read": [
+          "index.js:188"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/browser/V4-PORT.md OFFEN 5 (browser liest die Adapter nur, schreibt sie nicht – :104-107)",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "outbound"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_replaced": {
+      "icon_asset": "shared/assets/workjet-icons/operator-selection-v1/browser.jpg",
+      "icon_asset_srcset": "shared/assets/workjet-icons/operator-selection-v1/browser.jpg 1x"
+    },
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/browser.jpg (shared/operator-icon-selection.js, sha256 8fa94a7ae4b6…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; modules/browser/V4-PORT.md OFFEN 8; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Workspace",
+    "default_height": 760,
+    "default_width": 1120,
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "icon_svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-browser\"><defs><linearGradient id=\"grad-browser\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#0ea5e9\" /><stop offset=\"100%\" stop-color=\"#22c55e\" /></linearGradient></defs><rect x=\"3\" y=\"4\" width=\"18\" height=\"16\" rx=\"3\" fill=\"url(#grad-browser)\" fill-opacity=\"0.12\" stroke=\"url(#grad-browser)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M3 9h18\" stroke=\"url(#grad-browser)\" stroke-width=\"2\" stroke-linecap=\"round\"></path><circle cx=\"7\" cy=\"6.5\" r=\"0.8\" fill=\"url(#grad-browser)\"></circle><circle cx=\"10\" cy=\"6.5\" r=\"0.8\" fill=\"url(#grad-browser)\"></circle><path d=\"M8 15h8M12 11v8\" stroke=\"url(#grad-browser)\" stroke-width=\"1.7\" stroke-linecap=\"round\"></path></svg>",
+    "min_height": 480,
+    "min_width": 640,
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 760,
+        "width": 1120
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#0284c7",
+        "category": "Workspace",
+        "iconAssetId": "workjet.business-os.browser",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "canvas",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Browser"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {
+    "browser_frames": {
+      "_source": "v4/schemas/browser.collections.schema.json migration_strategies",
+      "from_ver": 0,
+      "migrate_fn": null,
+      "steps": [
+        {
+          "operations": [],
+          "to_ver": 1
+        }
+      ]
+    },
+    "browser_input_events": {
+      "_source": "v4/schemas/browser.collections.schema.json migration_strategies",
+      "from_ver": 0,
+      "migrate_fn": null,
+      "steps": [
+        {
+          "operations": [],
+          "to_ver": 1
+        }
+      ]
+    },
+    "browser_sessions": {
+      "_source": "v4/schemas/browser.collections.schema.json migration_strategies",
+      "from_ver": 0,
+      "migrate_fn": null,
+      "steps": [
+        {
+          "operations": [],
+          "to_ver": 1
+        }
+      ]
+    },
+    "browser_tabs": {
+      "_source": "v4/schemas/browser.collections.schema.json migration_strategies",
+      "from_ver": 0,
+      "migrate_fn": null,
+      "steps": [
+        {
+          "operations": [],
+          "to_ver": 1
+        }
+      ]
+    }
+  },
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "55f8eb8bc46e1f9682522c322d381c6a85f6ff70d210e25b49fa1eef1c3a9b87",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Browser",
+  "triggers": [],
+  "version": "0.3.0"
+}

@@ -1,13 +1,11 @@
 import { mountMailLogicEditor } from './logic-editor-v1.mjs';
-import { createBusinessOsOfficeBridge } from '../../../office-engine/src/business-os-bridge.mjs?v=20260807-einheitliche-ladepfade-v97';
 
 const EDITOR_MODES = Object.freeze({
   RICH_TEXT: 'rich-text',
   HTML: 'html',
 });
 
-const DEFAULT_EASY_EMAIL_MODULE = '../../../vendor/easy-email-editor/index.mjs';
-const STYLE_REVISION = '20260923-mail-content-editor-v2';
+const DEFAULT_EASY_EMAIL_MODULE = '../vendor/easy-email-editor/index.mjs';
 
 const COPY = Object.freeze({
   de: Object.freeze({
@@ -24,7 +22,7 @@ const COPY = Object.freeze({
     createWord: 'Word-Entwurf anlegen',
     openWord: 'In Word bearbeiten',
     linkedVersion: 'Version',
-    loadingHtml: 'HTML-Editor wird geladen…',
+    loadingHtml: '',
     htmlFailed: 'HTML-Editor konnte nicht geladen werden.',
     blocks: 'Bausteine',
     design: 'Design',
@@ -46,7 +44,7 @@ const COPY = Object.freeze({
     createWord: 'Create Word draft',
     openWord: 'Edit in Word',
     linkedVersion: 'Version',
-    loadingHtml: 'Loading HTML editor…',
+    loadingHtml: '',
     htmlFailed: 'The HTML editor could not be loaded.',
     blocks: 'Blocks',
     design: 'Design',
@@ -63,17 +61,16 @@ const COPY = Object.freeze({
  * stores only the returned document reference; the Documents module keeps
  * ownership of DOCX bytes, versions, permissions and Office bridge commands.
  * HTML content stays behind the local Easy Email runtime passed here or loaded
- * from the managed `business-os/vendor/easy-email-editor/index.mjs` browser ESM.
+ * from the app-owned `modules/mail/vendor/easy-email-editor/index.mjs` browser ESM.
  */
 export async function createMailContentEditor(options = {}) {
   const host = options.host;
   if (!isElement(host)) throw new TypeError('Mail content editor requires a host Element');
-  if (!options.ctx || typeof options.ctx !== 'object') throw new TypeError('Mail content editor requires the shell-provided ctx');
-
-  await ensureStyles(host.ownerDocument || document);
-
-  const ctx = options.ctx;
-  const locale = normalizeLocale(options.locale || ctx.locale);
+  // App-API 4.0: die App reicht ihre api durch; CSS lädt die Shell aus dem Manifest (editor/editor.css).
+  const appApi = options.api && typeof options.api === 'object' ? options.api : null;
+  // Icons aus dem gemeinsamen Icon-Satz der Shell (ctox:shared/icons.js), vom Aufrufer übergeben; ohne Übergabe Glyphen-Rückfall.
+  const ctx = typeof options.getActionIcon === 'function' ? { getActionIcon: options.getActionIcon } : null;
+  const locale = normalizeLocale(options.locale || appApi?.shell?.locale?.get?.());
   const labels = { ...COPY[locale], ...(options.labels || {}) };
   let mode = normalizeEditorMode(options.mode);
   let documentArtifact = normalizeDocumentArtifact(options.documentArtifact);
@@ -532,7 +529,7 @@ export async function createMailContentEditor(options = {}) {
   async function openWord() {
     assertAlive(destroyed);
     if (!documentArtifact) throw new Error(labels.noWordTitle);
-    const result = await openDocumentsArtifact(ctx, documentArtifact);
+    const result = await openDocumentsArtifact(appApi, documentArtifact);
     emit('open', { mode: EDITOR_MODES.RICH_TEXT, artifact: documentArtifact, result });
     return result;
   }
@@ -558,11 +555,15 @@ export async function createMailContentEditor(options = {}) {
   async function serialize() {
     assertAlive(destroyed);
     if (mode === EDITOR_MODES.RICH_TEXT) {
-      const compiled = documentArtifact
-        ? await (options.wordCompiler || createBusinessOsOfficeBridge(ctx, 'document')).freezeEmailContent({
-          recordId: documentArtifact.documentId,
-          versionId: documentArtifact.versionId,
-        })
+      const freezeRequest = documentArtifact ? {
+        source: documentArtifact.source || null,
+        documentId: documentArtifact.documentId,
+        versionId: documentArtifact.versionId,
+      } : null;
+      const compiled = freezeRequest
+        ? await (options.wordCompiler?.freezeEmailContent
+          ? options.wordCompiler.freezeEmailContent(freezeRequest)
+          : freezeWordContentViaCommand(appApi, freezeRequest))
         : null;
       return {
         mode,
@@ -572,18 +573,10 @@ export async function createMailContentEditor(options = {}) {
         compiledText: String(compiled?.text || ''),
         compilerId: String(compiled?.artifact?.compiler_id || ''),
         sourceSha256: String(compiled?.artifact?.source_sha256 || ''),
-        compiledHtmlRef: compiled?.artifact?.html_blob_id ? {
-          storage: 'document_blob_chunks',
-          blob_id: compiled.artifact.html_blob_id,
-          media_type: 'text/html; charset=utf-8',
-          sha256: compiled.artifact.html_sha256,
-        } : null,
-        compiledTextRef: compiled?.artifact?.text_blob_id ? {
-          storage: 'document_blob_chunks',
-          blob_id: compiled.artifact.text_blob_id,
-          media_type: 'text/plain; charset=utf-8',
-          sha256: compiled.artifact.text_sha256,
-        } : null,
+        // files-Referenzen aus dem Ergebnis von mail.content.freeze (inhaltsadressiert, api.files.get(ref));
+        // `blob` ist die Transfer-BlobRef der OS-Primitive als Herkunft.
+        compiledHtmlRef: compiled?.artifact?.html?.ref ? cloneJson(compiled.artifact.html) : null,
+        compiledTextRef: compiled?.artifact?.text?.ref ? cloneJson(compiled.artifact.text) : null,
         compiledAssets: cloneJson(compiled?.artifact?.assets || []),
         diagnostics: cloneJson(compiled?.artifact?.diagnostics || []),
       };
@@ -684,12 +677,27 @@ export function normalizeDocumentArtifact(value) {
   if (!documentId) throw new TypeError('Word artifact requires documentId');
   const versionId = String(value.versionId || value.version_id || '').trim();
   const title = String(value.title || value.label || '').trim();
+  const source = normalizeSourceBlobRef(value.source ?? value.source_blob);
   return Object.freeze({
     documentId,
     versionId,
     title,
     deepLink: buildDocumentsDeepLink({ documentId, versionId }),
+    ...(source ? { source } : {}),
   });
+}
+
+/**
+ * Quelle des Word-Inhalts als BlobRef {sha256, size, transfer_id} (OS-Primitiv-Vertrag, befund-cap-2.md). Nur Form-
+ * Übernahme; geprüft wird im Handler `mail.content.freeze`. Fehlt sie, kann mail den Inhalt nicht einfrieren – mail
+ * löst keine documents-Datensätze auf (Owner-Regel: Apps hängen nur an Standardschnittstellen).
+ */
+export function normalizeSourceBlobRef(value) {
+  if (value == null || typeof value !== 'object' || Array.isArray(value)) return null;
+  const sha256 = String(value.sha256 || '').trim();
+  const transferId = String(value.transfer_id || value.transferId || '').trim();
+  if (!sha256 || !transferId || !Number.isInteger(value.size)) return null;
+  return Object.freeze({ sha256, size: value.size, transfer_id: transferId });
 }
 
 export function buildDocumentsDeepLink(value = {}) {
@@ -709,16 +717,15 @@ export function buildDocumentsDeepLink(value = {}) {
   return `#documents?${params.toString()}`;
 }
 
-export async function openDocumentsArtifact(ctx, value) {
+export async function openDocumentsArtifact(appApi, value) {
   const artifact = normalizeDocumentArtifact(value);
   if (!artifact) throw new TypeError('A Word artifact is required');
-  if (typeof ctx?.openDesktopApp !== 'function') {
-    const error = new Error('Business OS document launcher is unavailable');
+  if (typeof appApi?.shell?.navigate !== 'function') {
+    const error = new Error('Business OS document launcher is missing');
     error.code = 'documents_launcher_unavailable';
     throw error;
   }
-  return ctx.openDesktopApp('documents', {
-    args: {
+  return appApi.shell.navigate('documents', {
       record: artifact.documentId,
       record_id: artifact.documentId,
       documentId: artifact.documentId,
@@ -727,8 +734,66 @@ export async function openDocumentsArtifact(ctx, value) {
         version_id: artifact.versionId,
         versionId: artifact.versionId,
       } : {}),
-    },
   });
+}
+
+export const MAIL_CONTENT_FREEZE_COMMAND = 'mail.content.freeze';
+
+/**
+ * App-API 4.0 (Strang MAIL3): Word-Inhalt über den mail-eigenen Handler `mail.content.freeze` einfrieren. Der Handler
+ * nutzt nur OS-Primitive (office.edit.prepare, office.render to email_html, blob.materialize) – keine Abhängigkeit zur
+ * documents-App. Payload `{source: BlobRef, document_id?, version_id?}` (IDs nur als Herkunftsetikett). Ergebnis bei
+ * `done`: `CommandState.result.artifact` mit files-Referenzen `html`/`text`/`assets` ({storage:'files', ref, sha256,
+ * size, media_type, blob}); HTML/Text kommen über `api.files.get(ref)`. Gepushter Status, kein Polling, kein Timeout.
+ * `failed` → Fehler mit Befehls-ID (die App meldet ihn in die Zone). Ergebnis: `{ artifact, html, text, assets }`.
+ */
+export function freezeWordContentViaCommand(appApi, { source, documentId, versionId } = {}) {
+  if (typeof appApi?.command !== 'function') {
+    return Promise.reject(Object.assign(new Error('App-API command is missing'), { code: 'unavailable' }));
+  }
+  if (!source) {
+    return Promise.reject(Object.assign(new Error('Word artifact has no source file (BlobRef) to freeze'), { code: 'invalid' }));
+  }
+  const payload = { source: { sha256: source.sha256, size: source.size, transfer_id: source.transfer_id } };
+  const document = String(documentId || '').trim();
+  if (document) payload.document_id = document;
+  if (versionId) payload.version_id = String(versionId);
+  const handle = appApi.command(MAIL_CONTENT_FREEZE_COMMAND, payload);
+  return new Promise((resolve, reject) => {
+    let off = null;
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      off?.();
+      fn(value);
+    };
+    handle.local?.catch?.((error) => finish(reject, error));
+    off = handle.status.subscribe((state) => {
+      if (state?.status === 'failed') {
+        finish(reject, Object.assign(new Error(String(state.error || MAIL_CONTENT_FREEZE_COMMAND)), { code: 'command_failed', command_id: handle.id }));
+      } else if (state?.status === 'done') {
+        const artifact = state.result?.artifact;
+        if (!artifact?.html?.ref || !artifact?.text?.ref) {
+          finish(reject, Object.assign(new Error('Frozen email content is missing its transport files'), { code: 'email_artifact_invalid', command_id: handle.id }));
+          return;
+        }
+        settled = true;
+        off?.();
+        loadFrozenEmailContent(appApi, artifact).then(resolve, reject);
+      }
+    });
+    if (settled) off?.();
+  });
+}
+
+async function loadFrozenEmailContent(appApi, artifact) {
+  const text = async (file) => {
+    const blob = await appApi.files.get(String(file.ref));
+    return typeof blob?.text === 'function' ? blob.text() : new TextDecoder('utf-8', { fatal: true }).decode(blob);
+  };
+  const [html, plain] = await Promise.all([text(artifact.html), text(artifact.text)]);
+  return { artifact, html, text: plain, assets: Array.isArray(artifact.assets) ? artifact.assets : [] };
 }
 
 export function validateEasyEmailRuntime(runtime) {
@@ -860,17 +925,6 @@ function isElement(value) {
 
 function assertAlive(destroyed) {
   if (destroyed) throw new Error('Mail content editor is destroyed');
-}
-
-async function ensureStyles(doc) {
-  if (doc.querySelector('link[data-mail-content-editor-style]')) return;
-  const link = doc.createElement('link');
-  link.rel = 'stylesheet';
-  link.dataset.mailContentEditorStyle = STYLE_REVISION;
-  const url = new URL('./editor.css', import.meta.url);
-  url.searchParams.set('v', STYLE_REVISION);
-  link.href = url.href;
-  (doc.head || doc.documentElement).append(link);
 }
 
 export const MAIL_EDITOR_MODES = EDITOR_MODES;

@@ -1,0 +1,1229 @@
+{
+  "schema": "ctox.sync.v4.e25-methods.v1",
+  "core_product_binding": {
+    "entry": "src/core/business_os/app_platform/runtime_host/feed.rs::dispatch_committed",
+    "adapter": "src/core/business_os/command_plane_v4_routes.rs::execute_core",
+    "authority": "retained RuntimeAuthority with original Core actor, P9 row fence and execution authority",
+    "test": "native_daemon_hotplug_roundtrip_and_change",
+    "measurement": "pending final lane; isolated foreground composition, not installed acceptance"
+  },
+  "native_peer_product_binding": {
+    "status": "not_run(p4)",
+    "owner": "#793 instances + Architecture CUTOVER-8",
+    "requires": "verified NativePool/peer and original NativeCommandAuthority + SessionPublicationGuard; no caller identity or service-user substitute",
+    "attachment_points": [
+      "src/core/service/store_inputs.rs:22",
+      "src/core/service/store_native.rs:198",
+      "src/core/business_os/rxdb_peer_native_command_routes.rs:6",
+      "src/core/rxdb/src/plugins/replication_webrtc/v4_session.rs:181"
+    ]
+  },
+  "native_file_authorization": {
+    "adapter": "src/core/business_os/rxdb_peer_v4_files.rs::NativeFileAccess",
+    "authorization": "one Store snapshot; owned file or readable desktop_files with export or actual projected readable BlobRef; publication fenced by current rights and native session",
+    "test": "e30_native_files_require_exported_row_or_visible_actual_reference; e30_real_native_provider_rechecks_rights_before_any_frame",
+    "production_session_attachment": "not_run(p4): NativeFileAccess::new needs the verified P4 session and publication guard; src/core/business_os/rxdb_peer_v4_files.rs:165"
+  },
+  "methods": [
+    {
+      "method": "ctox.workjet.device.v1",
+      "route": "ctox.workjet.device.v1",
+      "native_handler": "src/core/business_os/rxdb_peer_workjet_devices.rs:114",
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/app.js:7872; shared/react-settings.js:1540",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency",
+      "actions": [
+        "binding.list",
+        "binding.revoke",
+        "invite.create",
+        "invite.revoke"
+      ],
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/business_os/rxdb_peer_native_command_routes.rs:6",
+        "requires": "verified NativePool + original NativeCommandAuthority + SessionPublicationGuard",
+        "component_check": "e25_adapter_reuses_registered_handler_and_retains_original_actor"
+      }
+    },
+    {
+      "method": "ctox.workjet.grok.v1",
+      "route": "ctox.workjet.grok.v1",
+      "native_handler": "src/core/business_os/rxdb_peer_grok.rs:218",
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/shared/workjet-grok-native.mjs:16",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency",
+      "actions": [
+        "instance.grok.read",
+        "instance.grok.start",
+        "instance.grok.poll",
+        "instance.grok.cancel",
+        "instance.grok.check",
+        "instance.grok.remove"
+      ],
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/business_os/rxdb_peer_native_command_routes.rs:6",
+        "requires": "verified NativePool + original NativeCommandAuthority + SessionPublicationGuard",
+        "component_check": "e25_adapter_reuses_registered_handler_and_retains_original_actor"
+      }
+    },
+    {
+      "method": "ctox.workjet.calendar.read.v1",
+      "route": "ctox.workjet.calendar.read.v1",
+      "native_handler": "src/core/business_os/mcp_workjet_calendar.rs:27",
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/shared/workjet-calendar-native.mjs:30",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency",
+      "actions": [
+        "project.calendar.accounts.read",
+        "project.calendar.events.read"
+      ],
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/business_os/rxdb_peer_native_command_routes.rs:6",
+        "requires": "verified NativePool + original NativeCommandAuthority + SessionPublicationGuard",
+        "component_check": "e25_adapter_reuses_registered_handler_and_retains_original_actor"
+      }
+    },
+    {
+      "method": "ctox.browser.live.v1",
+      "route": "ctox.browser.live.v1",
+      "native_handler": "src/core/business_os/rxdb_peer_browser.rs:188",
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/modules/browser/index.js:385",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/business_os/rxdb_peer_native_command_routes.rs:6",
+        "requires": "verified NativePool + original NativeCommandAuthority + SessionPublicationGuard",
+        "component_check": "e25_adapter_reuses_registered_handler_and_retains_original_actor"
+      }
+    },
+    {
+      "method": "ctox.outbound.sellify_lookup.v1",
+      "route": "ctox.outbound.sellify_lookup.v1",
+      "native_handler": "src/core/business_os/store_outbound_commands.rs:1673",
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/customer-modules/outbound-lead-generation/index.js:9227",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/business_os/rxdb_peer_native_command_routes.rs:6",
+        "requires": "verified NativePool + original NativeCommandAuthority + SessionPublicationGuard",
+        "component_check": "e25_adapter_reuses_registered_handler_and_retains_original_actor"
+      }
+    },
+    {
+      "method": "ctox.workjet.speech.settings.v1",
+      "route": "ctox.workjet.speech.settings.v1",
+      "native_handler": "src/core/business_os/rxdb_peer_speech_settings.rs:217",
+      "streaming": false,
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/shared/speech-settings-control.mjs:13",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency",
+      "actions": [
+        "speech.settings.read",
+        "speech.settings.configure",
+        "speech.settings.key",
+        "speech.settings.playback",
+        "speech.settings.voices",
+        "speech.settings.check",
+        "speech.settings.check.transcription"
+      ],
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/business_os/rxdb_peer_native_command_routes.rs:6",
+        "requires": "verified NativePool + original NativeCommandAuthority + SessionPublicationGuard",
+        "component_check": "e25_adapter_reuses_registered_handler_and_retains_original_actor"
+      }
+    },
+    {
+      "method": "ctox.workjet.speech.dictation.v1",
+      "route": "ctox.workjet.speech.dictation.v1",
+      "native_handler": "src/core/business_os/rxdb_peer_dictation.rs:399",
+      "streaming": true,
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/shared/speech-dictation.mjs:60",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency",
+      "actions": [
+        "open",
+        "write",
+        "read",
+        "finish",
+        "cancel"
+      ],
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/business_os/rxdb_peer_native_command_routes.rs:6",
+        "requires": "verified NativePool + original NativeCommandAuthority + SessionPublicationGuard",
+        "component_check": "e25_adapter_reuses_registered_handler_and_retains_original_actor"
+      }
+    },
+    {
+      "method": "ctox.workjet.jour_fixe.speech.v1",
+      "route": "ctox.workjet.jour_fixe.speech.v1",
+      "native_handler": "src/core/business_os/rxdb_peer_jour_fixe_speech.rs:308",
+      "streaming": true,
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command",
+      "callsite": "src/apps/business-os/shared/jour-fixe-speech.mjs:14",
+      "adapter": "RxWebRTCReplicationPool::execute_native_command -> existing auxiliary_request_handlers[method]",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "measurement_scope": "Kernel/P5/P9 component; native DTO fixture; not installed/native-handler latency",
+      "actions": [
+        "open",
+        "write",
+        "read",
+        "finish",
+        "cancel"
+      ],
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/business_os/rxdb_peer_native_command_routes.rs:6",
+        "requires": "verified NativePool + original NativeCommandAuthority + SessionPublicationGuard",
+        "component_check": "e25_adapter_reuses_registered_handler_and_retains_original_actor"
+      }
+    },
+    {
+      "method": "ctox.workjet.calendar.connect.v1",
+      "route": "ctox.workjet.calendar.connect.v1",
+      "native_handler": "src/core/business_os/mcp_workjet_calendar_connect.rs:23",
+      "dependency": "PR875 source0bff84432 composed locally; original handler unchanged",
+      "lane": 1,
+      "test": "e25_kernel_command_to_native_completion",
+      "mutation": "remove exact route -> unknown_command",
+      "adapter_test": "e25_adapter_reuses_registered_handler_and_retains_original_actor",
+      "adapter": "existing admitted auxiliary handler from PR875",
+      "actions": [
+        "project.calendar.account.connect.start",
+        "project.calendar.account.connect.complete"
+      ],
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/business_os/rxdb_peer_native_command_routes.rs:6",
+        "requires": "verified NativePool + original NativeCommandAuthority + SessionPublicationGuard",
+        "component_check": "e25_adapter_reuses_registered_handler_and_retains_original_actor"
+      }
+    }
+  ],
+  "already_commands": [
+    "ctox.workjet.project.supervisor.route.read.v1",
+    "ctox.workjet.project.supervisor.route.read.v2",
+    "ctox.workjet.project.supervisor.route.capabilities.v1",
+    "ctox.workjet.project.supervisor.route.capabilities.v2"
+  ],
+  "note": "Action discriminants inside a native payload are not additional requestNative method names.",
+  "bridge_actions": [
+    {
+      "action": "speech.dictation",
+      "method": "ctox.workjet.speech.dictation.v1",
+      "source": "app.js:13916"
+    },
+    {
+      "action": "speech.settings.*",
+      "method": "ctox.workjet.speech.settings.v1",
+      "source": "app.js:13927"
+    },
+    {
+      "action": "project.calendar.accounts.read|project.calendar.events.read",
+      "method": "ctox.workjet.calendar.read.v1",
+      "source": "app.js:13939"
+    },
+    {
+      "action": "project.supervisor.route.*",
+      "route": "existing ctox.workjet.project.supervisor.route.{read,capabilities}.{v1,v2} commands",
+      "handler": "src/core/business_os/command_plane.rs:1963",
+      "requestNative": false
+    },
+    {
+      "action": "project.jour_fixe.narration.read",
+      "route": "readJourFixeNarration + meeting command + existing scoped file-demand loader",
+      "source": "app.js:13950",
+      "requestNative": false
+    }
+  ],
+  "protected_actions": [
+    {
+      "method": "ctox.workjet.device.v1",
+      "action": "invite.create",
+      "status": "unavailable:protected_invite_result_adapter_required"
+    },
+    {
+      "method": "ctox.workjet.speech.settings.v1",
+      "action": "speech.settings.key",
+      "status": "inline secret rejected before durability; credential provider ref adapter required"
+    },
+    {
+      "method": "ctox.workjet.grok.v1",
+      "result": "login.userCode",
+      "status": "unavailable:protected_result_adapter_required"
+    },
+    {
+      "method": "ctox.workjet.calendar.connect.v1",
+      "action": "project.calendar.account.connect.complete",
+      "status": "callbackUrl carries a one-time OAuth credential: rejected before durability until official Secret-Ref ingress exists"
+    }
+  ],
+  "wjb_evidence": {
+    "source": "Shell v4 E27.6 measured action inventory",
+    "sha256": "ad69f3d98652788468ad82efea715418a4714291064428e3a587b63829828fa0",
+    "fixture": "tests/sync_v4_e25/wjb-command-types.json"
+  },
+  "command_bus": [
+    {
+      "method": "ctox.plan.step.retry",
+      "route": "ctox.plan.step.retry",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.computer.assign",
+      "route": "ctox.workjet.computer.assign",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.computer.endpoint.disable",
+      "route": "ctox.workjet.computer.endpoint.disable",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.computer.endpoint.upsert",
+      "route": "ctox.workjet.computer.endpoint.upsert",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.computer.list",
+      "route": "ctox.workjet.computer.list",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion",
+        "isolated_handler_check": "e25_native_command_bus_preserves_user_and_skips_legacy_intake"
+      }
+    },
+    {
+      "method": "ctox.workjet.computer.ssh_key.ensure",
+      "route": "ctox.workjet.computer.ssh_key.ensure",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.computer.unassign",
+      "route": "ctox.workjet.computer.unassign",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.exit_model.read",
+      "route": "ctox.workjet.exit_model.read",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.exit_model.refresh",
+      "route": "ctox.workjet.exit_model.refresh",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.exit_model.submit",
+      "route": "ctox.workjet.exit_model.submit",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.jour_fixe.comment.add",
+      "route": "ctox.workjet.jour_fixe.comment.add",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.jour_fixe.meeting.end",
+      "route": "ctox.workjet.jour_fixe.meeting.end",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.jour_fixe.meeting.read",
+      "route": "ctox.workjet.jour_fixe.meeting.read",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.jour_fixe.meeting.start",
+      "route": "ctox.workjet.jour_fixe.meeting.start",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.jour_fixe.todos.confirm",
+      "route": "ctox.workjet.jour_fixe.todos.confirm",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.jour_fixe.todos.revise",
+      "route": "ctox.workjet.jour_fixe.todos.revise",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.jour_fixe.transcript.append",
+      "route": "ctox.workjet.jour_fixe.transcript.append",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.presentation.canvas.save",
+      "route": "ctox.workjet.presentation.canvas.save",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.presentation.read",
+      "route": "ctox.workjet.presentation.read",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.chat.create",
+      "route": "ctox.workjet.project.chat.create",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.init",
+      "route": "ctox.workjet.project.init",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.kpis.configure",
+      "route": "ctox.workjet.project.kpis.configure",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.kpis.read",
+      "route": "ctox.workjet.project.kpis.read",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.kpis.refresh",
+      "route": "ctox.workjet.project.kpis.refresh",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.list",
+      "route": "ctox.workjet.project.list",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion",
+        "isolated_handler_check": "e25_native_command_bus_preserves_user_and_skips_legacy_intake"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.supervisor.bind",
+      "route": "ctox.workjet.project.supervisor.bind",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.supervisor.route.capabilities.v1",
+      "route": "ctox.workjet.project.supervisor.route.capabilities.v1",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.supervisor.route.capabilities.v2",
+      "route": "ctox.workjet.project.supervisor.route.capabilities.v2",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.supervisor.route.read.v1",
+      "route": "ctox.workjet.project.supervisor.route.read.v1",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.supervisor.route.read.v2",
+      "route": "ctox.workjet.project.supervisor.route.read.v2",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.supervisor.turn.cancel",
+      "route": "ctox.workjet.project.supervisor.turn.cancel",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.supervisor.turn.capabilities",
+      "route": "ctox.workjet.project.supervisor.turn.capabilities",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.supervisor.turn.input",
+      "route": "ctox.workjet.project.supervisor.turn.input",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.supervisor.turn.submit",
+      "route": "ctox.workjet.project.supervisor.turn.submit",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.supervisor.turn.watch",
+      "route": "ctox.workjet.project.supervisor.turn.watch",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.upsert",
+      "route": "ctox.workjet.project.upsert",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.project.worker.add",
+      "route": "ctox.workjet.project.worker.add",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.providers.account.enable",
+      "route": "ctox.workjet.providers.account.enable",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.providers.account.remove",
+      "route": "ctox.workjet.providers.account.remove",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.providers.adopt_native",
+      "route": "ctox.workjet.providers.adopt_native",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.providers.list",
+      "route": "ctox.workjet.providers.list",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.providers.models.exclude",
+      "route": "ctox.workjet.providers.models.exclude",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.providers.models.select",
+      "route": "ctox.workjet.providers.models.select",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.providers.observe_native",
+      "route": "ctox.workjet.providers.observe_native",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.session.create",
+      "route": "ctox.workjet.session.create",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.session.list",
+      "route": "ctox.workjet.session.list",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion",
+        "isolated_handler_check": "e25_native_command_bus_preserves_user_and_skips_legacy_intake"
+      }
+    },
+    {
+      "method": "ctox.workjet.session.transfer.abort",
+      "route": "ctox.workjet.session.transfer.abort",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.session.transfer.pause_ack",
+      "route": "ctox.workjet.session.transfer.pause_ack",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.session.transfer.start",
+      "route": "ctox.workjet.session.transfer.start",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.session.transfer.status",
+      "route": "ctox.workjet.session.transfer.status",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    },
+    {
+      "method": "ctox.workjet.working_copy.upsert",
+      "route": "ctox.workjet.working_copy.upsert",
+      "native_handler": "src/core/business_os/command_plane.rs:1740",
+      "adapter": "native Core-only command executor (no V3 intake/command ledger)",
+      "lane": 1,
+      "test": "e25_workjet_inventory_is_registered_before_write",
+      "mutation": "remove route -> unknown_command write_result",
+      "native_check": {
+        "status": "not_run(p4)",
+        "attachment": "src/core/service/store_inputs.rs:22",
+        "requires": "#793/CUTOVER-8 verified peer/NativePool authority; no product measurement from fixture DTOs",
+        "component_check": "e25_kernel_command_to_native_completion"
+      }
+    }
+  ],
+  "e26_acceptance_methods": [
+    "ctox.workjet.speech.dictation.v1",
+    "ctox.workjet.speech.settings.v1",
+    "ctox.workjet.calendar.read.v1",
+    "ctox.workjet.jour_fixe.speech.v1",
+    "ctox.workjet.grok.v1",
+    "ctox.workjet.device.v1"
+  ],
+  "wjb_acceptance": {
+    "source": "Shell-v4 WJB export E34.2",
+    "sha256": "b801cd7835571656dd075def87adfc11ce2ba85f8ac0ab5f3ca8a73beac87852",
+    "required_types": [
+      "ctox.plan.step.retry",
+      "ctox.workjet.calendar.connect.v1",
+      "ctox.workjet.calendar.read.v1",
+      "ctox.workjet.computer.assign",
+      "ctox.workjet.computer.endpoint.disable",
+      "ctox.workjet.computer.endpoint.upsert",
+      "ctox.workjet.computer.ssh_key.ensure",
+      "ctox.workjet.computer.unassign",
+      "ctox.workjet.device.v1",
+      "ctox.workjet.exit_model.read",
+      "ctox.workjet.exit_model.refresh",
+      "ctox.workjet.exit_model.submit",
+      "ctox.workjet.grok.v1",
+      "ctox.workjet.jour_fixe.comment.add",
+      "ctox.workjet.jour_fixe.meeting.end",
+      "ctox.workjet.jour_fixe.meeting.read",
+      "ctox.workjet.jour_fixe.meeting.start",
+      "ctox.workjet.jour_fixe.speech.v1",
+      "ctox.workjet.jour_fixe.todos.confirm",
+      "ctox.workjet.jour_fixe.todos.revise",
+      "ctox.workjet.jour_fixe.transcript.append",
+      "ctox.workjet.presentation.canvas.save",
+      "ctox.workjet.presentation.read",
+      "ctox.workjet.project.chat.create",
+      "ctox.workjet.project.init",
+      "ctox.workjet.project.kpis.configure",
+      "ctox.workjet.project.kpis.read",
+      "ctox.workjet.project.kpis.refresh",
+      "ctox.workjet.project.list",
+      "ctox.workjet.project.supervisor.bind",
+      "ctox.workjet.project.supervisor.route.capabilities.v1",
+      "ctox.workjet.project.supervisor.route.capabilities.v2",
+      "ctox.workjet.project.supervisor.route.read.v1",
+      "ctox.workjet.project.supervisor.route.read.v2",
+      "ctox.workjet.project.supervisor.turn.cancel",
+      "ctox.workjet.project.supervisor.turn.capabilities",
+      "ctox.workjet.project.supervisor.turn.input",
+      "ctox.workjet.project.supervisor.turn.submit",
+      "ctox.workjet.project.supervisor.turn.watch",
+      "ctox.workjet.project.upsert",
+      "ctox.workjet.project.worker.add",
+      "ctox.workjet.providers.account.enable",
+      "ctox.workjet.providers.account.remove",
+      "ctox.workjet.providers.adopt_native",
+      "ctox.workjet.providers.list",
+      "ctox.workjet.providers.models.exclude",
+      "ctox.workjet.providers.models.select",
+      "ctox.workjet.providers.observe_native",
+      "ctox.workjet.session.create",
+      "ctox.workjet.session.transfer.abort",
+      "ctox.workjet.session.transfer.pause_ack",
+      "ctox.workjet.session.transfer.start",
+      "ctox.workjet.session.transfer.status",
+      "ctox.workjet.speech.dictation.v1",
+      "ctox.workjet.speech.settings.v1",
+      "ctox.workjet.working_copy.upsert"
+    ],
+    "retained_legacy_query_routes": [
+      "ctox.workjet.computer.list",
+      "ctox.workjet.session.list"
+    ]
+  },
+  "app_decision": {
+    "method": "threads.ctox_approval.request",
+    "native_handler": "src/core/business_os/threads.rs::request_approval; approve_approval; decide_without_queue",
+    "test": "e54_app_decision_preserves_privileged_self_review_boundary",
+    "scope": "native registered CLI owner; productive P4 command-to-completion not measured",
+    "options_contract": "1..32 unique string IDs or {id,label?,description?}; app principal from authorized source_context.module; selection decision_option_id (decision_option alias)",
+    "schema_contract": "target_command_type remains a string; app choice has no delegated target payload",
+    "mutations": [
+      "remove app-choice exception -> native assertion red",
+      "remove original optionless self-review gate -> native assertion red",
+      "bypass no-execution decision branch -> native assertion red"
+    ],
+    "source_sha256": "ef1344c6ebbd7c77b22e1b8d8b92f3b059571aea810af9fd9e74c3fe209363a6"
+  },
+  "platform_routes": [
+    {
+      "method": "ctox.secret.request.list",
+      "route": "ctox.secret.request.list",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "component verified: native Platform contract, rights gate mutation red and clean restoration green",
+      "productive": "not_run",
+      "gap": "request metadata producer and productive peer execution not exercised",
+      "component_source_sha256": "728051911bb01ebb58f7c370f15a340aa88700f01840b26f4b2fb4864bac84e7"
+    },
+    {
+      "method": "ctox.secret.request.fulfill",
+      "route": "ctox.secret.request.fulfill",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "component verified: native Platform contract, rights gate mutation red and clean restoration green",
+      "productive": "not_run",
+      "gap": "protected pre-outbox Kernel/P4 intake and native SecretStore effect/commit binding missing; returns unavailable",
+      "component_source_sha256": "728051911bb01ebb58f7c370f15a340aa88700f01840b26f4b2fb4864bac84e7",
+      "post_m7": true
+    },
+    {
+      "method": "ctox.secret.request.decline",
+      "route": "ctox.secret.request.decline",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "component verified: native Platform contract, rights gate mutation red and clean restoration green",
+      "productive": "not_run",
+      "gap": "request metadata producer and productive peer execution not exercised",
+      "component_source_sha256": "728051911bb01ebb58f7c370f15a340aa88700f01840b26f4b2fb4864bac84e7"
+    },
+    {
+      "method": "ctox.workjet.remote_worker.admit",
+      "route": "ctox.workjet.remote_worker.admit",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "GPU4 registered BOS/sync baseline green; canonical/native revocation-predicate mutations fail the intended assertions with matching compiled-source markers. Earlier direct-binding predicate mutation remains a local GPU3 observation; GPU3 final round is lost.",
+      "productive": "not_run(peer)",
+      "gap": "GPU4 cold build failed ENOSPC; serial retry verified the native baseline and status-filter/restart counterfactuals. Sources restored byte-identically; restoration rebuild hit its component time cap and follow-up was canceled while queued. Restored executable/direct regressions, fresh direct-binding predicate mutation and productive peer/worker execution remain unverified.",
+      "component_source_sha256": "8fb469a5df3c611e063a68ee4e21ec79ee494f83aedb0178b021416e197c939f",
+      "native_resolver": "devices::active_machine_enrollment; Platform borrows registered BOS reader; schema/feed unchanged; canonical command validation/idempotency retained; Platform::worker_grant rechecks source at consumption"
+    },
+    {
+      "method": "ctox.maintenance.restart",
+      "route": "ctox.maintenance.restart",
+      "handler": "src/core/business_os/app_platform/platform_routes.rs",
+      "test": "e49_platform_rights_metadata_grants_and_restart_reply_boundary",
+      "verification": "GPU4 native baseline: admin-only unavailable response and no restart intent; substituting a restart-success value fails the intended assertion with matching compiled-source markers.",
+      "productive": "not_run",
+      "gap": "post-M7: native completion publication plus bounded service consumer",
+      "component_source_sha256": "8fb469a5df3c611e063a68ee4e21ec79ee494f83aedb0178b021416e197c939f",
+      "capability_filter": {
+        "entry": "Platform::filter_session_capabilities",
+        "status": "native_component_verified",
+        "attachment": "src/core/rxdb/src/plugins/replication_webrtc/connection_lifecycle.rs:395",
+        "gap": "hello owner must filter selected capabilities after current authenticated user lookup; no caller role"
+      },
+      "post_m7": true
+    },
+    {
+      "method": "instance.providers.models.check",
+      "route": "instance.providers.models.check",
+      "handler": "src/core/business_os/app_platform/provider_model_check.rs",
+      "test": "native_model_check_is_permissioned_bound_and_not_reexecuted",
+      "verification": "Native model owner permission, dedup and commit-fence invariant verified on integration f5f3fcb11, using the built native test executable",
+      "productive": "not_run",
+      "gap": "Native owner contract verified; productive peer/provider probe and installed acceptance remain not_run."
+    }
+  ]
+}

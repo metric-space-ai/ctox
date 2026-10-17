@@ -1,0 +1,6797 @@
+{
+ "at": "2026-10-15T15:57:30.687Z",
+ "variant": "shared-css",
+ "stub": "/Users/michaelwelsch/.local/state/shell-v4/stub-pins/9fa9948",
+ "widths": [
+  1280,
+  900,
+  420
+ ],
+ "ported": [
+  "app-store",
+  "appsec-pentest",
+  "browser",
+  "buchhaltung",
+  "calendar",
+  "coding-agents",
+  "consent",
+  "conversations",
+  "creator",
+  "credentials",
+  "ctox",
+  "customers",
+  "cv-print-builder",
+  "desktop",
+  "documents",
+  "esign",
+  "explorer",
+  "file-viewer",
+  "importer",
+  "intake",
+  "interviews",
+  "invoices",
+  "iot",
+  "knowledge",
+  "kundenpipeline",
+  "mail",
+  "matching",
+  "nachweise",
+  "news",
+  "notes",
+  "outbound",
+  "placements",
+  "reports",
+  "research",
+  "shiftflow",
+  "spreadsheets",
+  "submissions",
+  "support",
+  "threads",
+  "tickets"
+ ],
+ "skipped": [],
+ "results": [
+  {
+   "app": "app-store",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 138,
+    "visibleElements": 85,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 186,
+    "scrollTop": 0,
+    "title": "App Store",
+    "titleCalls": [
+     "App Store"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/app-store@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--app-store-local-accent×2",
+     "--app-accent×1",
+     "--app-accent-foreground×1",
+     "--app-store-local-ink×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "app-store/1280.png"
+  },
+  {
+   "app": "app-store",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 138,
+    "visibleElements": 85,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 186,
+    "scrollTop": 0,
+    "title": "App Store",
+    "titleCalls": [
+     "App Store"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/app-store@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--app-store-local-accent×2",
+     "--app-accent×1",
+     "--app-accent-foreground×1",
+     "--app-store-local-ink×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "app-store/900.png"
+  },
+  {
+   "app": "app-store",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: nav.ctox-list.store-category-list 880>420"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 138,
+    "visibleElements": 84,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 186,
+    "scrollTop": 0,
+    "title": "App Store",
+    "titleCalls": [
+     "App Store"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/app-store@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--app-store-local-accent×2",
+     "--app-accent×1",
+     "--app-accent-foreground×1",
+     "--app-store-local-ink×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "app-store/420.png"
+  },
+  {
+   "app": "appsec-pentest",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 455,
+    "visibleElements": 114,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 970,
+    "scrollTop": 0,
+    "title": "Penetration Testing",
+    "titleCalls": [
+     "Penetration Testing"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/appsec-pentest@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "appsec-pentest/1280.png"
+  },
+  {
+   "app": "appsec-pentest",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 455,
+    "visibleElements": 114,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 970,
+    "scrollTop": 0,
+    "title": "Penetration Testing",
+    "titleCalls": [
+     "Penetration Testing"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/appsec-pentest@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "appsec-pentest/900.png"
+  },
+  {
+   "app": "appsec-pentest",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 455,
+    "visibleElements": 113,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 970,
+    "scrollTop": 0,
+    "title": "Penetration Testing",
+    "titleCalls": [
+     "Penetration Testing"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/appsec-pentest@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "appsec-pentest/420.png"
+  },
+  {
+   "app": "browser",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G3",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Lieferantenbewertung“"
+   ],
+   "G4": [
+    "7 abgeschnittene Texte (7 in Listen): Liste span.browser-session-meta „Ruhend · Persönlich · Fehler · 1 Tab · L“; Liste span.browser-session-meta „Ruhend · Persönlich · Verbindet · 1 Tab “; Liste span.browser-session-title „Rahmenvertrag über Wartung und Instandha“; Liste span.browser-session-meta „Sie steuern · Persönlich · Bereit · 1 Ta“; Liste span.browser-session-meta „Ruhend · Persönlich · Beendet · 0 Tabs ·“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 224,
+    "visibleElements": 112,
+    "root": {
+     "w": 1278,
+     "h": 687
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 936,
+    "scrollTop": 0,
+    "title": "Browser",
+    "titleCalls": [
+     "Browser"
+    ],
+    "zoneEntries": [
+     "app:browser.frame"
+    ],
+    "ellipsisCut": 7,
+    "appSheets": [
+     "/~a/browser@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "browser/1280.png"
+  },
+  {
+   "app": "browser",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G3",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Lieferantenbewertung“"
+   ],
+   "G4": [
+    "7 abgeschnittene Texte (7 in Listen): Liste span.browser-session-meta „Ruhend · Persönlich · Fehler · 1 Tab · L“; Liste span.browser-session-meta „Ruhend · Persönlich · Verbindet · 1 Tab “; Liste span.browser-session-title „Rahmenvertrag über Wartung und Instandha“; Liste span.browser-session-meta „Sie steuern · Persönlich · Bereit · 1 Ta“; Liste span.browser-session-meta „Ruhend · Persönlich · Beendet · 0 Tabs ·“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 224,
+    "visibleElements": 112,
+    "root": {
+     "w": 898,
+     "h": 687
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 936,
+    "scrollTop": 0,
+    "title": "Browser",
+    "titleCalls": [
+     "Browser"
+    ],
+    "zoneEntries": [
+     "app:browser.frame"
+    ],
+    "ellipsisCut": 7,
+    "appSheets": [
+     "/~a/browser@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "browser/900.png"
+  },
+  {
+   "app": "browser",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G3",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Lieferantenbewertung“"
+   ],
+   "G4": [
+    "3 abgeschnittene Texte (2 in Listen): Liste span.browser-session-meta „Ruhend · Persönlich · Fehler · 1 Tab · L“; Liste span.browser-session-title „Rahmenvertrag über Wartung und Instandha“; Text span.browser-tab-title „Kundentermin Vorbereitung“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 224,
+    "visibleElements": 110,
+    "root": {
+     "w": 420,
+     "h": 757
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 936,
+    "scrollTop": 0,
+    "title": "Browser",
+    "titleCalls": [
+     "Browser"
+    ],
+    "zoneEntries": [
+     "app:browser.frame"
+    ],
+    "ellipsisCut": 3,
+    "appSheets": [
+     "/~a/browser@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "browser/420.png"
+  },
+  {
+   "app": "buchhaltung",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768,
+    520
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Belege & Buchungen“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 916,
+    "visibleElements": 614,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 3804,
+    "scrollTop": 0,
+    "title": "Buchhaltung",
+    "titleCalls": [
+     "Buchhaltung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/buchhaltung@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1",
+     "--fibu-terminal-bg×1",
+     "--fibu-terminal-line×1",
+     "--fibu-terminal-ink×1",
+     "--fibu-info×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "buchhaltung/1280.png"
+  },
+  {
+   "app": "buchhaltung",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768,
+    520
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Belege & Buchungen“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G1 erlaubt: 1 Container mit [data-scroll-x] scrollen seitlich: div.fibu-scrollable-container.ctox-table-wrap 680>520"
+   ],
+   "info": {
+    "elements": 916,
+    "visibleElements": 614,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 3804,
+    "scrollTop": 0,
+    "title": "Buchhaltung",
+    "titleCalls": [
+     "Buchhaltung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/buchhaltung@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1",
+     "--fibu-terminal-bg×1",
+     "--fibu-terminal-line×1",
+     "--fibu-terminal-ink×1",
+     "--fibu-info×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "buchhaltung/900.png"
+  },
+  {
+   "app": "buchhaltung",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768,
+    520
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G1 erlaubt: 1 Container mit [data-scroll-x] scrollen seitlich: div.fibu-scrollable-container.ctox-table-wrap 680>412"
+   ],
+   "info": {
+    "elements": 916,
+    "visibleElements": 528,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 3619,
+    "scrollTop": 0,
+    "title": "Buchhaltung",
+    "titleCalls": [
+     "Buchhaltung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/buchhaltung@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1",
+     "--fibu-terminal-bg×1",
+     "--fibu-terminal-line×1",
+     "--fibu-terminal-ink×1",
+     "--fibu-info×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "buchhaltung/420.png"
+  },
+  {
+   "app": "calendar",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 385,
+    "visibleElements": 292,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 775,
+    "scrollTop": 0,
+    "title": "Kalender",
+    "titleCalls": [
+     "Kalender"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/calendar@1.0.0/index.css",
+     "/~a/calendar@1.0.0/vendor/event-calendar/event-calendar.min.css"
+    ],
+    "undefinedTokens": [
+     "--ec-border-color×19",
+     "--ec-bg-color×10",
+     "--ec-day-bg-color×9",
+     "--ec-slot-height×6",
+     "--ec-slot-label-periodicity×6",
+     "--ec-direction×6",
+     "--ec-color-300×4",
+     "--ec-slot-width×4"
+    ],
+    "undefinedTokenCount": 35
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "calendar/1280.png"
+  },
+  {
+   "app": "calendar",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 385,
+    "visibleElements": 302,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 886,
+    "scrollTop": 0,
+    "title": "Kalender",
+    "titleCalls": [
+     "Kalender"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/calendar@1.0.0/index.css",
+     "/~a/calendar@1.0.0/vendor/event-calendar/event-calendar.min.css"
+    ],
+    "undefinedTokens": [
+     "--ec-border-color×19",
+     "--ec-bg-color×10",
+     "--ec-day-bg-color×9",
+     "--ec-slot-height×6",
+     "--ec-slot-label-periodicity×6",
+     "--ec-direction×6",
+     "--ec-color-300×4",
+     "--ec-slot-width×4"
+    ],
+    "undefinedTokenCount": 35
+   },
+   "g6": {
+    "jaccard": 0.92,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "calendar/900.png"
+  },
+  {
+   "app": "calendar",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Kontext“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 385,
+    "visibleElements": 302,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 886,
+    "scrollTop": 0,
+    "title": "Kalender",
+    "titleCalls": [
+     "Kalender"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/calendar@1.0.0/index.css",
+     "/~a/calendar@1.0.0/vendor/event-calendar/event-calendar.min.css"
+    ],
+    "undefinedTokens": [
+     "--ec-border-color×19",
+     "--ec-bg-color×10",
+     "--ec-day-bg-color×9",
+     "--ec-slot-height×6",
+     "--ec-slot-label-periodicity×6",
+     "--ec-direction×6",
+     "--ec-color-300×4",
+     "--ec-slot-width×4"
+    ],
+    "undefinedTokenCount": 35
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "calendar/420.png"
+  },
+  {
+   "app": "coding-agents",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    150
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 140,
+    "visibleElements": 77,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 291,
+    "scrollTop": 0,
+    "title": "pi Coding Agent",
+    "titleCalls": [
+     "pi Coding Agent"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/coding-agents@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "coding-agents/1280.png"
+  },
+  {
+   "app": "coding-agents",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    150
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 140,
+    "visibleElements": 64,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 149,
+    "scrollTop": 0,
+    "title": "pi Coding Agent",
+    "titleCalls": [
+     "pi Coding Agent"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/coding-agents@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "coding-agents/900.png"
+  },
+  {
+   "app": "coding-agents",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    150
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 140,
+    "visibleElements": 74,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 205,
+    "scrollTop": 0,
+    "title": "pi Coding Agent",
+    "titleCalls": [
+     "pi Coding Agent"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/coding-agents@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "coding-agents/420.png"
+  },
+  {
+   "app": "consent",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    260
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 113,
+    "visibleElements": 84,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 490,
+    "scrollTop": 0,
+    "title": "Einwilligungen",
+    "titleCalls": [
+     "Einwilligungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/consent@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "consent/1280.png"
+  },
+  {
+   "app": "consent",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    260
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 113,
+    "visibleElements": 84,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 490,
+    "scrollTop": 0,
+    "title": "Einwilligungen",
+    "titleCalls": [
+     "Einwilligungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/consent@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "consent/900.png"
+  },
+  {
+   "app": "consent",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    260
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 113,
+    "visibleElements": 83,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 490,
+    "scrollTop": 0,
+    "title": "Einwilligungen",
+    "titleCalls": [
+     "Einwilligungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/consent@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "consent/420.png"
+  },
+  {
+   "app": "conversations",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste span.ctox-pane-kicker „Audit aus CTOX-Sicht“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 535,
+    "visibleElements": 336,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 2430,
+    "scrollTop": 0,
+    "title": "Conversations",
+    "titleCalls": [
+     "Conversations"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/conversations@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "conversations/1280.png"
+  },
+  {
+   "app": "conversations",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste span.ctox-pane-kicker „Audit aus CTOX-Sicht“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 535,
+    "visibleElements": 335,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 2430,
+    "scrollTop": 0,
+    "title": "Conversations",
+    "titleCalls": [
+     "Conversations"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/conversations@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "conversations/900.png"
+  },
+  {
+   "app": "conversations",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G4"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: nav.conv-channel-tabs 523>404"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste span.ctox-pane-kicker „Audit aus CTOX-Sicht“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 535,
+    "visibleElements": 334,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 2430,
+    "scrollTop": 0,
+    "title": "Conversations",
+    "titleCalls": [
+     "Conversations"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/conversations@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "conversations/420.png"
+  },
+  {
+   "app": "creator",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 145,
+    "visibleElements": 85,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 688,
+    "scrollTop": 0,
+    "title": "App Creator",
+    "titleCalls": [
+     "App Creator"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/creator@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "creator/1280.png"
+  },
+  {
+   "app": "creator",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 145,
+    "visibleElements": 85,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 688,
+    "scrollTop": 0,
+    "title": "App Creator",
+    "titleCalls": [
+     "App Creator"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/creator@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "creator/900.png"
+  },
+  {
+   "app": "creator",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 145,
+    "visibleElements": 84,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 688,
+    "scrollTop": 0,
+    "title": "App Creator",
+    "titleCalls": [
+     "App Creator"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/creator@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "creator/420.png"
+  },
+  {
+   "app": "credentials",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 85,
+    "visibleElements": 62,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 301,
+    "scrollTop": 0,
+    "title": "Zugangsdaten",
+    "titleCalls": [
+     "Zugangsdaten"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/credentials@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "credentials/1280.png"
+  },
+  {
+   "app": "credentials",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 85,
+    "visibleElements": 62,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 301,
+    "scrollTop": 0,
+    "title": "Zugangsdaten",
+    "titleCalls": [
+     "Zugangsdaten"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/credentials@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "credentials/900.png"
+  },
+  {
+   "app": "credentials",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 85,
+    "visibleElements": 61,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 301,
+    "scrollTop": 0,
+    "title": "Zugangsdaten",
+    "titleCalls": [
+     "Zugangsdaten"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/credentials@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "credentials/420.png"
+  },
+  {
+   "app": "ctox",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 718,
+    "visibleElements": 369,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1514,
+    "scrollTop": 0,
+    "title": "Crew",
+    "titleCalls": [
+     "Crew"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "(inline)",
+     "/~a/ctox@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--crew-color×16",
+     "--ctox-flow-edge×4",
+     "--ctox-flow-muted-fill×2",
+     "--ctox-flow-node-stroke×2",
+     "--ctox-canvas×1",
+     "--ctox-flow-lane-fill×1",
+     "--ctox-flow-lane-stroke×1",
+     "--ctox-flow-channel-fill×1"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "ctox/1280.png"
+  },
+  {
+   "app": "ctox",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 718,
+    "visibleElements": 365,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1514,
+    "scrollTop": 0,
+    "title": "Crew",
+    "titleCalls": [
+     "Crew"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "(inline)",
+     "/~a/ctox@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--crew-color×16",
+     "--ctox-flow-edge×4",
+     "--ctox-flow-muted-fill×2",
+     "--ctox-flow-node-stroke×2",
+     "--ctox-canvas×1",
+     "--ctox-flow-lane-fill×1",
+     "--ctox-flow-lane-stroke×1",
+     "--ctox-flow-channel-fill×1"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "ctox/900.png"
+  },
+  {
+   "app": "ctox",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Lieferantenbewertung 2026“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 718,
+    "visibleElements": 363,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1514,
+    "scrollTop": 0,
+    "title": "Crew",
+    "titleCalls": [
+     "Crew"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "(inline)",
+     "/~a/ctox@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--crew-color×16",
+     "--ctox-flow-edge×4",
+     "--ctox-flow-muted-fill×2",
+     "--ctox-flow-node-stroke×2",
+     "--ctox-canvas×1",
+     "--ctox-flow-lane-fill×1",
+     "--ctox-flow-lane-stroke×1",
+     "--ctox-flow-channel-fill×1"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "ctox/420.png"
+  },
+  {
+   "app": "customers",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [
+    "2 innere Container scrollen horizontal: nav.ctox-view-switch 457>400; nav.ctox-pane-band.customers-workbench-tabs 800>786"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 169,
+    "visibleElements": 121,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1064,
+    "scrollTop": 0,
+    "title": "Kunden",
+    "titleCalls": [
+     "Kunden"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/customers@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "customers/1280.png"
+  },
+  {
+   "app": "customers",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [
+    "2 innere Container scrollen horizontal: nav.ctox-view-switch 457>400; nav.ctox-pane-band.customers-workbench-tabs 800>406"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Hoffmann Medizintechnik GmbH“; Text p.customers-detail-subtitle „hoffmann.de · Lieferantenbewertung“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 169,
+    "visibleElements": 121,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1064,
+    "scrollTop": 0,
+    "title": "Kunden",
+    "titleCalls": [
+     "Kunden"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/customers@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "customers/900.png"
+  },
+  {
+   "app": "customers",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [
+    "2 innere Container scrollen horizontal: nav.ctox-view-switch 457>420; nav.ctox-pane-band.customers-workbench-tabs 814>420"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (0 in Listen): Text h2.ctox-pane-title „Hoffmann Medizintechnik GmbH“; Text p.customers-detail-subtitle „hoffmann.de · Lieferantenbewertung“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 169,
+    "visibleElements": 120,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1064,
+    "scrollTop": 0,
+    "title": "Kunden",
+    "titleCalls": [
+     "Kunden"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/customers@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "customers/420.png"
+  },
+  {
+   "app": "cv-print-builder",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: nav.ctox-view-switch 396>342"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 78,
+    "visibleElements": 47,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 81,
+    "scrollTop": 0,
+    "title": "CV Print Builder",
+    "titleCalls": [
+     "CV Print Builder"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/cv-print-builder@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "cv-print-builder/1280.png"
+  },
+  {
+   "app": "cv-print-builder",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: nav.ctox-view-switch 396>342"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 78,
+    "visibleElements": 47,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 81,
+    "scrollTop": 0,
+    "title": "CV Print Builder",
+    "titleCalls": [
+     "CV Print Builder"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/cv-print-builder@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "cv-print-builder/900.png"
+  },
+  {
+   "app": "cv-print-builder",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 78,
+    "visibleElements": 46,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 81,
+    "scrollTop": 0,
+    "title": "CV Print Builder",
+    "titleCalls": [
+     "CV Print Builder"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/cv-print-builder@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "cv-print-builder/420.png"
+  },
+  {
+   "app": "desktop",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1320,
+    767
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 7,
+    "visibleElements": 3,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 0,
+    "scrollTop": 0,
+    "title": "Desktop",
+    "titleCalls": [
+     "Desktop"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/desktop@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--shell-category-accent×5",
+     "--desktop-icon-padding×3",
+     "--surface-radius×1",
+     "--desktop-icon-cell-h×1",
+     "--shell-category-soft×1"
+    ],
+    "undefinedTokenCount": 5
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "desktop/1280.png"
+  },
+  {
+   "app": "desktop",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1320,
+    767
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 7,
+    "visibleElements": 3,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 0,
+    "scrollTop": 0,
+    "title": "Desktop",
+    "titleCalls": [
+     "Desktop"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/desktop@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--shell-category-accent×5",
+     "--desktop-icon-padding×3",
+     "--surface-radius×1",
+     "--desktop-icon-cell-h×1",
+     "--shell-category-soft×1"
+    ],
+    "undefinedTokenCount": 5
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "desktop/900.png"
+  },
+  {
+   "app": "desktop",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1320,
+    767
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 7,
+    "visibleElements": 3,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 0,
+    "scrollTop": 0,
+    "title": "Desktop",
+    "titleCalls": [
+     "Desktop"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/desktop@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--shell-category-accent×5",
+     "--desktop-icon-padding×3",
+     "--surface-radius×1",
+     "--desktop-icon-cell-h×1",
+     "--shell-category-soft×1"
+    ],
+    "undefinedTokenCount": 5
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "desktop/420.png"
+  },
+  {
+   "app": "documents",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G3"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    560,
+    360
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Keine gespeicherte Dokumentversion gefunden. Angebot Wartungsvertrag Halle 4“"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 114,
+    "visibleElements": 80,
+    "root": {
+     "w": 1278,
+     "h": 687
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 432,
+    "scrollTop": 0,
+    "title": "Dokumente",
+    "titleCalls": [
+     "Dokumente"
+    ],
+    "zoneEntries": [
+     "app:documents.version.missing"
+    ],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/documents@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--documents-actions-width×5",
+     "--documents-library-width×3",
+     "--surface-radius×2",
+     "--spring-duration×2",
+     "--shell-col-left×1",
+     "--spring-snappy×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "documents/1280.png"
+  },
+  {
+   "app": "documents",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G3"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    560,
+    360
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Keine gespeicherte Dokumentversion gefunden. Angebot Wartungsvertrag Halle 4“"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 114,
+    "visibleElements": 80,
+    "root": {
+     "w": 898,
+     "h": 687
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 432,
+    "scrollTop": 0,
+    "title": "Dokumente",
+    "titleCalls": [
+     "Dokumente"
+    ],
+    "zoneEntries": [
+     "app:documents.version.missing"
+    ],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/documents@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--documents-actions-width×5",
+     "--documents-library-width×3",
+     "--surface-radius×2",
+     "--spring-duration×2",
+     "--shell-col-left×1",
+     "--spring-snappy×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "documents/900.png"
+  },
+  {
+   "app": "documents",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G3"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    560,
+    360
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Keine gespeicherte Dokumentversion gefunden. Angebot Wartungsvertrag Halle 4“"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 114,
+    "visibleElements": 11,
+    "root": {
+     "w": 420,
+     "h": 757
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 36,
+    "scrollTop": 0,
+    "title": "Dokumente",
+    "titleCalls": [
+     "Dokumente"
+    ],
+    "zoneEntries": [
+     "app:documents.version.missing"
+    ],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/documents@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--documents-actions-width×5",
+     "--documents-library-width×3",
+     "--surface-radius×2",
+     "--spring-duration×2",
+     "--shell-col-left×1",
+     "--spring-snappy×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "documents/420.png"
+  },
+  {
+   "app": "esign",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 115,
+    "visibleElements": 83,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 603,
+    "scrollTop": 0,
+    "title": "E-Signatur",
+    "titleCalls": [
+     "E-Signatur"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/esign@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "esign/1280.png"
+  },
+  {
+   "app": "esign",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 115,
+    "visibleElements": 83,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 603,
+    "scrollTop": 0,
+    "title": "E-Signatur",
+    "titleCalls": [
+     "E-Signatur"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/esign@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "esign/900.png"
+  },
+  {
+   "app": "esign",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 115,
+    "visibleElements": 82,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 603,
+    "scrollTop": 0,
+    "title": "E-Signatur",
+    "titleCalls": [
+     "E-Signatur"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/esign@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "esign/420.png"
+  },
+  {
+   "app": "explorer",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 122,
+    "visibleElements": 114,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 547,
+    "scrollTop": 0,
+    "title": "Explorer",
+    "titleCalls": [
+     "Explorer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/explorer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "explorer/1280.png"
+  },
+  {
+   "app": "explorer",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 122,
+    "visibleElements": 99,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 470,
+    "scrollTop": 0,
+    "title": "Explorer",
+    "titleCalls": [
+     "Explorer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/explorer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "explorer/900.png"
+  },
+  {
+   "app": "explorer",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 122,
+    "visibleElements": 92,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 442,
+    "scrollTop": 0,
+    "title": "Explorer",
+    "titleCalls": [
+     "Explorer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/explorer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "explorer/420.png"
+  },
+  {
+   "app": "file-viewer",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 11,
+    "visibleElements": 11,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 5,
+    "scrollTop": 0,
+    "title": "Datei-Viewer",
+    "titleCalls": [
+     "Datei-Viewer",
+     "Datei-Viewer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/file-viewer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "file-viewer/1280.png"
+  },
+  {
+   "app": "file-viewer",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 11,
+    "visibleElements": 11,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 5,
+    "scrollTop": 0,
+    "title": "Datei-Viewer",
+    "titleCalls": [
+     "Datei-Viewer",
+     "Datei-Viewer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/file-viewer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "file-viewer/900.png"
+  },
+  {
+   "app": "file-viewer",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 11,
+    "visibleElements": 11,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 5,
+    "scrollTop": 0,
+    "title": "Datei-Viewer",
+    "titleCalls": [
+     "Datei-Viewer",
+     "Datei-Viewer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/file-viewer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "file-viewer/420.png"
+  },
+  {
+   "app": "importer",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 109,
+    "visibleElements": 63,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 693,
+    "scrollTop": 0,
+    "title": "App Importer",
+    "titleCalls": [
+     "App Importer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/importer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--imp-accent×12",
+     "--border×11",
+     "--imp-accent-soft×5",
+     "--app-accent-foreground×4",
+     "--imp-accent-strong×4",
+     "--app-accent×3",
+     "--app-accent-soft×1",
+     "--text-muted×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "importer/1280.png"
+  },
+  {
+   "app": "importer",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 109,
+    "visibleElements": 63,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 693,
+    "scrollTop": 0,
+    "title": "App Importer",
+    "titleCalls": [
+     "App Importer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/importer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--imp-accent×12",
+     "--border×11",
+     "--imp-accent-soft×5",
+     "--app-accent-foreground×4",
+     "--imp-accent-strong×4",
+     "--app-accent×3",
+     "--app-accent-soft×1",
+     "--text-muted×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "importer/900.png"
+  },
+  {
+   "app": "importer",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 109,
+    "visibleElements": 54,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 629,
+    "scrollTop": 0,
+    "title": "App Importer",
+    "titleCalls": [
+     "App Importer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/importer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--imp-accent×12",
+     "--border×11",
+     "--imp-accent-soft×5",
+     "--app-accent-foreground×4",
+     "--imp-accent-strong×4",
+     "--app-accent×3",
+     "--app-accent-soft×1",
+     "--text-muted×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "importer/420.png"
+  },
+  {
+   "app": "intake",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 117,
+    "visibleElements": 79,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 464,
+    "scrollTop": 0,
+    "title": "Bewerbungseingang",
+    "titleCalls": [
+     "Bewerbungseingang"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/intake@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "intake/1280.png"
+  },
+  {
+   "app": "intake",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 117,
+    "visibleElements": 79,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 464,
+    "scrollTop": 0,
+    "title": "Bewerbungseingang",
+    "titleCalls": [
+     "Bewerbungseingang"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/intake@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "intake/900.png"
+  },
+  {
+   "app": "intake",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 117,
+    "visibleElements": 78,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 464,
+    "scrollTop": 0,
+    "title": "Bewerbungseingang",
+    "titleCalls": [
+     "Bewerbungseingang"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/intake@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "intake/420.png"
+  },
+  {
+   "app": "interviews",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 131,
+    "visibleElements": 59,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 300,
+    "scrollTop": 0,
+    "title": "Interviews",
+    "titleCalls": [
+     "Interviews"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/interviews@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "interviews/1280.png"
+  },
+  {
+   "app": "interviews",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 131,
+    "visibleElements": 59,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 300,
+    "scrollTop": 0,
+    "title": "Interviews",
+    "titleCalls": [
+     "Interviews"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/interviews@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "interviews/900.png"
+  },
+  {
+   "app": "interviews",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 131,
+    "visibleElements": 59,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 300,
+    "scrollTop": 0,
+    "title": "Interviews",
+    "titleCalls": [
+     "Interviews"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/interviews@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "interviews/420.png"
+  },
+  {
+   "app": "invoices",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 108,
+    "visibleElements": 87,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 355,
+    "scrollTop": 0,
+    "title": "Rechnungen",
+    "titleCalls": [
+     "Rechnungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/invoices@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--invoices-v2-control-inset×2"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "invoices/1280.png"
+  },
+  {
+   "app": "invoices",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 108,
+    "visibleElements": 87,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 355,
+    "scrollTop": 0,
+    "title": "Rechnungen",
+    "titleCalls": [
+     "Rechnungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/invoices@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--invoices-v2-control-inset×2"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "invoices/900.png"
+  },
+  {
+   "app": "invoices",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 108,
+    "visibleElements": 86,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 355,
+    "scrollTop": 0,
+    "title": "Rechnungen",
+    "titleCalls": [
+     "Rechnungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/invoices@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--invoices-v2-control-inset×2"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "invoices/420.png"
+  },
+  {
+   "app": "iot",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 77,
+    "visibleElements": 56,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 113,
+    "scrollTop": 0,
+    "title": "IoT",
+    "titleCalls": [
+     "IoT"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/iot@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "iot/1280.png"
+  },
+  {
+   "app": "iot",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 77,
+    "visibleElements": 56,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 113,
+    "scrollTop": 0,
+    "title": "IoT",
+    "titleCalls": [
+     "IoT"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/iot@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "iot/900.png"
+  },
+  {
+   "app": "iot",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 77,
+    "visibleElements": 55,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 113,
+    "scrollTop": 0,
+    "title": "IoT",
+    "titleCalls": [
+     "IoT"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/iot@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "iot/420.png"
+  },
+  {
+   "app": "knowledge",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 194,
+    "visibleElements": 105,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 793,
+    "scrollTop": 0,
+    "title": "Knowledge",
+    "titleCalls": [
+     "Knowledge"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/knowledge@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--knowledge-accent×24",
+     "--knowledge-surface×22",
+     "--knowledge-line×17",
+     "--knowledge-muted×16",
+     "--knowledge-control-radius×15",
+     "--knowledge-text×10",
+     "--knowledge-bg×4",
+     "--knowledge-surface-muted×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "knowledge/1280.png"
+  },
+  {
+   "app": "knowledge",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 194,
+    "visibleElements": 105,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 793,
+    "scrollTop": 0,
+    "title": "Knowledge",
+    "titleCalls": [
+     "Knowledge"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/knowledge@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--knowledge-accent×24",
+     "--knowledge-surface×22",
+     "--knowledge-line×17",
+     "--knowledge-muted×16",
+     "--knowledge-control-radius×15",
+     "--knowledge-text×10",
+     "--knowledge-bg×4",
+     "--knowledge-surface-muted×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "knowledge/900.png"
+  },
+  {
+   "app": "knowledge",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 194,
+    "visibleElements": 76,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 587,
+    "scrollTop": 0,
+    "title": "Knowledge",
+    "titleCalls": [
+     "Knowledge"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/knowledge@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--knowledge-accent×24",
+     "--knowledge-surface×22",
+     "--knowledge-line×17",
+     "--knowledge-muted×16",
+     "--knowledge-control-radius×15",
+     "--knowledge-text×10",
+     "--knowledge-bg×4",
+     "--knowledge-surface-muted×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "knowledge/420.png"
+  },
+  {
+   "app": "kundenpipeline",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1180,
+    767
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 81,
+    "visibleElements": 80,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 510,
+    "scrollTop": 0,
+    "title": "Decision Hub",
+    "titleCalls": [
+     "Decision Hub"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/kundenpipeline@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "kundenpipeline/1280.png"
+  },
+  {
+   "app": "kundenpipeline",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1180,
+    767
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 81,
+    "visibleElements": 30,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 105,
+    "scrollTop": 0,
+    "title": "Decision Hub",
+    "titleCalls": [
+     "Decision Hub"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/kundenpipeline@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "kundenpipeline/900.png"
+  },
+  {
+   "app": "kundenpipeline",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1180,
+    767
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 81,
+    "visibleElements": 28,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 105,
+    "scrollTop": 0,
+    "title": "Decision Hub",
+    "titleCalls": [
+     "Decision Hub"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/kundenpipeline@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "kundenpipeline/420.png"
+  },
+  {
+   "app": "mail",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    620
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 383,
+    "visibleElements": 105,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 431,
+    "scrollTop": 0,
+    "title": "Mail",
+    "titleCalls": [
+     "Mail"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/mail@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--mail-left-width×3",
+     "--mail-right-width×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "mail/1280.png"
+  },
+  {
+   "app": "mail",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    620
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 383,
+    "visibleElements": 105,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 431,
+    "scrollTop": 0,
+    "title": "Mail",
+    "titleCalls": [
+     "Mail"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/mail@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--mail-left-width×3",
+     "--mail-right-width×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "mail/900.png"
+  },
+  {
+   "app": "mail",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    620
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 383,
+    "visibleElements": 50,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 131,
+    "scrollTop": 0,
+    "title": "Mail",
+    "titleCalls": [
+     "Mail"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/mail@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--mail-left-width×3",
+     "--mail-right-width×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "mail/420.png"
+  },
+  {
+   "app": "matching",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 226,
+    "visibleElements": 103,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 210,
+    "scrollTop": 0,
+    "title": "Matching",
+    "titleCalls": [
+     "Matching"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/matching@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--matchColor×3"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "matching/1280.png"
+  },
+  {
+   "app": "matching",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 226,
+    "visibleElements": 103,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 210,
+    "scrollTop": 0,
+    "title": "Matching",
+    "titleCalls": [
+     "Matching"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/matching@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--matchColor×3"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "matching/900.png"
+  },
+  {
+   "app": "matching",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 226,
+    "visibleElements": 102,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 210,
+    "scrollTop": 0,
+    "title": "Matching",
+    "titleCalls": [
+     "Matching"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/matching@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--matchColor×3"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "matching/420.png"
+  },
+  {
+   "app": "nachweise",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 156,
+    "visibleElements": 92,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 827,
+    "scrollTop": 0,
+    "title": "Nachweise",
+    "titleCalls": [
+     "Nachweise"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/nachweise@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "nachweise/1280.png"
+  },
+  {
+   "app": "nachweise",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 156,
+    "visibleElements": 92,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 827,
+    "scrollTop": 0,
+    "title": "Nachweise",
+    "titleCalls": [
+     "Nachweise"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/nachweise@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "nachweise/900.png"
+  },
+  {
+   "app": "nachweise",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 156,
+    "visibleElements": 91,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 827,
+    "scrollTop": 0,
+    "title": "Nachweise",
+    "titleCalls": [
+     "Nachweise"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/nachweise@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "nachweise/420.png"
+  },
+  {
+   "app": "news",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G3"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Ausgabe fehlgeschlagen: Lieferantenbewertung“"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 284,
+    "visibleElements": 155,
+    "root": {
+     "w": 1278,
+     "h": 687
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 560,
+    "scrollTop": 0,
+    "title": "News",
+    "titleCalls": [
+     "News"
+    ],
+    "zoneEntries": [
+     "app:news.issue.failed"
+    ],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/news@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--news-line×16",
+     "--news-muted×16",
+     "--news-text×12",
+     "--news-row×9",
+     "--news-bg×5",
+     "--news-hover×5",
+     "--news-fill×5",
+     "--news-surface×5"
+    ],
+    "undefinedTokenCount": 10
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "news/1280.png"
+  },
+  {
+   "app": "news",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G3"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Ausgabe fehlgeschlagen: Lieferantenbewertung“"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 284,
+    "visibleElements": 144,
+    "root": {
+     "w": 898,
+     "h": 687
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 536,
+    "scrollTop": 0,
+    "title": "News",
+    "titleCalls": [
+     "News"
+    ],
+    "zoneEntries": [
+     "app:news.issue.failed"
+    ],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/news@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--news-line×16",
+     "--news-muted×16",
+     "--news-text×12",
+     "--news-row×9",
+     "--news-bg×5",
+     "--news-hover×5",
+     "--news-fill×5",
+     "--news-surface×5"
+    ],
+    "undefinedTokenCount": 10
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "news/900.png"
+  },
+  {
+   "app": "news",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G3"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Ausgabe fehlgeschlagen: Lieferantenbewertung“"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 284,
+    "visibleElements": 74,
+    "root": {
+     "w": 420,
+     "h": 757
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 341,
+    "scrollTop": 0,
+    "title": "News",
+    "titleCalls": [
+     "News"
+    ],
+    "zoneEntries": [
+     "app:news.issue.failed"
+    ],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/news@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--news-line×16",
+     "--news-muted×16",
+     "--news-text×12",
+     "--news-row×9",
+     "--news-bg×5",
+     "--news-hover×5",
+     "--news-fill×5",
+     "--news-surface×5"
+    ],
+    "undefinedTokenCount": 10
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "news/420.png"
+  },
+  {
+   "app": "notes",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 375,
+    "visibleElements": 224,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1081,
+    "scrollTop": 0,
+    "title": "Notizen",
+    "titleCalls": [
+     "Notizen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/notes@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--nn-shadow×2",
+     "--nn-paper-shadow×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "notes/1280.png"
+  },
+  {
+   "app": "notes",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 375,
+    "visibleElements": 224,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1081,
+    "scrollTop": 0,
+    "title": "Notizen",
+    "titleCalls": [
+     "Notizen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/notes@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--nn-shadow×2",
+     "--nn-paper-shadow×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "notes/900.png"
+  },
+  {
+   "app": "notes",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 375,
+    "visibleElements": 106,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 190,
+    "scrollTop": 0,
+    "title": "Notizen",
+    "titleCalls": [
+     "Notizen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/notes@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--nn-shadow×2",
+     "--nn-paper-shadow×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "notes/420.png"
+  },
+  {
+   "app": "outbound",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G1 erlaubt: 1 Container mit [data-scroll-x] scrollen seitlich: div.outbound-table-scroll-unified 1382>882"
+   ],
+   "info": {
+    "elements": 367,
+    "visibleElements": 282,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1411,
+    "scrollTop": 0,
+    "title": "Outbound",
+    "titleCalls": [
+     "Outbound"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/outbound@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--outbound-info×4",
+     "--row-h×3",
+     "--outbound-info-ink×3",
+     "--outbound-indigo×3",
+     "--outbound-purple×2",
+     "--ctox-left-width×1",
+     "--outbound-purple-ink×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "outbound/1280.png"
+  },
+  {
+   "app": "outbound",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G1 erlaubt: 1 Container mit [data-scroll-x] scrollen seitlich: div.outbound-table-scroll-unified 1382>574"
+   ],
+   "info": {
+    "elements": 367,
+    "visibleElements": 282,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1411,
+    "scrollTop": 0,
+    "title": "Outbound",
+    "titleCalls": [
+     "Outbound"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/outbound@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--outbound-info×4",
+     "--row-h×3",
+     "--outbound-info-ink×3",
+     "--outbound-indigo×3",
+     "--outbound-purple×2",
+     "--ctox-left-width×1",
+     "--outbound-purple-ink×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 5,
+    "viewportColumns": 5,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "outbound/900.png"
+  },
+  {
+   "app": "outbound",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G1 erlaubt: 1 Container mit [data-scroll-x] scrollen seitlich: div.outbound-table-scroll-unified 1382>396"
+   ],
+   "info": {
+    "elements": 367,
+    "visibleElements": 281,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1411,
+    "scrollTop": 0,
+    "title": "Outbound",
+    "titleCalls": [
+     "Outbound"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/outbound@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--outbound-info×4",
+     "--row-h×3",
+     "--outbound-info-ink×3",
+     "--outbound-indigo×3",
+     "--outbound-purple×2",
+     "--ctox-left-width×1",
+     "--outbound-purple-ink×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 5,
+    "viewportColumns": 5,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "outbound/420.png"
+  },
+  {
+   "app": "placements",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 122,
+    "visibleElements": 85,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 693,
+    "scrollTop": 0,
+    "title": "Vermittlungen",
+    "titleCalls": [
+     "Vermittlungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/placements@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "placements/1280.png"
+  },
+  {
+   "app": "placements",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 122,
+    "visibleElements": 85,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 693,
+    "scrollTop": 0,
+    "title": "Vermittlungen",
+    "titleCalls": [
+     "Vermittlungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/placements@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "placements/900.png"
+  },
+  {
+   "app": "placements",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 122,
+    "visibleElements": 84,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 693,
+    "scrollTop": 0,
+    "title": "Vermittlungen",
+    "titleCalls": [
+     "Vermittlungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/placements@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "placements/420.png"
+  },
+  {
+   "app": "reports",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 156,
+    "visibleElements": 115,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 919,
+    "scrollTop": 0,
+    "title": "Bugs & Features",
+    "titleCalls": [
+     "Bugs & Features"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/reports@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--reports-feature×3",
+     "--app-accent×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "reports/1280.png"
+  },
+  {
+   "app": "reports",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 156,
+    "visibleElements": 115,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 919,
+    "scrollTop": 0,
+    "title": "Bugs & Features",
+    "titleCalls": [
+     "Bugs & Features"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/reports@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--reports-feature×3",
+     "--app-accent×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "reports/900.png"
+  },
+  {
+   "app": "reports",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 156,
+    "visibleElements": 114,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 919,
+    "scrollTop": 0,
+    "title": "Bugs & Features",
+    "titleCalls": [
+     "Bugs & Features"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/reports@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--reports-feature×3",
+     "--app-accent×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "reports/420.png"
+  },
+  {
+   "app": "research",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1240,
+    1024,
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: div.ctox-pane-tabs 642>586"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "3 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Rahmenvertrag über Wartung und Instandha“; Text span[data-graph-summary] „0 Elemente · 0 Verknüpfungen · 0 Themenf“; Text span „Report braucht verifizierte Quellen“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 183,
+    "visibleElements": 178,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1145,
+    "scrollTop": 0,
+    "title": "Web Research",
+    "titleCalls": [
+     "Web Research"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 3,
+    "appSheets": [
+     "/~a/research@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--research-line×39",
+     "--research-muted×38",
+     "--research-accent×31",
+     "--research-surface×17",
+     "--research-surface-2×15",
+     "--research-text×15",
+     "--research-warn×12",
+     "--research-good×9"
+    ],
+    "undefinedTokenCount": 16
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "research/1280.png"
+  },
+  {
+   "app": "research",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1240,
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "3 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Rahmenvertrag über Wartung und Instandha“; Text strong „Semantischer Research-Graph“; Text span[data-graph-summary] „0 Elemente · 0 Verknüpfungen · 0 Themenf“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 183,
+    "visibleElements": 176,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1106,
+    "scrollTop": 0,
+    "title": "Web Research",
+    "titleCalls": [
+     "Web Research"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 3,
+    "appSheets": [
+     "/~a/research@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--research-line×39",
+     "--research-muted×38",
+     "--research-accent×31",
+     "--research-surface×17",
+     "--research-surface-2×15",
+     "--research-text×15",
+     "--research-warn×12",
+     "--research-good×9"
+    ],
+    "undefinedTokenCount": 16
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "research/900.png"
+  },
+  {
+   "app": "research",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1240,
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 183,
+    "visibleElements": 169,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1012,
+    "scrollTop": 0,
+    "title": "Web Research",
+    "titleCalls": [
+     "Web Research"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/research@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--research-line×39",
+     "--research-muted×38",
+     "--research-accent×31",
+     "--research-surface×17",
+     "--research-surface-2×15",
+     "--research-text×15",
+     "--research-warn×12",
+     "--research-good×9"
+    ],
+    "undefinedTokenCount": 16
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "research/420.png"
+  },
+  {
+   "app": "shiftflow",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    760
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 287,
+    "visibleElements": 151,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 611,
+    "scrollTop": 0,
+    "title": "Einsatzplanung",
+    "titleCalls": [
+     "Einsatzplanung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/shiftflow@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--shiftflow-dept×3",
+     "--shiftflow-dept-strong×1",
+     "--shiftflow-icon-document×1",
+     "--ctox-left-width×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "shiftflow/1280.png"
+  },
+  {
+   "app": "shiftflow",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    760
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 287,
+    "visibleElements": 151,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 572,
+    "scrollTop": 0,
+    "title": "Einsatzplanung",
+    "titleCalls": [
+     "Einsatzplanung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/shiftflow@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--shiftflow-dept×3",
+     "--shiftflow-dept-strong×1",
+     "--shiftflow-icon-document×1",
+     "--ctox-left-width×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "shiftflow/900.png"
+  },
+  {
+   "app": "shiftflow",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    760
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 287,
+    "visibleElements": 150,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 572,
+    "scrollTop": 0,
+    "title": "Einsatzplanung",
+    "titleCalls": [
+     "Einsatzplanung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/shiftflow@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--shiftflow-dept×3",
+     "--shiftflow-dept-strong×1",
+     "--shiftflow-icon-document×1",
+     "--ctox-left-width×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "shiftflow/420.png"
+  },
+  {
+   "app": "spreadsheets",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 104,
+    "visibleElements": 77,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 398,
+    "scrollTop": 0,
+    "title": "Tabellen",
+    "titleCalls": [
+     "Tabellen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/spreadsheets@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--surface-radius×2",
+     "--shell-col-left×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "spreadsheets/1280.png"
+  },
+  {
+   "app": "spreadsheets",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 104,
+    "visibleElements": 77,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 398,
+    "scrollTop": 0,
+    "title": "Tabellen",
+    "titleCalls": [
+     "Tabellen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/spreadsheets@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--surface-radius×2",
+     "--shell-col-left×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "spreadsheets/900.png"
+  },
+  {
+   "app": "spreadsheets",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 104,
+    "visibleElements": 10,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 31,
+    "scrollTop": 0,
+    "title": "Tabellen",
+    "titleCalls": [
+     "Tabellen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/spreadsheets@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--surface-radius×2",
+     "--shell-col-left×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "spreadsheets/420.png"
+  },
+  {
+   "app": "submissions",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 116,
+    "visibleElements": 82,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 533,
+    "scrollTop": 0,
+    "title": "Vorstellungen",
+    "titleCalls": [
+     "Vorstellungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/submissions@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "submissions/1280.png"
+  },
+  {
+   "app": "submissions",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 116,
+    "visibleElements": 82,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 533,
+    "scrollTop": 0,
+    "title": "Vorstellungen",
+    "titleCalls": [
+     "Vorstellungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/submissions@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "submissions/900.png"
+  },
+  {
+   "app": "submissions",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 116,
+    "visibleElements": 81,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 533,
+    "scrollTop": 0,
+    "title": "Vorstellungen",
+    "titleCalls": [
+     "Vorstellungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/submissions@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "submissions/420.png"
+  },
+  {
+   "app": "support",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 234,
+    "visibleElements": 104,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1284,
+    "scrollTop": 0,
+    "title": "Support",
+    "titleCalls": [
+     "Support"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/support@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "support/1280.png"
+  },
+  {
+   "app": "support",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Rechnung wurde an die Buchhaltung weiter“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 234,
+    "visibleElements": 104,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1284,
+    "scrollTop": 0,
+    "title": "Support",
+    "titleCalls": [
+     "Support"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/support@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "support/900.png"
+  },
+  {
+   "app": "support",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste h2.ctox-pane-title „Rechnung wurde an die Buchhaltung weiter“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 234,
+    "visibleElements": 103,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1284,
+    "scrollTop": 0,
+    "title": "Support",
+    "titleCalls": [
+     "Support"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/support@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--ctox-left-width×3",
+     "--ctox-right-width×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "support/420.png"
+  },
+  {
+   "app": "threads",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 292,
+    "visibleElements": 113,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 765,
+    "scrollTop": 0,
+    "title": "Threads",
+    "titleCalls": [
+     "Threads"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/threads@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "threads/1280.png"
+  },
+  {
+   "app": "threads",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 292,
+    "visibleElements": 113,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 765,
+    "scrollTop": 0,
+    "title": "Threads",
+    "titleCalls": [
+     "Threads"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/threads@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "threads/900.png"
+  },
+  {
+   "app": "threads",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 292,
+    "visibleElements": 50,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 259,
+    "scrollTop": 0,
+    "title": "Threads",
+    "titleCalls": [
+     "Threads"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/threads@1.0.0/index.css"
+    ],
+    "undefinedTokens": [],
+    "undefinedTokenCount": 0
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "threads/420.png"
+  },
+  {
+   "app": "tickets",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 372,
+    "visibleElements": 301,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 976,
+    "scrollTop": 0,
+    "title": "Tickets",
+    "titleCalls": [
+     "Tickets"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/tickets@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--tickets-v2-control-inset×3"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "tickets/1280.png"
+  },
+  {
+   "app": "tickets",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 372,
+    "visibleElements": 300,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 976,
+    "scrollTop": 0,
+    "title": "Tickets",
+    "titleCalls": [
+     "Tickets"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/tickets@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--tickets-v2-control-inset×3"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 900,
+    "compareWindowW": 900
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "tickets/900.png"
+  },
+  {
+   "app": "tickets",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 372,
+    "visibleElements": 299,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 976,
+    "scrollTop": 0,
+    "title": "Tickets",
+    "titleCalls": [
+     "Tickets"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/tickets@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--tickets-v2-control-inset×3"
+    ],
+    "undefinedTokenCount": 1
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1,
+    "viewportWindowW": 420,
+    "compareWindowW": 420
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "tickets/420.png"
+  }
+ ]
+}

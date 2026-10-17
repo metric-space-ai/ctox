@@ -1,8 +1,19 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { registerHooks } from 'node:module';
+
+// App-API 4.0: 'ctox:shared/x.js' löst in der Shell der Service Worker auf (§16.15); hier wie dort auf shared/.
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    if (specifier.startsWith('ctox:shared/')) {
+      return nextResolve(new URL(`../../../shared/${specifier.slice('ctox:shared/'.length)}`, import.meta.url).href, context);
+    }
+    return nextResolve(specifier, context);
+  },
+});
 
 const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const read = (rel) => readFileSync(resolve(moduleRoot, rel), 'utf8');
@@ -16,17 +27,18 @@ test('consent: manifest is consistent and has no inline SVG', () => {
   assert.ok(!manifest.layout || !manifest.layout.icon_svg, 'no inline SVG in manifest');
 });
 
-test('consent: schema declares its owned collection', () => {
-  const schemaSrc = read('schema.js');
-  assert.match(schemaSrc, /business_consents/);
-  assert.match(schemaSrc, /export const collections/);
+test('consent: schema declares its owned collection (v4: collections.schema.json ist die einzige Quelle)', () => {
+  const schema = JSON.parse(read('collections.schema.json'));
+  assert.ok((schema.collections || schema).business_consents, 'business_consents declared');
+  assert.ok(!existsSync(resolve(moduleRoot, 'schema.js')), 'schema.js entfällt (PORTING.md R17)');
 });
 
 test('consent: denied collection access renders a locked state instead of an empty state', () => {
   const source = read('index.js');
-  assert.match(source, /permissionCheck\(PRIMARY\)/);
-  assert.match(source, /CTOX_BUSINESS_OS_PERMISSION_DENIED/);
+  // v4: der Core antwortet forbidden; die Sperre erscheint in der Zustandszone, nicht als Kasten im Inhalt.
+  assert.match(source, /error\?\.code !== 'forbidden'/);
   assert.match(source, /renderLockedCollection\(\)/);
+  assert.match(source, /code: MODULE_ID \+ '\.data\.locked'/);
   assert.match(source, /dataLockedHint/);
 });
 
@@ -37,7 +49,7 @@ test('consent: left column carries the canonical grammar markup pins', () => {
   assert.match(html, /data-pg-tray-toggle/, 'filter tray toggle');
   assert.match(html, /data-pg-tray\b/, 'collapsed tray');
   assert.match(html, /data-pg-reset/, 'tray reset control');
-  assert.match(html, /data-pg-footer/, 'one-line footer target');
+  assert.doesNotMatch(html, /data-pg-footer/, 'keine Fußzeile, die nur den Reiterzähler wiederholt (Textdiät Regel 5)');
   // Status select in the tray drives the filter.
   assert.match(html, /data-pg-filter[^>]*data-pg-name="status"/, 'status filter in tray');
 });
@@ -90,7 +102,7 @@ test('consent: import/export/new/collapse handlers are wired in index.js', () =>
   assert.match(indexJs, /URL\.createObjectURL/, 'export uses an object URL');
   // Import = file input reading JSON, upserting via the record helper.
   assert.match(indexJs, /type = 'file'/, 'import creates a file input');
-  assert.match(indexJs, /\.upsert\(/, 'import upserts records');
+  assert.match(indexJs, /api\.put\(PRIMARY, prepareImport\(/, 'import writes records via api.put');
   assert.match(indexJs, /prepareImport\(/, 'import normalizes via the record helper');
 });
 
@@ -101,8 +113,10 @@ test('consent: existing command flows are untouched', () => {
   assert.match(indexJs, /ats\.subject\.erase/, 'Art. 17 erase command');
   // The check payload keeps its exact shape { subject_id, purpose }.
   assert.match(indexJs, /purpose: purposeRaw \|\| null/, 'consent-check payload unchanged');
-  // Subject rights dispatch keeps the legacy `type` + `command_type` pair.
-  assert.match(indexJs, /type: commandType, command_type: commandType/, 'subject dispatch shape unchanged');
+  // v4: Befehle über api.command (Typ + Payload), Status gepusht – kein commandBus, kein Warten.
+  assert.match(indexJs, /runCommand\(commandType, \{ subject_id \}/, 'subject dispatch payload unchanged');
+  assert.match(indexJs, /api\.command\(type, /);
+  assert.doesNotMatch(indexJs, /commandBus/);
 });
 
 test('consent: auto-reveal follows hasSelection && !userCollapsed', async () => {
@@ -129,7 +143,7 @@ test('consent: record list renders selector rows from a stub doc array', async (
   assert.ok(!/<button/.test(out), 'shards carry no per-row buttons');
 
   const empty = mod.renderRecordList([], { view: 'cards', nowMs: now });
-  assert.match(empty, /ctox-empty/, 'empty state renders the kit empty class');
+  assert.equal(empty, '', 'v4 (R11): an empty list renders nothing');
 });
 
 // Betreiber-Direktive 31.08.2026: die beiden Ansichten muessen sich in der
@@ -139,7 +153,7 @@ test('consent: card and list view differ in density, not just in detail', async 
   const mod = await import('../index.js');
   const now = 1_781_990_000_000;
   const rows = [{
-    id: 'c1', subject_id: 'cand-10422', purpose: 'Bewerbung', legal_basis: 'consent',
+    id: 'c1', subject_id: 'cand-10422', subject_name: 'Ella Vier', purpose: 'Bewerbung', legal_basis: 'consent',
     granted_at_ms: now - 86_400_000, expires_at_ms: now + 86_400_000,
   }];
 
@@ -148,7 +162,7 @@ test('consent: card and list view differ in density, not just in detail', async 
   assert.ok(cardMeta.length >= 2, `card view carries >= 2 meta lines, got ${cardMeta.length}`);
   assert.match(cards, /consent-row--cards/, 'card rows carry the card modifier');
   // Die Detailfelder der App, keine neuen Datenpfade.
-  assert.match(cards, /cand-10422/, 'card meta shows the subject');
+  assert.match(cards, /Ella Vier/, 'card meta shows the subject');
   assert.match(cards, /Rechtsgrundlage/, 'card meta shows the legal basis');
   assert.match(cards, /erteilt/, 'card meta shows the grant date');
   assert.match(cards, /gültig bis/, 'card meta shows the expiry');
@@ -166,25 +180,14 @@ test('consent: card and list view differ in density, not just in detail', async 
   assert.equal((list.match(/ctox-badge/g) || []).length, 1, 'exactly one short meta in the list row');
 });
 
-test('consent: collection readiness gates the data-driven empty state', async () => {
+test('consent: v4 – no readiness, no syncing shell; empty renders nothing (App-API 4.0)', async () => {
   const mod = await import('../index.js');
   const now = 1_781_990_000_000;
-  // Empty source + not yet initially replicated ⇒ syncing shell, not empty.
-  const syncing = mod.renderRecordList([], { view: 'cards', nowMs: now, readiness: { ready: false, state: 'catching-up' } });
-  assert.match(syncing, /ctox-syncing/, 'unready empty source renders the syncing shell');
-  assert.match(syncing, /role="status"/, 'syncing shell is a polite status region');
-  assert.ok(!/ctox-empty/.test(syncing), 'syncing shell is not the empty state');
-  // Empty source + live ⇒ the real empty state.
-  const empty = mod.renderRecordList([], { view: 'cards', nowMs: now, readiness: { ready: true, state: 'live' } });
-  assert.match(empty, /ctox-empty/, 'ready empty source renders the empty state');
-  // Rows always win over readiness.
+  assert.equal(mod.renderRecordList([], { view: 'cards', nowMs: now, readiness: { ready: false } }), '');
   const rows = [{ id: 'c1', subject_id: 's', purpose: 'p', granted_at_ms: now - 1000 }];
-  const out = mod.renderRecordList(rows, { view: 'cards', nowMs: now, readiness: { ready: false, state: 'never-synced' } });
-  assert.match(out, /data-context-record-id="c1"/, 'rows render regardless of readiness');
-  assert.ok(!/ctox-syncing/.test(out), 'no syncing shell when rows exist');
-  // Mount wires the canonical readiness subscription with teardown.
-  assert.match(indexJs, /subscribeCollectionReadiness/, 'readiness subscription wired');
-  assert.match(indexJs, /collectionReadiness/, 'readiness snapshot read');
+  assert.match(mod.renderRecordList(rows, { view: 'cards', nowMs: now }), /data-context-record-id="c1"/);
+  assert.doesNotMatch(indexJs, /subscribeCollectionReadiness|collectionReadiness|ctox-syncing/);
+  assert.match(indexJs, /api\.query\(PRIMARY, \{\}\)\.subscribe\(/, 'live query');
 });
 
 test('consent: band + counts derive from the derived consent status', async () => {
@@ -221,7 +224,7 @@ test('consent: prepareImport fills the schema-required fields for upsert', async
   assert.equal(rec.purpose, 'p');
   assert.equal(rec.updated_at_ms, now, 'updated_at_ms stamped');
   assert.ok(rec.id, 'id is generated when missing');
-  assert.equal(rec._deleted, false);
+  assert.equal(Object.hasOwn(rec, '_deleted'), false, '_deleted ist reserviert (Kern-Tombstone, E47) und wird nie geschrieben');
   // A round-tripped export keeps its id.
   assert.equal(mod.prepareImport({ id: 'keep', subject_id: 'x', purpose: 'p' }, now).id, 'keep');
 });

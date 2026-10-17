@@ -26,7 +26,6 @@ use crate::lcm;
 use crate::persistence;
 
 const MASTER_KEY_STORAGE_KEY: &str = "secret_master_key_b64";
-const SECRET_STORE_FILE: &str = "ctox-secrets.sqlite3";
 pub(crate) const SECRET_MASTER_KEY_FILE: &str = "ctox-secrets.key";
 const SECRET_KV_TABLE: &str = "ctox_secret_kv";
 const SECRET_PUT_USAGE: &str = "usage: ctox secret put --scope <scope> --name <name> (--value <text>|--value-stdin) [--description <text>] [--metadata-json <json>]";
@@ -73,8 +72,7 @@ pub fn handle_secret_command(root: &Path, args: &[String]) -> Result<()> {
     let command = args.first().map(String::as_str).unwrap_or("");
     match command {
         "init" => {
-            let conn = open_secret_db(root)?;
-            ensure_secret_schema(&conn)?;
+            let _owner = secret_owner(root)?;
             let key_source = ensure_secret_master_key(root)?.1;
             print_json(
                 &json!({"ok": true, "db_path": resolve_db_path(root), "key_source": key_source}),
@@ -268,72 +266,37 @@ pub(crate) fn with_secret_value_snapshot<T>(
     with_secret_values_authority(root, &[(scope, name)], false, |values, _| apply(values[0]))
 }
 
-fn with_secret_values_authority<T>(
-    root: &Path,
-    keys: &[(&str, &str)],
-    publication: bool,
-    apply: impl FnOnce(&[&[u8]], &str) -> Result<T>,
-) -> Result<T> {
-    anyhow::ensure!(
-        !keys.is_empty() && keys.len() <= 8,
-        "invalid publication secret tuple"
-    );
-    let master = master_key_guard(root);
-    // Report only after every actual issuer/SQLite guard has released.
-    let timing = publication.then(|| {
-        crate::authority_fence_metrics::FenceTiming::new(
-            crate::authority_fence_metrics::Category::IssuerPublication,
-        )
-    });
-    let issuer_timing = timing
-        .as_ref()
-        .map(|timing| timing.stage(crate::authority_fence_metrics::Stage::Issuer));
-    let _master = if publication {
-        Some(
-            master
-                .try_lock()
-                .map_err(|_| anyhow::anyhow!("secret master-key authority is unavailable"))?,
-        )
-    } else {
-        None
-    };
-    if let Some(timing) = &issuer_timing {
-        timing.acquired();
-    }
-    let flags = if publication {
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-    } else {
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-    };
-    let conn = Connection::open_with_flags(resolve_db_path(root), flags)?;
-    conn.busy_timeout(std::time::Duration::ZERO)?;
-    let sqlite_timing = timing
-        .as_ref()
-        .map(|timing| timing.stage(crate::authority_fence_metrics::Stage::EncryptedStore));
-    let tx = rusqlite::Transaction::new_unchecked(
-        &conn,
-        if publication {
-            rusqlite::TransactionBehavior::Immediate
-        } else {
-            rusqlite::TransactionBehavior::Deferred
-        },
-    )?;
-    if let Some(timing) = &sqlite_timing {
-        timing.acquired();
-    }
-    // This file is reread, rather than treating a formerly valid key as current.
-    // Bound its read independently of an accidentally replaced large file.
+fn current_protected_key(root: &Path) -> Result<Zeroizing<String>> {
     let mut raw = Zeroizing::new(String::new());
     fs::File::open(master_key_path(root))?
         .take(129)
         .read_to_string(&mut raw)?;
     anyhow::ensure!(raw.len() <= 128, "secret master-key file is oversized");
-    let key = decode_master_key(&raw, "failed to decode current secret master key")?;
-    let embedded: Option<String> = tx
+    if persistence::sqlite_path(root).try_exists()? {
+        if let Some(legacy) = persistence::load_text_value(root, MASTER_KEY_STORAGE_KEY)? {
+            anyhow::ensure!(
+                legacy.trim() == raw.trim(),
+                "secret master key conflicts with the legacy runtime key"
+            );
+        }
+    }
+    Ok(raw)
+}
+
+fn current_issuer_rows(
+    conn: &Connection,
+    keys: &[(String, String)],
+    raw: &str,
+) -> Result<(Vec<SecretMaterial>, String)> {
+    anyhow::ensure!(
+        !keys.is_empty() && keys.len() <= 8,
+        "invalid publication secret tuple"
+    );
+    let embedded: Option<String> = conn
         .query_row(
-            "SELECT value FROM ctox_secret_kv WHERE key = ?1",
+            "SELECT value FROM ctox_secret_kv WHERE key=?1",
             [MASTER_KEY_STORAGE_KEY],
-            |row| row.get(0),
+            |r| r.get(0),
         )
         .optional()?
         .flatten();
@@ -343,76 +306,144 @@ fn with_secret_values_authority<T>(
             "secret master key conflicts with the embedded legacy key"
         );
     }
-    // Retain legacy conflict detection without invoking persistence helpers
-    // that initialize a database or write migrations while authority is held.
-    let legacy_path = persistence::sqlite_path(root);
-    let legacy = if legacy_path.try_exists()? {
-        let conn =
-            Connection::open_with_flags(legacy_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-        conn.busy_timeout(std::time::Duration::ZERO)?;
-        Some(conn)
-    } else {
-        None
-    };
-    // Core owns this same legacy database. Do not acquire another Core writer
-    // transaction here: the callback must obtain its own native worker/Core
-    // authority, and a second connection would self-conflict. Legacy key rows
-    // are migration conflict diagnostics, not the canonical issuer record.
-    if let Some(legacy) = &legacy {
-        let value: Option<String> = legacy
-            .query_row(
-                "SELECT kv_value FROM ctox_kv_store WHERE kv_key = ?1",
-                [MASTER_KEY_STORAGE_KEY],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if let Some(value) = value {
-            anyhow::ensure!(
-                value.trim() == raw.trim(),
-                "secret master key conflicts with the legacy runtime key"
-            );
-        }
-    }
+    let key = decode_master_key(raw, "failed to decode current secret master key")?;
     let mut revisions = Vec::with_capacity(keys.len());
-    let values = keys.iter().map(|(scope, name)| {
-        let (nonce, ciphertext): (String, String) = tx.query_row(
-            "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2",
-            params![scope, name], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional()?.context("current secret not found")?;
+    let mut values = Vec::with_capacity(keys.len());
+    for (scope, name) in keys {
+        let(nonce,ciphertext):(String,String)=conn.query_row("SELECT nonce_b64,ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",params![scope,name],|r|Ok((r.get(0)?,r.get(1)?))).optional()?.context("current secret not found")?;
+        values.push(decrypt_secret_value(&key, &nonce, &ciphertext)?);
         revisions.push(json!([scope, name, nonce, ciphertext]));
-        decrypt_secret_value(&key, &nonce, &ciphertext)
-    }).collect::<Result<Vec<_>>>()?;
-    if !publication {
-        // A protected key replacement concurrent with the encrypted read must
-        // fail closed, even if both generations happen to decrypt this record.
-        let mut after = Zeroizing::new(String::new());
-        fs::File::open(master_key_path(root))?
-            .take(129)
-            .read_to_string(&mut after)?;
-        anyhow::ensure!(
-            after.as_str() == raw.as_str(),
-            "secret master key changed during snapshot"
-        );
     }
     let fingerprint = format!(
         "sha256:{:x}",
         Sha256::digest(serde_json::to_vec(&revisions)?)
     );
-    if !publication {
-        // Preparation needs the decrypted tuple, not a retained encrypted-store
-        // read lock. Also permits rotation on legacy DELETE-journal stores.
-        drop(legacy);
-        drop(tx);
-        drop(conn);
-    }
-    let borrowed = values
+    Ok((values, fingerprint))
+}
+
+fn with_owner_secret_snapshot<T>(
+    root: &Path,
+    keys: &[(&str, &str)],
+    apply: impl FnOnce(&[&[u8]], &str) -> Result<T>,
+) -> Result<T> {
+    persistence::require_sync_owner_context()?;
+    let raw = current_protected_key(root)?;
+    let key_check = raw.clone();
+    let keys = keys
         .iter()
-        .map(|value| value.as_slice())
+        .map(|(s, n)| (s.to_string(), n.to_string()))
         .collect::<Vec<_>>();
-    let result = apply(&borrowed, &fingerprint);
-    if let Some(timing) = &timing {
-        timing.finish(result.is_ok());
+    let (values, fingerprint) = secret_owner(root)?.read_blocking(move |conn| {
+        current_issuer_rows(conn, &keys, &raw)
+            .map_err(|_| ctox_store::StoreError::Invalid("secret snapshot unavailable".into()))
+    })?;
+    let mut after = Zeroizing::new(String::new());
+    fs::File::open(master_key_path(root))?
+        .take(129)
+        .read_to_string(&mut after)?;
+    anyhow::ensure!(
+        after.as_str() == key_check.as_str(),
+        "secret master key changed during snapshot"
+    );
+    let borrowed = values.iter().map(|v| v.as_slice()).collect::<Vec<_>>();
+    apply(&borrowed, &fingerprint)
+}
+
+fn with_secret_values_authority<T>(
+    root: &Path,
+    keys: &[(&str, &str)],
+    publication: bool,
+    apply: impl FnOnce(&[&[u8]], &str) -> Result<T>,
+) -> Result<T> {
+    persistence::require_sync_owner_context()?;
+    anyhow::ensure!(
+        !keys.is_empty() && keys.len() <= 8,
+        "invalid publication secret tuple"
+    );
+    if !publication {
+        return with_owner_secret_snapshot(root, keys, apply);
     }
+    let owner = secret_owner(root)?;
+    let timing = crate::authority_fence_metrics::FenceTiming::new(
+        crate::authority_fence_metrics::Category::IssuerPublication,
+    );
+    let result = (|| {
+        let issuer = timing.stage(crate::authority_fence_metrics::Stage::Issuer);
+        let master = master_key_guard(root);
+        let _master = master
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("secret master-key authority is unavailable"))?;
+        issuer.acquired();
+        // Protected-key filesystem work and the legacy Core diagnostic precede
+        // Secrets admission. Master authority remains held until actual release.
+        let raw = current_protected_key(root)?;
+        let keys = keys
+            .iter()
+            .map(|(s, n)| (s.to_string(), n.to_string()))
+            .collect::<Vec<_>>();
+        let encrypted = timing.stage(crate::authority_fence_metrics::Stage::EncryptedStore);
+        let (prepared, receive) = std::sync::mpsc::sync_channel(1);
+        let (finish, finished) = std::sync::mpsc::sync_channel(1);
+        let (handle, _reservation) = owner.submit_publication(move |tx| {
+            let values = current_issuer_rows(tx, &keys, &raw);
+            let valid = values.is_ok();
+            prepared
+                .try_send(values)
+                .map_err(|_| ctox_store::StoreError::Cancelled)?;
+            if !valid {
+                return Err(ctox_store::StoreError::Invalid(
+                    "current issuer unavailable".into(),
+                ));
+            }
+            // Specialized issuer reservation: execute no external callback or
+            // I/O on this writer. Keep its transaction until the caller's one
+            // deadline-bounded publication finishes, including error/unwind.
+            match finished.recv() {
+                Ok(true) => Ok(()),
+                _ => Err(ctox_store::StoreError::Cancelled),
+            }
+        })?;
+        let (values, fingerprint) = match receive.recv() {
+            Ok(Ok(value)) => value,
+            Ok(Err(error)) => {
+                let _ = handle.blocking_wait();
+                return Err(error);
+            }
+            Err(_) => {
+                handle.blocking_wait()?;
+                anyhow::bail!("secret publication owner closed")
+            }
+        };
+        encrypted.acquired();
+        struct Complete(Option<std::sync::mpsc::SyncSender<bool>>);
+        impl Complete {
+            fn finish(mut self, ok: bool) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.try_send(ok);
+                }
+            }
+        }
+        impl Drop for Complete {
+            fn drop(&mut self) {
+                if let Some(sender) = self.0.take() {
+                    let _ = sender.try_send(false);
+                }
+            }
+        }
+        let complete = Complete(Some(finish));
+        let borrowed = values.iter().map(|v| v.as_slice()).collect::<Vec<_>>();
+        // Borrowed native policy/Core/publication callbacks stay on their
+        // original admitted worker; no unsafe lifetime or second SQLite open.
+        let result = apply(&borrowed, &fingerprint);
+        complete.finish(result.is_ok());
+        let released = handle.blocking_wait();
+        if result.is_ok() {
+            released?;
+        }
+        result
+    })();
+    // Report only after both issuer and real SQLite reservation have released.
+    timing.finish(result.is_ok());
     result
 }
 
@@ -433,28 +464,24 @@ pub fn read_secret_values(root: &Path, keys: &[(&str, &str)]) -> Result<Vec<Stri
     if keys.is_empty() {
         return Ok(Vec::new());
     }
-    let (key_bytes, _) = load_existing_secret_master_key(root)?;
-    let mut conn = open_secret_db(root)?;
-    let tx = conn.transaction()?;
-    let mut values = Vec::with_capacity(keys.len());
-    for (scope, name) in keys {
-        let (nonce_b64, ciphertext_b64): (String, String) = tx
-            .query_row(
-                "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2 LIMIT 1",
-                params![scope, name],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?
-            .context("secret not found")?;
-        let value = decrypt_secret_value(&key_bytes, &nonce_b64, &ciphertext_b64)?;
-        values.push(
-            std::str::from_utf8(&value)
+    persistence::require_sync_owner_context()?;
+    let (key, _) = load_existing_secret_master_key(root)?;
+    let keys = keys
+        .iter()
+        .map(|(s, n)| (s.to_string(), n.to_string()))
+        .collect::<Vec<_>>();
+    let records=secret_owner(root)?.read_blocking(move|conn|{
+        keys.iter().map(|(scope,name)|Ok(conn.query_row("SELECT nonce_b64,ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",params![scope,name],|r|Ok((Zeroizing::new(r.get::<_,String>(0)?),Zeroizing::new(r.get::<_,String>(1)?))))?)).collect::<std::result::Result<Vec<_>,ctox_store::StoreError>>()
+    })?;
+    records
+        .into_iter()
+        .map(|(nonce, ciphertext)| {
+            let value = decrypt_secret_value(&key, &nonce, &ciphertext)?;
+            Ok(std::str::from_utf8(&value)
                 .context("secret value is not valid UTF-8")?
-                .to_owned(),
-        );
-    }
-    tx.commit()?;
-    Ok(values)
+                .to_owned())
+        })
+        .collect()
 }
 
 /// Encrypts a credential tuple first and commits every record in one SQLite
@@ -481,71 +508,53 @@ fn mutate_secret_records(
     records: &[SecretRecordWrite<'_>],
     deletes: &[(&str, &str)],
 ) -> Result<bool> {
-    let (key_bytes, _) = ensure_secret_master_key(root)?;
-    let encrypted = records
+    persistence::require_sync_owner_context()?;
+    let (key, _) = ensure_secret_master_key(root)?;
+    // Encrypt/serialize before entering the owner's write transaction.
+    let records = records
         .iter()
-        .map(|record| {
+        .map(|r| {
             Ok((
-                record,
-                encrypt_secret_value(&key_bytes, record.value.as_bytes())?,
-                serde_json::to_string(&record.metadata)?,
+                r.scope.to_owned(),
+                r.name.to_owned(),
+                r.description.map(str::to_owned),
+                serde_json::to_string(&r.metadata)?,
+                encrypt_secret_value(&key, r.value.as_bytes())?,
             ))
         })
         .collect::<Result<Vec<_>>>()?;
-    let mut conn = open_secret_db(root)?;
-    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    for &(scope, name, expected) in guards {
-        let current: Option<(String, String)> = tx.query_row(
-            "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",
-            params![scope, name],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional()?;
-        let current = current
-            .map(|(nonce, ciphertext)| {
-                let value = decrypt_secret_value(&key_bytes, &nonce, &ciphertext)?;
-                Ok::<_, anyhow::Error>(std::str::from_utf8(&value)?.to_owned())
-            })
-            .transpose()?;
-        if current.as_deref() != expected {
-            return Ok(false);
-        }
-    }
-    for (scope, name) in deletes {
-        tx.execute(
-            "DELETE FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",
-            params![scope, name],
-        )?;
-    }
+    let guards = guards
+        .iter()
+        .map(|(s, n, v)| {
+            (
+                s.to_string(),
+                n.to_string(),
+                v.map(|v| Zeroizing::new(v.to_owned())),
+            )
+        })
+        .collect::<Vec<_>>();
+    let deletes = deletes
+        .iter()
+        .map(|(s, n)| (s.to_string(), n.to_string()))
+        .collect::<Vec<_>>();
     let now = now_iso_string();
-    for (record, encrypted, metadata_json) in encrypted {
-        let secret_id = format!("secret:{}:{}", record.scope, stable_digest(record.name));
-        tx.execute(
-            r#"
-            INSERT INTO ctox_secret_records (
-                secret_id, scope, secret_name, description, metadata_json,
-                nonce_b64, ciphertext_b64, created_at, updated_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
-            ON CONFLICT(scope, secret_name) DO UPDATE SET
-                description=excluded.description,
-                metadata_json=excluded.metadata_json,
-                nonce_b64=excluded.nonce_b64,
-                ciphertext_b64=excluded.ciphertext_b64,
-                updated_at=excluded.updated_at
-            "#,
-            params![
-                secret_id,
-                record.scope,
-                record.name,
-                record.description,
-                metadata_json,
-                encrypted.nonce_b64,
-                encrypted.ciphertext_b64,
-                now,
-            ],
-        )?;
+    let changed = secret_owner(root)?.write_blocking(move|tx|{
+        for(scope,name,expected)in guards {
+            let current:Option<(String,String)>=tx.query_row("SELECT nonce_b64,ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",params![scope,name],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+            let current=current.map(|(n,c)|decrypt_secret_value(&key,&n,&c).map_err(|_|ctox_store::StoreError::Invalid("secret compare decryption failed".into()))).transpose()?;
+            let current=current.as_ref().map(|v|std::str::from_utf8(v).map_err(|_|ctox_store::StoreError::Invalid("secret compare encoding failed".into()))).transpose()?;
+            if current!=expected.as_deref().map(String::as_str) {return Ok(false)}
+        }
+        for(scope,name)in deletes {tx.execute("DELETE FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",params![scope,name])?;}
+        for(scope,name,description,metadata,encrypted)in records {
+            tx.execute("INSERT INTO ctox_secret_records (secret_id,scope,secret_name,description,metadata_json,nonce_b64,ciphertext_b64,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8) ON CONFLICT(scope,secret_name) DO UPDATE SET description=excluded.description,metadata_json=excluded.metadata_json,nonce_b64=excluded.nonce_b64,ciphertext_b64=excluded.ciphertext_b64,updated_at=excluded.updated_at",params![format!("secret:{}:{}",scope,stable_digest(&name)),scope,name,description,metadata,encrypted.nonce_b64,encrypted.ciphertext_b64,now])?;
+        }
+        Ok(true)
+    })?;
+    if changed {
+        crate::business_os::browser_bootstrap::invalidate(root);
     }
-    tx.commit()?;
-    Ok(true)
+    Ok(changed)
 }
 
 /// Deletes a credential tuple in one SQLite transaction. This is used after
@@ -556,17 +565,23 @@ pub fn delete_secret_records(root: &Path, keys: &[(&str, &str)]) -> Result<usize
     if keys.is_empty() {
         return Ok(0);
     }
-    let mut conn = open_secret_db(root)?;
-    ensure_secret_schema(&conn)?;
-    let tx = conn.transaction()?;
-    let mut deleted = 0usize;
-    for (scope, name) in keys {
-        deleted = deleted.saturating_add(tx.execute(
-            "DELETE FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2",
-            params![scope, name],
-        )?);
+    let keys = keys
+        .iter()
+        .map(|(s, n)| (s.to_string(), n.to_string()))
+        .collect::<Vec<_>>();
+    let deleted = secret_owner(root)?.write_blocking(move |tx| {
+        let mut deleted = 0usize;
+        for (scope, name) in keys {
+            deleted = deleted.saturating_add(tx.execute(
+                "DELETE FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",
+                params![scope, name],
+            )?);
+        }
+        Ok(deleted)
+    })?;
+    if deleted > 0 {
+        crate::business_os::browser_bootstrap::invalidate(root);
     }
-    tx.commit()?;
     Ok(deleted)
 }
 
@@ -591,28 +606,15 @@ pub(crate) fn delete_secret_records_if_versions(
     root: &Path,
     keys: &[(String, String, String)],
 ) -> Result<()> {
-    let mut conn = open_secret_db(root)?;
-    ensure_secret_schema(&conn)?;
-    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-    for (scope, name, expected) in keys {
-        let record: Option<(String,String)> = tx.query_row(
-            "SELECT nonce_b64,ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",
-            params![scope,name], |row| Ok((row.get(0)?,row.get(1)?)),
-        ).optional()?;
-        if let Some((nonce, ciphertext)) = record {
-            anyhow::ensure!(
-                stable_digest(&format!("{nonce}:{ciphertext}")) == *expected,
-                "provider credential generation changed; reconciliation required"
-            );
+    let keys = keys.to_vec();
+    secret_owner(root)?.write_blocking(move|tx|{
+        for(scope,name,expected)in &keys {
+            let row:Option<(String,String)>=tx.query_row("SELECT nonce_b64,ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",params![scope,name],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
+            if let Some((n,c))=row {if stable_digest(&format!("{n}:{c}"))!=*expected {return Err(ctox_store::StoreError::Invalid("provider credential generation changed; reconciliation required".into()))}}
         }
-    }
-    for (scope, name, _) in keys {
-        tx.execute(
-            "DELETE FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",
-            params![scope, name],
-        )?;
-    }
-    tx.commit()?;
+        for(scope,name,_)in keys {tx.execute("DELETE FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",params![scope,name])?;}
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -624,26 +626,14 @@ pub(crate) fn secret_record_content_version(
     scope: &str,
     name: &str,
 ) -> Result<Option<String>> {
-    let path = secret_store_path(root);
-    if !path.is_file() {
+    if !secret_store_path(root).is_file() {
         return Ok(None);
     }
-    let conn = Connection::open_with_flags(
-        &path,
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    // This optional cache-coherence probe also runs under the cache lock.
-    // A busy store must bypass caching without delaying unrelated roots for
-    // the ordinary authoritative Secret Store read's full busy timeout.
-    conn.busy_timeout(std::time::Duration::from_millis(100))?;
-    let protected_record: Option<(String, String)> =
-        rusqlite::OptionalExtension::optional(conn.query_row(
-            "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records
-             WHERE scope = ?1 AND secret_name = ?2",
-            params![scope, name],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ))?;
-    Ok(protected_record.map(|(nonce, ciphertext)| stable_digest(&format!("{nonce}:{ciphertext}"))))
+    let (scope, name) = (scope.to_owned(), name.to_owned());
+    let record=secret_owner(root)?.read_blocking(move|conn|Ok(conn.query_row("SELECT nonce_b64,ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",params![scope,name],|r|Ok((Zeroizing::new(r.get::<_,String>(0)?),Zeroizing::new(r.get::<_,String>(1)?)))).optional()?))?;
+    Ok(record.map(|(nonce, ciphertext)| {
+        stable_digest(&format!("{}:{}", nonce.as_str(), ciphertext.as_str()))
+    }))
 }
 
 /// Atomically create an encrypted record without ever replacing its existing
@@ -656,28 +646,13 @@ pub(crate) fn create_secret_record_if_absent(
     value: &str,
     metadata: Value,
 ) -> Result<bool> {
-    let conn = open_secret_db(root)?;
-    ensure_secret_schema(&conn)?;
-    let (key_bytes, _) = ensure_secret_master_key(root)?;
-    let encrypted = encrypt_secret_value(&key_bytes, value.as_bytes())?;
+    persistence::require_sync_owner_context()?;
+    let (key, _) = ensure_secret_master_key(root)?;
+    let encrypted = encrypt_secret_value(&key, value.as_bytes())?;
+    let metadata = serde_json::to_string(&metadata)?;
+    let (scope, name) = (scope.to_owned(), name.to_owned());
     let now = now_iso_string();
-    let secret_id = format!("secret:{}:{}", scope, stable_digest(name));
-    Ok(conn.execute(
-        "INSERT INTO ctox_secret_records
-         (secret_id, scope, secret_name, description, metadata_json,
-          nonce_b64, ciphertext_b64, created_at, updated_at)
-         VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?7)
-         ON CONFLICT(scope, secret_name) DO NOTHING",
-        params![
-            secret_id,
-            scope,
-            name,
-            serde_json::to_string(&metadata)?,
-            encrypted.nonce_b64,
-            encrypted.ciphertext_b64,
-            now
-        ],
-    )? == 1)
+    Ok(secret_owner(root)?.write_blocking(move|tx|Ok(tx.execute("INSERT INTO ctox_secret_records (secret_id,scope,secret_name,description,metadata_json,nonce_b64,ciphertext_b64,created_at,updated_at) VALUES(?1,?2,?3,NULL,?4,?5,?6,?7,?7) ON CONFLICT(scope,secret_name) DO NOTHING",params![format!("secret:{}:{}",scope,stable_digest(&name)),scope,name,metadata,encrypted.nonce_b64,encrypted.ciphertext_b64,now])?==1))?)
 }
 
 pub fn delete_secret_record(root: &Path, scope: &str, name: &str) -> Result<()> {
@@ -1241,15 +1216,44 @@ fn looks_like_filesystem_path_value(value: &str) -> bool {
         || trimmed.starts_with("../")
 }
 
+fn secret_owner(root: &Path) -> Result<crate::lcm::owner_adapter::OwnerAdapter> {
+    persistence::require_sync_owner_context()?;
+    Ok(crate::lcm::owner_adapter::OwnerAdapter::for_path(
+        &resolve_db_path(root),
+    )?)
+}
+fn secret_key_row(root: &Path) -> Result<Option<String>> {
+    Ok(secret_owner(root)?.read_blocking(|conn| {
+        Ok(conn
+            .query_row(
+                "SELECT value FROM ctox_secret_kv WHERE key=?1",
+                [MASTER_KEY_STORAGE_KEY],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten())
+    })?)
+}
+fn clear_secret_key_row(root: &Path) -> Result<()> {
+    secret_owner(root)?.write_blocking(|tx| {
+        tx.execute(
+            "DELETE FROM ctox_secret_kv WHERE key=?1",
+            [MASTER_KEY_STORAGE_KEY],
+        )?;
+        Ok(())
+    })?;
+    Ok(())
+}
+
 pub fn secret_exists(root: &Path, scope: &str, name: &str) -> Result<bool> {
-    let conn = open_secret_db(root)?;
-    ensure_secret_schema(&conn)?;
-    let exists = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2)",
-        params![scope, name],
-        |row| row.get::<_, i64>(0),
-    )?;
-    Ok(exists != 0)
+    let (scope, name) = (scope.to_owned(), name.to_owned());
+    Ok(secret_owner(root)?.read_blocking(move |conn| {
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2)",
+            params![scope, name],
+            |r| r.get::<_, bool>(0),
+        )?)
+    })?)
 }
 
 pub(crate) fn put_secret(
@@ -1260,71 +1264,29 @@ pub(crate) fn put_secret(
     description: Option<String>,
     metadata: Value,
 ) -> Result<SecretRecordView> {
-    let conn = open_secret_db(root)?;
-    ensure_secret_schema(&conn)?;
-    let (key_bytes, _) = ensure_secret_master_key(root)?;
-    let encrypted = encrypt_secret_value(&key_bytes, value.as_bytes())?;
-    let now = now_iso_string();
-    let secret_id = format!("secret:{}:{}", scope, stable_digest(name));
-    conn.execute(
-        r#"
-        INSERT INTO ctox_secret_records (
-            secret_id, scope, secret_name, description, metadata_json,
-            nonce_b64, ciphertext_b64, created_at, updated_at
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
-        ON CONFLICT(scope, secret_name) DO UPDATE SET
-            description=excluded.description,
-            metadata_json=excluded.metadata_json,
-            nonce_b64=excluded.nonce_b64,
-            ciphertext_b64=excluded.ciphertext_b64,
-            updated_at=excluded.updated_at
-        "#,
-        params![
-            secret_id,
+    write_secret_records(
+        root,
+        &[SecretRecordWrite {
             scope,
             name,
-            description,
-            serde_json::to_string(&metadata)?,
-            encrypted.nonce_b64,
-            encrypted.ciphertext_b64,
-            now,
-        ],
+            value,
+            description: description.as_deref(),
+            metadata,
+        }],
     )?;
     load_secret_record(root, scope, name)?.context("secret metadata vanished after write")
 }
 
 fn list_secrets(root: &Path, scope: Option<&str>) -> Result<Vec<SecretRecordView>> {
-    let conn = open_secret_db(root)?;
-    ensure_secret_schema(&conn)?;
-    let mut statement = conn.prepare(
-        r#"
-        SELECT secret_id, scope, secret_name, description, metadata_json, created_at, updated_at
-        FROM ctox_secret_records
-        WHERE (?1 IS NULL OR scope = ?1)
-        ORDER BY updated_at DESC
-        "#,
-    )?;
-    let rows = statement.query_map(params![scope], map_secret_record_row)?;
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(anyhow::Error::from)
+    let scope = scope.map(str::to_owned);
+    Ok(secret_owner(root)?.read_blocking(move|conn|{
+        Ok(conn.prepare("SELECT secret_id,scope,secret_name,description,metadata_json,created_at,updated_at FROM ctox_secret_records WHERE (?1 IS NULL OR scope=?1) ORDER BY updated_at DESC")?.query_map([scope],map_secret_record_row)?.collect::<rusqlite::Result<Vec<_>>>()?)
+    })?)
 }
 
 fn load_secret_record(root: &Path, scope: &str, name: &str) -> Result<Option<SecretRecordView>> {
-    let conn = open_secret_db(root)?;
-    ensure_secret_schema(&conn)?;
-    let record = conn
-        .query_row(
-            r#"
-            SELECT secret_id, scope, secret_name, description, metadata_json, created_at, updated_at
-            FROM ctox_secret_records
-            WHERE scope = ?1 AND secret_name = ?2
-            LIMIT 1
-            "#,
-            params![scope, name],
-            map_secret_record_row,
-        )
-        .optional()?;
-    Ok(record)
+    let (scope, name) = (scope.to_owned(), name.to_owned());
+    Ok(secret_owner(root)?.read_blocking(move|conn|Ok(conn.query_row("SELECT secret_id,scope,secret_name,description,metadata_json,created_at,updated_at FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2 LIMIT 1",params![scope,name],map_secret_record_row).optional()?))?)
 }
 
 pub(crate) fn get_secret_value(root: &Path, scope: &str, name: &str) -> Result<String> {
@@ -1357,46 +1319,28 @@ pub fn read_secret_value_optional(
     scope: &str,
     name: &str,
 ) -> std::result::Result<Option<String>, SecretReadError> {
-    let conn = open_secret_db(root).map_err(|_| SecretReadError::Unavailable)?;
-    ensure_secret_schema(&conn).map_err(|_| SecretReadError::Unavailable)?;
-    let record: Option<(String, String)> = conn
-        .query_row(
-            r#"
-            SELECT nonce_b64, ciphertext_b64
-            FROM ctox_secret_records
-            WHERE scope = ?1 AND secret_name = ?2
-            LIMIT 1
-            "#,
-            params![scope, name],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()
-        .map_err(|_| SecretReadError::Unavailable)?;
-    let Some((nonce_b64, ciphertext_b64)) = record else {
+    let (scope, name) = (scope.to_owned(), name.to_owned());
+    let record=secret_owner(root).map_err(|_|SecretReadError::Unavailable)?.read_blocking(move|conn|Ok(conn.query_row("SELECT nonce_b64,ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name=?2",params![scope,name],|r|Ok((Zeroizing::new(r.get::<_,String>(0)?),Zeroizing::new(r.get::<_,String>(1)?)))).optional()?)).map_err(|_|SecretReadError::Unavailable)?;
+    let Some((nonce, ciphertext)) = record else {
         return Ok(None);
     };
-    let (key_bytes, _) =
+    let (key, _) =
         load_existing_secret_master_key(root).map_err(|_| SecretReadError::Unavailable)?;
-    let value = decrypt_secret_value(&key_bytes, &nonce_b64, &ciphertext_b64)
+    let value = decrypt_secret_value(&key, &nonce, &ciphertext)
         .map_err(|_| SecretReadError::DecryptionFailed)?;
     std::str::from_utf8(&value)
-        .map(|value| Some(value.to_owned()))
+        .map(|v| Some(v.to_owned()))
         .map_err(|_| SecretReadError::InvalidEncoding)
 }
 
 fn delete_secret(root: &Path, scope: &str, name: &str) -> Result<()> {
-    let conn = open_secret_db(root)?;
-    ensure_secret_schema(&conn)?;
-    conn.execute(
-        "DELETE FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2",
-        params![scope, name],
-    )?;
+    delete_secret_records(root, &[(scope, name)])?;
     Ok(())
 }
 
 /// Canonical native-only encrypted-store path; opening it does not confer authority.
 pub(crate) fn resolve_db_path(root: &Path) -> PathBuf {
-    root.join("runtime").join(SECRET_STORE_FILE)
+    crate::paths::secrets_db(root)
 }
 
 /// Tracks secret-DB paths whose schema has already been verified in this
@@ -1410,6 +1354,435 @@ fn initialized_secret_paths() -> &'static Mutex<HashSet<PathBuf>> {
     INITIALIZED.get_or_init(|| Mutex::new(HashSet::new()))
 }
 
+/// Low-level encrypted-row seam for the separately owned Secrets file.
+/// This is NOT issuer authorization: publication must retain the master-key
+/// lock and current-key checks of with_secret_values_authority. That synchronous
+/// cross-owner callback is migrated separately, never replaced by a snapshot.
+#[derive(Clone)]
+pub(crate) struct SecretStore {
+    owner: crate::lcm::owner_adapter::OwnerAdapter,
+    root: PathBuf,
+}
+
+/// Opaque encrypted snapshot, never a publication authorization token.
+/// No Debug implementation: row material must not enter diagnostics.
+pub(crate) struct EncryptedIssuerRow {
+    pub(crate) nonce: Zeroizing<String>,
+    pub(crate) ciphertext: Zeroizing<String>,
+}
+
+impl SecretStore {
+    /// One persisted identity shared by instance packets and the native host.
+    /// Only an absent row permits creation; corrupt/unreadable records fail
+    /// closed. The unique encrypted reference arbitrates concurrent creators.
+    pub(crate) async fn instance_signing_identity(
+        &self,
+    ) -> Result<std::sync::Arc<ctox_sync::authority::auth::SigningIdentity>> {
+        let retained = self.clone();
+        persistence::run_core_sync(move || {
+            let _retained = &retained;
+            let root = &retained.root;
+            let (scope, name) = crate::sync_host::SIGNING_IDENTITY_SECRET_KEY;
+            if let Some(encoded) = read_secret_value_optional(root, scope, name)? {
+                let encoded = Zeroizing::new(encoded);
+                return Ok(std::sync::Arc::new(
+                    crate::sync_host::signing_identity_from_record(encoded.as_bytes())?,
+                ));
+            }
+            use ctox_sync::authority::auth::SigningIdentity;
+            let bytes = Zeroizing::new(SigningIdentity::generate_pkcs8()?);
+            let identity = std::sync::Arc::new(SigningIdentity::from_pkcs8(&bytes)?);
+            let public = identity.public_identity();
+            let encoded_key = Zeroizing::new(BASE64_STANDARD.encode(bytes.as_slice()));
+            #[derive(Serialize)]
+            struct Record<'a> {
+                identity: &'a str,
+                pkcs8: &'a str,
+            }
+            let record = Zeroizing::new(serde_json::to_string(&Record {
+                identity: &public,
+                pkcs8: encoded_key.as_str(),
+            })?);
+            if create_secret_record_if_absent(
+                root,
+                scope,
+                name,
+                record.as_str(),
+                serde_json::json!({"source":"instance-native-owner","version":1}),
+            )? {
+                return Ok(identity);
+            }
+            // Another admitted creator won: borrow its stored identity, never
+            // return a candidate which was not committed to the SecretStore.
+            let encoded = Zeroizing::new(read_secret_value(root, scope, name)?);
+            Ok(std::sync::Arc::new(
+                crate::sync_host::signing_identity_from_record(encoded.as_bytes())?,
+            ))
+        })
+        .await
+    }
+
+    pub(crate) async fn attach(
+        root: &Path,
+        writer: ctox_store::writer::WriterHandle,
+        readers: ctox_store::read_pool::ReadPool,
+    ) -> std::result::Result<Self, ctox_store::StoreError> {
+        #[cfg(unix)]
+        let permission_path = writer.db_id().path().to_path_buf();
+        let owner = crate::lcm::owner_adapter::OwnerAdapter::attach(
+            &resolve_db_path(root),
+            writer,
+            readers,
+        )
+        .await?;
+        #[cfg(unix)]
+        {
+            let path = permission_path;
+            tokio::task::spawn_blocking(move || -> std::io::Result<()> {
+                use std::os::unix::fs::PermissionsExt;
+                fs::set_permissions(
+                    path.parent()
+                        .ok_or_else(|| std::io::Error::other("secret parent missing"))?,
+                    fs::Permissions::from_mode(0o700),
+                )?;
+                fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+            })
+            .await
+            .map_err(|_| {
+                ctox_store::StoreError::Invalid("secret permissions worker failed".into())
+            })??;
+        }
+        Ok(Self {
+            owner,
+            root: root.to_path_buf(),
+        })
+    }
+
+    pub(crate) async fn migrate_legacy_from_core(&self) -> Result<()> {
+        let rows = persistence::read_core_snapshot(&self.root, read_legacy_secret_rows).await?;
+        self.owner.write(Default::default(),move|tx| {
+            let present:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM ctox_secret_records)",[],|r|r.get(0))?;
+            if present {return Ok(())}
+            for(id,scope,name,description,metadata,nonce,ciphertext,created,updated)in rows {
+                tx.execute("INSERT OR IGNORE INTO ctox_secret_records(secret_id,scope,secret_name,description,metadata_json,nonce_b64,ciphertext_b64,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)",params![id,scope,name,description,metadata,nonce,ciphertext,created,updated])?;
+            }
+            Ok(())
+        }).await?;
+        Ok(())
+    }
+
+    /// Current issuer re-read plus one bounded synchronous callback under the
+    /// existing Secrets writer. The master-key guard remains held through ack.
+    /// Callbacks must not await/reenter Secrets; other file owners retain the
+    /// existing issuer-before-Core lock order. Return no credentials
+    /// in diagnostics or receipts; this API never logs row/key material.
+    pub(crate) async fn with_current_values<T: Send + 'static>(
+        &self,
+        keys: Vec<(String, String)>,
+        apply: impl FnOnce(&[&[u8]], &str) -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let root = self.root.clone();
+        let retained = self.clone();
+        persistence::run_core_sync(move || {
+            let _retained = retained;
+            let borrowed = keys
+                .iter()
+                .map(|(s, n)| (s.as_str(), n.as_str()))
+                .collect::<Vec<_>>();
+            with_secret_values_authority(&root, &borrowed, true, apply)
+        })
+        .await
+    }
+
+    /// A preparatory snapshot only. Recheck inside the writer transaction;
+    /// protected-key authorization remains with with_secret_values_authority.
+    pub(crate) async fn encrypted_row(
+        &self,
+        scope: String,
+        name: String,
+    ) -> std::result::Result<Option<EncryptedIssuerRow>, ctox_store::StoreError> {
+        self.owner.read(ctox_store::JobOptions::default(), move |conn| {
+            Ok(conn.query_row(
+                "SELECT nonce_b64, ciphertext_b64 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2",
+                params![scope, name], |row| Ok(EncryptedIssuerRow {
+                    nonce: Zeroizing::new(row.get(0)?),
+                    ciphertext: Zeroizing::new(row.get(1)?),
+                }),
+            ).optional()?)
+        }).await
+    }
+
+    /// Compare and operate in ONE owner transaction. Never authorize a later
+    /// write from an earlier reader snapshot; errors contain no row material.
+    pub(crate) async fn with_matching_encrypted_row<T: Send + 'static>(
+        &self,
+        scope: String,
+        name: String,
+        nonce: Zeroizing<String>,
+        ciphertext: Zeroizing<String>,
+        apply: impl FnOnce(&rusqlite::Transaction<'_>) -> std::result::Result<T, ctox_store::StoreError>
+            + Send
+            + 'static,
+    ) -> std::result::Result<T, ctox_store::StoreError> {
+        self.owner.write(ctox_store::JobOptions::default(), move |tx| {
+            let matches: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM ctox_secret_records WHERE scope = ?1 AND secret_name = ?2 AND nonce_b64 = ?3 AND ciphertext_b64 = ?4)",
+                params![scope, name, nonce.as_str(), ciphertext.as_str()], |row| row.get(0),
+            )?;
+            if !matches {
+                return Err(ctox_store::StoreError::Invalid("encrypted issuer row changed".into()));
+            }
+            apply(tx)
+        }).await
+    }
+}
+
+#[cfg(test)]
+mod owner_seam_tests {
+    use super::*;
+    use ctox_store::{
+        config::{AdmissionBudget, ConnectionConfig},
+        registry::Registry,
+        writer::WriterOptions,
+        DbId, JobOptions, WriteJob,
+    };
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn secret_owner_rejects_stale_issuer_without_side_effects() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = resolve_db_path(dir.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let writer = Registry.open(DbId::new(&path).unwrap(), WriterOptions {
+            configure: Some(Arc::new(|conn| {
+                ConnectionConfig::default().apply_writer(conn)?;
+                // Real encrypted-row schema; all material below is synthetic.
+                conn.execute_batch("CREATE TABLE ctox_secret_records (secret_id TEXT PRIMARY KEY, scope TEXT NOT NULL, secret_name TEXT NOT NULL, description TEXT, metadata_json TEXT NOT NULL, nonce_b64 TEXT NOT NULL, ciphertext_b64 TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(scope, secret_name)); CREATE TABLE publication (value INTEGER); INSERT INTO ctox_secret_records VALUES ('fixture', 'test', 'issuer', NULL, '{}', 'old-nonce', 'synthetic-ciphertext', '0', '0');")?;
+                Ok(())
+            })), ..WriterOptions::default()
+        }).unwrap();
+        writer.ready().await.unwrap();
+        let readers = ctox_store::read_pool::ReadPool::for_database(
+            writer.db_id(),
+            writer.generation(),
+            ConnectionConfig::default(),
+            AdmissionBudget::default(),
+        )
+        .await
+        .unwrap();
+        let store = SecretStore::attach(dir.path(), writer.clone(), readers.clone())
+            .await
+            .unwrap();
+        let stale = store
+            .encrypted_row("test".into(), "issuer".into())
+            .await
+            .unwrap()
+            .unwrap();
+        // A real writer commit rotates the issuer after the reader snapshot.
+        writer.submit(WriteJob::new(JobOptions::default(), |tx| {
+            tx.execute("UPDATE ctox_secret_records SET nonce_b64 = 'new-nonce' WHERE scope = 'test' AND secret_name = 'issuer'", [])?;
+            Ok(())
+        })).unwrap().await.unwrap();
+        let rejected = store
+            .with_matching_encrypted_row(
+                "test".into(),
+                "issuer".into(),
+                stale.nonce,
+                stale.ciphertext,
+                |tx| {
+                    tx.execute("INSERT INTO publication VALUES (99)", [])?;
+                    Ok(())
+                },
+            )
+            .await;
+        assert!(matches!(rejected, Err(ctox_store::StoreError::Invalid(_))));
+        // Matching row and publication operate in the same writer transaction.
+        let current = store
+            .encrypted_row("test".into(), "issuer".into())
+            .await
+            .unwrap()
+            .unwrap();
+        store
+            .with_matching_encrypted_row(
+                "test".into(),
+                "issuer".into(),
+                current.nonce,
+                current.ciphertext,
+                |tx| {
+                    tx.execute("INSERT INTO publication VALUES (73)", [])?;
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+        let values: Vec<i64> = writer
+            .submit(WriteJob::new(JobOptions::default(), |tx| {
+                Ok(tx
+                    .prepare("SELECT value FROM publication")?
+                    .query_map([], |r| r.get(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?)
+            }))
+            .unwrap()
+            .await
+            .unwrap();
+        assert_eq!(values, vec![73]);
+        readers.shutdown().await.unwrap();
+        writer.shutdown().await.unwrap();
+    }
+    #[tokio::test]
+    async fn issuer_current_values_and_metadata_share_injected_owners() -> Result<()> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let root = tempfile::tempdir()?;
+        let path = resolve_db_path(root.path());
+        anyhow::ensure!(
+            path.starts_with(root.path()),
+            "isolated secret owner fixture required"
+        );
+        std::fs::create_dir_all(path.parent().unwrap())?;
+        let (core_writer, core_readers) = ctox_store::testkit::StoreFixture::open(DbId::new(
+            persistence::sqlite_path(root.path()),
+        )?)
+        .await?
+        .into_parts();
+        let core = persistence::install_core_owner(root.path(), core_writer, core_readers).await?;
+        let writer=Registry.open(DbId::new(&path)?,WriterOptions{configure:Some(Arc::new(|conn|{
+            ConnectionConfig::default().apply_writer(conn)?;
+            ensure_secret_schema(conn).map_err(|_|ctox_store::StoreError::Invalid("secret fixture schema".into()))?;
+            conn.execute_batch("CREATE TEMP TABLE secret_owner_audit(k TEXT);CREATE TEMP TRIGGER secret_owner_insert AFTER INSERT ON ctox_secret_records BEGIN INSERT INTO secret_owner_audit VALUES(new.secret_name);END;")?;
+            Ok(())
+        })),..Default::default()})?;
+        writer.ready().await?;
+        let readers = ctox_store::read_pool::ReadPool::for_database(
+            writer.db_id(),
+            writer.generation(),
+            Default::default(),
+            Default::default(),
+        )
+        .await?;
+        let store = SecretStore::attach(root.path(), writer.clone(), readers.clone()).await?;
+        assert!(matches!(
+            read_secret_value_optional(root.path(), "test", "issuer"),
+            Err(SecretReadError::Unavailable)
+        ));
+        let path = root.path().to_path_buf();
+        let queued_writer = writer.clone();
+        persistence::run_core_sync(move|| {
+            write_secret_records(&path,&[
+                SecretRecordWrite{scope:"test",name:"issuer",value:"fixture-first",description:None,metadata:json!({})},
+                SecretRecordWrite{scope:"test",name:"refresh",value:"fixture-refresh",description:None,metadata:json!({})},
+                SecretRecordWrite{scope:"test",name:"probe-issuer",value:"fixture-probe",description:None,metadata:json!({})},
+            ])?;
+            let values=read_secret_values(&path,&[("test","issuer"),("test","refresh")])?;
+            assert!(values[0]=="fixture-first"&&values[1]=="fixture-refresh");
+            let version=secret_record_content_version(&path,"test","issuer")?.unwrap();
+            assert!(!compare_and_write_secret_records(&path,&[("test","issuer",Some("stale-fixture"))],&[],&[("test","refresh")])?);
+            assert!(secret_exists(&path,"test","refresh")?);
+            assert!(!create_secret_record_if_absent(&path,"test","issuer","must-not-win",json!({}))?);
+            assert!(create_secret_record_if_absent(&path,"test","new","fixture-new",json!({}))?);
+            assert!(list_secret_records(&path,Some("test"))?.iter().any(|r|r.secret_name=="issuer"));
+            assert!(compare_and_write_secret_records(&path,&[("test","issuer",Some("fixture-first"))],&[SecretRecordWrite{scope:"test",name:"issuer",value:"fixture-second",description:None,metadata:json!({})}],&[])?);
+            assert!(secret_record_content_version(&path,"test","issuer")?.unwrap()!=version);
+            assert!(delete_secret_records_if_versions(&path,&[("test".into(),"issuer".into(),version)]).is_err());
+            assert!(read_secret_value(&path,"test","issuer")?=="fixture-second");
+            assert!(delete_secret_records(&path,&[("test","new")])?==1);
+            assert!(read_secret_value_optional(&path,"test","new")?.is_none());
+            // Preparatory snapshot releases its reader and does not acquire
+            // master/publication authority around the borrowed callback.
+            with_secret_value_snapshot(&path,"test","refresh",|bytes| {
+                assert!(bytes==b"fixture-refresh");
+                let master=master_key_guard(&path);assert!(master.try_lock().is_ok());Ok(())
+            })?;
+            // Existing borrowed callers keep their lifetime/type contract, but
+            // the live writer owns the reservation through callback return.
+            let pending=with_current_secret_value(&path,"test","probe-issuer",|value| {
+                assert!(value==b"fixture-probe");
+                let busy=delete_secret_records(&path,&[("test","probe-issuer")]).unwrap_err();
+                assert!(matches!(busy.downcast_ref::<ctox_store::StoreError>(),Some(ctox_store::StoreError::Busy)),"reentrant mutation must fail before queueing behind its publication");
+                // Another owner command must remain queued through publication.
+                // This controlled delay is fault injection, not a latency test.
+                let (committed,signal)=std::sync::mpsc::sync_channel(1);
+                let ticket=queued_writer.submit(WriteJob::new(Default::default(),move|tx| {
+                    tx.execute("DELETE FROM ctox_secret_records WHERE scope='test' AND secret_name='probe-issuer'",[])?;
+                    let _=committed.try_send(());Ok(())
+                }))?;
+                assert!(matches!(signal.recv_timeout(std::time::Duration::from_millis(250)),Err(std::sync::mpsc::RecvTimeoutError::Timeout)),"issuer revocation ran before the publication callback returned");
+                persistence::store_text_value(&path,"publication-core",Some("bounded"))?;
+                Ok(ticket)
+            })?;
+            pending.blocking_wait()?;
+            assert!(persistence::load_text_value(&path,"publication-core")?.as_deref()==Some("bounded"));
+            assert!(read_secret_value_optional(&path,"test","probe-issuer")?.is_none());
+            Ok(())
+        }).await?;
+        let fired = Arc::new(AtomicBool::new(false));
+        let effect = fired.clone();
+        let path = root.path().to_path_buf();
+        store
+            .with_current_values(vec![("test".into(), "issuer".into())], move |values, _| {
+                assert!(values.len() == 1 && values[0] == b"fixture-second");
+                let master = master_key_guard(&path);
+                assert!(
+                    master.try_lock().is_err(),
+                    "master guard escaped the committing owner callback"
+                );
+                effect.store(true, Ordering::Release);
+                Ok(())
+            })
+            .await?;
+        assert!(fired.load(Ordering::Acquire));
+        fired.store(false, Ordering::Release);
+        let path = root.path().to_path_buf();
+        persistence::run_core_sync(move || delete_secret(&path, "test", "issuer")).await?;
+        let effect = fired.clone();
+        assert!(store
+            .with_current_values(vec![("test".into(), "issuer".into())], move |_, _| {
+                effect.store(true, Ordering::Release);
+                Ok(())
+            })
+            .await
+            .is_err());
+        assert!(
+            !fired.load(Ordering::Acquire),
+            "a removed issuer still authorized publication"
+        );
+        assert!(
+            writer
+                .submit(WriteJob::new(Default::default(), |tx| Ok(tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM secret_owner_audit WHERE k='issuer')",
+                    [],
+                    |r| r.get::<_, bool>(0)
+                )?)))?
+                .await?
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(resolve_db_path(root.path()))?
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+            assert_eq!(
+                fs::metadata(master_key_path(root.path()))?
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        readers.shutdown().await?;
+        writer.shutdown().await?;
+        core.shutdown().await?;
+        Ok(())
+    }
+}
+
+// Legacy direct-open path. Secrets-owned callers in this file go through the
+// injected owner (`secret_owner`); tests use this as fixture bootstrap. The
+// remaining live caller is `secret_requests` (agent secret requests), which
+// still opens its request table directly and must migrate onto the owner.
 pub(crate) fn open_secret_db(root: &Path) -> Result<Connection> {
     let db_path = resolve_db_path(root);
     if let Some(parent) = db_path.parent() {
@@ -1437,7 +1810,7 @@ pub(crate) fn open_secret_db(root: &Path) -> Result<Connection> {
 }
 
 fn master_key_path(root: &Path) -> PathBuf {
-    root.join("runtime").join(SECRET_MASTER_KEY_FILE)
+    crate::paths::runtime_dir(root).join(SECRET_MASTER_KEY_FILE)
 }
 
 fn persist_master_key_file(root: &Path, encoded: &str) -> Result<()> {
@@ -1498,6 +1871,18 @@ pub(crate) fn ensure_secret_schema(conn: &Connection) -> Result<()> {
             return Ok(());
         }
     }
+    initialize_owned_secret_schema(conn)?;
+    if let Some(path) = conn_path {
+        initialized_secret_paths()
+            .lock()
+            .unwrap_or_else(|err| err.into_inner())
+            .insert(path);
+    }
+    Ok(())
+}
+
+/// Composition-root initializer: no path cache may outlive an owner generation.
+pub(crate) fn initialize_owned_secret_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS ctox_secret_records (
@@ -1522,12 +1907,6 @@ pub(crate) fn ensure_secret_schema(conn: &Connection) -> Result<()> {
         );
         "#,
     )?;
-    if let Some(path) = conn_path {
-        initialized_secret_paths()
-            .lock()
-            .unwrap_or_else(|err| err.into_inner())
-            .insert(path);
-    }
     Ok(())
 }
 
@@ -1569,9 +1948,9 @@ fn resolve_secret_master_key(
     root: &Path,
     create_if_missing: bool,
 ) -> Result<(SecretMaterial, &'static str)> {
+    persistence::require_sync_owner_context()?;
     let guard = master_key_guard(root);
-    let _guard = guard.lock().unwrap_or_else(|error| error.into_inner());
-    let conn = open_secret_db(root)?;
+    let _guard = guard.try_lock().map_err(|_| ctox_store::StoreError::Busy)?;
     let key_path = master_key_path(root);
     if key_path.is_file() {
         #[cfg(unix)]
@@ -1580,23 +1959,12 @@ fn resolve_secret_master_key(
             fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600))?;
         }
         let raw = fs::read_to_string(&key_path).context("failed to read secret master key file")?;
-        if let Some(embedded) = conn
-            .query_row(
-                &format!("SELECT value FROM {SECRET_KV_TABLE} WHERE key = ?1"),
-                [MASTER_KEY_STORAGE_KEY],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten()
-        {
+        if let Some(embedded) = secret_key_row(root)? {
             anyhow::ensure!(
                 embedded.trim() == raw.trim(),
                 "secret master key file conflicts with the embedded legacy key"
             );
-            conn.execute(
-                &format!("DELETE FROM {SECRET_KV_TABLE} WHERE key = ?1"),
-                [MASTER_KEY_STORAGE_KEY],
-            )?;
+            clear_secret_key_row(root)?;
         }
         if let Some(legacy) = load_legacy_master_key(root)? {
             anyhow::ensure!(
@@ -1610,21 +1978,10 @@ fn resolve_secret_master_key(
             "protected_file",
         ));
     }
-    if let Some(raw) = conn
-        .query_row(
-            &format!("SELECT value FROM {SECRET_KV_TABLE} WHERE key = ?1"),
-            [MASTER_KEY_STORAGE_KEY],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()?
-        .flatten()
-    {
+    if let Some(raw) = secret_key_row(root)? {
         let key = decode_master_key(&raw, "failed to decode stored secret master key")?;
         persist_master_key_file(root, &raw)?;
-        conn.execute(
-            &format!("DELETE FROM {SECRET_KV_TABLE} WHERE key = ?1"),
-            [MASTER_KEY_STORAGE_KEY],
-        )?;
+        clear_secret_key_row(root)?;
         return Ok((key, "migrated_protected_file"));
     }
 
@@ -1648,39 +2005,32 @@ fn resolve_secret_master_key(
     Ok((key, "generated_protected_file"))
 }
 
-fn migrate_legacy_secret_store(root: &Path, target: &Connection) -> Result<()> {
-    let legacy_path = persistence::sqlite_path(root);
-    if legacy_path == resolve_db_path(root) || !legacy_path.is_file() {
-        return Ok(());
-    }
-    let has_rows = target
-        .query_row(
-            "SELECT EXISTS(SELECT 1 FROM ctox_secret_records LIMIT 1)",
-            [],
-            |row| row.get::<_, i64>(0),
-        )
-        .unwrap_or(0)
-        != 0;
-    if has_rows {
-        return Ok(());
-    }
-    let legacy = Connection::open(&legacy_path)
-        .with_context(|| format!("failed to open legacy secret db {}", legacy_path.display()))?;
-    legacy
-        .busy_timeout(persistence::sqlite_busy_timeout_duration())
-        .context("failed to configure legacy secret DB busy_timeout")?;
-    let table_exists = legacy
+type LegacySecretRow = (
+    String,
+    String,
+    String,
+    Option<String>,
+    String,
+    String,
+    String,
+    String,
+    String,
+);
+fn read_legacy_secret_rows(
+    conn: &Connection,
+) -> std::result::Result<Vec<LegacySecretRow>, ctox_store::StoreError> {
+    let table_exists = conn
         .query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ctox_secret_records')",
             [],
             |row| row.get::<_, i64>(0),
         )
-        .unwrap_or(0)
+        ?
         != 0;
     if !table_exists {
-        return Ok(());
+        return Ok(Vec::new());
     }
-    let mut stmt = legacy.prepare(
+    let mut stmt = conn.prepare(
         r#"
         SELECT secret_id, scope, secret_name, description, metadata_json,
                nonce_b64, ciphertext_b64, created_at, updated_at
@@ -1702,6 +2052,26 @@ fn migrate_legacy_secret_store(root: &Path, target: &Connection) -> Result<()> {
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+fn migrate_legacy_secret_store(root: &Path, target: &Connection) -> Result<()> {
+    let legacy_path = persistence::sqlite_path(root);
+    if legacy_path == resolve_db_path(root) || !legacy_path.is_file() {
+        return Ok(());
+    }
+    let has_rows = target
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM ctox_secret_records LIMIT 1)",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        != 0;
+    if has_rows {
+        return Ok(());
+    }
+    let rows = persistence::read_core_snapshot_blocking(root, read_legacy_secret_rows)?;
     for (
         secret_id,
         scope,
@@ -2043,35 +2413,13 @@ fn load_credentials_bulk(
     if names.is_empty() {
         return Ok(Vec::new());
     }
-    let conn = open_secret_db(root)?;
-    ensure_secret_schema(&conn)?;
-    let placeholders = (1..=names.len())
-        .map(|i| format!("?{}", i + 1))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let sql = format!(
-        "SELECT secret_name, nonce_b64, ciphertext_b64
-         FROM ctox_secret_records
-         WHERE scope = ?1 AND secret_name IN ({placeholders})"
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let mut params: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(names.len() + 1);
-    let scope: &str = CREDENTIAL_SCOPE;
-    params.push(&scope);
-    for name in names {
-        params.push(name);
-    }
-    let rows = stmt
-        .query_map(rusqlite::params_from_iter(params.iter().copied()), |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-            ))
-        })?
-        .filter_map(|res| res.ok())
-        .collect();
-    Ok(rows)
+    let names = names.to_vec();
+    Ok(secret_owner(root)?.read_blocking(move|conn|{
+        let placeholders=(1..=names.len()).map(|i|format!("?{}",i+1)).collect::<Vec<_>>().join(",");
+        let sql=format!("SELECT secret_name,nonce_b64,ciphertext_b64 FROM ctox_secret_records WHERE scope=?1 AND secret_name IN ({placeholders})");
+        let mut values=vec![CREDENTIAL_SCOPE];values.extend(names);
+        Ok(conn.prepare(&sql)?.query_map(rusqlite::params_from_iter(values),|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?.collect::<rusqlite::Result<Vec<_>>>()?)
+    })?)
 }
 
 #[cfg(test)]
@@ -2202,71 +2550,61 @@ mod tests {
 
     #[test]
     fn secret_store_encrypts_values_at_rest_and_round_trips() -> Result<()> {
-        let root = temp_root("roundtrip");
-        fs::create_dir_all(&root)?;
+        let fixture = std::sync::Arc::new(tempfile::tempdir()?);
+        let work = std::sync::Arc::clone(&fixture);
+        persistence::run_cli_owned(fixture.path(), move || {
+            let root = work.path().to_owned();
 
-        let record = put_secret(
-            &root,
-            "ticket:zammad",
-            "api-token",
-            "super-secret-token",
-            Some("Zammad API token".to_string()),
-            json!({"kind": "token"}),
-        )?;
-        assert_eq!(record.secret_name, "api-token");
-        assert!(secret_exists(&root, "ticket:zammad", "api-token")?);
+            let record = put_secret(
+                &root,
+                "ticket:zammad",
+                "api-token",
+                "super-secret-token",
+                Some("Zammad API token".to_string()),
+                json!({"kind": "token"}),
+            )?;
+            assert_eq!(record.secret_name, "api-token");
+            assert!(secret_exists(&root, "ticket:zammad", "api-token")?);
 
-        let plaintext = get_secret_value(&root, "ticket:zammad", "api-token")?;
-        assert_eq!(plaintext, "super-secret-token");
+            let plaintext = get_secret_value(&root, "ticket:zammad", "api-token")?;
+            assert_eq!(plaintext, "super-secret-token");
 
-        let db_path = resolve_db_path(&root);
-        let raw = fs::read(&db_path)?;
-        let raw_text = String::from_utf8_lossy(&raw);
-        assert!(!raw_text.contains("super-secret-token"));
-        let conn = Connection::open(&db_path)?;
-        let embedded_master_key = conn
-            .query_row(
-                &format!("SELECT value FROM {SECRET_KV_TABLE} WHERE key = ?1"),
-                [MASTER_KEY_STORAGE_KEY],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
-        assert!(embedded_master_key.is_none());
-        assert!(master_key_path(&root).is_file());
-        let raw_master_key = fs::read_to_string(master_key_path(&root))?;
-        conn.execute(
-            &format!(
-                "INSERT INTO {SECRET_KV_TABLE} (key, value) VALUES (?1, ?2) \
+            let db_path = resolve_db_path(&root);
+            let raw = fs::read(&db_path)?;
+            let raw_text = String::from_utf8_lossy(&raw);
+            assert!(!raw_text.contains("super-secret-token"));
+            let embedded_master_key = secret_key_row(&root)?;
+            assert!(embedded_master_key.is_none());
+            assert!(master_key_path(&root).is_file());
+            let raw_master_key = Zeroizing::new(fs::read_to_string(master_key_path(&root))?);
+            secret_owner(&root)?.write_blocking(move |conn| {
+                conn.execute(
+                    &format!(
+                        "INSERT INTO {SECRET_KV_TABLE} (key, value) VALUES (?1, ?2) \
                  ON CONFLICT(key) DO UPDATE SET value=excluded.value"
-            ),
-            params![MASTER_KEY_STORAGE_KEY, raw_master_key.trim()],
-        )?;
-        let _ = ensure_secret_master_key(&root)?;
-        let recovered_embedded_key = conn
-            .query_row(
-                &format!("SELECT value FROM {SECRET_KV_TABLE} WHERE key = ?1"),
-                [MASTER_KEY_STORAGE_KEY],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
-        assert!(recovered_embedded_key.is_none());
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            assert_eq!(fs::metadata(&db_path)?.permissions().mode() & 0o777, 0o600);
-            assert_eq!(
-                fs::metadata(master_key_path(&root))?.permissions().mode() & 0o777,
-                0o600
-            );
-        }
+                    ),
+                    params![MASTER_KEY_STORAGE_KEY, raw_master_key.trim()],
+                )?;
+                Ok(())
+            })?;
+            let _ = ensure_secret_master_key(&root)?;
+            let recovered_embedded_key = secret_key_row(&root)?;
+            assert!(recovered_embedded_key.is_none());
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt as _;
+                assert_eq!(fs::metadata(&db_path)?.permissions().mode() & 0o777, 0o600);
+                assert_eq!(
+                    fs::metadata(master_key_path(&root))?.permissions().mode() & 0o777,
+                    0o600
+                );
+            }
 
-        let records = list_secrets(&root, Some("ticket:zammad"))?;
-        assert_eq!(records.len(), 1);
+            let records = list_secrets(&root, Some("ticket:zammad"))?;
+            assert_eq!(records.len(), 1);
 
-        let _ = fs::remove_dir_all(&root);
-        Ok(())
+            Ok(())
+        })
     }
 
     #[test]

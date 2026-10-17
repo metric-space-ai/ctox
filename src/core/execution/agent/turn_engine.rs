@@ -93,7 +93,7 @@ impl CompactionGuardStatus {
 }
 
 pub fn build_turn_plan(
-    engine: &lcm::LcmEngine,
+    engine: &lcm::LcmClient,
     conversation_id: i64,
     config: ChatTurnConfig,
 ) -> Result<ChatTurnPlan> {

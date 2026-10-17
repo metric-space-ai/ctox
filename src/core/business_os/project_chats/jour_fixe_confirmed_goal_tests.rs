@@ -4,7 +4,10 @@ use super::*;
 use crate::mission::{plan, schedule};
 
 fn fixture() -> anyhow::Result<TempDir> {
-    let root = super::jour_fixe_owner::fixture("review")?;
+    fixture_with_root(tempfile::tempdir()?)
+}
+fn fixture_with_root(root: TempDir) -> anyhow::Result<TempDir> {
+    let root = super::jour_fixe_owner::fixture_with_root("review", root)?;
     let _ = store::issue_business_os_capability_token_for_managed_user(
         root.path(),
         "owner",
@@ -665,107 +668,233 @@ fn concurrent_owner_confirmations_linearize_to_one_goal_for_one_proposal() -> an
 #[test]
 fn failed_plan_step_reaches_supervisor_turn_and_thread_then_clears_on_retry() -> anyhow::Result<()>
 {
-    let root = fixture()?;
-    let accepted = send(
-        root.path(),
-        "confirmed-failure",
-        "owner",
-        request("failure-op"),
-    )?;
-    let goal = accepted["result"]["goal"]["goal_id"]
-        .as_str()
-        .context("confirmed goal")?;
-    let step = format!("{goal}::prove-reopen");
-    let thread = "cc6cfe73-2824-4360-9daf-3b3efb079931";
-    let submitted = super::supervisor_turns::control(
-        root.path(),
-        "failure-submit",
-        "owner",
-        "submit",
-        json!({"project_id":"project","thread_id":thread,"goal":"Inspect the failed plan"}),
-    )?;
-    let command = submitted["result"]["turn"]["command_id"]
-        .as_str()
-        .context("supervisor task")?;
-    plan::handle_plan_command(
-        root.path(),
-        &[
-            "fail-step".into(),
-            "--step-id".into(),
-            step.clone(),
-            "--reason".into(),
-            "real plan failure".into(),
-        ],
-    )?;
-    let watch = |id: &str| {
-        super::supervisor_turns::control(
+    crate::business_os::project_chats::plan_state::run_contract(move |root| {
+        let root = fixture_with_root(root)?;
+        let accepted = send(
             root.path(),
-            id,
+            "confirmed-failure",
             "owner",
-            "watch",
-            json!({"project_id":"project","thread_id":thread,"target_command_id":command}),
-        )
-    };
-    assert_eq!(
-        watch("failure-watch")?["result"]["turn"]["failed_step_id"],
-        step,
-        "native failed step must reach supervisor turn"
-    );
-    let core = core(root.path())?;
-    super::super::plan_state::project_threads(root.path(), &core)?;
-    let policy = open_store(root.path())?;
-    let saved = || {
-        outbound_load_record(&policy, "user_threads", thread)
-            .map(|r| r.unwrap()["metadata"]["failed_step_id"].clone())
-    };
-    assert_eq!(
-        saved()?,
-        step,
-        "native failed step must reach thread projection"
-    );
-    assert_eq!(
-        super::super::plan_state::failed(
+            request("failure-op"),
+        )?;
+        let goal = accepted["result"]["goal"]["goal_id"]
+            .as_str()
+            .context("confirmed goal")?;
+        let step = format!("{goal}::prove-reopen");
+        let thread = "cc6cfe73-2824-4360-9daf-3b3efb079931";
+        let submitted = super::supervisor_turns::control(
+            root.path(),
+            "failure-submit",
+            "owner",
+            "submit",
+            json!({"project_id":"project","thread_id":thread,"goal":"Inspect the failed plan"}),
+        )?;
+        let command = submitted["result"]["turn"]["command_id"]
+            .as_str()
+            .context("supervisor task")?;
+        plan::handle_plan_command(
+            root.path(),
+            &[
+                "fail-step".into(),
+                "--step-id".into(),
+                step.clone(),
+                "--reason".into(),
+                "real plan failure".into(),
+            ],
+        )?;
+        let watch = |id: &str| {
+            super::supervisor_turns::control(
+                root.path(),
+                id,
+                "owner",
+                "watch",
+                json!({"project_id":"project","thread_id":thread,"target_command_id":command}),
+            )
+        };
+        assert_eq!(
+            watch("failure-watch")?["result"]["turn"]["failed_step_id"],
+            step,
+            "native failed step must reach supervisor turn"
+        );
+        let core = core(root.path())?;
+        super::super::plan_state::project_threads(root.path(), &core)?;
+        let policy = open_store(root.path())?;
+        let saved = || {
+            outbound_load_record(&policy, "user_threads", thread)
+                .map(|r| r.unwrap()["metadata"]["failed_step_id"].clone())
+        };
+        assert_eq!(
+            saved()?,
+            step,
+            "native failed step must reach thread projection"
+        );
+        assert_eq!(
+            super::super::plan_state::failed(
+                root.path(),
+                "foreign",
+                "project",
+                &format!("business-os/threads/{thread}")
+            )?,
+            None
+        );
+        assert_eq!(
+            super::super::plan_state::failed(
+                root.path(),
+                "owner",
+                "foreign-project",
+                &format!("business-os/threads/{thread}")
+            )?,
+            None
+        );
+        let retry = crate::business_os::command_plane::accept_rxdb_business_command(
+            root.path(),
+            json!({"id":"retry-visible-step","module":"ctox","command_type":"ctox.plan.step.retry","payload":{"step_id":step},"client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}}),
+        )?;
+        assert_eq!(retry["status"], "completed", "{retry}");
+        assert!(watch("retried-watch")?["result"]["turn"]["failed_step_id"].is_null());
+        super::super::plan_state::project_threads(root.path(), &core)?;
+        assert!(saved()?.is_null(), "retry must remove stale thread failure");
+        core.execute(
+            "UPDATE planned_steps SET status='failed' WHERE step_id=?1",
+            [&step],
+        )?;
+        core.execute(
+            "UPDATE planned_goals SET status='superseded' WHERE goal_id=?1",
+            [goal],
+        )?;
+        assert_eq!(
+            super::super::plan_state::failed(
+                root.path(),
+                "owner",
+                "project",
+                &format!("business-os/threads/{thread}")
+            )?,
+            None,
+            "superseded goal must not be offered for retry"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn planned_steps_projection_is_current_read_only_and_never_crosses_projects() -> anyhow::Result<()>
+{
+    crate::business_os::project_chats::plan_state::run_contract(move |root| {
+        let root = fixture_with_root(root)?;
+        let result = send(
+            root.path(),
+            "confirm-projection",
+            "owner",
+            request("projection-op"),
+        )?;
+        let goal = result["result"]["goal"]["goal_id"]
+            .as_str()
+            .context("goal")?;
+        let id = format!("{goal}::prove-reopen");
+        let core = core(root.path())?;
+        let rxdb = Connection::open(store::rxdb_store_path(root.path()))?;
+        rxdb.execute_batch("CREATE TABLE ctox_business_os__planned_steps__v0(id TEXT PRIMARY KEY,revision TEXT,deleted INTEGER NOT NULL DEFAULT 0,lastWriteTime REAL NOT NULL DEFAULT 0,data TEXT NOT NULL)")?;
+        core.execute_batch("DROP TABLE IF EXISTS ctox_harness_flow_events")?;
+        let policy = open_store(root.path())?;
+        let load = || outbound_load_record(&policy, "planned_steps", &id).map(|row| row.unwrap());
+        let mirror = || -> anyhow::Result<Value> {
+            let raw: String = rxdb.query_row(
+                "SELECT data FROM ctox_business_os__planned_steps__v0 WHERE id=?1",
+                [&id],
+                |r| r.get(0),
+            )?;
+            Ok(serde_json::from_str(&raw)?)
+        };
+        crate::business_os::harness_cockpit::refresh_plan_projection_for_test(root.path())?;
+        let row = load()?;
+        assert_eq!(
+            row["step_id"], "prove-reopen",
+            "projection must retain Todo identity"
+        );
+        assert_eq!(row["goal_revision"], 1);
+        assert_eq!(row["owner"], "Michael");
+        assert_eq!(row["status"], "pending");
+        assert!(row["completed_at_ms"].is_null());
+        assert_eq!(
+            mirror()?["step_id"],
+            "prove-reopen",
+            "projection must reach actual RxDB mirror"
+        );
+        let (owner_token, _) = store::issue_business_os_capability_token_for_managed_user(
+            root.path(),
+            "owner",
+            "Owner",
+            "admin",
+            store::now_ms() as i64,
+        )?;
+        let (foreign, _) = store::issue_business_os_capability_token_for_managed_user(
             root.path(),
             "foreign",
-            "project",
-            &format!("business-os/threads/{thread}")
-        )?,
-        None
-    );
-    assert_eq!(
-        super::super::plan_state::failed(
+            "Foreign",
+            "admin",
+            store::now_ms() as i64,
+        )?;
+        assert!(threads::may_replicate_document(
             root.path(),
-            "owner",
-            "foreign-project",
-            &format!("business-os/threads/{thread}")
-        )?,
-        None
-    );
-    let retry = crate::business_os::command_plane::accept_rxdb_business_command(
-        root.path(),
-        json!({"id":"retry-visible-step","module":"ctox","command_type":"ctox.plan.step.retry","payload":{"step_id":step},"client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}}),
-    )?;
-    assert_eq!(retry["status"], "completed", "{retry}");
-    assert!(watch("retried-watch")?["result"]["turn"]["failed_step_id"].is_null());
-    super::super::plan_state::project_threads(root.path(), &core)?;
-    assert!(saved()?.is_null(), "retry must remove stale thread failure");
-    core.execute(
-        "UPDATE planned_steps SET status='failed' WHERE step_id=?1",
-        [&step],
-    )?;
-    core.execute(
-        "UPDATE planned_goals SET status='superseded' WHERE goal_id=?1",
-        [goal],
-    )?;
-    assert_eq!(
-        super::super::plan_state::failed(
+            &owner_token,
+            "planned_steps",
+            &row
+        ));
+        assert!(
+            !threads::may_replicate_document(root.path(), &foreign, "planned_steps", &row),
+            "foreign admin must not read a projected project step"
+        );
+        assert!(
+            !threads::may_accept_peer_write(root.path(), &owner_token, "planned_steps"),
+            "plan projection must reject peer writes"
+        );
+        let mut forged = row.clone();
+        forged["project_id"] = json!("foreign-project");
+        assert!(!threads::may_replicate_document(
             root.path(),
-            "owner",
-            "project",
-            &format!("business-os/threads/{thread}")
-        )?,
-        None,
-        "superseded goal must not be offered for retry"
-    );
-    Ok(())
+            &owner_token,
+            "planned_steps",
+            &forged
+        ));
+        for (status, completion) in [
+            ("failed", None),
+            ("completed", Some("2026-10-16T03:00:00Z")),
+        ] {
+            core.execute(
+                "UPDATE planned_steps SET status=?2,completed_at=?3 WHERE step_id=?1",
+                rusqlite::params![id, status, completion],
+            )?;
+            crate::business_os::harness_cockpit::refresh_plan_projection_for_test(root.path())?;
+            let row = mirror()?;
+            assert_eq!(row["status"], status);
+            assert_eq!(
+                row["failed_step_id"].as_str(),
+                (status == "failed").then_some(id.as_str())
+            );
+            if status == "completed" {
+                assert_eq!(row["completed_at_ms"], 1792119600000i64);
+            }
+        }
+        core.execute(
+            "UPDATE planned_goals SET status='superseded' WHERE goal_id=?1",
+            [goal],
+        )?;
+        assert!(
+            !threads::may_replicate_document(root.path(), &owner_token, "planned_steps", &row),
+            "replaced goal must become invisible before projection repair"
+        );
+        crate::business_os::harness_cockpit::refresh_plan_projection_for_test(root.path())?;
+        assert!(
+            outbound_load_record(&policy, "planned_steps", &id)?.is_none(),
+            "superseded goal must not yield open topics"
+        );
+        assert_eq!(
+            rxdb.query_row(
+                "SELECT deleted FROM ctox_business_os__planned_steps__v0 WHERE id=?1",
+                [id],
+                |r| r.get::<_, i64>(0)
+            )?,
+            1
+        );
+        Ok(())
+    })
 }

@@ -1,0 +1,1 @@
+Verwende die ausgewählte Knowledge-Tabelle "{{title}}" (ID {{id}}, Domain {{domain}}) als Datenbasis. Diese Auswahl ist eine Tabelle und kein prozeduraler Skill; beachte ihren Vollständigkeitsstatus und ihre Tabellen-Lineage.

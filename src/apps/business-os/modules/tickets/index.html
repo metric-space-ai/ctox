@@ -1,13 +1,12 @@
 <main class="ctox-workspace tickets-module is-ops-hidden" data-tickets-root data-resize-frame>
   <!-- LEFT: ticket selector — canonical column grammar. All chrome behaviour
        (search / view-toggle / tray / reset / active-dot / counted band) is
-       SHELL-wired from the data-pg-* attributes; this module writes no chrome
+       wired by the app via autoWirePaneGrammar(root) from the data-pg-* attributes; this module writes no chrome
        JS/CSS. Header carries the standing Neu / Import / Export icon actions. -->
   <aside class="ctox-pane tickets-pane tickets-left" aria-label="Tickets" data-left-content>
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-copy="kicker">CTOX</span>
           <h2 class="ctox-pane-title" data-copy="listTitle">Tickets</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -40,7 +39,6 @@
           <button type="button" class="ctox-sort-dir" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
         </div>
       </div>
-      <p class="tickets-command-status" data-ticket-command-status hidden></p>
     </header>
     <nav class="ctox-view-switch" aria-label="Ansichten">
       <div class="ctox-pane-tabs">
@@ -51,7 +49,7 @@
       </div>
     </nav>
     <div class="ctox-pane-body ctox-well">
-      <div class="ctox-list os-scrollbar" data-ticket-list><p class="ctox-empty" data-copy="noTickets">Noch keine Tickets verfügbar.</p></div>
+      <div class="ctox-list os-scrollbar" data-ticket-list></div>
     </div>
     <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </aside>
@@ -68,13 +66,13 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-detail-kicker>CTOX</span>
+          <span class="ctox-pane-kicker" data-detail-kicker></span>
           <h2 class="ctox-pane-title" data-detail-title>Ticket</h2>
         </div>
         <div class="ctox-pane-actions" data-detail-actions></div>
       </div>
     </header>
-    <div class="tickets-pane-body" data-ticket-detail-body><p class="ctox-empty" data-copy="selectTicket">Wähle links ein Ticket aus.</p></div>
+    <div class="tickets-pane-body" data-ticket-detail-body></div>
   </section>
 
   <!-- THIRD: operations pane — ON-DEMAND ONLY. Hidden by default, opened from
@@ -86,7 +84,7 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-ops-kicker data-copy="operations">Operationen</span>
+          <span class="ctox-pane-kicker" data-ops-kicker></span>
           <h2 class="ctox-pane-title" data-ops-title>Ticket</h2>
         </div>
         <div class="ctox-pane-actions" data-ops-actions></div>

@@ -1,28 +1,24 @@
-import { loadModuleMessages } from '../../shared/i18n.js';
-import { canUseBusinessPermission, BusinessOsPermissions } from '../../shared/permissions.js?v=20260816-browser-sync-guards-v141';
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
 
 // Write-only credentials manager. The browser never receives a secret value:
-// it dispatches ctox.secret.{list,put,delete} control commands over the
-// RxDB/WebRTC command bus, and the daemon redacts the value from the persisted
+// it sends ctox.secret.{list,put,delete} commands via api.command (App-API 4.0,
+// pushed status, never awaited), and the daemon redacts the value from the persisted
 // command record (see store.rs accept_rxdb_business_command). Listing returns
-// metadata only (name + description + set/unset status). The list is REACTIVE:
-// the module subscribes to the shared business_commands collection and re-lists
-// when a ctox.secret.put/delete command lands (no manual refresh button).
+// metadata only (name + description + set/unset status) as the `done` result of
+// ctox.secret.list. The list is REACTIVE: the module subscribes to put/delete
+// commands in business_commands and re-lists when one lands (no refresh button).
+// V4-PORT.md OFFEN-1: metadata as a live collection via ctx.cap.secrets.
 
-const MOD_BUILD = '20260721-credentials-ia';
+const SECRETS_MANAGE = 'secrets.manage';
 const LIST_COMMAND = 'ctox.secret.list';
 const PUT_COMMAND = 'ctox.secret.put';
 const DELETE_COMMAND = 'ctox.secret.delete';
 
 const labels = {
   de: {
-    kicker: 'CTOX',
     title: 'Zugangsdaten',
     listTitle: 'Zugangsdaten',
     newTitle: 'Neue Zugangsdaten',
-    editKicker: 'Zugangsdatum',
-    newKicker: 'Neu',
-    subtitle: 'Write-only: Werte werden verschlüsselt im CTOX-Secret-Store abgelegt und nie an den Browser zurückgegeben.',
     newAction: 'Neue Zugangsdaten',
     importAction: 'Importieren',
     exportAction: 'Exportieren',
@@ -38,7 +34,7 @@ const labels = {
     bandOpen: 'Offen',
     keyLabel: 'Schlüssel',
     valueLabel: 'Wert',
-    valueHint: 'Das Wertfeld bleibt immer leer — gespeicherte Werte werden nie zurückgegeben.',
+    valueHint: 'Werte werden verschlüsselt gespeichert und nie wieder angezeigt.',
     status_set: 'Gesetzt',
     status_unset: 'Nicht gesetzt',
     updated: 'aktualisiert {date}',
@@ -53,9 +49,6 @@ const labels = {
     field_source: 'Quelle',
     field_updated: 'Aktualisiert',
     entries: 'Einträge',
-    empty_all: 'Keine Zugangsdaten konfiguriert.',
-    empty_filtered: 'Kein Eintrag passt zum Filter.',
-    syncing: 'Daten werden synchronisiert.',
     confirm_delete: '{name} wirklich entfernen?',
     saved: '{name} gespeichert',
     deleted: '{name} entfernt',
@@ -66,16 +59,12 @@ const labels = {
     key_invalid: 'Ungültiger Schlüssel: UPPER_SNAKE_CASE (A–Z, 0–9, _).',
     save_failed: 'Speichern fehlgeschlagen.',
     load_failed: 'Laden fehlgeschlagen.',
-    no_permission: 'Du hast keine Berechtigung, Zugangsdaten zu verwalten (Rolle Chef oder Admin erforderlich).',
+    no_permission: 'Keine Berechtigung für Zugangsdaten (Rolle Chef oder Admin).',
   },
   en: {
-    kicker: 'CTOX',
     title: 'Credentials',
     listTitle: 'Credentials',
     newTitle: 'New credential',
-    editKicker: 'Credential',
-    newKicker: 'New',
-    subtitle: 'Write-only: values are stored encrypted in the CTOX secret store and never returned to the browser.',
     newAction: 'New credential',
     importAction: 'Import',
     exportAction: 'Export',
@@ -91,7 +80,7 @@ const labels = {
     bandOpen: 'Pending',
     keyLabel: 'Key',
     valueLabel: 'Value',
-    valueHint: 'The value field is always empty — stored values are never returned.',
+    valueHint: 'Values are stored encrypted and never shown again.',
     status_set: 'Set',
     status_unset: 'Not set',
     updated: 'updated {date}',
@@ -106,9 +95,6 @@ const labels = {
     field_source: 'Source',
     field_updated: 'Updated',
     entries: 'entries',
-    empty_all: 'No credentials configured.',
-    empty_filtered: 'No entry matches the filter.',
-    syncing: 'Syncing data.',
     confirm_delete: 'Remove {name}?',
     saved: '{name} saved',
     deleted: '{name} removed',
@@ -119,7 +105,7 @@ const labels = {
     key_invalid: 'Invalid key: UPPER_SNAKE_CASE (A–Z, 0–9, _).',
     save_failed: 'Save failed.',
     load_failed: 'Load failed.',
-    no_permission: 'You do not have permission to manage credentials (Chef or Admin role required).',
+    no_permission: 'No permission for credentials (Chef or Admin role).',
   },
 };
 
@@ -224,18 +210,11 @@ export function credentialRow(entry, opts = {}) {
     + '</div>';
 }
 
-// The list body markup (shards or compact rows), or the empty state. When the
-// caller passes a collection readiness snapshot (data-driven empty only — the
-// unfiltered replicated source is empty) and it reports `ready === false`, the
-// well shows the canonical syncing shell instead of claiming "no data".
+// The list body markup (shards or compact rows). App-API 4.0 (R11): an empty
+// list renders nothing – no syncing shell, no empty text; states go to the zone.
 export function renderRecordList(rows, opts = {}) {
   const list = Array.isArray(rows) ? rows : [];
-  if (!list.length) {
-    if (opts.readiness && opts.readiness.ready === false) {
-      return '<div class="ctox-syncing" role="status" aria-live="polite">' + esc(opts.syncingText || tr('syncing')) + '</div>';
-    }
-    return '<div class="ctox-empty"><strong>' + esc(opts.emptyText || tr('empty_all')) + '</strong></div>';
-  }
+  if (!list.length) return '';
   return list.map((e) => credentialRow(e, { view: opts.view, selected: e.name && e.name === opts.selectedName })).join('');
 }
 
@@ -308,15 +287,17 @@ export function parseImportEntries(raw) {
 }
 
 // Command envelope for the RxDB/WebRTC command bus — shape unchanged.
-export function buildCommandDoc(commandType, payload, commandId) {
+// App-API 4.0: api.command(type, payload) – the command document ({id, type, payload, status, app_id, actor_id})
+// is created by the API; routing fields travel inside the payload (PORTING.md R5).
+export function buildCommandDoc(commandType, payload) {
   return {
-    id: commandId,
-    module: 'credentials',
-    command_type: commandType,
-    record_id: payload?.name || 'credentials',
-    inbound_channel: 'business_os.credentials',
-    payload: payload || {},
-    client_context: { source_module: 'credentials' },
+    type: commandType,
+    payload: {
+      ...(payload || {}),
+      record_id: payload?.name || 'credentials',
+      inbound_channel: 'business_os.credentials',
+      client_context: { source_module: 'credentials' },
+    },
   };
 }
 
@@ -324,22 +305,38 @@ export function buildCommandDoc(commandType, payload, commandId) {
 // Mount
 // ---------------------------------------------------------------------------
 
-export async function mount(ctx) {
-  const locale = String(ctx.locale || document.documentElement.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
-  const messages = await loadModuleMessages(import.meta.url, locale, labels);
-  text = messages;
-  const t = (key) => messages[key] ?? labels.de[key] ?? key;
+function langFrom(value) {
+  return String(value || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+}
 
-  await ensureStyles();
-  ctx.host.innerHTML = await loadMarkup();
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
+// App-API 4.0: mount(host, api, {restored}) → {unmount, snapshot}.
+export async function mount(host, api, { restored } = {}) {
+  let locale = langFrom(api.shell.locale.get());
+  text = labels[locale];
+  // api.shell.t übersteuert die eingebetteten Texte (Schlüsselraum offen, app-api.d.ts OFFEN-B).
+  const t = (key) => {
+    const scoped = 'credentials.' + key;
+    const value = api.shell.t?.(scoped);
+    if (typeof value === 'string' && value && value !== scoped) return value;
+    return text[key] ?? labels.de[key] ?? key;
+  };
+  if (!host.dataset.app) host.dataset.app = api.app?.id || 'credentials';
+  host.innerHTML = await loadMarkup();
+  const disposers = [];
 
-  const root = ctx.host.querySelector('[data-credentials-root]');
-  root?.setAttribute('lang', locale);
-  root?.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
-  root?.querySelectorAll('[data-i18n-placeholder]').forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
-  root?.querySelectorAll('[data-i18n-title]').forEach((node) => { node.title = node.ariaLabel = t(node.dataset.i18nTitle); });
+  const root = host.querySelector('[data-credentials-root]');
+  const applyLabels = () => {
+    root?.setAttribute('lang', locale);
+    root?.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
+    root?.querySelectorAll('[data-i18n-placeholder]').forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
+    root?.querySelectorAll('[data-i18n-title]').forEach((node) => { node.title = node.ariaLabel = t(node.dataset.i18nTitle); });
+    // Textdiät Regel 1: Sachinfo nur als Tooltip am Feld (Name bleibt das Label).
+    root?.querySelectorAll('[data-i18n-tooltip]').forEach((node) => { node.title = t(node.dataset.i18nTooltip); });
+  };
+  applyLabels();
+  // Pane-Grammatik verdrahtet die App selbst (PORTING.md R14).
+  autoWirePaneGrammar(host);
+  api.shell.setTitle(t('title'));
 
   const rail = root?.querySelector('.credentials-rail');
   const listEl = root?.querySelector('[data-cred-list]');
@@ -348,33 +345,25 @@ export async function mount(ctx) {
   const keyEl = root?.querySelector('[data-cred-key]');
   const valueEl = root?.querySelector('[data-cred-value]');
   const submitEl = root?.querySelector('[data-cred-submit]');
-  const gateEl = root?.querySelector('[data-cred-gate]');
   const titleEl = root?.querySelector('[data-cred-title]');
-  const modeEl = root?.querySelector('[data-cred-mode]');
   const viewToggleEl = root?.querySelector('[data-cred-view-toggle]');
 
-  const canManage = canUseBusinessPermission({
-    session: ctx.session,
-    governance: ctx.governance,
-    permission: BusinessOsPermissions.SecretsManage,
-    scopeType: 'workspace',
-  });
+  // Spiegel für die Darstellung (§10.2a Nr. 3); jede Mutation entscheidet der Core.
+  const computeCanManage = () => {
+    const perms = api.actor?.permissions?.get?.() || [];
+    const role = String(api.actor?.role || '').toLowerCase().replace(/^business_os_/, '');
+    return perms.includes(SECRETS_MANAGE) || ['admin', 'chef'].includes(role);
+  };
+  let canManage = computeCanManage();
 
   let rowsCache = [];
   let selectedName = null;
   let userCollapsed = false;
   let refreshing = false;
   let refreshQueued = false;
-  // Canonical collection readiness for the module's backing collection. The
-  // credential list is a command-bus round trip, but the command docs live in
-  // (and the outcome arrives over) the replicated business_commands bridge —
-  // so its readiness gates the data-driven empty state. Render-hint only.
-  let listReadiness = null;
   // Module-owned view mode: the shell grammar only wires the two-button
   // [data-pg-view] radio pair, and this app renders ONE toggle button.
   let viewMode = 'cards';
-
-  const collection = () => { try { return ctx.db?.collection?.('business_commands') || null; } catch { return null; } };
 
   // ---- shell-wired grammar state (read straight from the pane DOM) ----------
   function readGrammar() {
@@ -416,15 +405,12 @@ export async function mount(ctx) {
     if (node) node.textContent = str || '';
   }
 
-  const GATE_VARIANTS = { ok: ' is-success', block: ' is-danger', offline: ' is-warning' };
-  function setGate(message, kind) {
-    if (!gateEl) return;
-    gateEl.className = 'ctox-callout' + (GATE_VARIANTS[kind] || '');
-    gateEl.textContent = message || '';
-    gateEl.hidden = !message;
+  // Früher ctx.notifications: Meldungen gehen in die Zustandszone der Shell (stabile code je Fall).
+  function toast(message, isError = false, code = isError ? 'credentials.error' : 'credentials.notice') {
+    api.status.report({ level: isError ? 'error' : 'info', code, text: String(message ?? '') });
   }
-  function toast(message, isError = false) {
-    ctx.notifications?.show?.({ type: isError ? 'error' : 'success', title: t('title'), message: String(message ?? '') });
+  function hint(code, key) {
+    api.status.report({ level: 'warn', code: 'credentials.' + code, text: t(key) });
   }
 
   // ---- render ---------------------------------------------------------------
@@ -439,7 +425,6 @@ export async function mount(ctx) {
       detailEl.setAttribute('data-context-record-type', 'credential');
       detailEl.setAttribute('data-context-label', rec.name || '');
     }
-    if (modeEl) modeEl.textContent = rec ? t('editKicker') : t('newKicker');
     if (titleEl) titleEl.textContent = rec ? rec.name : t('newTitle');
     if (submitEl) submitEl.textContent = rec ? (rec.is_set ? t('btn_rotate') : t('btn_save')) : t('add_btn');
     if (valueEl) valueEl.placeholder = rec && rec.is_set ? t('ph_rotate') : t('ph_set');
@@ -447,9 +432,10 @@ export async function mount(ctx) {
 
   function render() {
     if (!canManage) {
-      if (listEl) listEl.innerHTML = '<div class="ctox-empty"><strong>' + esc(t('no_permission')) + '</strong></div>';
+      if (listEl) listEl.innerHTML = '';
+      hint('permission.missing', 'no_permission');
       writeCounts({ all: 0, set: 0, open: 0 });
-      writeFooter('— ' + t('entries'));
+      writeFooter('');
       if (detailEl) { detailEl.hidden = true; detailEl.innerHTML = ''; }
       setControlsEnabled(false);
       return;
@@ -460,67 +446,79 @@ export async function mount(ctx) {
       // The well itself carries the view so the list variant can collapse the
       // inter-row gap to zero (maximum density) without a second class per row.
       listEl.dataset.credView = g.view;
-      const dataEmpty = !rowsCache.length;
-      const emptyText = dataEmpty ? t('empty_all') : t('empty_filtered');
-      listEl.innerHTML = renderRecordList(filtered, {
-        view: g.view,
-        selectedName,
-        emptyText,
-        // Readiness gates ONLY the data-driven empty; a filter empty means the
-        // data exists and must keep rendering the plain ctox-empty.
-        readiness: dataEmpty ? listReadiness : null,
-        syncingText: t('syncing'),
-      });
+      listEl.innerHTML = renderRecordList(filtered, { view: g.view, selectedName });
     }
     writeCounts(countsFor(rowsCache));
-    const scope = { all: t('bandAll'), set: t('bandSet'), open: t('bandOpen') }[g.band] || t('bandAll');
-    writeFooter(filtered.length + ' ' + t('entries') + ' · ' + scope);
+    // Textdiät Regel 3/5: Anzahl steht schon im Reiter – kein zweiter Zähler im Fuß.
+    writeFooter('');
     renderDetail();
   }
 
-  // ---- data (command bus round trip) ----------------------------------------
-  async function refresh() {
+  // ---- data (ctox.secret.list via api.command, result pushed) ---------------
+  function refresh() {
     if (!canManage) { rowsCache = []; render(); return; }
     // Single-flight: a subscription burst must not fan out into parallel lists.
     if (refreshing) { refreshQueued = true; return; }
     refreshing = true;
-    try {
-      do {
-        refreshQueued = false;
-        try {
-          const { outcome } = await sendCommand(LIST_COMMAND, {});
-          rowsCache = mergeEntries(outcome?.catalog, outcome?.extra);
-        } catch (error) {
-          toast(error?.message || t('load_failed'), true);
-          rowsCache = [];
-        }
-      } while (refreshQueued);
-    } finally {
-      refreshing = false;
-    }
-    render();
+    refreshQueued = false;
+    sendCommand(LIST_COMMAND, {}, {
+      done(result) {
+        rowsCache = mergeEntries(result?.catalog, result?.extra);
+        api.status.clear('credentials.list.failed');
+      },
+      failed(error) {
+        toast((error || t('load_failed')), true, 'credentials.list.failed');
+      },
+      finally() {
+        refreshing = false;
+        render();
+        if (refreshQueued) refresh();
+      },
+    });
   }
 
-  async function sendCommand(commandType, payload) {
-    const bus = ctx.commandBus;
-    if (!bus?.dispatch) throw new Error('command bus unavailable');
-    const commandId = 'cmd_cred_' + Date.now() + '_' + Math.floor(Math.random() * 1e6);
-    try { await ctx.sync?.startCollection?.('business_commands'); } catch { /* bridge may already run */ }
-    const busResult = await bus.dispatch(buildCommandDoc(commandType, payload, commandId));
-    return { commandId, outcome: busResult?.result || null };
+  // api.command legt das Befehlsdokument an und liefert sofort; der Status kommt gepusht (nie warten).
+  function sendCommand(commandType, payload, on = {}) {
+    const { type, payload: body } = buildCommandDoc(commandType, payload);
+    const handle = api.command(type, body);
+    const code = 'credentials.command.' + commandType;
+    let off = null;
+    let finished = false;
+    const stop = () => { finished = true; off?.(); off = null; };
+    const end = (fn, arg) => { try { fn?.(arg); } finally { on.finally?.(); } };
+    off = handle.status.subscribe((value) => {
+      if (finished) return;
+      if (value?.status === 'done') {
+        stop();
+        api.status.clear(code);
+        end(on.done, value.result);
+      } else if (value?.status === 'failed') {
+        stop();
+        api.status.report({ level: 'error', code, text: commandType + ': ' + (value.error || 'failed'), ref: handle.id });
+        end(on.failed, value.error);
+      }
+    });
+    if (finished) off?.();
+    handle.local.catch((error) => {
+      if (finished) return;
+      stop();
+      api.status.report({ level: 'error', code, text: commandType + ': ' + (error?.code || 'local') + ' ' + (error?.message || error), ref: handle.id });
+      end(on.failed, error?.message);
+    });
+    disposers.push(stop);
+    return handle;
   }
 
-  // Best-effort: strip a plaintext value that a failed/timed-out put may have
-  // left in the local pending command doc. On success the daemon already
-  // redacted the durable record, so this is a no-op.
-  async function redactLocalCommand(commandId, name) {
+  // Best-effort: strip a plaintext value that a put may have left in the local
+  // command doc. The daemon redacts the durable record; until the Core owns this
+  // for every client (V4-PORT.md OFFEN-2) the app keeps its local cleanup.
+  function redactLocalCommand(commandId, name) {
     if (!commandId) return;
     try {
-      const col = collection();
-      if (!col?.findOne) return;
-      const doc = await col.findOne(commandId).exec();
+      const doc = api.get('business_commands', commandId).get();
       if (doc?.payload && Object.prototype.hasOwnProperty.call(doc.payload, 'value')) {
-        await doc.patch({ payload: { name } });
+        // api.patch ist JSON-Merge-Patch (§10.2a): null entfernt das Feld.
+        api.patch('business_commands', commandId, { payload: { value: null, name } });
       }
     } catch { /* durable record already redacted server-side */ }
   }
@@ -545,7 +543,6 @@ export async function mount(ctx) {
       keyEl.readOnly = Boolean(rec);
     }
     if (valueEl) valueEl.value = '';
-    setGate('');
     applyListSelection();
     renderDetail();
   }
@@ -555,46 +552,44 @@ export async function mount(ctx) {
     userCollapsed = false;
     if (keyEl) { keyEl.value = ''; keyEl.readOnly = false; }
     if (valueEl) valueEl.value = '';
-    setGate('');
     applyListSelection();
     renderDetail();
     keyEl?.focus?.();
   }
 
   // ---- write path (ctox.secret.put / ctox.secret.delete) --------------------
-  async function onSubmit(event) {
+  function onSubmit(event) {
     event.preventDefault();
     if (!canManage) return;
     const name = (keyEl?.value || '').trim();
     const value = valueEl?.value || '';
-    if (!KEY_RE.test(name)) { setGate(t('key_invalid'), 'block'); return; }
-    if (!value) { setGate(t('value_required'), 'block'); return; }
+    if (!KEY_RE.test(name)) { hint('form.key_invalid', 'key_invalid'); return; }
+    if (!value) { hint('form.value_required', 'value_required'); return; }
+    api.status.clear('credentials.form.key_invalid');
+    api.status.clear('credentials.form.value_required');
     if (valueEl) valueEl.value = '';
-    let commandId = null;
-    try {
-      const result = await sendCommand(PUT_COMMAND, { name, value });
-      commandId = result.commandId;
-      selectedName = name;
-      toast(t('saved').replace('{name}', name));
-    } catch (error) {
-      toast(error?.message || t('save_failed'), true);
-    } finally {
-      await redactLocalCommand(commandId, name);
-      await refresh();
-    }
+    selectedName = name;
+    const handle = sendCommand(PUT_COMMAND, { name, value }, {
+      done() { toast(t('saved').replace('{name}', name), false, 'credentials.secret.saved'); },
+      finally() { redactLocalCommand(handle?.id, name); },
+    });
   }
 
   async function handleDelete(name) {
     if (!name || !canManage) return;
-    if (!window.confirm(t('confirm_delete').replace('{name}', name))) return;
-    try {
-      await sendCommand(DELETE_COMMAND, { name });
-      toast(t('deleted').replace('{name}', name));
-    } catch (error) {
-      toast(error?.message || t('save_failed'), true);
-    }
+    // Bestätigung im App-Fenster (api.shell.dialog, OFFEN-A); destruktiv → default:false.
+    const confirmed = await api.shell.dialog({
+      kind: 'confirm',
+      title: t('btn_delete'),
+      text: t('confirm_delete').replace('{name}', name),
+      confirm_label: t('btn_delete'),
+      default: false,
+    });
+    if (confirmed !== true) return;
+    sendCommand(DELETE_COMMAND, { name }, {
+      done() { toast(t('deleted').replace('{name}', name), false, 'credentials.secret.deleted'); },
+    });
     if (selectedName === name) startNew();
-    await refresh();
   }
 
   // ---- import / export ------------------------------------------------------
@@ -628,24 +623,21 @@ export async function mount(ctx) {
       const file = input.files && input.files[0];
       if (!file) return;
       let parsed;
-      try { parsed = JSON.parse(await file.text()); } catch { setGate(t('import_invalid'), 'block'); return; }
+      try { parsed = JSON.parse(await file.text()); } catch { hint('import.invalid', 'import_invalid'); return; }
       const entries = parseImportEntries(parsed);
-      if (!entries.length) { setGate(t('import_empty'), 'block'); return; }
+      if (!entries.length) { hint('import.empty', 'import_empty'); return; }
+      let pending = entries.length;
       let count = 0;
       for (const entry of entries) {
-        let commandId = null;
-        try {
-          const result = await sendCommand(PUT_COMMAND, { name: entry.name, value: entry.value });
-          commandId = result.commandId;
-          count += 1;
-        } catch (error) {
-          console.error('[credentials] import put failed:', error);
-        } finally {
-          await redactLocalCommand(commandId, entry.name);
-        }
+        const handle = sendCommand(PUT_COMMAND, { name: entry.name, value: entry.value }, {
+          done() { count += 1; },
+          finally() {
+            redactLocalCommand(handle?.id, entry.name);
+            pending -= 1;
+            if (!pending) toast(t('imported').replace('{count}', String(count)), false, 'credentials.import.done');
+          },
+        });
       }
-      setGate(t('imported').replace('{count}', String(count)), 'ok');
-      await refresh();
     });
     input.click();
   }
@@ -687,70 +679,96 @@ export async function mount(ctx) {
   rail?.addEventListener('ctox-pane-grammar-change', onGrammarChange);
   viewToggleEl?.addEventListener('click', onViewToggle);
 
-  // Readiness: the shell emits an immediate snapshot and re-emits only on
-  // state changes; each change re-renders so the syncing shell resolves to
-  // the real empty/data state once business_commands is live.
-  let readinessUnsubscribe = null;
-  const subscribeReadiness = ctx.sync?.subscribeCollectionReadiness;
-  if (typeof subscribeReadiness === 'function') {
-    try {
-      const unsub = subscribeReadiness.call(ctx.sync, 'business_commands', (snapshot) => {
-        listReadiness = snapshot;
-        render();
-      });
-      readinessUnsubscribe = typeof unsub === 'function' ? unsub : null;
-    } catch { /* readiness is a render hint; absence must never block mount */ }
-  }
-
   // Reactive: re-list when a ctox.secret.put/delete command lands in the shared
   // business_commands collection (own writes + peer writes). The selector
   // excludes ctox.secret.list so our own listing never re-triggers a refresh.
-  let subscription = null;
   let lastCommandSignature = null;
-  if (canManage) {
-    const col = collection();
-    if (col?.find) {
-      try {
-        subscription = col
-          .find({ selector: { command_type: { $in: [PUT_COMMAND, DELETE_COMMAND] } } })
-          .$?.subscribe?.((docs) => {
-            // Only a changed put/delete set re-lists. The query stream also
-            // re-emits for unrelated writes to business_commands — including
-            // this module's own ctox.secret.list — which made every listing
-            // trigger the next one (a list every 2-6 s while the window was
-            // open; field report 11.09.2026, thesen).
-            const signature = JSON.stringify((Array.isArray(docs) ? docs : []).map((doc) => {
-              const row = typeof doc?.toJSON === 'function' ? doc.toJSON() : doc;
-              return [row?.id || row?.command_id || '', row?.status || '', row?.execution_phase || ''];
-            }));
-            if (signature === lastCommandSignature) return;
-            lastCommandSignature = signature;
-            refresh();
-          });
-      } catch { /* live sync optional; explicit refresh after writes still runs */ }
-    }
+  function subscribeCommands() {
+    if (!canManage) return () => {};
+    return api.query('business_commands', {
+      selector: { $or: [{ type: { $in: [PUT_COMMAND, DELETE_COMMAND] } }, { command_type: { $in: [PUT_COMMAND, DELETE_COMMAND] } }] },
+    }).subscribe((docs) => {
+      // Only a changed put/delete set re-lists (field report 11.09.2026, thesen:
+      // re-emits for unrelated writes made every listing trigger the next one).
+      const signature = JSON.stringify((Array.isArray(docs) ? docs : []).map((row) => [row?.id || row?.command_id || '', row?.status || '', row?.execution_phase || '']));
+      if (signature === lastCommandSignature) return;
+      const first = lastCommandSignature === null;
+      lastCommandSignature = signature;
+      if (!first) refresh();
+    });
   }
+  let commandsOff = subscribeCommands();
+  disposers.push(() => commandsOff());
+  disposers.push(api.actor.permissions.subscribe(() => {
+    const next = computeCanManage();
+    if (next === canManage) return;
+    canManage = next;
+    if (canManage) api.status.clear('credentials.permission.missing');
+    commandsOff();
+    commandsOff = subscribeCommands();
+    setControlsEnabled(canManage);
+    refresh();
+  }));
+  disposers.push(api.shell.locale.subscribe((value) => {
+    const next = langFrom(value);
+    if (next === locale) return;
+    locale = next;
+    text = labels[locale];
+    applyLabels();
+    updateViewToggle();
+    render();
+  }));
 
   // Usable window before the list round-trip completes.
+  applyRestored(restored);
   updateViewToggle();
   render();
   if (!canManage) setControlsEnabled(false);
-  void refresh();
+  refresh();
+
+  // Snapshot für den Live-Remount: Auswahl, Ansicht, eingegebener Schlüssel. Den Wert nimmt der Snapshot
+  // bewusst NICHT mit (write-only: Geheimnisse verlassen das Eingabefeld nur über ctox.secret.put).
+  function snapshot() {
+    return {
+      v: 1,
+      selectedName,
+      userCollapsed,
+      viewMode,
+      search: rail?.querySelector('[data-pg-search]')?.value || '',
+      keyDraft: selectedName ? '' : (keyEl?.value || ''),
+    };
+  }
+  function applyRestored(snap) {
+    if (!snap || typeof snap !== 'object') return;
+    if (typeof snap.selectedName === 'string') selectedName = snap.selectedName;
+    if (typeof snap.userCollapsed === 'boolean') userCollapsed = snap.userCollapsed;
+    if (snap.viewMode === 'list' || snap.viewMode === 'cards') viewMode = snap.viewMode;
+    const search = rail?.querySelector('[data-pg-search]');
+    if (search && typeof snap.search === 'string') search.value = snap.search;
+    if (keyEl) {
+      keyEl.value = selectedName || (typeof snap.keyDraft === 'string' ? snap.keyDraft : '');
+      keyEl.readOnly = Boolean(selectedName);
+    }
+  }
 
   function setControlsEnabled(enabled) {
     root?.querySelectorAll('input, button').forEach((node) => { node.disabled = !enabled; });
   }
 
-  return () => {
-    try { subscription?.unsubscribe?.(); } catch {}
-    try { readinessUnsubscribe?.(); } catch {}
-    listEl?.removeEventListener('click', onListClick);
-    listEl?.removeEventListener('keydown', onListKey);
-    root?.removeEventListener('click', onAction);
-    formEl?.removeEventListener('submit', onSubmit);
-    rail?.removeEventListener('ctox-pane-grammar-change', onGrammarChange);
-    viewToggleEl?.removeEventListener('click', onViewToggle);
-    ctx.host.replaceChildren();
+  return {
+    unmount() {
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (error) { console.warn('[credentials] unsubscribe failed', error); }
+      }
+      listEl?.removeEventListener('click', onListClick);
+      listEl?.removeEventListener('keydown', onListKey);
+      root?.removeEventListener('click', onAction);
+      formEl?.removeEventListener('submit', onSubmit);
+      rail?.removeEventListener('ctox-pane-grammar-change', onGrammarChange);
+      viewToggleEl?.removeEventListener('click', onViewToggle);
+      host.replaceChildren();
+    },
+    snapshot,
   };
 }
 
@@ -766,23 +784,9 @@ function formatUpdated(value) {
   } catch { return ''; }
 }
 
-async function ensureStyles() {
-  const cssVersion = String(import.meta.url).split('?v=')[1] || MOD_BUILD;
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  let link = document.querySelector('link[data-credentials-style]');
-  if (!link) {
-    link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.dataset.credentialsStyle = 'true';
-    document.head.append(link);
-  }
-  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
-}
-
 async function loadMarkup() {
-  const markupVersion = String(import.meta.url).split('?v=')[1] || MOD_BUILD;
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-  const html = await fetch(markupHref).then((r) => r.text());
+  // index.html liefert der Service Worker versioniert (§16.15) – kein Cache-Buster; CSS lädt die Shell.
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((r) => r.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((n) => n.remove());
   return doc.body.innerHTML;

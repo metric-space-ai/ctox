@@ -1,3 +1,12 @@
+/* App-API 4.0: das App-root ist der Container für die @container-Regeln (v4-Shell setzt keinen
+   business-app-window-Container mehr, gleiches Muster wie intake). */
+[data-app="threads"] { container: business-app-window / inline-size; }
+
+/* workjet#594: Name = Projekt · Aufgabe; das Projekt tritt zurück, die Aufgabe trägt die Zeile. */
+[data-app="threads"] .threads-name-project { color: var(--muted); font-weight: 600; }
+[data-app="threads"] .threads-name-sep { color: var(--muted); font-weight: 400; }
+[data-app="threads"] .threads-detail-id { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: var(--fs-micro); overflow-wrap: anywhere; }
+
 /* Threads — migrated onto the shared design system (shared/base.css + app.css).
    Frame (.ctox-workspace[data-resize-frame]), panes (.ctox-pane), declarative
    column resizers (.ctox-column-resizer[data-resizer-var]), pane headers
@@ -17,7 +26,7 @@
    No taskbar reserve here: the chat dock floats over the DESKTOP, not inside
    every window — a blanket padding-bottom leaves a dead band in windowed mode.
    The mobile sheet (container <=600px) keeps its own safe-area padding. */
-.threads-module {
+[data-app="threads"] .threads-module {
   /* Module-local type scale aliases. Kit tokens (--kit-fill/--kit-fill-strong/
      --kit-hover/--focus-ring) come from shared/base.css — the module must NOT
      re-define them. */
@@ -27,40 +36,33 @@
 }
 
 /* Pane row templates: the kit ships auto/1fr; each threads pane declares its
-   own rows (left: header/band/list/footer, center: header/timeline/
+   own rows (left: header/band/list — no footer, center: header/timeline/
    composer/mobile bar, right: one scrolling card stack). */
-.threads-left {
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+[data-app="threads"] .threads-left {
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 /* Explicit tracks (the Knowledge idiom): the kit hides column resizers on
    narrow windows — with auto-flow placement the center pane then slides onto
    the empty 12px resizer track and the main view "disappears". Pinning every
    pane to its column makes hidden resizers harmless. */
-.threads-left { grid-column: 1; grid-row: 1; }
-.threads-module > [data-resizer="left"] { grid-column: 2; grid-row: 1; }
-.threads-center { grid-column: 3; grid-row: 1; }
-.threads-module > [data-resizer="right"] { grid-column: 4; grid-row: 1; }
-.threads-right { grid-column: 5; grid-row: 1; }
+[data-app="threads"] .threads-left { grid-column: 1; grid-row: 1; }
+[data-app="threads"] .threads-module > [data-resizer="left"] { grid-column: 2; grid-row: 1; }
+[data-app="threads"] .threads-center { grid-column: 3; grid-row: 1; }
+[data-app="threads"] .threads-module > [data-resizer="right"] { grid-column: 4; grid-row: 1; }
+[data-app="threads"] .threads-right { grid-column: 5; grid-row: 1; }
 
-.threads-center {
-  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+[data-app="threads"] .threads-center {
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
   position: relative;
 }
 
-.threads-command-receipt {
-  padding: 6px 14px;
-  color: var(--text-secondary);
-  font-size: var(--fs-meta);
-  overflow-wrap: anywhere;
-}
-.threads-command-receipt[data-state="error"] { color: var(--danger, #b42318); }
 
-.threads-right {
+[data-app="threads"] .threads-right {
   grid-template-rows: minmax(0, 1fr);
 }
 
-.threads-source-link {
+[data-app="threads"] .threads-source-link {
   display: inline-block;
   width: fit-content;
   padding: 0;
@@ -69,32 +71,27 @@
   color: inherit;
   text-align: left;
 }
-.threads-source-link.is-linked {
+[data-app="threads"] .threads-source-link.is-linked {
   cursor: pointer;
   text-decoration: underline;
   text-underline-offset: 2px;
 }
-.threads-source-link:focus-visible {
+[data-app="threads"] .threads-source-link:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: 3px;
 }
-.threads-center > .ctox-pane-header {
+[data-app="threads"] .threads-center > .ctox-pane-header {
   position: relative;
 }
-.threads-status {
-  position: absolute;
-  bottom: 5px;
-  left: 14px;
-  max-width: calc(100% - 90px);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  font-size: var(--fs-meta);
-}
-.threads-sync-state {
+/* workjet#594: der Status steht ausgeschrieben unter dem Titel – im Fluss, mit Zeilenumbruch statt Ellipse. */
+[data-app="threads"] .threads-status {
   display: block;
+  color: var(--muted);
   font-size: var(--fs-meta);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
+[data-app="threads"] .threads-status:empty { display: none; }
 
 /* ----------------------------------------------------------------------------
    Shell V2 head geometry. Reference: modules/knowledge/index.css.
@@ -117,9 +114,27 @@
    contract's 2 x 37px (§7 h1: every top-row head equal, total <= 74px). The
    expandable filter tray still grows the head when opened — the contract
    measures the resting state. */
-.shell-window[data-shell-contract="v2"] .threads-module .threads-left > .ctox-pane-header {
+[data-app="threads"] .threads-module .threads-left > .ctox-pane-header {
   box-sizing: border-box;
-  padding: 0 14px 0 calc(var(--shell-v2-icon-size, 80px) + 14px);
+  padding: 0 14px 0 var(--shell-icon-inset, calc(var(--shell-v2-icon-size, 80px) + 14px));
+}
+
+/* Der Kopf darf nie breiter als seine Spalte werden: sonst schneidet der Spaltenrand den Filterknopf ab
+   (Kopf-Mindestbreite aus Einrückung + Titel + Aktionen > 320 px). Spalte, Kopf und Titelblock schrumpfen,
+   der Titel kürzt, Suche und Knöpfe bleiben im Pane. */
+[data-app="threads"] .threads-module > .threads-left {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+}
+[data-app="threads"] .threads-module .threads-left > .ctox-pane-header,
+[data-app="threads"] .threads-module .threads-left > .ctox-pane-header > .ctox-pane-title-row,
+[data-app="threads"] .threads-module .threads-left > .ctox-pane-header .ctox-pane-titles {
+  min-width: 0;
+}
+[data-app="threads"] .threads-module .threads-left > .ctox-pane-header .ctox-pane-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Last head: the close control is 74px wide, 70px is the contract floor. The
@@ -128,17 +143,35 @@
    matches the queue head's 2 x 37px; the title row stays in band row 1, the
    second band row is quiet surface (and aligns the timeline start with the
    queue list start). */
-.shell-window[data-shell-contract="v2"] .threads-module .threads-center > .ctox-pane-header {
+[data-app="threads"] .threads-module .threads-center > .ctox-pane-header {
   box-sizing: border-box;
-  height: calc(2 * var(--shell-v2-header-row-size, 37px));
+  /* Ruhezustand exakt 2 x 37px; nur ein umbrechender Status (schmale Fenster) darf den Kopf strecken (workjet#594). */
+  height: auto;
   min-height: calc(2 * var(--shell-v2-header-row-size, 37px));
   padding: 0 70px 0 14px;
 }
+/* Band-Zeile 2 des Timeline-Kopfs: Status ausgeschrieben, bricht um statt abzuschneiden. */
+[data-app="threads"] .threads-module .threads-center > .ctox-pane-header > .threads-status {
+  min-height: calc(var(--shell-v2-header-row-size, 37px) - 1px);
+  padding: 2px 0 6px;
+  box-sizing: border-box;
+}
+/* Kicker (Projekt) schrumpft nicht auf „CTOX SH…“: er behält seine Breite bis 45 %, die Aufgabe nimmt den Rest. */
+[data-app="threads"] .threads-module .threads-center > .ctox-pane-header .ctox-pane-titles > .ctox-pane-kicker {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  /* Rundgang RUND2: der Kicker ist ein <button> (bricht standardmäßig um); ohne nowrap lief ein langer Projektname
+     über drei Zeilen, sprengte die 37-px-Zeile und schob den Aufgabentitel aus dem Kopf. */
+  white-space: nowrap;
+}
+[data-app="threads"] .threads-module .threads-center > .ctox-pane-header .ctox-pane-titles > .ctox-pane-title { flex: 1 1 auto; }
 
 /* Row 2 of the queue head: the filterbar is exactly band row 2. The band's
    1px hairline border-bottom counts toward the head's outer 74px, so the
    filterbar row cedes that pixel. */
-.shell-window[data-shell-contract="v2"] .threads-module .threads-left > .ctox-pane-header > .threads-filterbar {
+[data-app="threads"] .threads-module .threads-left > .ctox-pane-header > .threads-filterbar {
   box-sizing: border-box;
   height: calc(var(--shell-v2-header-row-size, 37px) - 1px);
   min-height: calc(var(--shell-v2-header-row-size, 37px) - 1px);
@@ -147,7 +180,7 @@
 }
 
 /* Row 1 of both heads is the shell header band: identical height. */
-.shell-window[data-shell-contract="v2"] .threads-module .ctox-pane > .ctox-pane-header > .ctox-pane-title-row {
+[data-app="threads"] .threads-module .ctox-pane > .ctox-pane-header > .ctox-pane-title-row {
   box-sizing: border-box;
   height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
@@ -160,11 +193,11 @@
    redundant "Business OS" kicker (the shell frame already names the app, and
    Knowledge's first head carries no kicker either) and every title keeps the
    shell's 44px trigger minimum. */
-.shell-window[data-shell-contract="v2"] .threads-module .threads-left > .ctox-pane-header .ctox-pane-kicker {
+[data-app="threads"] .threads-module .threads-left > .ctox-pane-header .ctox-pane-kicker {
   display: none;
 }
 
-.shell-window[data-shell-contract="v2"] .threads-module .ctox-pane > .ctox-pane-header .ctox-pane-titles {
+[data-app="threads"] .threads-module .ctox-pane > .ctox-pane-header .ctox-pane-titles {
   flex: 1 1 auto;
   flex-direction: row;
   align-items: baseline;
@@ -174,12 +207,12 @@
   overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .threads-module .ctox-pane > .ctox-pane-header .ctox-pane-kicker {
+[data-app="threads"] .threads-module .ctox-pane > .ctox-pane-header .ctox-pane-kicker {
   flex: 0 1 auto;
   min-width: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .threads-module .ctox-pane > .ctox-pane-header .ctox-pane-title {
+[data-app="threads"] .threads-module .ctox-pane > .ctox-pane-header .ctox-pane-title {
   flex: 0 1 auto;
   min-width: 44px;
   margin: 0;
@@ -189,12 +222,12 @@
 }
 
 /* The action block never claims the title's width. */
-.shell-window[data-shell-contract="v2"] .threads-module .ctox-pane > .ctox-pane-header .ctox-pane-actions {
+[data-app="threads"] .threads-module .ctox-pane > .ctox-pane-header .ctox-pane-actions {
   flex: 0 0 auto;
 }
 
 /* Row 2 — one dense filter row: [search][view-toggle][filter]. */
-.threads-filterbar {
+[data-app="threads"] .threads-filterbar {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
@@ -204,11 +237,11 @@
 /* ONE control, not two (operator directive 31.08.). data-pg-view names the
    view currently on screen; the glyph shows the OTHER one — the view the click
    switches to. No pressed state: the button is an action. */
-.threads-view-toggle svg { display: none; }
-.threads-view-toggle[data-pg-view="cards"] svg[data-view-glyph="list"],
-.threads-view-toggle[data-pg-view="list"] svg[data-view-glyph="cards"] { display: block; }
-.threads-filter-toggle { position: relative; }
-.threads-filter-toggle.has-active-filters::after {
+[data-app="threads"] .threads-view-toggle svg { display: none; }
+[data-app="threads"] .threads-view-toggle[data-pg-view="cards"] svg[data-view-glyph="list"],
+[data-app="threads"] .threads-view-toggle[data-pg-view="list"] svg[data-view-glyph="cards"] { display: block; }
+[data-app="threads"] .threads-filter-toggle { position: relative; }
+[data-app="threads"] .threads-filter-toggle.has-active-filters::after {
   content: "";
   position: absolute;
   top: 3px;
@@ -219,21 +252,21 @@
   background: var(--accent);
 }
 /* Collapsed tray: one recessed fill holding the secondary-queue dropdown. */
-.threads-filter-advanced {
+[data-app="threads"] .threads-filter-advanced {
   margin-top: 6px;
   padding: 8px;
   border-radius: var(--control-radius);
   background: var(--kit-fill);
 }
-.threads-filter-row { display: flex; gap: 6px; align-items: center; }
-.threads-select {
+[data-app="threads"] .threads-filter-row { display: flex; gap: 6px; align-items: center; }
+[data-app="threads"] .threads-select {
   flex: 1 1 0;
   min-width: 0;
   height: 28px;
   padding: 0 8px;
   font-size: var(--fs-meta);
 }
-.threads-filter-reset {
+[data-app="threads"] .threads-filter-reset {
   flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
@@ -247,54 +280,46 @@
   color: var(--muted);
   cursor: pointer;
 }
-.threads-filter-reset svg { width: 15px; height: 15px; }
-.threads-filter-reset:hover { background: var(--accent); color: var(--surface); }
+[data-app="threads"] .threads-filter-reset svg { width: 15px; height: 15px; }
+[data-app="threads"] .threads-filter-reset:hover { background: var(--accent); color: var(--surface); }
 /* Row 3 — primary queue band: equal segments with counts. */
-.threads-view-switch {
+[data-app="threads"] .threads-view-switch {
   padding: 8px 10px;
   border-bottom: 1px solid var(--hairline, var(--line));
 }
-.threads-view-switch .ctox-pane-tabs { display: flex; width: 100%; min-width: 0; }
-.threads-view-switch .ctox-pane-tab { flex: 1 1 0; min-width: 0; }
-.threads-view-switch .view-count {
+[data-app="threads"] .threads-view-switch .ctox-pane-tabs { display: flex; width: 100%; min-width: 0; }
+[data-app="threads"] .threads-view-switch .ctox-pane-tab { flex: 1 1 0; min-width: 0; }
+[data-app="threads"] .threads-view-switch .view-count {
   font-size: var(--fs-micro);
   font-weight: 600;
   color: var(--muted);
   margin-left: 4px;
 }
-.threads-view-switch .ctox-pane-tab[aria-selected="true"] .view-count { color: var(--accent); }
+[data-app="threads"] .threads-view-switch .ctox-pane-tab[aria-selected="true"] .view-count { color: var(--accent); }
 /* Element well: recessed zone under a divider — list never merges with the
    toolbar above. */
-.threads-well {
+[data-app="threads"] .threads-well {
   background: color-mix(in srgb, #000 7%, var(--surface));
   border-top: 1px solid var(--hairline, var(--line));
-}
-/* App floor. */
-.threads-footer {
-  padding: 6px 12px;
-  border-top: 1px solid var(--hairline, var(--line));
-  background: var(--surface);
-  color: var(--muted);
-  font-size: var(--fs-micro);
 }
 /* The two list modes are defined together further down, in the shard-anatomy
    section — see "Cards vs. list". */
 /* Element actions collected top-right of a card, as icons. */
-.threads-approval-card { position: relative; }
-.threads-card-actions {
+[data-app="threads"] .threads-approval-card { position: relative; }
+[data-app="threads"] .threads-card-actions {
   position: absolute;
   top: 6px;
   right: 6px;
   display: flex;
   gap: 2px;
 }
-.threads-card-actions .ctox-pane-icon { opacity: 0.6; }
-.threads-card-actions .ctox-pane-icon:hover { opacity: 1; }
-.threads-card-actions .is-confirm { color: var(--accent); }
-.threads-card-actions .is-danger { color: var(--danger, #e5484d); }
+[data-app="threads"] .threads-card-actions .ctox-pane-icon { opacity: 0.6; }
+[data-app="threads"] .threads-card-actions .ctox-pane-icon:hover { opacity: 1; }
+[data-app="threads"] .threads-card-actions .is-confirm { color: var(--accent); }
+[data-app="threads"] .threads-card-actions .is-danger { color: var(--danger, #e5484d); }
 /* Status badges dock under the title, small — never in the action cluster. */
-.threads-status-line { display: inline-flex; gap: 4px; margin-top: 2px; }
-.threads-notification-actions { display: inline-flex; gap: 2px; }
+[data-app="threads"] .threads-status-line { display: inline-flex; gap: 4px; margin-top: 2px; }
+[data-app="threads"] .threads-notification-actions { display: inline-flex; gap: 2px; }
 
 /* The standing briefing stat strip was removed (no standing status rows):
    the counted view band + tray filters carry the same numbers. */
@@ -302,33 +327,33 @@
 /* Thread list: rows are kit .ctox-list-item (hover/selected accent bar from
    the kit); only the title/attention/meta/preview content stack is local. */
 /* custom: thread-row content stack inside the kit list row */
-.threads-list-item {
+[data-app="threads"] .threads-list-item {
   display: grid;
   gap: 2px;
 }
 
-.threads-list-title {
+[data-app="threads"] .threads-list-title {
   color: var(--text-strong, var(--text));
   font-size: 13px;
   font-weight: 700;
   line-height: 1.3;
 }
 
-.threads-list-meta,
-.threads-list-preview,
-.threads-message-meta {
+[data-app="threads"] .threads-list-meta,
+[data-app="threads"] .threads-list-preview,
+[data-app="threads"] .threads-message-meta {
   color: var(--muted);
   font-size: 11.5px;
   line-height: 1.35;
 }
 
-.threads-list-preview {
+[data-app="threads"] .threads-list-preview {
   color: var(--text);
 }
 
 /* custom: attention reason (warning-colored priority hint). It leads the meta
    row and is only rendered when there IS a reason — no reserved empty line. */
-.threads-attention {
+[data-app="threads"] .threads-attention {
   color: var(--warning);
   font-size: 11px;
   font-weight: 650;
@@ -337,7 +362,7 @@
 /* custom: chat-style timeline with author-aligned message bubbles — a
    genuine special view the kit does not express (bubble alignment, own
    accent tint) */
-.threads-timeline {
+[data-app="threads"] .threads-timeline {
   min-width: 0;
   min-height: 0;
   overflow: auto;
@@ -347,7 +372,7 @@
   gap: 8px;
 }
 
-.threads-message {
+[data-app="threads"] .threads-message {
   max-width: 760px;
   border: 1px solid var(--line);
   border-radius: var(--panel-radius);
@@ -355,12 +380,12 @@
   padding: 10px 12px;
 }
 
-.threads-message.is-mine {
+[data-app="threads"] .threads-message.is-mine {
   align-self: flex-end;
   background: color-mix(in srgb, var(--accent) 7%, var(--surface));
 }
 
-.threads-message-body {
+[data-app="threads"] .threads-message-body {
   margin-top: 4px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -370,7 +395,7 @@
 
 /* custom: approval decision card in the timeline — the one accent-tinted
    call-to-action panel; facts use the kit .ctox-fields grid */
-.threads-approval-card {
+[data-app="threads"] .threads-approval-card {
   display: grid;
   gap: 8px;
   max-width: 760px;
@@ -382,7 +407,7 @@
 
 
 /* Composer: kit .ctox-textarea + primary .ctox-button on a module grid. */
-.threads-composer {
+[data-app="threads"] .threads-composer {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: end;
@@ -392,7 +417,7 @@
 }
 
 /* Right pane: kit .ctox-card inspector sections in one scrolling stack. */
-.threads-right-scroll {
+[data-app="threads"] .threads-right-scroll {
   display: grid;
   gap: 8px;
   align-content: start;
@@ -401,50 +426,50 @@
 
 /* h3 sits inside the kit card header, which already owns the uppercase
    label typography — reset the UA heading style to inherit it. */
-.threads-panel h3 {
+[data-app="threads"] .threads-panel h3 {
   margin: 0;
   font: inherit;
 }
 
 /* Vertical form stacking inside the kit card body. */
-.threads-form {
+[data-app="threads"] .threads-form {
   display: grid;
   gap: 8px;
 }
 
-.threads-form label {
+[data-app="threads"] .threads-form label {
   display: grid;
   gap: 4px;
 }
 
-.threads-form .ctox-field-label {
+[data-app="threads"] .threads-form .ctox-field-label {
   margin-bottom: 0;
 }
 
 /* Context panel content: kit .ctox-fields / .ctox-callout markup from JS;
    only stacking and link styling are local. */
-.threads-context {
+[data-app="threads"] .threads-context {
   display: grid;
   gap: 8px;
 }
 
-.threads-context a {
+[data-app="threads"] .threads-context a {
   color: var(--accent);
   font-weight: 700;
   text-decoration: none;
   overflow-wrap: anywhere;
 }
 
-.threads-context a:hover {
+[data-app="threads"] .threads-context a:hover {
   text-decoration: underline;
 }
 
-.threads-notification-list {
+[data-app="threads"] .threads-notification-list {
   display: grid;
   gap: 8px;
 }
 
-.threads-notification-actions {
+[data-app="threads"] .threads-notification-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
@@ -452,7 +477,7 @@
 }
 
 /* custom: presence hint (advisory) — another user has this thread open */
-.threads-presence-hint {
+[data-app="threads"] .threads-presence-hint {
   color: var(--warning);
   font-size: 11px;
   font-weight: 600;
@@ -460,8 +485,8 @@
 }
 
 /* Mobile-only chrome: hidden on desktop, shown by the ≤600px switcher. */
-.threads-mobile-back,
-.threads-mobile-actions {
+[data-app="threads"] .threads-mobile-back,
+[data-app="threads"] .threads-mobile-actions {
   display: none;
 }
 
@@ -469,12 +494,12 @@
    resizer fall away, so the timeline head is the column that reaches the
    right window edge — it already carries the 70px control clearance. */
 @container business-app-window (max-width: 1024px) {
-  .threads-module {
+  [data-app="threads"] .threads-module {
     grid-template-columns: var(--ctox-left-width, 240px) 12px minmax(0, 1fr);
   }
 
-  .threads-right,
-  .threads-module > [data-resizer="right"] {
+  [data-app="threads"] .threads-right,
+  [data-app="threads"] .threads-module > [data-resizer="right"] {
     display: none;
   }
 }
@@ -482,14 +507,14 @@
 /* Touch targets on coarse pointers: every interactive control reaches the
    44px minimum, icon-only pane buttons in both dimensions. */
 @media (pointer: coarse) {
-  .threads-module button,
-  .threads-module input,
-  .threads-module textarea,
-  .threads-module select {
+  [data-app="threads"] .threads-module button,
+  [data-app="threads"] .threads-module input,
+  [data-app="threads"] .threads-module textarea,
+  [data-app="threads"] .threads-module select {
     min-height: 44px;
   }
 
-  .threads-module .ctox-pane-icon {
+  [data-app="threads"] .threads-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
@@ -500,7 +525,34 @@
    context views via .is-mobile-detail/.is-context-open; the kit has no
    equivalent pattern */
 @container business-app-window (max-width: 768px) {
-  .threads-module {
+  /* workjet#594: im Einspalter stehen Projekt und Aufgabe in einer eigenen Zeile unter Zurück/Aktionen –
+     die Aktionsleiste hätte ihnen sonst die ganze Breite genommen (gemessen: 0px bei 420). */
+  [data-app="threads"] .threads-module .threads-center > .ctox-pane-header > .ctox-pane-title-row {
+    flex-wrap: wrap;
+    height: auto;
+  }
+  /* Unterhalb der 74px-Ikonenzone (Zeilen 1–2: Zurück, Aktionen) gehört dem Namen die volle Breite; er bricht um. */
+  [data-app="threads"] .threads-module .threads-center > .ctox-pane-header .ctox-pane-titles {
+    order: 3;
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    row-gap: 0;
+    margin-left: calc(-1 * var(--shell-v2-icon-size, 80px));
+    padding: 4px 0 2px;
+    overflow: visible;
+  }
+  [data-app="threads"] .threads-module .threads-center > .ctox-pane-header .ctox-pane-titles > .ctox-pane-kicker { max-width: 100%; }
+  [data-app="threads"] .threads-module .threads-center > .ctox-pane-header .ctox-pane-titles > .ctox-pane-title {
+    flex: 1 0 100%;
+    white-space: normal;
+    overflow: visible;
+    overflow-wrap: anywhere;
+  }
+  [data-app="threads"] .threads-module .threads-center > .ctox-pane-header > .threads-status {
+    margin-left: calc(-1 * var(--shell-v2-icon-size, 80px));
+  }
+
+  [data-app="threads"] .threads-module {
     display: block;
   }
 
@@ -511,63 +563,63 @@
      reserved the band in EVERY state: measured at 720px it left 58px of dead
      strip under the queue list and still let the bar cover the composer by
      57px. One reserve, on the pane that has the bar. */
-  .threads-center {
+  [data-app="threads"] .threads-center {
     padding-bottom: calc(52px + env(safe-area-inset-bottom, 0px));
   }
 
-  .threads-module > [data-resizer] {
+  [data-app="threads"] .threads-module > [data-resizer] {
     display: none;
   }
 
-  .threads-left,
-  .threads-center,
-  .threads-right {
+  [data-app="threads"] .threads-left,
+  [data-app="threads"] .threads-center,
+  [data-app="threads"] .threads-right {
     width: 100%;
     height: 100%;
     border: 0;
     border-radius: 0;
   }
 
-  .threads-center,
-  .threads-right {
+  [data-app="threads"] .threads-center,
+  [data-app="threads"] .threads-right {
     display: none;
   }
 
-  .threads-module.is-mobile-detail .threads-left {
+  [data-app="threads"] .threads-module.is-mobile-detail .threads-left {
     display: none;
   }
 
-  .threads-module.is-mobile-detail .threads-center {
+  [data-app="threads"] .threads-module.is-mobile-detail .threads-center {
     display: grid;
   }
 
-  .threads-module.is-context-open .threads-center {
+  [data-app="threads"] .threads-module.is-context-open .threads-center {
     display: none;
   }
 
-  .threads-module.is-context-open .threads-right {
+  [data-app="threads"] .threads-module.is-context-open .threads-right {
     display: grid;
     height: 100%;
   }
 
-  .threads-mobile-back {
+  [data-app="threads"] .threads-mobile-back {
     display: inline-flex;
   }
 
   /* No extra tail here any more: the pane's own reserve already keeps the
      timeline clear of the thumb bar, so 84px would only lengthen the scroll. */
-  .threads-message,
-  .threads-approval-card {
+  [data-app="threads"] .threads-message,
+  [data-app="threads"] .threads-approval-card {
     max-width: min(100%, 72ch);
   }
 
-  .threads-composer textarea {
+  [data-app="threads"] .threads-composer textarea {
     max-height: 120px;
   }
 
   /* custom: mobile bottom action bar — thumb-reach action row, no desktop
      kit equivalent */
-  .threads-mobile-actions {
+  [data-app="threads"] .threads-mobile-actions {
     position: absolute;
     inset: auto 0 0;
     z-index: 3;
@@ -579,7 +631,7 @@
     background: var(--surface);
   }
 
-  .threads-mobile-actions button {
+  [data-app="threads"] .threads-mobile-actions button {
     min-height: 44px;
     border: 0;
     border-radius: var(--control-radius);
@@ -590,32 +642,32 @@
     font-weight: 650;
   }
 
-  .threads-mobile-actions button:hover {
+  [data-app="threads"] .threads-mobile-actions button:hover {
     background: var(--kit-hover);
   }
 
   /* Single column: whichever pane is on screen is BOTH the first and the last
      head of the top row, so it has to clear the app icon on the left and the
      window control on the right at the same time. */
-  .shell-window[data-shell-contract="v2"] .threads-module .threads-left > .ctox-pane-header {
-    padding-right: 70px;
+  [data-app="threads"] .threads-module .threads-left > .ctox-pane-header {
+    padding-right: var(--shell-v2-control-inset, 70px);
   }
 
-  .shell-window[data-shell-contract="v2"] .threads-module .threads-center > .ctox-pane-header {
+  [data-app="threads"] .threads-module .threads-center > .ctox-pane-header {
     padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
   }
 }
 
 /* Actions/attention column is collapsible and hidden by default so reading a
    thread gets the full width; the header toggle re-reveals it on demand. */
-.threads-module.is-actions-hidden {
+[data-app="threads"] .threads-module.is-actions-hidden {
   grid-template-columns: var(--ctox-left-width, 320px) 12px minmax(0, 1fr);
 }
-.threads-module.is-actions-hidden .threads-right,
-.threads-module.is-actions-hidden > [data-resizer="right"] {
+[data-app="threads"] .threads-module.is-actions-hidden .threads-right,
+[data-app="threads"] .threads-module.is-actions-hidden > [data-resizer="right"] {
   display: none;
 }
-.threads-toggle-actions[aria-pressed="true"] {
+[data-app="threads"] .threads-toggle-actions[aria-pressed="true"] {
   color: var(--accent);
   background: var(--accent-soft);
 }
@@ -623,26 +675,31 @@
 /* Right pane: ONE frame (the pane). The stacked action forms are flat
    sections split by hairlines — kicker-style headings, no card-in-pane
    frames (shard grammar rule 4). */
-.threads-right .ctox-card.threads-panel {
+[data-app="threads"] .threads-right .ctox-card.threads-panel {
   border: 0;
   border-radius: 0;
   background: transparent;
   border-bottom: 1px solid var(--hairline, var(--line));
 }
-.threads-right .ctox-card.threads-panel:last-child { border-bottom: 0; }
-.threads-right .ctox-card.threads-panel > header h3,
-.threads-right .ctox-card.threads-panel > summary h3 {
+[data-app="threads"] .threads-right .ctox-card.threads-panel:last-child { border-bottom: 0; }
+[data-app="threads"] .threads-right .ctox-card.threads-panel > header h3,
+[data-app="threads"] .threads-right .ctox-card.threads-panel > summary h3 {
   font-size: var(--fs-micro);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--muted);
 }
-.threads-right .ctox-card.threads-panel > summary {
+[data-app="threads"] .threads-right .ctox-card.threads-panel > summary {
   cursor: pointer;
   padding: 10px 12px;
 }
-.threads-right .ctox-card.threads-panel > summary:focus-visible {
+/* Rundgang RUND2: die Überschrift steht im Aufklapp-Kopf inline neben dem Pfeil (vorher eigene Zeile darunter). */
+[data-app="threads"] .threads-right .ctox-card.threads-panel > summary h3 {
+  display: inline;
+  margin: 0 0 0 4px;
+}
+[data-app="threads"] .threads-right .ctox-card.threads-panel > summary:focus-visible {
   outline: 2px solid currentColor;
   outline-offset: -2px;
 }
@@ -652,9 +709,9 @@
    CARDS: bubble with its own frame, author/time meta above a wrapping body.
    LIST: exactly one line per message — author + time on the left, body
    ellipsized on the right, no frames, no fills, tightest possible rhythm. */
-.threads-module.is-center-list-view .threads-timeline { gap: 0; padding: 4px 12px; }
-.threads-module.is-center-list-view .threads-message,
-.threads-module.is-center-list-view .threads-approval-card {
+[data-app="threads"] .threads-module.is-center-list-view .threads-timeline { gap: 0; padding: 4px 12px; }
+[data-app="threads"] .threads-module.is-center-list-view .threads-message,
+[data-app="threads"] .threads-module.is-center-list-view .threads-approval-card {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -666,13 +723,13 @@
   border-bottom: 1px solid color-mix(in srgb, var(--hairline, var(--line)) 55%, transparent);
   max-width: none;
 }
-.threads-module.is-center-list-view .threads-message-meta {
+[data-app="threads"] .threads-module.is-center-list-view .threads-message-meta {
   flex: 0 0 auto;
   margin: 0;
   font-size: var(--fs-micro);
   white-space: nowrap;
 }
-.threads-module.is-center-list-view .threads-message-body {
+[data-app="threads"] .threads-module.is-center-list-view .threads-message-body {
   flex: 1 1 auto;
   min-width: 0;
   margin: 0;
@@ -684,46 +741,46 @@
 }
 /* An approval card is a decision surface: in list mode it keeps its accent
    hairline so it never disappears into the protocol stream. */
-.threads-module.is-center-list-view .threads-approval-card {
+[data-app="threads"] .threads-module.is-center-list-view .threads-approval-card {
   display: grid;
   gap: 4px;
   padding: 4px 0 6px;
   border-left: 2px solid var(--accent);
   padding-left: 8px;
 }
-.threads-module.is-center-list-view .threads-card-actions,
-.threads-module.is-center-list-view .threads-card-actions.is-decide { position: static; }
+[data-app="threads"] .threads-module.is-center-list-view .threads-card-actions,
+[data-app="threads"] .threads-module.is-center-list-view .threads-card-actions.is-decide { position: static; }
 
 /* Standalone note: visible ONLY when the fragment is opened without the shell
    (file://) — inside Business OS this module stylesheet loads and hides it. */
-.ctox-standalone-note { display: none; }
+[data-app="threads"] .ctox-standalone-note { display: none; }
 
 /* The center kicker links to the source object when one exists — approving
    must never be blind. */
-[data-thread-source].is-linked { cursor: pointer; }
-[data-thread-source].is-linked:hover { color: var(--accent); text-decoration: underline; }
+[data-app="threads"] [data-thread-source].is-linked { cursor: pointer; }
+[data-app="threads"] [data-thread-source].is-linked:hover { color: var(--accent); text-decoration: underline; }
 
 /* Inbox-shard anatomy: [anchor: unread dot + sender initial] [main: title+time /
    why-me / foreign preview]. Three lines, scannable like a good mail row. */
-.threads-list-item {
+[data-app="threads"] .threads-list-item {
   grid-template-columns: 26px minmax(0, 1fr);
   column-gap: 8px;
   align-items: start;
 }
-.threads-item-anchor {
+[data-app="threads"] .threads-item-anchor {
   display: grid;
   justify-items: center;
   gap: 3px;
   padding-top: 2px;
 }
-.threads-item-dot {
+[data-app="threads"] .threads-item-dot {
   width: 7px;
   height: 7px;
   border-radius: 999px;
   background: transparent;
 }
-.threads-list-item.is-unread .threads-item-dot { background: var(--accent); }
-.threads-item-avatar {
+[data-app="threads"] .threads-list-item.is-unread .threads-item-dot { background: var(--accent); }
+[data-app="threads"] .threads-item-avatar {
   width: 20px;
   height: 20px;
   display: inline-flex;
@@ -735,15 +792,15 @@
   font-size: 10px;
   font-weight: 700;
 }
-.threads-item-main { display: grid; gap: 2px; min-width: 0; }
-.threads-item-top {
+[data-app="threads"] .threads-item-main { display: grid; gap: 2px; min-width: 0; }
+[data-app="threads"] .threads-item-top {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
 }
-.threads-item-top .threads-list-title {
+[data-app="threads"] .threads-item-top .threads-list-title {
   /* Einzeilig abgeschnitten verlor der Titel genau das, was den Eintrag
      identifiziert: bei "Sellify-Übergabe: AKEMI chemisch technische Produkte
      GmbH" waren 432px noetig und 203px sichtbar -- die Firma stand im
@@ -757,8 +814,8 @@
   overflow: hidden;
   overflow-wrap: anywhere;
 }
-.threads-list-item.is-unread .threads-list-title { color: var(--text-strong, var(--text)); }
-.threads-item-time {
+[data-app="threads"] .threads-list-item.is-unread .threads-list-title { color: var(--text-strong, var(--text)); }
+[data-app="threads"] .threads-item-time {
   flex: 0 0 auto;
   color: var(--muted);
   font-size: var(--fs-micro);
@@ -766,7 +823,7 @@
 }
 /* Meta row of a shard: the attention reason (warning-toned, when there is one)
    followed by the triage facts — status, assignee, origin, deadline. */
-.threads-list-meta {
+[data-app="threads"] .threads-list-meta {
   display: flex;
   align-items: baseline;
   gap: 6px;
@@ -775,22 +832,23 @@
   font-size: var(--fs-meta);
   line-height: 1.35;
 }
-.threads-list-meta:empty { display: none; }
-.threads-attention,
-.threads-meta-facts {
+[data-app="threads"] .threads-list-meta:empty { display: none; }
+/* workjet#594: Aufmerksamkeitsgrund und Status werden nie abgeschnitten („Blockiert · F…“) – die Zeile bricht um. */
+[data-app="threads"] .threads-list-meta { flex-wrap: wrap; row-gap: 0; }
+[data-app="threads"] .threads-attention,
+[data-app="threads"] .threads-meta-facts {
   min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+[data-app="threads"] .threads-attention { flex: 0 0 auto; }
+[data-app="threads"] .threads-meta-facts { flex: 1 1 auto; }
+[data-app="threads"] .threads-list-preview {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.threads-attention { flex: 0 1 auto; }
-.threads-meta-facts { flex: 1 1 auto; }
-.threads-list-preview {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.threads-list-preview b { font-weight: 600; color: var(--muted); }
+[data-app="threads"] .threads-list-preview b { font-weight: 600; color: var(--muted); }
 
 /* ----------------------------------------------------------------------------
    Cards vs. list — two genuinely different densities, not two paddings
@@ -805,21 +863,21 @@
    stops clamping at two lines, and the row height collapses to the tightest
    value the 13px type allows. Maximum density.
    -------------------------------------------------------------------------- */
-.threads-list-item { padding: 10px 14px; }
+[data-app="threads"] .threads-list-item { padding: 10px 14px; }
 
-.threads-module.is-list-view .threads-list-item {
+[data-app="threads"] .threads-module.is-list-view .threads-list-item {
   padding: 3px 10px;
   grid-template-columns: 12px minmax(0, 1fr);
   column-gap: 6px;
   align-items: center;
 }
-.threads-module.is-list-view .threads-item-anchor { padding-top: 0; }
-.threads-module.is-list-view .threads-item-avatar,
-.threads-module.is-list-view .threads-list-meta,
-.threads-module.is-list-view .threads-list-preview { display: none; }
-.threads-module.is-list-view .threads-item-main { gap: 0; }
-.threads-module.is-list-view .threads-item-top { align-items: center; }
-.threads-module.is-list-view .threads-list-title {
+[data-app="threads"] .threads-module.is-list-view .threads-item-anchor { padding-top: 0; }
+[data-app="threads"] .threads-module.is-list-view .threads-item-avatar,
+[data-app="threads"] .threads-module.is-list-view .threads-list-meta,
+[data-app="threads"] .threads-module.is-list-view .threads-list-preview { display: none; }
+[data-app="threads"] .threads-module.is-list-view .threads-item-main { gap: 0; }
+[data-app="threads"] .threads-module.is-list-view .threads-item-top { align-items: center; }
+[data-app="threads"] .threads-module.is-list-view .threads-list-title {
   display: block;
   -webkit-line-clamp: none;
   line-clamp: none;
@@ -831,8 +889,8 @@
 }
 
 /* @-mention autocomplete: floats above the composer, kit fills, no frames. */
-.threads-composer { position: relative; }
-.threads-mention-popup {
+[data-app="threads"] .threads-composer { position: relative; }
+[data-app="threads"] .threads-mention-popup {
   position: absolute;
   bottom: calc(100% + 4px);
   left: 10px;
@@ -844,7 +902,7 @@
   background: var(--surface);
   overflow: hidden;
 }
-.threads-mention-popup button {
+[data-app="threads"] .threads-mention-popup button {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -856,12 +914,12 @@
   text-align: left;
   cursor: pointer;
 }
-.threads-mention-popup button:hover { background: var(--kit-hover); }
-.threads-mention-popup button b { font-size: var(--fs-sm, 12px); font-weight: 600; }
-.threads-mention-popup button span { color: var(--muted); font-size: var(--fs-micro); }
+[data-app="threads"] .threads-mention-popup button:hover { background: var(--kit-hover); }
+[data-app="threads"] .threads-mention-popup button b { font-size: var(--fs-sm, 12px); font-weight: 600; }
+[data-app="threads"] .threads-mention-popup button span { color: var(--muted); font-size: var(--fs-micro); }
 
 /* Timeline: system events are compact protocol lines, not chat bubbles. */
-.threads-message.is-event {
+[data-app="threads"] .threads-message.is-event {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -872,15 +930,15 @@
   color: var(--muted);
   font-size: var(--fs-meta);
 }
-.threads-message.is-event .threads-event-text {
+[data-app="threads"] .threads-message.is-event .threads-event-text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.threads-message.is-event .threads-event-meta { flex: 0 0 auto; font-size: var(--fs-micro); }
+[data-app="threads"] .threads-message.is-event .threads-event-meta { flex: 0 0 auto; font-size: var(--fs-micro); }
 /* Inline reference links: quiet, but unmistakably clickable. */
-.threads-msg-link {
+[data-app="threads"] .threads-msg-link {
   display: inline-flex;
   align-items: baseline;
   gap: 3px;
@@ -894,12 +952,12 @@
   cursor: pointer;
   white-space: nowrap;
 }
-.threads-msg-link:hover { text-decoration: underline; background: var(--kit-hover); }
-.threads-msg-link.is-rework { color: var(--warning, #d8a03a); }
+[data-app="threads"] .threads-msg-link:hover { text-decoration: underline; background: var(--kit-hover); }
+[data-app="threads"] .threads-msg-link.is-rework { color: var(--warning, #d8a03a); }
 /* Decide cluster sits below the always-on link cluster on approval cards. */
-.threads-card-actions.is-decide { top: 40px; }
+[data-app="threads"] .threads-card-actions.is-decide { top: 40px; }
 
-/* Keine Zahlen hinter Tabs (UI-Regel, workjet#801). Die Knoten bleiben für den Pane-Grammar-Vertrag. */
-.ctox-pane-tab .view-count {
+/* Keine Zahlen hinter Tabs (UI-Regel, workjet#801; aus main 2ce94bd22, Zug 16m). Die Knoten bleiben für den Pane-Grammar-Vertrag. */
+[data-app="threads"] .ctox-pane-tab .view-count {
   display: none;
 }

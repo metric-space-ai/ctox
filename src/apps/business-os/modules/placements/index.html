@@ -6,7 +6,6 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-copy="kicker">ATS</span>
           <h2 class="ctox-pane-title" data-copy="listTitle">Vermittlungen</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -54,7 +53,6 @@
     <div class="ctox-pane-body ctox-well">
       <div class="ctox-list" data-ats-list></div>
     </div>
-    <footer class="ctox-pane-footer"><span data-pg-footer></span></footer>
   </aside>
 
   <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="260" data-resizer-max="520" aria-label="Spaltenbreite anpassen"></button>
@@ -65,7 +63,6 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-ats-wb-kicker data-copy="composerKicker">NEUE VERMITTLUNG</span>
           <h2 class="ctox-pane-title" data-ats-wb-title data-copy="composerTitle">Vermittlung anlegen</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -76,14 +73,14 @@
     <div class="ctox-pane-scroll placements-workbench-scroll">
       <form class="ctox-compact-form" data-ats-form>
         <div class="ctox-compact-form__fields">
-          <label class="ctox-compact-field"><span data-copy="candidate">Kandidat-ID</span><input class="ctox-input" type="text" name="candidate_id" required data-ats-field="candidate_id" /></label>
-          <label class="ctox-compact-field"><span data-copy="client">Kunden-Account-ID</span><input class="ctox-input" type="text" name="client_account_id" data-ats-field="client_account_id" /></label>
+          <label class="ctox-compact-field"><span data-copy="candidate">Kandidat</span><input class="ctox-input" type="text" name="candidate_id" required data-ats-field="candidate_id" /></label>
+          <label class="ctox-compact-field"><span data-copy="client">Kunde</span><input class="ctox-input" type="text" name="client_account_id" data-ats-field="client_account_id" /></label>
           <label class="ctox-compact-field"><span data-copy="placementType">Vermittlungsart</span><select class="ctox-select" name="placement_type" data-ats-field="placement_type">
             <option value="" data-copy="directHire">Festanstellung (Personalvermittlung)</option>
             <option value="arbeitnehmerueberlassung" data-copy="temporary">Arbeitnehmerüberlassung (Zeitarbeit)</option>
           </select></label>
         </div>
-        <div class="ctox-compact-form__actions"><button class="ctox-button is-primary" type="submit" data-copy="create">Anlegen</button></div>
+        <div class="ctox-compact-form__actions"><button type="button" class="ctox-button" data-action="cancel-new" data-copy="cancelNew">Abbrechen</button><button class="ctox-button is-primary" type="submit" data-copy="create">Anlegen</button></div>
         <details class="ats-more">
           <summary data-copy="more">Weitere Angaben</summary>
           <div class="ctox-compact-form__fields">
@@ -93,9 +90,7 @@
           </div>
         </details>
       </form>
-      <div class="ctox-callout" data-ats-gate></div>
       <div class="placements-detail" data-ats-detail></div>
     </div>
-    <footer class="ctox-pane-footer"><span data-ats-wb-footer></span></footer>
   </section>
 </main>

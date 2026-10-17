@@ -8,6 +8,7 @@ pub(crate) struct AccountSelection {
     session: Option<String>,
     selected: Option<String>,
     error_class: Option<&'static str>,
+    upstream_status: Option<u16>,
 }
 tokio::task_local! { pub(crate) static ACCOUNT_SELECTION: Mutex<AccountSelection>; }
 pub fn requested_account() -> Option<String> {
@@ -189,7 +190,11 @@ pub fn record_upstream_status(status: u16, body: &[u8]) {
             "network-provider"
         })
     };
-    let _ = ACCOUNT_SELECTION.try_with(|state| state.lock().unwrap().error_class = class);
+    let _ = ACCOUNT_SELECTION.try_with(|state| {
+        let mut state = state.lock().unwrap();
+        state.error_class = class;
+        state.upstream_status = Some(status);
+    });
 }
 
 #[cfg(test)]
@@ -228,4 +233,39 @@ mod isolation_tests {
         });
         tokio::join!(pinned, unpinned);
     }
+}
+
+/// Native callers use the same exact-account scope as the listener. Only the
+/// executor can report selection/upstream evidence; a router's local 200 is
+/// insufficient. No upstream body, credential or header escapes this scope.
+#[derive(Default)]
+pub struct PinnedObservation {
+    pub selected: Option<String>,
+    pub upstream_status: Option<u16>,
+    pub error_class: Option<&'static str>,
+}
+pub async fn with_pinned_account<T>(
+    account: String,
+    call: impl std::future::Future<Output = T>,
+) -> (T, PinnedObservation) {
+    ACCOUNT_SELECTION
+        .scope(
+            Mutex::new(AccountSelection {
+                requested: Some(account),
+                ..Default::default()
+            }),
+            async move {
+                let value = call.await;
+                let observation = ACCOUNT_SELECTION.with(|state| {
+                    let state = state.lock().unwrap();
+                    PinnedObservation {
+                        selected: state.selected.clone(),
+                        upstream_status: state.upstream_status,
+                        error_class: state.error_class,
+                    }
+                });
+                (value, observation)
+            },
+        )
+        .await
 }

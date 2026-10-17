@@ -1,0 +1,624 @@
+[
+ {
+  "width": 1280,
+  "scenario": "A Sicht, Tastatur, Ausschließen",
+  "steps": [
+   {
+    "campaign": "Outbound Firmenqualifizierung",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "campaign": "Angebot Wartungsvertrag Halle 4",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "campaign": "Projektplan Relaunch Kundenportal",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "campaign": "Lieferantenbewertung 2026",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "campaign": "Onboarding neue Mitarbeitende",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "campaign": "Rahmenvertrag über Wartung und Instandhaltung der Produktionsanlagen am Standort Augsburg",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "campaign": "Kundentermin Vorbereitung",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "company": "company-005",
+    "visible": [
+     "Qualifizieren",
+     "Weitere Aktionen"
+    ],
+    "menu": [
+     "research-company=Nachrecherchieren",
+     "validate-company-research=Als validiert markieren",
+     "download-company-research-log=Run-Log herunterladen",
+     "hide-company=Ausblenden",
+     "reject-company=Ausschließen"
+    ],
+    "escCloses": true,
+    "focusAfterEsc": "button[company-more] Weitere Aktionen"
+   },
+   {
+    "company": "company-011",
+    "visible": [
+     "Qualifizieren",
+     "Weitere Aktionen"
+    ],
+    "menu": [
+     "research-company=Nachrecherchieren",
+     "validate-company-research=Als validiert markieren",
+     "download-company-research-log=Run-Log herunterladen",
+     "hide-company=Ausblenden",
+     "reject-company=Ausschließen"
+    ],
+    "escCloses": true,
+    "focusAfterEsc": "button[company-more] Weitere Aktionen"
+   },
+   {
+    "keyboard": {
+     "focus": "button[company-more] Weitere Aktionen",
+     "enterOpens": true,
+     "firstFocus": "button[research-company] Nachrecherchieren",
+     "afterDown": "button[validate-company-research] Als validiert markieren",
+     "afterUp": "button[research-company] Nachrecherchieren",
+     "afterEnd": "button[reject-company] Ausschließen",
+     "escCloses": true,
+     "focusBack": "button[company-more] Weitere Aktionen",
+     "spaceOpens": true,
+     "chosen": "button[research-company] Nachrecherchieren",
+     "enterRuns": [
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "command outbound.company.research {\"run_id\":\"run_26417ffd-0843-4533-ae7c-88fa80afd6b8\",\"title\":\"Unternehmensdaten recherchie",
+      "put outbound_research_runs/run_26417ffd-0843-4533-ae7c-88fa80afd6b8 {\"id\":\"run_26417ffd-0843-4533-ae7c-88fa80afd6b8\",\"campaign_id\":\"campaign-005\",\"company_id\"",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "patch outbound_companies/company-005 {\"research_status\":\"queued\",\"updated_at_ms\":1792131911927}"
+     ],
+     "menuClosed": true
+    }
+   },
+   {
+    "company": "company-005",
+    "action": {
+     "itemId": "reject-company",
+     "label": "Ausschließen",
+     "clicks": 2,
+     "ops": [
+      "patch outbound_companies/company-005 {\"qualification_status\":\"rejected\",\"fit_status\":\"not_fit\",\"fit_score\":10,\"updated_at_ms\":1",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "patch outbound_campaigns/campaign-005 {\"source_count\":1,\"company_count\":2,\"qualified_count\":0,\"pipeline_count\":1,\"updated_at_ms\""
+     ],
+     "downloads": [],
+     "sheet": null
+    }
+   },
+   {
+    "company": "company-005",
+    "visibleAfterReject": [
+     "Weitere Aktionen"
+    ]
+   }
+  ],
+  "errors": []
+ },
+ {
+  "width": 1280,
+  "scenario": "B Zeilenaktionen",
+  "steps": [
+   {
+    "company": "company-005",
+    "action": {
+     "itemId": "download-company-research-log",
+     "label": "Run-Log herunterladen",
+     "clicks": 2,
+     "ops": [],
+     "downloads": [
+      "wagner-elektrotechnik-gmbh-research-log.json"
+     ],
+     "sheet": null
+    }
+   },
+   {
+    "company": "company-005",
+    "action": {
+     "itemId": "validate-company-research",
+     "label": "Als validiert markieren",
+     "clicks": 2,
+     "ops": [
+      "patch outbound_companies/company-005 {\"research_status\":\"validated\",\"research_validation_status\":\"validated\",\"validated_at_ms\":",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv"
+     ],
+     "downloads": [],
+     "sheet": null
+    }
+   },
+   {
+    "company": "company-005",
+    "action": {
+     "itemId": "research-company",
+     "label": "Nachrecherchieren",
+     "clicks": 2,
+     "ops": [
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "command outbound.company.research {\"run_id\":\"run_f454f7cf-aefd-4020-a50c-e6f8fbcd4588\",\"title\":\"Unternehmensdaten recherchie",
+      "put outbound_research_runs/run_f454f7cf-aefd-4020-a50c-e6f8fbcd4588 {\"id\":\"run_f454f7cf-aefd-4020-a50c-e6f8fbcd4588\",\"campaign_id\":\"campaign-005\",\"company_id\"",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "patch outbound_companies/company-005 {\"research_status\":\"queued\",\"updated_at_ms\":1792131918443}"
+     ],
+     "downloads": [],
+     "sheet": null
+    }
+   },
+   {
+    "company": "company-005",
+    "primary": "Qualifizieren",
+    "action": {
+     "sel": ".v4-app-root tr[data-company-id=\"company-005\"] .outbound-cell-actions [data-action=\"qualify-company\"]",
+     "clicks": 1,
+     "ops": [
+      "patch outbound_companies/company-005 {\"qualification_status\":\"qualified\",\"fit_status\":\"fit\",\"fit_score\":75,\"updated_at_ms\":1792",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "patch outbound_campaigns/campaign-005 {\"source_count\":1,\"company_count\":2,\"qualified_count\":1,\"pipeline_count\":1,\"updated_at_ms\""
+     ],
+     "sheet": null
+    },
+    "visibleAfter": [
+     "In Pipeline",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "company": "company-005",
+    "primary": "In Pipeline",
+    "action": {
+     "sel": ".v4-app-root tr[data-company-id=\"company-005\"] .outbound-cell-actions [data-action=\"send-pipeline\"]",
+     "clicks": 1,
+     "ops": [
+      "patch outbound_companies/company-005 {\"pipeline_status\":\"pipeline\",\"qualification_status\":\"qualified\",\"updated_at_ms\":179213192",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "patch outbound_campaigns/campaign-005 {\"source_count\":1,\"company_count\":2,\"qualified_count\":1,\"pipeline_count\":1,\"updated_at_ms\""
+     ],
+     "sheet": null
+    },
+    "visibleAfter": [
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "company": "company-005",
+    "action": {
+     "itemId": "hide-company",
+     "label": "Ausblenden",
+     "clicks": 2,
+     "ops": [],
+     "downloads": [],
+     "sheet": null
+    },
+    "rowsBefore": 2,
+    "rowsAfter": 1
+   }
+  ],
+  "errors": []
+ },
+ {
+  "width": 1280,
+  "scenario": "C Kampagnen",
+  "steps": [
+   {
+    "campaign": "Rahmenvertrag über Wartung und Instandhaltung der Produktionsanlagen am Standort Augsburg",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ],
+    "menu": [
+     "import-source=Importjob anlegen",
+     "open-campaign-runbook=Kampagnen-Runbook öffnen",
+     "delete-campaign=Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Rahmenvertrag über Wartung und Instandhaltung der Produktionsanlagen am Standort Augsburg",
+    "action": {
+     "itemId": "import-source",
+     "label": "Importjob anlegen",
+     "clicks": 2,
+     "ops": [],
+     "downloads": [],
+     "sheet": null,
+     "importer": true,
+     "closedBy": "Schließen-Knopf"
+    }
+   },
+   {
+    "campaign": "Rahmenvertrag über Wartung und Instandhaltung der Produktionsanlagen am Standort Augsburg",
+    "action": {
+     "itemId": "open-campaign-runbook",
+     "label": "Kampagnen-Runbook öffnen",
+     "clicks": 2,
+     "ops": [],
+     "downloads": [],
+     "sheet": null,
+     "navigate": [
+      "knowledge {\"id\":\"runbook:business-os.outbound.campaign-005.runbook.v1\"}"
+     ]
+    }
+   },
+   {
+    "campaign": "Rahmenvertrag über Wartung und Instandhaltung der Produktionsanlagen am Standort Augsburg",
+    "primary": "Bearbeiten",
+    "action": {
+     "sel": ".v4-app-root .outbound-campaign-item[data-campaign-id=\"campaign-005\"] [data-action=\"edit-campaign\"]",
+     "clicks": 1,
+     "ops": [],
+     "sheet": null,
+     "editor": true
+    }
+   },
+   {
+    "campaign": "Angebot Wartungsvertrag Halle 4",
+    "action": {
+     "itemId": "delete-campaign",
+     "label": "Kampagne löschen",
+     "clicks": 2,
+     "ops": [],
+     "downloads": [],
+     "sheet": "Kampagne löschen Kampagne \"Angebot Wartungsvertrag Halle 4\" löschen? Importjobs, Firmen und Pipeline-Einträge dieser Kampagne werden entfernt. Abbrechen Löschen",
+     "opsAfterEnter": [
+      "remove outbound_sources/source-001 \"source-001\"",
+      "remove outbound_companies/company-001 \"company-001\"",
+      "remove outbound_companies/company-007 \"company-007\"",
+      "remove outbound_pipeline_items/pipeline-item-001 \"pipeline-item-001\"",
+      "remove outbound_research_runs/research-run-001 \"research-run-001\"",
+      "remove outbound_research_adapters/research-adapter-001 \"research-adapter-001\"",
+      "remove outbound_campaigns/campaign-001 \"campaign-001\""
+     ],
+     "campaignsBefore": 7,
+     "campaignsAfter": 6,
+     "victimGone": true
+    }
+   }
+  ],
+  "errors": []
+ },
+ {
+  "width": 420,
+  "scenario": "A Sicht, Tastatur, Ausschließen",
+  "steps": [
+   {
+    "campaign": "Outbound Firmenqualifizierung",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "campaign": "Angebot Wartungsvertrag Halle 4",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "campaign": "Projektplan Relaunch Kundenportal",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "campaign": "Lieferantenbewertung 2026",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "campaign": "Onboarding neue Mitarbeitende",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "campaign": "Rahmenvertrag über Wartung und Instandhaltung der Produktionsanlagen am Standort Augsburg",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "campaign": "Kundentermin Vorbereitung",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "company": "company-005",
+    "visible": [
+     "Qualifizieren",
+     "Weitere Aktionen"
+    ],
+    "menu": [
+     "research-company=Nachrecherchieren",
+     "validate-company-research=Als validiert markieren",
+     "download-company-research-log=Run-Log herunterladen",
+     "hide-company=Ausblenden",
+     "reject-company=Ausschließen"
+    ],
+    "escCloses": true,
+    "focusAfterEsc": "button[company-more] Weitere Aktionen"
+   },
+   {
+    "company": "company-011",
+    "visible": [
+     "Qualifizieren",
+     "Weitere Aktionen"
+    ],
+    "menu": [
+     "research-company=Nachrecherchieren",
+     "validate-company-research=Als validiert markieren",
+     "download-company-research-log=Run-Log herunterladen",
+     "hide-company=Ausblenden",
+     "reject-company=Ausschließen"
+    ],
+    "escCloses": true,
+    "focusAfterEsc": "button[company-more] Weitere Aktionen"
+   },
+   {
+    "keyboard": {
+     "focus": "button[company-more] Weitere Aktionen",
+     "enterOpens": true,
+     "firstFocus": "button[research-company] Nachrecherchieren",
+     "afterDown": "button[validate-company-research] Als validiert markieren",
+     "afterUp": "button[research-company] Nachrecherchieren",
+     "afterEnd": "button[reject-company] Ausschließen",
+     "escCloses": true,
+     "focusBack": "button[company-more] Weitere Aktionen",
+     "spaceOpens": true,
+     "chosen": "button[research-company] Nachrecherchieren",
+     "enterRuns": [
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "command outbound.company.research {\"run_id\":\"run_12fb12a1-b214-4e95-a638-6717af9d9fe4\",\"title\":\"Unternehmensdaten recherchie",
+      "put outbound_research_runs/run_12fb12a1-b214-4e95-a638-6717af9d9fe4 {\"id\":\"run_12fb12a1-b214-4e95-a638-6717af9d9fe4\",\"campaign_id\":\"campaign-005\",\"company_id\"",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "patch outbound_companies/company-005 {\"research_status\":\"queued\",\"updated_at_ms\":1792131935269}"
+     ],
+     "menuClosed": true
+    }
+   },
+   {
+    "company": "company-005",
+    "action": {
+     "itemId": "reject-company",
+     "label": "Ausschließen",
+     "clicks": 2,
+     "ops": [
+      "patch outbound_companies/company-005 {\"qualification_status\":\"rejected\",\"fit_status\":\"not_fit\",\"fit_score\":10,\"updated_at_ms\":1",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "patch outbound_campaigns/campaign-005 {\"source_count\":1,\"company_count\":2,\"qualified_count\":0,\"pipeline_count\":1,\"updated_at_ms\""
+     ],
+     "downloads": [],
+     "sheet": null
+    }
+   },
+   {
+    "company": "company-005",
+    "visibleAfterReject": [
+     "Weitere Aktionen"
+    ]
+   }
+  ],
+  "errors": []
+ },
+ {
+  "width": 420,
+  "scenario": "B Zeilenaktionen",
+  "steps": [
+   {
+    "company": "company-005",
+    "action": {
+     "itemId": "download-company-research-log",
+     "label": "Run-Log herunterladen",
+     "clicks": 2,
+     "ops": [],
+     "downloads": [
+      "wagner-elektrotechnik-gmbh-research-log.json"
+     ],
+     "sheet": null
+    }
+   },
+   {
+    "company": "company-005",
+    "action": {
+     "itemId": "validate-company-research",
+     "label": "Als validiert markieren",
+     "clicks": 2,
+     "ops": [
+      "patch outbound_companies/company-005 {\"research_status\":\"validated\",\"research_validation_status\":\"validated\",\"validated_at_ms\":",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv"
+     ],
+     "downloads": [],
+     "sheet": null
+    }
+   },
+   {
+    "company": "company-005",
+    "action": {
+     "itemId": "research-company",
+     "label": "Nachrecherchieren",
+     "clicks": 2,
+     "ops": [
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "command outbound.company.research {\"run_id\":\"run_04a0f521-6fac-487e-bef9-8d7bdd2e4c87\",\"title\":\"Unternehmensdaten recherchie",
+      "put outbound_research_runs/run_04a0f521-6fac-487e-bef9-8d7bdd2e4c87 {\"id\":\"run_04a0f521-6fac-487e-bef9-8d7bdd2e4c87\",\"campaign_id\":\"campaign-005\",\"company_id\"",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "patch outbound_companies/company-005 {\"research_status\":\"queued\",\"updated_at_ms\":1792131941485}"
+     ],
+     "downloads": [],
+     "sheet": null
+    }
+   },
+   {
+    "company": "company-005",
+    "primary": "Qualifizieren",
+    "action": {
+     "sel": ".v4-app-root tr[data-company-id=\"company-005\"] .outbound-cell-actions [data-action=\"qualify-company\"]",
+     "clicks": 1,
+     "ops": [
+      "patch outbound_companies/company-005 {\"qualification_status\":\"qualified\",\"fit_status\":\"fit\",\"fit_score\":75,\"updated_at_ms\":1792",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "patch outbound_campaigns/campaign-005 {\"source_count\":1,\"company_count\":2,\"qualified_count\":1,\"pipeline_count\":1,\"updated_at_ms\""
+     ],
+     "sheet": null
+    },
+    "visibleAfter": [
+     "In Pipeline",
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "company": "company-005",
+    "primary": "In Pipeline",
+    "action": {
+     "sel": ".v4-app-root tr[data-company-id=\"company-005\"] .outbound-cell-actions [data-action=\"send-pipeline\"]",
+     "clicks": 1,
+     "ops": [
+      "patch outbound_companies/company-005 {\"pipeline_status\":\"pipeline\",\"qualification_status\":\"qualified\",\"updated_at_ms\":179213194",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "command knowledge.command {\"title\":\"Knowledge command\",\"args\":[\"data\",\"list\",\"--domain\",\"outbound\",\"--include-archiv",
+      "patch outbound_campaigns/campaign-005 {\"source_count\":1,\"company_count\":2,\"qualified_count\":1,\"pipeline_count\":1,\"updated_at_ms\""
+     ],
+     "sheet": null
+    },
+    "visibleAfter": [
+     "Weitere Aktionen"
+    ]
+   },
+   {
+    "company": "company-005",
+    "action": {
+     "itemId": "hide-company",
+     "label": "Ausblenden",
+     "clicks": 2,
+     "ops": [],
+     "downloads": [],
+     "sheet": null
+    },
+    "rowsBefore": 2,
+    "rowsAfter": 1
+   }
+  ],
+  "errors": []
+ },
+ {
+  "width": 420,
+  "scenario": "C Kampagnen",
+  "steps": [
+   {
+    "campaign": "Rahmenvertrag über Wartung und Instandhaltung der Produktionsanlagen am Standort Augsburg",
+    "visible": [
+     "Kampagne bearbeiten",
+     "Weitere Aktionen"
+    ],
+    "menu": [
+     "import-source=Importjob anlegen",
+     "open-campaign-runbook=Kampagnen-Runbook öffnen",
+     "delete-campaign=Kampagne löschen"
+    ]
+   },
+   {
+    "campaign": "Rahmenvertrag über Wartung und Instandhaltung der Produktionsanlagen am Standort Augsburg",
+    "action": {
+     "itemId": "import-source",
+     "label": "Importjob anlegen",
+     "clicks": 2,
+     "ops": [],
+     "downloads": [],
+     "sheet": null,
+     "importer": true,
+     "closedBy": "Schließen-Knopf"
+    }
+   },
+   {
+    "campaign": "Rahmenvertrag über Wartung und Instandhaltung der Produktionsanlagen am Standort Augsburg",
+    "action": {
+     "itemId": "open-campaign-runbook",
+     "label": "Kampagnen-Runbook öffnen",
+     "clicks": 2,
+     "ops": [],
+     "downloads": [],
+     "sheet": null,
+     "navigate": [
+      "knowledge {\"id\":\"runbook:business-os.outbound.campaign-005.runbook.v1\"}"
+     ]
+    }
+   },
+   {
+    "campaign": "Rahmenvertrag über Wartung und Instandhaltung der Produktionsanlagen am Standort Augsburg",
+    "primary": "Bearbeiten",
+    "action": {
+     "sel": ".v4-app-root .outbound-campaign-item[data-campaign-id=\"campaign-005\"] [data-action=\"edit-campaign\"]",
+     "clicks": 1,
+     "ops": [],
+     "sheet": null,
+     "editor": true
+    }
+   },
+   {
+    "campaign": "Angebot Wartungsvertrag Halle 4",
+    "action": {
+     "itemId": "delete-campaign",
+     "label": "Kampagne löschen",
+     "clicks": 2,
+     "ops": [],
+     "downloads": [],
+     "sheet": "Kampagne löschen Kampagne \"Angebot Wartungsvertrag Halle 4\" löschen? Importjobs, Firmen und Pipeline-Einträge dieser Kampagne werden entfernt. Abbrechen Löschen",
+     "opsAfterEnter": [
+      "remove outbound_sources/source-001 \"source-001\"",
+      "remove outbound_companies/company-001 \"company-001\"",
+      "remove outbound_companies/company-007 \"company-007\"",
+      "remove outbound_pipeline_items/pipeline-item-001 \"pipeline-item-001\"",
+      "remove outbound_research_runs/research-run-001 \"research-run-001\"",
+      "remove outbound_research_adapters/research-adapter-001 \"research-adapter-001\"",
+      "remove outbound_campaigns/campaign-001 \"campaign-001\""
+     ],
+     "campaignsBefore": 7,
+     "campaignsAfter": 6,
+     "victimGone": true
+    }
+   }
+  ],
+  "errors": []
+ }
+]

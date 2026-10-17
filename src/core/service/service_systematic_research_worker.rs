@@ -253,37 +253,34 @@ fn systematic_research_started_at(
     job: &QueuedPrompt,
     fallback_started_at: u64,
 ) -> u64 {
-    let db_path = crate::paths::core_db(root);
-    let Ok(conn) = Connection::open_with_flags(
-        db_path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    ) else {
-        return fallback_started_at;
-    };
-    let mut earliest = None;
-    for message_key in &job.leased_message_keys {
-        let created_at = conn
-            .query_row(
-                "SELECT MIN(created_at)
+    let keys = job.leased_message_keys.clone();
+    super::store_inputs::owned_read(root, false, move |conn| {
+        let mut earliest = None;
+        for message_key in &keys {
+            let created_at = conn
+                .query_row(
+                    "SELECT MIN(created_at)
                  FROM ctox_harness_flow_events
                  WHERE message_key = ?1
                    AND event_kind = 'business_command_context_loaded'",
-                params![message_key],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .ok()
-            .flatten();
-        let Some(epoch) = created_at
-            .as_deref()
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-            .and_then(|value| u64::try_from(value.timestamp()).ok())
-            .filter(|epoch| *epoch <= fallback_started_at)
-        else {
-            continue;
-        };
-        earliest = Some(earliest.map_or(epoch, |current: u64| current.min(epoch)));
-    }
-    earliest.unwrap_or(fallback_started_at)
+                    params![message_key],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .ok()
+                .flatten();
+            let Some(epoch) = created_at
+                .as_deref()
+                .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+                .and_then(|value| u64::try_from(value.timestamp()).ok())
+                .filter(|epoch| *epoch <= fallback_started_at)
+            else {
+                continue;
+            };
+            earliest = Some(earliest.map_or(epoch, |current: u64| current.min(epoch)));
+        }
+        Ok(earliest.unwrap_or(fallback_started_at))
+    })
+    .unwrap_or(fallback_started_at)
 }
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]

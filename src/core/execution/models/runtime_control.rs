@@ -121,7 +121,7 @@ struct RuntimeSwitchLease {
 
 impl Drop for RuntimeSwitchLease {
     fn drop(&mut self) {
-        let _ = persistence::release_lease(&self.root, RUNTIME_SWITCH_LEASE_KEY);
+        let _ = persistence::release_lease_on_drop(&self.root, RUNTIME_SWITCH_LEASE_KEY);
     }
 }
 

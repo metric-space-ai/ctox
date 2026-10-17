@@ -1,0 +1,114 @@
+{
+ "app": "shiftflow",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Einsatzplanung",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 744
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Neue Schicht",
+    "button:Schichten importieren",
+    "button:Schichten exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filtern",
+    "nav:Woche (0)",
+    "nav:Entwürfe (1)",
+    "button:Linke Spaltenbreite anpassen",
+    "button:Dienstplan automatisch generie",
+    "button:Vorherige Woche",
+    "button:Nächste Woche",
+    "nav:Dienstplan (0)",
+    "nav:Konflikte (0)",
+    "nav:Zeiterfassung (2)",
+    "nav:Abrechnung (2)",
+    "button:Mitarbeiter-Timeline",
+    "button:Projekt-Timeline",
+    "button:Dienstplan veröffentlichen",
+    "button:Mitarbeiter-Details: Tanja Alb",
+    "button:Mitarbeiter-Details: Holger Br",
+    "button:Mitarbeiter-Details: Jule Enge",
+    "button:Mitarbeiter-Details: Martin Se",
+    "button:Mitarbeiter-Details: Nina Kais",
+    "button:Mitarbeiter-Details: Oliver Ro"
+   ],
+   "shot": "shiftflow/1280-01-open.png"
+  },
+  {
+   "step": "nav Woche (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/1280-02-nav_Woche_0_.png"
+  },
+  {
+   "step": "nav Entwürfe (1)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "shiftflow/1280-03-nav_Entw_rfe_1_.png"
+  },
+  {
+   "step": "nav Dienstplan (0)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 999,
+   "shot": "shiftflow/1280-04-suche_ohne_Treffer.png",
+   "textAfter": 314
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "shiftflow/1280-05-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "shiftflow",
+  "Einsatzplanung"
+ ]
+}

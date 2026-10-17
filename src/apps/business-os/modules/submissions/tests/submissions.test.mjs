@@ -23,10 +23,10 @@ test('submissions: manifest is consistent and has no inline SVG', () => {
   assert.ok(!manifest.layout || !manifest.layout.icon_svg, 'no inline SVG in manifest');
 });
 
-test('submissions: schema declares its owned collection', () => {
-  const schemaSrc = read('schema.js');
-  assert.match(schemaSrc, /submissions/);
-  assert.match(schemaSrc, /export const collections/);
+test('submissions: collections.schema.json is the only schema source (schema.js removed, §16.13)', () => {
+  const schema = JSON.parse(read('collections.schema.json'));
+  assert.ok(schema.collections.submissions, 'submissions declared');
+  assert.throws(() => read('schema.js'), /ENOENT/, 'schema.js is gone');
 });
 
 test('submissions: left column carries the canonical grammar markup pins', () => {
@@ -49,7 +49,7 @@ test('submissions: left column carries the canonical grammar markup pins', () =>
   assert.doesNotMatch(markup, /data-pg-view=/);
   assert.doesNotMatch(markup, /ctox-view-toggle/);
   // Footer target.
-  assert.match(html, /data-pg-footer/);
+  assert.doesNotMatch(html, /data-pg-footer/, 'keine Fußzeile, die nur den Reiterzähler wiederholt (Textdiät Regel 5)');
   // Counted view band with >= 2 real views (bands with a single tab are a
   // static-check failure).
   const bandTabs = (html.match(/data-pg-band=/g) || []).length;
@@ -67,13 +67,13 @@ test('submissions: header carries Neu, Import and Export actions', () => {
 
 test('submissions: import/export handlers are wired in index.js', () => {
   const js = read('index.js');
-  // Export via Blob URL download, import via file input + JSON, upsert through
-  // the shell-provided collection handle — no HTTP.
+  // Export via Blob URL download, import via file input + JSON, writes through
+  // api.put (App-API 4.0) — no HTTP.
   assert.match(js, /new Blob\(/);
   assert.match(js, /URL\.createObjectURL/);
   assert.match(js, /input\.type = 'file'/);
   assert.match(js, /JSON\.parse/);
-  assert.match(js, /\.upsert\(/);
+  assert.match(js, /api\.put\(PRIMARY, record\)/);
   assert.match(js, /\[data-action="import"\]/);
   assert.match(js, /\[data-action="export"\]/);
 });
@@ -82,19 +82,19 @@ test('submissions: present command type + payload are unchanged', () => {
   const js = read('index.js');
   // The single native command and its payload keys must stay exactly as-is.
   assert.match(js, /ats\.submission\.present/);
-  assert.match(js, /command_type: PRESENT_COMMAND/);
+  assert.match(js, /sendCommand\(PRESENT_COMMAND, payload,/, 'v4: api.command(type, payload) über sendCommand');
   assert.match(js, /vacancy_id: String\(f\.vacancy_id \|\| ''\)\.trim\(\) \|\| null/);
   assert.match(js, /client_contact_id: String\(f\.client_contact_id \|\| ''\)\.trim\(\) \|\| null/);
 });
 
 test('submissions: renders a shard list from a stub doc array with the context trio', () => {
   const docs = [
-    { id: 's1', candidate_id: 'CAND-1', client_account_id: 'ACC-1', status: 'sent' },
-    { id: 's2', candidate_id: 'CAND-2', client_account_id: 'ACC-2', status: 'hired', feedback: { outcome: 'accepted' } },
+    { id: 's1', candidate_id: 'CAND-1', candidate_name: 'Anna Eins', client_account_id: 'ACC-1', status: 'sent' },
+    { id: 's2', candidate_id: 'CAND-2', candidate_name: 'Bernd Zwei', client_account_id: 'ACC-2', status: 'hired', feedback: { outcome: 'accepted' } },
   ];
   const cardsHtml = renderList(docs, { view: 'cards', selectedId: 's2' });
-  assert.match(cardsHtml, /CAND-1/);
-  assert.match(cardsHtml, /CAND-2/);
+  assert.match(cardsHtml, /Anna Eins/);
+  assert.match(cardsHtml, /Bernd Zwei/);
   assert.match(cardsHtml, /data-context-record-id="s1"/);
   assert.match(cardsHtml, /data-context-record-type="submission"/);
   assert.match(cardsHtml, /data-subs-row="s2"/);
@@ -103,32 +103,17 @@ test('submissions: renders a shard list from a stub doc array with the context t
   // Compact variant is a distinct rendering behind the toggle.
   const listHtml = renderList(docs, { view: 'list', selectedId: '' });
   assert.match(listHtml, /subs-row-compact/);
-  // Empty state.
-  assert.match(renderList([], { view: 'cards' }), /ctox-empty/);
+  // An empty list renders nothing (App-API 4.0).
+  assert.equal(renderList([], { view: 'cards' }), '');
 });
 
-test('submissions: empty source gates on collection readiness', () => {
-  // Source empty + not yet replicated → kit syncing shell (role=status).
-  const syncingHtml = renderList([], { view: 'cards', sourceEmpty: true, readiness: { ready: false, state: 'catching-up' } });
-  assert.match(syncingHtml, /ctox-syncing/);
-  assert.match(syncingHtml, /role="status"/);
-  assert.doesNotMatch(syncingHtml, /ctox-empty/);
-  // Source empty + live → the real empty state.
-  const emptyHtml = renderList([], { view: 'cards', sourceEmpty: true, readiness: { ready: true, state: 'live' } });
-  assert.match(emptyHtml, /ctox-empty/);
-  assert.doesNotMatch(emptyHtml, /ctox-syncing/);
-  // Filter-empty (source holds rows) never shows the syncing shell, even
-  // when the collection is still catching up.
-  const filterEmptyHtml = renderList([], { view: 'cards', sourceEmpty: false, readiness: { ready: false } });
-  assert.match(filterEmptyHtml, /ctox-empty/);
-  assert.doesNotMatch(filterEmptyHtml, /ctox-syncing/);
-  // Rows always win over readiness.
-  const rowsHtml = renderList(
-    [{ id: 's1', candidate_id: 'CAND-1', client_account_id: 'ACC-1', status: 'sent' }],
-    { view: 'cards', sourceEmpty: false, readiness: { ready: false } },
-  );
-  assert.match(rowsHtml, /CAND-1/);
-  assert.doesNotMatch(rowsHtml, /ctox-syncing/);
+test('submissions: no readiness / syncing state in the content (App-API 4.0, R4/R11)', () => {
+  assert.equal(renderList([], { view: 'cards', sourceEmpty: true, readiness: { ready: false } }), '');
+  const rowsHtml = renderList([{ id: 's1', candidate_id: 'CAND-1', candidate_name: 'Anna Eins', client_account_id: 'ACC-1', status: 'sent' }], { view: 'cards' });
+  assert.match(rowsHtml, /Anna Eins/);
+  const js = read('index.js');
+  assert.doesNotMatch(js, /ctox-syncing|renderListOrState|collectionReadiness|commandBus|ctx\.db/, 'no v3 data/sync paths left');
+  assert.match(js, /api\.command\(type, payload\)/, 'commands go through api.command without waiting');
 });
 
 test('submissions: band counts and filtering derive from the status field', () => {

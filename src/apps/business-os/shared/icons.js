@@ -224,21 +224,6 @@ const iconMap = {
       <line x1="13" y1="7" x2="11" y2="17" stroke="url(#grad-code-editor)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></line>
     </svg>
   `,
-  'file-viewer': (size, stroke) => `
-    <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" class="svg-icon svg-file-viewer">
-      <defs>
-        <linearGradient id="grad-file-viewer" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#475569" />
-          <stop offset="100%" stop-color="#1e293b" />
-        </linearGradient>
-      </defs>
-      <rect x="3" y="3" width="18" height="18" rx="2" fill="url(#grad-file-viewer)" fill-opacity="0.12" stroke="url(#grad-file-viewer)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></rect>
-      <!-- Dynamic split-window / image representation -->
-      <line x1="9" y1="3" x2="9" y2="21" stroke="url(#grad-file-viewer)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></line>
-      <circle cx="15" cy="8" r="2" stroke="url(#grad-file-viewer)" stroke-width="1.5"></circle>
-      <path d="M10 18l3-3 4 4" stroke="url(#grad-file-viewer)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path>
-    </svg>
-  `,
   shiftflow: (size, stroke) => `
     <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" class="svg-icon svg-shiftflow">
       <defs>
@@ -285,20 +270,6 @@ const iconMap = {
       <line x1="14" y1="6" x2="10" y2="18" stroke="url(#grad-creator)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></line>
       <path d="M18 4l.5 1.5L20 6l-1.5.5L18 8l-.5-1.5L16 6l1.5-.5z" fill="url(#grad-creator)"></path>
       <path d="M6 18l.25.75L7 19l-.75.25L6 20l-.25-.75L5 19l.75-.25z" fill="url(#grad-creator)"></path>
-    </svg>
-  `,
-  'app-store': (size, stroke) => `
-    <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" class="svg-icon svg-app-store">
-      <defs>
-        <linearGradient id="grad-app-store" x1="0%" y1="0%" x2="100%" y2="100%">
-          <stop offset="0%" stop-color="#f59e0b" />
-          <stop offset="100%" stop-color="#ec4899" />
-        </linearGradient>
-      </defs>
-      <path d="M21 8H3a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h18a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2z" fill="url(#grad-app-store)" fill-opacity="0.12" stroke="url(#grad-app-store)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></path>
-      <path d="M16 8A4 4 0 0 0 8 8" stroke="url(#grad-app-store)" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"></path>
-      <rect x="5" y="12" width="5" height="5" rx="1" fill="url(#grad-app-store)" fill-opacity="0.25" stroke="url(#grad-app-store)" stroke-width="1.2"></rect>
-      <rect x="14" y="12" width="5" height="5" rx="1" fill="url(#grad-app-store)" fill-opacity="0.25" stroke="url(#grad-app-store)" stroke-width="1.2"></rect>
     </svg>
   `,
   fallback: (size, stroke) => `

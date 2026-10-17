@@ -7,6 +7,9 @@ const srcRoot = path.resolve(scriptDir, '..', '..');
 const repoRoot = path.resolve(srcRoot, '..');
 const businessOsRoot = path.join(srcRoot, 'apps', 'business-os');
 const vendorRoot = path.join(businessOsRoot, 'vendor');
+// App-eigene Vendor-Ziele (Strang VENDOR, v4/tools/isolation/REPORT.md): eine App -> modules/<id>/vendor/.
+const documentsVendorRoot = path.join(businessOsRoot, 'modules', 'documents', 'vendor');
+const notesVendorRoot = path.join(businessOsRoot, 'modules', 'notes', 'vendor');
 const archivedWordPortRoot = path.join(
   repoRoot,
   'archive',
@@ -52,7 +55,7 @@ if (requestedBuild && !['document-format', 'superdoc', 'hyperformula', 'lexical'
 
 async function buildDocumentFormat() {
   const entry = path.join(businessOsRoot, 'modules', 'documents', 'document-format', 'src', 'index.ts');
-  const outfile = path.join(vendorRoot, 'document-format.mjs');
+  const outfile = path.join(documentsVendorRoot, 'document-format.mjs');
   await esbuild.build({
     entryPoints: [entry],
     outfile,
@@ -115,8 +118,8 @@ async function buildHyperFormula() {
 }
 
 async function buildLexical() {
-  const entry = path.join(businessOsRoot, 'vendor', 'lexical-src', 'index.js');
-  const outfile = path.join(vendorRoot, 'lexical.mjs');
+  const entry = path.join(notesVendorRoot, 'lexical-src', 'index.js');
+  const outfile = path.join(notesVendorRoot, 'lexical.mjs');
   await esbuild.build({
     entryPoints: [entry],
     outfile,

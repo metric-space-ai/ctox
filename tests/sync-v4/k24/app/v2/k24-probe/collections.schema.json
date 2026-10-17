@@ -1,0 +1,129 @@
+{
+  "collections": {
+    "k24_ticks": {
+      "schema": {
+        "type": "object",
+        "primaryKey": "id",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "command",
+              "trigger",
+              "ui"
+            ]
+          },
+          "command_id": {
+            "type": "string",
+            "maxLength": 128
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "weight": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "source",
+          "created_at_ms",
+          "weight"
+        ]
+      },
+      "indexes": [
+        [
+          "created_at_ms"
+        ],
+        [
+          "source",
+          "created_at_ms"
+        ]
+      ],
+      "class": "full",
+      "rights": null,
+      "client_limit": null,
+      "byte_budget": null
+    },
+    "k24_runs": {
+      "schema": {
+        "type": "object",
+        "primaryKey": "id",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "done",
+              "failed"
+            ]
+          },
+          "task_id": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "task_status": {
+            "type": "string",
+            "maxLength": 40
+          },
+          "result_text": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "callback_count": {
+            "type": "number"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "task_id",
+          "created_at_ms"
+        ]
+      },
+      "indexes": [
+        [
+          "task_id"
+        ],
+        [
+          "created_at_ms"
+        ]
+      ],
+      "class": "full",
+      "rights": null,
+      "client_limit": null,
+      "byte_budget": null
+    }
+  },
+  "migrations": {
+    "k24_ticks": {
+      "from_ver": "__BASE_APP_VER__",
+      "migrate_fn": "migrations/k24_ticks.js"
+    }
+  }
+}

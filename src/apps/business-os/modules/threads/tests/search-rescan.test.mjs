@@ -1,156 +1,56 @@
+// Regel (vor dem Port: „authoritative rescan/deletion/cancellation“): Suche deckt alle zugänglichen Threads ab,
+// eine Löschung (Tombstone/_deleted oder is_deleted) entfernt den Thread sofort – auch den ausgewählten –, und keine
+// spätere Emission bringt ihn zurück. In App-API 4.0 ist die lokale Abfrage vollständig und live; die frühere
+// Scan-/Abbruch-Maschinerie (Seiten, Generationen, Sichtbarkeitsprüfung) entfällt, die Regel bleibt.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node --test src/apps/business-os/modules/threads/tests/search-rescan.test.mjs
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import vm from 'node:vm';
-import { collectUniquePages } from '../paging.js';
+import { startHarness, mountMain, rowTexts } from './_v4-harness.mjs';
 
-// Exercise the module's real scan, observation and selection lifecycle without
-// a browser. Only rendering and detail transport are replaced at the boundary.
-const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-const observers = new Map();
-const timers = new Map();
-let timerId = 0;
-let rows = [];
-let pendingPage;
-let pendingRecord;
-let onRecordLookup;
-let attentionStates = [];
-const listeners = new Map();
-const context = vm.createContext({
-  collectUniquePages, console, isVisible: true,
-  window: {
-    setTimeout(fn) { timers.set(++timerId, fn); return timerId; },
-    clearTimeout(id) { timers.delete(id); },
-    setInterval() { return 0; }, clearInterval() {},
-  },
-  document: { addEventListener(name, fn) { listeners.set(name, fn); }, removeEventListener(name) { listeners.delete(name); } },
-  database: { collection(name) { return {
-    observe(fn) { observers.set(name, fn); return () => observers.delete(name); },
-    find({ skip = 0, limit = 100 }) { return { exec: () => name === 'user_threads'
-      ? pendingPage || Promise.resolve(rows.slice(skip, skip + limit))
-      : Promise.resolve(name === 'user_thread_states' ? attentionStates : []) }; },
-    findOne(id) { return { exec: () => {
-      onRecordLookup?.();
-      return pendingRecord || Promise.resolve(rows.find((row) => row.id === id));
-    } }; },
-  }; } },
+let h, page;
+before(async () => { h = await startHarness(); page = h.page; await mountMain(page); await h.settle(); });
+after(async () => { await h?.close(); });
+
+const search = async (text) => {
+  await page.fill('[data-pg-search]', text);
+  await page.dispatchEvent('[data-pg-search]', 'input');
+  await h.settle();
+};
+
+test('Suche über den angezeigten Namen und die Quelle, über alle zugänglichen Threads', async () => {
+  // „Alle“ statt Handeln, damit auch t3 (AI-Arbeit) zur Menge gehört.
+  await page.click('[data-pg-tray-toggle]');
+  await page.selectOption('[data-pg-filter][data-pg-name="view"]', 'all');
+  await search('nachtlauf');
+  const rows = await rowTexts(page);
+  assert.equal(rows.length, 1);
+  assert.match(rows[0].text, /CTOX Shell v4 · Nachtlauf/);
+  await search('müller');
+  assert.deepEqual((await rowTexts(page)).map((r) => r.id), [await page.evaluate(() => window.__fx.ids.t5)]);
 });
-vm.runInContext(source.replace(/^import[\s\S]*?;\n/gm, '').replace(/^export /gm, '').replaceAll('import.meta.url', '"file:///threads/index.js"') + `
-  moduleIsVisible = () => globalThis.isVisible;
-  render = () => {};
-  updateConnectivity = () => {};
-  notifyActionRequired = () => {};
-  currentUserId = () => 'alice';
-  clearLoadError = () => {};
-  showError = (error) => { throw error; };
-  hydrateSelectedThread = async () => {};
-  visibleThreads = () => state.data.threads;
-  Object.assign(state, {
-    ctx: { db: database }, search: 'target', searchCorpus: [],
-    searchCorpusComplete: false, searchScanGeneration: 0,
-    threadsReadiness: { ready: true }, searchScanInFlight: null,
-  });
-  globalThis.api = { state, scheduleSearchScan, wireRealtime, refreshOnce };
-`, context);
-const { state, scheduleSearchScan, wireRealtime, refreshOnce } = context.api;
-const stop = wireRealtime();
-async function scan() {
-  scheduleSearchScan();
-  const callback = [...timers.values()].at(-1);
-  assert.ok(callback, 'scan scheduled');
-  timers.clear();
-  callback();
-  await state.searchScanInFlight;
-}
 
-rows = [{ id: 'removed', title: 'target', updated_at_ms: 1 }];
-await scan();
-assert.equal(state.searchCorpusComplete, true);
-assert.equal(state.selectedId, 'removed');
-state.detailCompleteThreadId = 'removed';
-state.data.messages = [{ id: 'secret-message', thread_id: 'removed' }];
-state.data.commands = [{ id: 'old-command' }];
-// Absence in a complete scan must evict the old record even without an event.
-rows = [];
-state.searchCorpusComplete = false;
-await scan();
-assert.equal(state.searchCorpus.length, 0);
-assert.equal(state.data.threads.length, 0);
-assert.equal(state.selectedId, '');
-assert.equal(state.detailCompleteThreadId, '');
-assert.equal(state.data.messages.length, 0);
-assert.equal(state.data.commands.length, 0);
-
-rows = [{ id: 'removed', updated_at_ms: 2 }];
-state.searchCorpusComplete = false;
-await scan();
-let resolvePage;
-pendingPage = new Promise((resolve) => { resolvePage = resolve; });
-state.searchCorpusComplete = false;
-const inFlight = scan();
-observers.get('user_threads')({ success: { removed: { id: 'removed', _deleted: true } } });
-assert.equal(state.data.threads.length, 0, 'tombstone removes selected record immediately');
-assert.equal(state.selectedId, '');
-resolvePage(rows);
-await inFlight;
-assert.equal(state.searchCorpusComplete, false, 'invalidated in-flight scan is incomplete');
-assert.equal(state.data.threads.length, 0, 'late page cannot resurrect deleted thread');
-pendingPage = undefined;
-rows = [];
-await scan();
-assert.equal(state.searchCorpusComplete, true);
-assert.equal(state.searchCorpus.length, 0);
-// A refresh that already fetched old rows must not undo a later tombstone.
-rows = [{ id: 'removed', updated_at_ms: 3 }];
-state.searchCorpusComplete = false;
-await scan();
-pendingPage = new Promise((resolve) => { resolvePage = resolve; });
-const oldRefresh = refreshOnce();
-observers.get('user_threads')({ success: { removed: { id: 'removed', _deleted: true } } });
-resolvePage(rows);
-await oldRefresh;
-assert.equal(state.data.threads.length, 0, 'late recent-window response cannot resurrect a tombstone');
-assert.equal(state.recentThreadsComplete, false);
-pendingPage = undefined;
-
-// Exercise the later await boundary too: recent rows arrived, personal lookup
-// is pending when the deletion lands.
-attentionStates = [{ id: 'state-removed', user_id: 'alice', thread_id: 'removed', attention_score: 50 }];
-let resolveRecord;
-pendingRecord = new Promise((resolve) => { resolveRecord = resolve; });
-const recordRequested = new Promise((resolve) => { onRecordLookup = resolve; });
-const oldPersonalRefresh = refreshOnce();
-await recordRequested;
-observers.get('user_threads')({ success: { removed: { id: 'removed', is_deleted: true } } });
-resolveRecord(rows[0]);
-await oldPersonalRefresh;
-assert.equal(state.data.threads.length, 0, 'late personal response cannot resurrect a tombstone');
-assert.equal(state.personalComplete, false);
-pendingRecord = undefined;
-onRecordLookup = undefined;
-attentionStates = [];
-
-state.searchCorpusComplete = false;
-await scan();
-assert.equal(state.searchCorpusComplete, true);
-context.isVisible = false;
-observers.get('user_threads')({ success: { removed: { id: 'removed', _deleted: true } } });
-assert.equal(state.searchCorpusComplete, false, 'hidden deletion invalidates completed search');
-assert.equal(state.data.threads.length, 0);
-rows = [];
-context.isVisible = true;
-listeners.get('visibilitychange')();
-await state.refreshInFlight;
-assert.equal(state.data.threads.length, 0, 'visible refresh cannot merge deleted cached row back');
-assert.equal(state.searchCorpusComplete, false, 'visible refresh does not substitute for a complete rescan');
-await scan();
-assert.equal(state.searchCorpusComplete, true);
-assert.equal(state.selectedId, '');
-stop();
-
-let active = true;
-const cancelled = await collectUniquePages(async () => { active = false; return [{ id: 'late' }]; }, {
-  shouldContinue: () => active,
+test('Tombstone entfernt den ausgewählten Treffer sofort; spätere Emissionen bringen ihn nicht zurück', async () => {
+  const { t5 } = await page.evaluate(() => window.__fx.ids);
+  await page.click(`[data-thread-id="${t5}"]`);
+  await h.settle();
+  assert.equal(await page.evaluate(() => window.__app.snapshot().selectedId), t5);
+  await page.evaluate((id) => window.__k.sim.push('user_threads', { id, _deleted: true }), t5);
+  await h.settle();
+  assert.deepEqual(await rowTexts(page), []);
+  assert.equal(await page.evaluate(() => window.__app.snapshot().selectedId), '');
+  assert.equal(await page.$eval('[data-thread-title]', (el) => el.textContent), '');
+  // Fremde Änderungen (andere Threads, Zustände) lösen neue Emissionen aus – der gelöschte bleibt weg.
+  await page.evaluate(() => window.__k.sim.push('user_thread_states', { id: 'state_noise', thread_id: 'x', user_id: 'michael', attention_score: 5, updated_at_ms: Date.now() }));
+  await h.settle();
+  assert.deepEqual(await rowTexts(page), []);
 });
-assert.equal(cancelled.complete, false, 'cancellation during final page is not completion');
-assert.equal(cancelled.records.length, 0);
-console.log('Threads authoritative rescan/deletion/cancellation regression passed');
+
+test('is_deleted:true gilt wie gelöscht; Suche zurücksetzen zeigt den Rest', async () => {
+  const { t1 } = await page.evaluate(() => window.__fx.ids);
+  await page.evaluate((id) => window.__k.sim.push('user_threads', { ...window.__fx.collections.user_threads.find((t) => t.id === id), is_deleted: true, updated_at_ms: Date.now() }), t1);
+  await search('');
+  const ids = (await rowTexts(page)).map((r) => r.id);
+  assert.ok(!ids.includes(t1));
+  assert.ok(ids.length >= 3);
+  assert.deepEqual(page.__errors, []);
+});

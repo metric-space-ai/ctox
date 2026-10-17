@@ -97,9 +97,10 @@ export async function importTemplateToDb(db, skrName) {
 
   for (const acct of template) {
     const id = `${skrName}_${acct.code}`;
-    const existing = await collection.findOne({ selector: { id } }).exec();
+    // db = Speicher-Adapter der App (index.js fibuDb): byId/add sind api.get/api.put (App-API 4.0).
+    const existing = collection.byId(id);
     if (!existing) {
-      await collection.insert({
+      await collection.add({
         id,
         code: acct.code,
         name: acct.name,

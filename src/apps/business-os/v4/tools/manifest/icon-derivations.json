@@ -1,0 +1,651 @@
+{
+  "_format": "ctox-shell-v4-icon-derivations-1",
+  "apps": {
+    "app-store": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "950bcb487a15dd7f3de5baf25eb1500d84a305c3a5270d51f809e7d917f680bb",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "fe4d067afb1933cd7b5b0f0eec06d396f67ef41cf6c2db8513447c9b102a936b",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/app-store.jpg",
+      "source_px": 1024,
+      "source_sha256": "b6e9bc5bfa8bb42b86748efc00e9b5e736c4a0b6809b6c763aa6e8e7164de108"
+    },
+    "appsec-pentest": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "33da5d407791572340b2b1fefbb8524e3753f60b78e16306102151c4d726622b",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "1705dc79ab8d8fdab73b54be65a46a85d81a1bd28599c9bf8fa35e1c8505f282",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/appsec-pentest.jpg",
+      "source_px": 1024,
+      "source_sha256": "85fd7ee28a9d4f8a047569cbc376b63e5f26d16584272ccd0785fae638fb1a53"
+    },
+    "browser": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "eafafdd5c47fbd6a83f8a84e9e0d7e76aa30bf750e791dc30fc81a7e969ba936",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "196bbacaebde44b726a7873ffbafd026a589f7135171243805425eea9348fad2",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/browser.jpg",
+      "source_px": 1024,
+      "source_sha256": "8fa94a7ae4b6db8885c0088a68cf736a23c0fd717a3711cd9b015c969f799a11"
+    },
+    "buchhaltung": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "ffc3ab2ffd28030717493bdbbe0527ee4a9367d5c4c99445d7db5344de801795",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "7209dffd78d7b12267c51cb0a8cd27e321a5925e7770e4c7f3bceb3f49cbb160",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/buchhaltung.jpg",
+      "source_px": 1024,
+      "source_sha256": "56b558dd0dbc5210bf6b0472ccef3df5602ce582b987ae04ee4c5f762d14eb0a"
+    },
+    "calendar": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "d077d299a757539aca48fa9e53f3f887cc17678350034bac939498a3d77bc094",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "77b187e0d8a89b404c7fc26c4f0cd5d1cfd92c2ced706332fbe836620b89bc81",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/calendar.jpg",
+      "source_px": 1024,
+      "source_sha256": "c3de8ab4a29322bb08256ac953058904ac73d8d945df22f20df72ff988067f67"
+    },
+    "coding-agents": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "2363a6a02011c2628c351620f4aa9000a904060c7a8b6d4d5fbc17f5b085cf69",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "703abbbf085005de5fbf022b3c2a392d27f2d4096e4422efa389b586a3ab87d5",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/coding-agents.jpg",
+      "source_px": 1024,
+      "source_sha256": "1cf4cc4fd8e785f1b557be6dbbc3d0d8f02ab7462f9c16b17b163fc023c0bae3"
+    },
+    "consent": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "6c255b843208cc772e67f077f8cfe65c01089d42c6b24a8821b2550d0a5deac1",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "e8a24e140ab451199d3382aca2a754580d981db13fe1817c7b3eb0c4cecb1c23",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/consent.jpg",
+      "source_px": 1024,
+      "source_sha256": "a886247228318a5bf11d85a7e64ffd4f9e914454327718be8e1f451f9b032596"
+    },
+    "conversations": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "6b76ac565652160542c9e6b318553b98584210837607930e9552c3a89ae4a08b",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "df74cc4185f820d069ee20516ee593ca8aa09d9e5cac78012b3cdaf5ddae3c19",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/conversations.jpg",
+      "source_px": 1024,
+      "source_sha256": "1656adf1e387e7db50c4b7f6ea99998de43ecd6373fc1bedeb760e3cd109941b"
+    },
+    "creator": {
+      "outputs": {
+        "assets/icon.png": {
+          "px": 256,
+          "sha256": "40f41ca5bf71d772cb7418ab01ed4c1e5974e6ec4e4877c92b85e4e0827568a9",
+          "tool": "ffmpeg lanczos"
+        },
+        "assets/icon@512.png": {
+          "px": 512,
+          "sha256": "acb089e621a25ecdd20a6fe10f289d61f340938326c2dae1252ded10af0e0fb3",
+          "tool": "copy"
+        }
+      },
+      "source": "shared/assets/workjet-icons/grok-shell-v1/creator.png",
+      "source_px": 512,
+      "source_sha256": "acb089e621a25ecdd20a6fe10f289d61f340938326c2dae1252ded10af0e0fb3"
+    },
+    "credentials": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "80812437f7ad48fe7e29af4eb5c20636f431d95a470dc818fc765f2de0687f9c",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "eb519e7d10fd0537353b48a2e1af80932d4906ba63482dff6723c6325051304d",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/credentials.jpg",
+      "source_px": 1024,
+      "source_sha256": "d796dc418c8f64faadc3f43e914a7bfb6ea6e6a4b54a7b6d643e6ff40b1f4e57"
+    },
+    "ctox": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "38860ac10aa2175eec7a5feaf886275a65eef7d5d86fc2b313d0aebdb00768fc",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "822096d64731a44712f41335e81498acdf649330909962aeeaa34b108c45d910",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/ctox.jpg",
+      "source_px": 1024,
+      "source_sha256": "595492dd0ab23f3db59a0ebe9a6ec8062b1b2a80cbc54f566ee32b0501bcf0ce"
+    },
+    "customers": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "1b15a944de072f9d8bdc70a63813ca82a39b248d7f40e3a64a809638d6ae4e3d",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "8cfc6a6f3e884019f6ba14f0f6670e9d5ec0b5c7a528e5bb75214597a2a399ab",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/customers.jpg",
+      "source_px": 1024,
+      "source_sha256": "3a03210ceaa9ce7850ebd0409bff33e09e20e0c1850d9f84805682c307c4a5f9"
+    },
+    "cv-print-builder": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "80f0f7dc56dafbdc81f49d11c6bea63dc35c68e5945bb9452dd6e02dd87d891a",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "3fea8c7044b49a9df49f9b40d2222d7306140945edd2d86a885af7a96bc765a3",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/cv-print-builder.jpg",
+      "source_px": 1024,
+      "source_sha256": "bfda9b1a621037eb1d508614ddc3a9d4221abfe941976ddf326764d6b02c2b87"
+    },
+    "desktop": {
+      "outputs": {
+        "assets/icon.png": {
+          "px": 256,
+          "sha256": "4d5379c48aff92f80a2c230f44372eee79b5f01cf2d71a84ca64ada5a9c73f26",
+          "tool": "ffmpeg lanczos"
+        },
+        "assets/icon@512.png": {
+          "px": 512,
+          "sha256": "a29aad670cdcbb65e8864c81e30bb6b5713cdb5e27dc0f738a5534bf6d40c8f3",
+          "tool": "copy"
+        }
+      },
+      "source": "shared/assets/workjet-icons/grok-shell-v1/desktop.png",
+      "source_px": 512,
+      "source_sha256": "a29aad670cdcbb65e8864c81e30bb6b5713cdb5e27dc0f738a5534bf6d40c8f3"
+    },
+    "documents": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "8a673edbc3339255706b8d7e5f119759ab1eb5f3ca85b81a0ac33eb35fa00187",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "7c4ac5c8a10782423ffc9595c2de46e97957b5e2200c5ccd27f53aba6cea4426",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/documents.jpg",
+      "source_px": 1024,
+      "source_sha256": "31123bf173860e01f05eb6be2431f71925bab9f355241b2582d30a2d06aef216"
+    },
+    "esign": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "89896657d542772428d14dad14a0fe634b02ee4f0ad8deaa4236df88af595a52",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "dbc5218cb41381406d1e7b2399848338a5a7bac873c87317e6ab6b16c4017ddc",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/esign.jpg",
+      "source_px": 1024,
+      "source_sha256": "766c1175e036a870e4a28465ddc9e294bd0df22a9376e3acb8e125683026089f"
+    },
+    "explorer": {
+      "outputs": {
+        "assets/icon.png": {
+          "px": 256,
+          "sha256": "1c329f27f464aa0a5adfafaa0553226bcf1ad8312d9a712b0775c10467e71631",
+          "tool": "ffmpeg lanczos"
+        },
+        "assets/icon@512.png": {
+          "px": 512,
+          "sha256": "7ef0e24a291ce31f1bb6d86283cb0b90bd14a2023589bb9be6452553c84846b1",
+          "tool": "copy"
+        }
+      },
+      "source": "shared/assets/workjet-icons/grok-shell-v1/explorer.png",
+      "source_px": 512,
+      "source_sha256": "7ef0e24a291ce31f1bb6d86283cb0b90bd14a2023589bb9be6452553c84846b1"
+    },
+    "file-viewer": {
+      "outputs": {
+        "assets/icon.png": {
+          "px": 256,
+          "sha256": "ffda97708c2ca183344238069657b9c006205dd6252b7a765456b6a03bc83004",
+          "tool": "ffmpeg lanczos"
+        },
+        "assets/icon@512.png": {
+          "px": 512,
+          "sha256": "78311622fe7fd9a6a63f09f39ed7cc87da3cc25c7a8449f770211b8c2d6169f8",
+          "tool": "copy"
+        }
+      },
+      "source": "shared/assets/workjet-icons/grok-shell-v1/file-viewer.png",
+      "source_px": 512,
+      "source_sha256": "78311622fe7fd9a6a63f09f39ed7cc87da3cc25c7a8449f770211b8c2d6169f8"
+    },
+    "importer": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "2cf8363841c711ef2ebda7601966deda35fed0cfe958b11c5398532e11abd5f0",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "1a7af5616ecd747e13d431d8947c2629af407fa8d964bed9e2041991aacdfe72",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/importer.jpg",
+      "source_px": 1024,
+      "source_sha256": "13c493fc01ebc97db2fd6d098281ffde490761deadfbfc9963db7b8ecda60e61"
+    },
+    "intake": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "c8d7b89bca0fae1d33515df1ae03b7d05990dfdcbd6c65d0491123606ef808c8",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "9e726744227e863edd5ef21db994fdbf47e0bf5345d3f348ca76232eb6f40a2d",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/intake.jpg",
+      "source_px": 1024,
+      "source_sha256": "0a6d81e7d9c14b8526ab8d19f8344164d054db52fdc9b3856108f12729e532e7"
+    },
+    "interviews": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "a3bcce31c951c74914b74d9b77dc94d89f89051ff568f5aa24ccca2aa2a66c51",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "5e42f85dae1e1d167dc01291626c1ffda55ec465775d9122c7434873ffcbdfe2",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/interviews.jpg",
+      "source_px": 1024,
+      "source_sha256": "642cda9e3cb5c56c9ac63b46d731696087f980b48423501f2d8428bf5554f9d7"
+    },
+    "invoices": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "404231732d718b4d6fff19d3f39e4ad26b15f2720d5683f8e88b7618d1c8720a",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "0d11d581676f32c4af591a59af6ef10984e6b79aa3b304857444500689ef43c1",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/invoices.jpg",
+      "source_px": 1024,
+      "source_sha256": "1a0828f86f17d972434a30390e81f7d58fb8bff6e4fd4f9f5a7476088c36c52e"
+    },
+    "iot": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "7657ac2e9873d8e52d983519c3a94abdb47288786804cc527e18cf170d951bbb",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "605945c3392fa1c78cce7a0a98c46ca386a0307debff496aa24be74530bad31f",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/iot.jpg",
+      "source_px": 1024,
+      "source_sha256": "47e1a59d94e34baa238268a4eb5ec8190b8211e885ac418e106bb0de25bd2e43"
+    },
+    "mail": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "9abe6c142fbe1d1a98f86b58770da5a2ec1401e8d4b467c66f101611a2cc7ae9",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "b28e6689b705dbd7761ae1534195c79a13a18e687fa3b2f62f1019b601ebf480",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/mail.jpg",
+      "source_px": 1024,
+      "source_sha256": "dd943203a5729623a71df00b3c994f5a9085cf8d1373c6c7f440494409f3bcc4"
+    },
+    "matching": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "3bde634a41120c92468b533c23847246cd3b15f928d66be6451358c2c4931c9f",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "b8062a13d45162bf9526db39d903ed0b9294afb4c1531d79df8606f05cee10a3",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/matching.jpg",
+      "source_px": 1024,
+      "source_sha256": "3ececa42f99f1d63104468b920b6fea37fcc398186cae1f3b409de1647e2c3b7"
+    },
+    "nachweise": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "ea439621aa2b989a23b873069a0bd3466b3a0eda1bb5495a4167e4e31af8fa81",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "cb87e39f60605d8c3b97d2172471e078ee7aab101dd3f71741c2c7cfaff73f8a",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/nachweise.jpg",
+      "source_px": 1024,
+      "source_sha256": "cd43c8c297a229317fab2d9cd399e889e7377a6dcf16025bf52a1ce325f6d76a"
+    },
+    "news": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "10a8e2d20a59ac3dd5b6e139b5a234b1dcf82a12e8b96b4cfd536357dc71c850",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "19206727d17c85a3b39c2032c30c9fb319cedd2a97be7480568479a112b393ed",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/news-2.jpg",
+      "source_px": 1024,
+      "source_sha256": "415e717a9036ff7d996aadffdc37507af47300a234bb61dcc6db036d324a6765"
+    },
+    "notes": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "c04f91d5240dd8a585e6ff32a96c8f2980351041c251ca0fc98467c96b55fbf3",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "5f643fadaed6e3d300caabefb9053d573de0730fc4620a2bbd0e332256477f56",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/notes.jpg",
+      "source_px": 1024,
+      "source_sha256": "aa1aafef932cb21d16611927780be82d4a5d68c9b474b70308aaeda83be5cf8b"
+    },
+    "outbound": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "236ea306b4832180cd779ce17c8078b42210c0ff76e75fc29fb6296e56bc9aaf",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "5cfc3b9ed49eb32f36b45beb025af2396a774d984cfb011e151f32b92f159898",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/outbound.jpg",
+      "source_px": 1024,
+      "source_sha256": "a47a0a7e7e42acf918ae7e8a64304566b62ce94d31513a33894e163fda735c5a"
+    },
+    "placements": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "d5ac75c4ec8becd43a952e704874ce2b3f1642d7c61eb0c2b7be6208a8393db2",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "8c8f1610b3f2f22a37ae055253d607c1e5fb1b4d04aedf512f13e999f4d42f8c",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/placements.jpg",
+      "source_px": 1024,
+      "source_sha256": "f5818b645ddd2f8c4ea3f54a90b34003c1fb3fa86228b2f44ac5c4c90703079c"
+    },
+    "reports": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "3a6c5eb0d7442518153338ab32fe4591d8c669f8a25f4d32fe362ace0e21ab1e",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "b081b1ba7cd05f5efe70f59263b1f4737e66964d02d7a5a9654742382ed23f5d",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/reports.jpg",
+      "source_px": 1024,
+      "source_sha256": "f83ec81f7954a899490a63d02af84fc4d145f49184b7884b97a749a8bd373275"
+    },
+    "research": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "a24ed0d616301530ec6444b12a07b808711341dce0f04d6c4baed13a277a1cf1",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "4b1b5a5704ff7e69c53e0dd39056a59bcc8ceb632178f62e6fd2e823b2a27b45",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/research.jpg",
+      "source_px": 1024,
+      "source_sha256": "a888d0b6ca2053cd15030286577951004fb449a97e79980df76ffaf643e796fb"
+    },
+    "shiftflow": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "4f6654a4e1d6e571a7f129d6183a84e5d96f43365768a2843c3c42c55e197260",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "1b3bc2c5b34333b00cc52e35ea841a9e4298279b510ab2fdb4e72bfd4b40abbd",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/shiftflow.jpg",
+      "source_px": 1024,
+      "source_sha256": "19b53504a0ce1129bc049039aa24c1e5f2baa64f70afe6cc23011420e5a81ef0"
+    },
+    "spreadsheets": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "3b775922374597478411b16a76d000b9b4e51ee5fc4486e2bb95922386422806",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "49b5498289cf3dba1b0b91642c4d5293dd2a688cd88da649bcf70c7cdc2ccc5c",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/spreadsheets.jpg",
+      "source_px": 1024,
+      "source_sha256": "664b5a31fa43c3d1135b15979c8348e0397dc648c37dbd823e681f4da35db284"
+    },
+    "submissions": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "cb9e02324fb71546a0b5da330b54d47ccd5e3fb5332a1d7ea66062439a97e10e",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "9b45194cbeaa2a794271c261de79f008a23d9b63cfd315af4bec4419a9ac90d5",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/submissions.jpg",
+      "source_px": 1024,
+      "source_sha256": "8cbfd230fafe8eacc84752410f1e1321024378125bb17189b9fcb7b7b39bfc13"
+    },
+    "support": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "fd3efd91b523dcb1c454eff58f8ee0afbc293cba25a995288e94680fce188dd2",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "a84fcda3b5e667e5694797913e700e04303a0d255949f2c6134505614eb9cb96",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/support.jpg",
+      "source_px": 1024,
+      "source_sha256": "d5058006ec868a0ea19378ea477e16f8ddb51bb92c7817c1c39c390291e26235"
+    },
+    "threads": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "43940a5c2dcb7a195b257b631093c26c8fa2ff3bb378c6349f56de8d59070401",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "d6bb043e90e98976eee91bcd6ed2c236b54efe1a07e0f2f957441157b4293f13",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/threads.jpg",
+      "source_px": 1024,
+      "source_sha256": "b4cf784881d8c5463837688755795dffbd66b5082333bf1508357df3a10d28ed"
+    },
+    "tickets": {
+      "outputs": {
+        "assets/icon.jpg": {
+          "px": 256,
+          "sha256": "ab27b9d0eb830319747c8b4c285304ba6fe7540eab99ce8b13a189225ff5772a",
+          "tool": "ffmpeg lanczos q:v 2"
+        },
+        "assets/icon@512.jpg": {
+          "px": 512,
+          "sha256": "ce4afdc10fa64023e57050fa786cc1afc02eeba960a6d6090133ff97b07c3d85",
+          "tool": "ffmpeg lanczos q:v 2"
+        }
+      },
+      "source": "shared/assets/workjet-icons/operator-selection-v1/tickets.jpg",
+      "source_px": 1024,
+      "source_sha256": "6d0cbd2138977725b6043fd582b1d2b65b7214c8c9153ad7977942c26ebc4675"
+    }
+  }
+}

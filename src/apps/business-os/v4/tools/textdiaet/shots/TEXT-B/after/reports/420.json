@@ -1,0 +1,92 @@
+{
+ "app": "reports",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Bugs & Features",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Gefilterte Liste als JSON expo",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Alle (6)",
+    "nav:Bugs (6)",
+    "nav:Features (0)",
+    "button:Projektplan Relaunch Kundenpor",
+    "button:Lieferantenbewertung 2026 Bugs",
+    "button:Onboarding neue Mitarbeitende ",
+    "button:Rahmenvertrag über Wartung und",
+    "button:Kundentermin Vorbereitung Bugs",
+    "button:Budgetplanung Vertrieb Süd Bug",
+    "button:An Coding Agent übergeben",
+    "button:Aktionen einblenden"
+   ],
+   "shot": "reports/420-01-open.png"
+  },
+  {
+   "step": "nav Alle (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "reports/420-02-nav_Alle_6_.png"
+  },
+  {
+   "step": "nav Bugs (6)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 852,
+   "shot": "reports/420-03-suche_ohne_Treffer.png",
+   "textAfter": 58
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "reports/420-04-suche_geleert.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "reports",
+  "Bugs & Features"
+ ]
+}

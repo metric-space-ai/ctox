@@ -29,7 +29,9 @@ const selectedLabelRule = css.match(/\.desktop-icon\.selected \.desktop-icon-lab
 assert.match(selectedLabelRule, /background:\s*transparent/u);
 assert.match(css, /--desktop-icon-cell-w:\s*120px/u);
 assert.match(css, /--desktop-icon-cell-h:\s*140px/u);
-assert.match(css, /@media \(max-width: 767px\)[\s\S]*--desktop-icon-cell-h:\s*132px/u);
+// Kompaktraster folgt der Fensterbreite (Container), nicht dem Viewport (Geometrie-Labor G6).
+assert.match(css, /@container \(max-width: 767px\)[\s\S]*--desktop-icon-cell-h:\s*132px/u);
+assert.doesNotMatch(css, /@media[^{]*(?:min|max)-width/u);
 assert.match(css, /\.desktop-icon:focus-visible \.desktop-icon-glyph/u);
 assert.match(js, /const DEFAULT_GRID = \{ cellW: 120, cellH: 140,/u);
 assert.match(js, /const COMPACT_GRID = \{ cellW: 88, cellH: 132,/u);
@@ -40,12 +42,20 @@ assert.match(js, /el\.setAttribute\('role', 'button'\)/u);
 assert.match(js, /el\.setAttribute\('aria-label', label\)/u);
 assert.match(js, /const columns = Math\.max\(1, Math\.floor\(usableWidth \/ grid\.cellW\)\)/u);
 assert.match(js, /x: grid\.offset \+ \(index % columns\) \* grid\.cellW/u);
-assert.match(js, /ROW_MAJOR_LAYOUT_MIGRATION = 'row-major-v2'/u);
+// v4: Zeilen-Migration per localStorage-Flag entfällt; Kollisionen verteilt normalizeIconLayoutIfNeeded je Montage.
+assert.match(js, /function normalizeIconLayoutIfNeeded\(\)/u);
 assert.match(js, /const position = clampIconPosition\(doc, doc, currentGrid\(\)\)/u);
 assert.doesNotMatch(js, /const rows = Math\.max\(1, Math\.floor\(usableHeight \/ grid\.cellH\)\)/u);
 assert.match(js, /onReorder: reorderIcons/u);
+// G6 @900: gespeicherte x/y sind die freie Anordnung nach der eigenen Fläche, nie nach Viewport oder Kompaktraster;
+// die selbst gesetzte Standardanordnung folgt der Spaltenzahl der Fläche (ResizeObserver), bis der Nutzer anordnet.
+assert.doesNotMatch(js, /innerWidth/u, 'the grid follows the window surface, never the browser viewport');
+assert.match(js, /function gridPosition\(index, grid = freeGrid\(\)\)/u);
+assert.match(js, /seeded = true;[\s\S]*?const grid = freeGrid\(\);/u);
+assert.match(js, /flowWatch = new ResizeObserver\(\(\) => reflowAuto\(\)\)/u);
+assert.match(js, /function reflowAuto\(\)[\s\S]*?stopAutoFlow\(\); return;/u, 'auto-flow stops once the user arranged icons');
 assert.match(js, /dataset\.workjetMobileHost === 'true'\) return/u);
-assert.match(js, /await iconsCollection\.bulkUpsert\(updates\)/u);
+assert.match(js, /api\.patch\('desktop_icons', id, \{ sort_index: sortIndex/u);
 assert.match(dragJs, /TOUCH_REORDER_HOLD_MS = 360/u);
 assert.match(dragJs, /addEventListener\('touchstart', onTouchStart/u);
 assert.match(dragJs, /addEventListener\('touchmove', onTouchMove, \{ passive: false \}\)/u);

@@ -1,8 +1,6 @@
 {
   "title": "Nachweise",
-  "subtitle": "Generischer Nachweis-/Zertifikats-Tresor: ablaufende, verifizierte Artefakte (Zertifikate, Lizenzen, Arbeitserlaubnis) je Subjekt mit Ablauf-Warnung und Einsatz-Gate.",
   "add": "Anlegen",
-  "empty": "Noch keine Einträge.",
   "newAction": "Neuer Nachweis",
   "importAction": "Importieren",
   "exportAction": "Exportieren",
@@ -10,7 +8,6 @@
   "bandValid": "Gültig",
   "bandExpiring": "Ablaufend",
   "bandCritical": "Kritisch",
-  "syncing": "Daten werden synchronisiert.",
   "showAsList": "Als Liste anzeigen",
   "showAsCards": "Als Karten anzeigen"
 }
