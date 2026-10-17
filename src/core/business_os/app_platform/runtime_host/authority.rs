@@ -753,16 +753,14 @@ impl RuntimeAuthority {
         let status = status.to_owned();
         let codec = self.codec.clone();
         let b = binding.clone();
-        self.database
-            .writer
-            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+        feed::retry_write(&self.database, &self.health(), "event.result", move |tx| {
                 codec.check_fence(tx, &b)?;
                 let mut doc = document(tx, "business_commands", &id)?
                     .ok_or_else(|| invalid("not_found: event"))?;
                 doc["status"] = json!(status);
                 store_command(tx, &doc)?;
                 Ok(())
-            }))?
+            })
             .await?;
         Ok(())
     }
@@ -828,16 +826,14 @@ impl RuntimeAuthority {
         let b = binding.clone();
         let codec = self.codec.clone();
         let id = format!("command-callback:{target}");
-        self.database
-            .writer
-            .submit(WriteJob::new(JobOptions::default(), move |tx| {
+        feed::retry_write(&self.database, &self.health(), "callback.result", move |tx| {
                 codec.check_fence(tx, &b)?;
                 let mut doc = document(tx, "business_commands", &id)?
                     .ok_or_else(|| invalid("not_found: callback record"))?;
                 doc["status"] = json!(if succeeded { "done" } else { "failed" });
                 store_command(tx, &doc)?;
                 Ok(())
-            }))?
+            })
             .await?;
         Ok(())
     }
