@@ -3,6 +3,7 @@ import {spawnSync} from 'node:child_process';
 const root=new URL('../',import.meta.url);
 const cases=[
  ['real-platform-publication','kernel.mjs','const builtinPlatform = fakeCore ?','const builtinPlatform = true ?','E48.1 real','tests/e48.test.mjs'],
+ ['platform-owner-active-version','kernel.mjs',"const ver=owner===PLATFORM_APP_ID?visible(mirrorGet('business_apps',owner))?.active_ver:owner===app.id?app.ver:","const ver=owner===app.id?app.ver:",'E48.1 real','tests/e48.test.mjs'],
  ['grant-timer-from-send','transport-webrtc.mjs',"this.scheduler.send('control',{type:'scope.grant.request',app_id}).then(()=>{","pending.timer=setTimeout(()=>{},10);this.scheduler.send('control',{type:'scope.grant.request',app_id}).then(()=>{",'THESEN timers','tests/e481-queue.test.mjs'],
  ['transfer-timer-from-send','transport-webrtc.mjs',"this.scheduler.send('transfer',{type,request_id,...body}).then(()=>{","pending.timer=setTimeout(()=>{},10);this.scheduler.send('transfer',{type,request_id,...body}).then(()=>{",'THESEN timers','tests/e481-queue.test.mjs'],
  ['no-queue-replacement','transport-webrtc.mjs',"done.reject(new CtoxError('unavailable','Transfer deadline exceeded'));","this.fail(new CtoxError('unavailable','Local queue timeout'));done.reject(new CtoxError('unavailable','Transfer deadline exceeded'));",'THESEN timers','tests/e481-queue.test.mjs'],

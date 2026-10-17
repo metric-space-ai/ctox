@@ -56,7 +56,23 @@ test('E48.1 real kernel never publishes a platform catalog and writes the native
  const page=(collection,data)=>transport.events.page({collection,epoch:'1',scope_hash:'local',gen:1,cursor_to:'0',complete:true,backlog:0,docs:data.map(doc=>({id:doc.id,seq:'0',rev:'native',body:doc}))});
  await page('business_apps',[{id:'ctox-platform',active_ver:'platform-7'}]);
  await page('business_app_versions',[{id:'ctox-platform@platform-7',manifest:{collections:{business_commands:{schema:{version:3,type:'object'}}},exports:{business_commands:['read','write']}}}]);
- const h=api.command('ctox.task.create',{});await h.local;
+ const h=k.appApi('ctox-platform','1').command('ctox.task.create',{});await assert.doesNotReject(h.local,'internal platform writes use the Core catalog too');
  for(let n=0;n<100&&!transport.entry;n++)await new Promise(r=>setTimeout(r,2));
  assert.equal(transport.entry.schema_ver,3);assert.equal(transport.entry.app_ver,'platform-7');
+});
+
+
+test('E48.1 reload retires only unconfirmed client bootstrap; confirmed native builtin catalog survives',async t=>{
+ const {createKernel}=await import('../kernel.mjs');const {KernelTransport}=await import('../transport.mjs');const {openBackend}=await import('../store-idb-v5.mjs');
+ for(const confirmed of [false,true]){
+  const instanceId='catalog-reload-'+process.pid+'-'+confirmed,dbName='ctox-'+instanceId+'-alice',db=await openBackend(dbName,'memory');t.after(()=>db.close());
+  const data={id:'ctox-platform@1',app_id:'ctox-platform',app_ver:'1',builtin:true,manifest:{collections:{}}};
+  const row=(collection,data)=>({collection,id:data.id,data,deleted:false,pending:false,rev:confirmed?'native-confirmed':null,seq:confirmed?'3':'0',base:{data,deleted:false,rev:confirmed?'native-confirmed':null,seq:confirmed?'3':'0'}});
+  await db.tx(async tx=>{await tx.put('docs',row('business_app_versions',data));await tx.put('docs',row('business_apps',{id:'ctox-platform',active_ver:'1'}));});
+  const kernel=createKernel({instanceId,userId:'alice',dbName,storage:'memory',multiTab:false,transport:new KernelTransport()});t.after(()=>kernel.close());await kernel.ready;
+  const versions=(await db.all('docs')).filter(r=>r.collection==='business_app_versions');assert.equal(versions.length,confirmed?1:0);
+  if(confirmed)assert.equal(versions[0].rev,'native-confirmed');
+  else assert.equal((await db.all('docs')).some(r=>r.collection==='business_apps'),false);
+  await kernel.close();
+ }
 });

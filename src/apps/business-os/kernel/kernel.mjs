@@ -1040,11 +1040,11 @@ export function createKernel(opts = {}) {
   }
   function collectionVersion(app,collection) {
     const owner=SYSTEM_COLLECTIONS.has(collection)?PLATFORM_APP_ID:app.id;
-    const ver=owner===app.id?app.ver:activations.get(owner)?.activated_ver??visible(mirrorGet('business_apps',owner))?.active_ver;
+    const ver=owner===PLATFORM_APP_ID?visible(mirrorGet('business_apps',owner))?.active_ver:owner===app.id?app.ver:activations.get(owner)?.activated_ver??visible(mirrorGet('business_apps',owner))?.active_ver;
     const manifest=versionDoc(owner,ver)?.manifest;
     return {owner,ver,definition:manifest?.collections?.[collection],gen:manifest?.generations?.[collection]};
   }
-  function schemaFor(app, collection) { const {owner,ver,definition}=collectionVersion(app,collection);return (owner===PLATFORM_APP_ID && versionDoc(owner,ver)?.builtin ? PLATFORM_SCHEMAS[collection]??null : definition?.schema)??(owner===PLATFORM_APP_ID?PLATFORM_SCHEMAS[collection]??null:null); }
+  function schemaFor(app, collection) { const {owner,ver,definition}=collectionVersion(app,collection);return (fakeCore && owner===PLATFORM_APP_ID && versionDoc(owner,ver)?.builtin ? PLATFORM_SCHEMAS[collection]??null : definition?.schema)??(fakeCore && owner===PLATFORM_APP_ID?PLATFORM_SCHEMAS[collection]??null:null); }
   function writeVersion(app,collection) {
     const {owner,ver,definition,gen}=collectionVersion(app,collection);
     // Wire versions describe the collection owner, never the calling app.
@@ -1704,7 +1704,7 @@ export function createKernel(opts = {}) {
           type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
           ...(commandOptions.target_app!==undefined ? {target_app:commandOptions.target_app} : !route.error && !route.platform && route.target!==appId ? {target_app:route.target} : {}),
         }, key !== undefined);
-        write.local.catch(error=>{cmdSubmitFailed.set(id,{status:'submit_failed',error:{code:error.code??'local_error',reason:error.message??String(error)},local_inserted:false});notify('commands');});
+        write.local.catch(error=>{cmdSubmitFailed.set(id,{status:'submit_failed',error:{code:error?.code??'local_error',reason:error?.message??String(error)},local_inserted:false});notify('commands');});
         const status = makeLive(['c:business_commands', 'commands'], () => {
           if(cmdSubmitFailed.has(id))return cmdSubmitFailed.get(id);
           const d = visible(mirrorGet('business_commands', id));
@@ -2632,11 +2632,12 @@ export function createKernel(opts = {}) {
       return result;
     }) : await db.tx(async t=>{
       // Retire bootstrap rows left by older clients, but preserve every native catalog row.
-      for(const row of await t.all('docs'))if(row.collection==='business_app_versions'&&row.data?.app_id===PLATFORM_APP_ID&&row.data?.builtin===true){
+      for(const row of await t.all('docs'))if(row.collection==='business_app_versions'&&row.data?.app_id===PLATFORM_APP_ID&&row.data?.builtin===true&&row.rev==null&&row.seq==='0'&&!row.pending){
         await t.del('docs',[row.collection,row.id]);
         const active=await t.get('docs',['business_apps',PLATFORM_APP_ID]);
         if(active?.data?.active_ver===row.data.app_ver&&active.rev==null&&row.seq==='0')await t.del('docs',['business_apps',PLATFORM_APP_ID]);
-        await t.del('meta','activation:'+PLATFORM_APP_ID);
+        const activation=await t.get('meta','activation:'+PLATFORM_APP_ID);
+        if(activation?.activated_ver===row.data.app_ver)await t.del('meta','activation:'+PLATFORM_APP_ID);
       }
       return [];
     });
