@@ -190,12 +190,20 @@ jobs:
         if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: npm --prefix src/apps/business-os exec playwright install --with-deps chromium
 
-      - name: Business OS Office mobile height
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+      # Line selection (E37): the V2 Office guards check the V2 shell layout and mount path; on main the Office apps
+      # are v4 ports (since #895), so main runs the v4 counterparts (as business-os-shell-release.yml does by series).
+      - name: Business OS Office mobile height (V2 line)
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && (github.base_ref || github.ref_name) == 'release/v2'
         run: npm --prefix src/apps/business-os run qa:shell-office-height -- --output-dir "${RUNNER_TEMP}/ctox-shell-office-height"
-      - name: Guard Office notification contract
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
+      - name: Business OS Office mobile height (v4 line)
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && (github.base_ref || github.ref_name) != 'release/v2'
+        run: npm --prefix src/apps/business-os run qa:shell-office-height:v4 -- --output-dir "${RUNNER_TEMP}/ctox-shell-office-height"
+      - name: Guard Office notification contract (V2 line)
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && (github.base_ref || github.ref_name) == 'release/v2'
         run: npm --prefix src/apps/business-os run qa:office-notifications -- --output-dir "${RUNNER_TEMP}/ctox-office-notifications"
+      - name: Guard Office notification contract (v4 line)
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && (github.base_ref || github.ref_name) != 'release/v2'
+        run: npm --prefix src/apps/business-os run qa:office-notifications:v4 -- --output-dir "${RUNNER_TEMP}/ctox-office-notifications"
 
       - name: Business OS JS tests
         if: matrix.target == 'x86_64-unknown-linux-gnu'
