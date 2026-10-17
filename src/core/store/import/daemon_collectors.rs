@@ -256,10 +256,18 @@ pub(crate) fn collect(
                 // Every original row is already archived or retained by E29-R5/6.
                 let mut declared_documents = Vec::new();
                 for doc in extra.documents {
-                    if release.collections.values().flatten().any(|d| d.name == doc.collection) {
+                    if release
+                        .collections
+                        .values()
+                        .flatten()
+                        .any(|d| d.name == doc.collection)
+                    {
                         declared_documents.push(doc);
                     } else {
-                        extra.report.diagnostics.push(format!("core_projection_unregistered:{}",doc.collection));
+                        extra
+                            .report
+                            .diagnostics
+                            .push(format!("core_projection_unregistered:{}", doc.collection));
                     }
                 }
                 extra.documents = declared_documents;
@@ -267,7 +275,12 @@ pub(crate) fn collect(
                     .into_iter()
                     .filter(|key| {
                         !source.tables.iter().any(|d| {
-                            (d.rule == "E29.1" || !release.collections.values().flatten().any(|schema|schema.name==d.table.collection))
+                            (d.rule == "E29.1"
+                                || !release
+                                    .collections
+                                    .values()
+                                    .flatten()
+                                    .any(|schema| schema.name == d.table.collection))
                                 && *key == format!("{}:{}", source.choice.database, d.table.name)
                         })
                     })

@@ -578,18 +578,58 @@ fn core_collector_projects_ticket_and_archives_full_raw_row_without_inventing_a_
     // A native view without an app manifest must not invent an app destination.
     data.execute_batch("CREATE TABLE workjet_supervisor_bindings(project_id TEXT PRIMARY KEY,owner_user_id TEXT,thread_id TEXT,created_at_ms INTEGER);INSERT INTO workjet_supervisor_bindings VALUES('project','owner','thread',1);")?;
     let core = &mut snapshot.databases[1];
-    core.tables.push(Decision {rule:"E29-R5".into(),table:Table {name:"workjet_supervisor_bindings".into(),collection:"workjet_supervisor_bindings".into(),version:0,id_column:"$rowid".into(),body_column:None,entity:cutover::Entity::Core,mode:Mode::ArchiveOnly},measurement:Some(freeze::measure(&data,"workjet_supervisor_bindings")?)});
-    if let daemon_collectors::Collector::Core {tables,..} = &mut core.collectors[0] {tables.push("workjet_supervisor_bindings".into());}
+    core.tables.push(Decision {
+        rule: "E29-R5".into(),
+        table: Table {
+            name: "workjet_supervisor_bindings".into(),
+            collection: "workjet_supervisor_bindings".into(),
+            version: 0,
+            id_column: "$rowid".into(),
+            body_column: None,
+            entity: cutover::Entity::Core,
+            mode: Mode::ArchiveOnly,
+        },
+        measurement: Some(freeze::measure(&data, "workjet_supervisor_bindings")?),
+    });
+    if let daemon_collectors::Collector::Core { tables, .. } = &mut core.collectors[0] {
+        tables.push("workjet_supervisor_bindings".into());
+    }
     measurements(core);
-    snapshot.inventory.get_mut("ctox.sqlite3").unwrap().insert("workjet_supervisor_bindings".into());
-    fs::write(&path,serde_json::to_vec(&snapshot).unwrap())?;
-    let archived = prepare_with_core(path.clone(),&[],migration,Some(not_a_crew_fixture))?;
-    assert!(!archived.import.snapshot.documents.iter().any(|d|d.collection=="workjet_supervisor_bindings"));
-    let binding_report=archived.tables.iter().find(|t|t.table=="workjet_supervisor_bindings").unwrap();
-    assert_eq!(binding_report.expected_target_rows,1);
-    assert_eq!(binding_report.destination,"legacy_records");
-    assert!(archived.import.snapshot.documents.iter().any(|d|d.collection==cutover::ARCHIVE && d.body["source_table"]=="workjet_supervisor_bindings" && d.body["doc"]["thread_id"]=="thread"));
-    assert!(archived.import.snapshot.report.diagnostics.iter().any(|s|s=="core_projection_unregistered:workjet_supervisor_bindings"));
+    snapshot
+        .inventory
+        .get_mut("ctox.sqlite3")
+        .unwrap()
+        .insert("workjet_supervisor_bindings".into());
+    fs::write(&path, serde_json::to_vec(&snapshot).unwrap())?;
+    let archived = prepare_with_core(path.clone(), &[], migration, Some(not_a_crew_fixture))?;
+    assert!(!archived
+        .import
+        .snapshot
+        .documents
+        .iter()
+        .any(|d| d.collection == "workjet_supervisor_bindings"));
+    let binding_report = archived
+        .tables
+        .iter()
+        .find(|t| t.table == "workjet_supervisor_bindings")
+        .unwrap();
+    assert_eq!(binding_report.expected_target_rows, 1);
+    assert_eq!(binding_report.destination, "legacy_records");
+    assert!(archived
+        .import
+        .snapshot
+        .documents
+        .iter()
+        .any(|d| d.collection == cutover::ARCHIVE
+            && d.body["source_table"] == "workjet_supervisor_bindings"
+            && d.body["doc"]["thread_id"] == "thread"));
+    assert!(archived
+        .import
+        .snapshot
+        .report
+        .diagnostics
+        .iter()
+        .any(|s| s == "core_projection_unregistered:workjet_supervisor_bindings"));
     fs::write(frozen.join("v4/manifests/owned-timeseries.manifest.json"),json!({"app_id":"timeseries","collections":{"iot_timeseries":{"class":"full","schema":definition("iot_timeseries").schema_json}}}).to_string())?;
     assert!(
         matches!(prepare_with_core(path,&[],migration,Some(not_a_crew_fixture)),Err(StoreError::Invalid(s)) if s=="cutover_timeseries_requires_unowned_full_archive")

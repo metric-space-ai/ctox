@@ -361,7 +361,12 @@ fn prepare_with_core(
                     "retained_core".into()
                 } else if matches!(decision.table.mode, Mode::ArchiveOnly) {
                     "legacy_records + specialized projection".into()
-                } else if !plan.collections.values().flatten().any(|d| d.name==decision.table.collection) {
+                } else if !plan
+                    .collections
+                    .values()
+                    .flatten()
+                    .any(|d| d.name == decision.table.collection)
+                {
                     "legacy_records".into()
                 } else {
                     decision.table.collection.clone()
@@ -422,9 +427,18 @@ fn prepare_with_core(
     }
     for table in &mut tables {
         if !table.retained_source && table.decision != "E29.1" {
-            if let Some(targets) = import.audit.target_documents.get(&format!("{}:{}",table.database,table.table)) {
-                let collections: BTreeSet<_> = targets.iter().map(|(collection,_)|collection.as_str()).collect();
-                if !collections.is_empty() { table.destination = collections.into_iter().collect::<Vec<_>>().join(" + "); }
+            if let Some(targets) = import
+                .audit
+                .target_documents
+                .get(&format!("{}:{}", table.database, table.table))
+            {
+                let collections: BTreeSet<_> = targets
+                    .iter()
+                    .map(|(collection, _)| collection.as_str())
+                    .collect();
+                if !collections.is_empty() {
+                    table.destination = collections.into_iter().collect::<Vec<_>>().join(" + ");
+                }
             }
         }
         table.expected_target_rows = if table.retained_source {
