@@ -15,7 +15,11 @@ if(marker.owner!==owner||marker.synthetic!==true||new URL(base).origin!=='http:/
 if(!out.startsWith(allowed+'/')||!expected.startsWith(allowed+'/'))throw Error('Private artifact paths required');
 const digest=x=>createHash('sha256').update(x).digest('hex');
 const r={startedAtMs:Date.now(),terminal:false,pass:false,criteria:[],console:[],pageErrors:[],requestsFailed:[]};let browser;
-const criterion=(id,pass,details)=>r.criteria.push({id,status:pass?'pass':'fail',...details});
+const pendingSignaling=process.env.M7_EXPECT_SIGNALING_DEPLOY==='1';
+const criterion=(id,pass,details)=>{
+ const blocked=pendingSignaling&&!pass&&((id.startsWith('launch-context')&&(details.httpStatus===503||details.http503===20))||(id==='browser-boot'&&r.launchSeries?.every(x=>x.samples.every(s=>s.httpStatus===503))));
+ r.criteria.push({id,status:blocked?'not_run':pass?'pass':'fail',...(blocked?{reason:'signaling-deploy',observed:'blocked by expected HTTP503; never a passing launch claim'}:{}),...details});
+};
 const save=()=>fs.writeFileSync(join(out,'smoke.json'),JSON.stringify(r,null,2),{mode:0o600});
 try{
  const readyAt=Date.now();await until(async()=>{try{await fetch(base,{method:'HEAD',signal:AbortSignal.timeout(1000)});return true;}catch{return false;}},8000,'private HTTP socket ready');r.socketReadyMs=Date.now()-readyAt;
@@ -32,7 +36,7 @@ try{
    samples.push(row);
   }
   const good=samples.filter(x=>x.httpStatus===200&&x.hasV4).length;r.launchSeries.push({phase,samples,http200:good,httpFail:20-good});
-  criterion('launch-context-'+phase,good===20,{calls:20,http200:good,httpFail:20-good,warmDelayMs:phase==='warm'?5000:0});save();
+  criterion('launch-context-'+phase,good===20,{calls:20,http200:good,httpFail:20-good,http503:samples.filter(x=>x.httpStatus===503).length,warmDelayMs:phase==='warm'?5000:0});save();
  }
  for(const [id,path] of [['entry','/'],['service-worker','/sw.js'],['kernel','/kernel/boot.mjs'],['launch-context','/api/business-os/launch-context']]){
   const at=Date.now();

@@ -17,8 +17,9 @@ export async function performDressSmoke({config,root,output,env,cli,quiesce,phas
     const slot=fs.realpathSync(join(state,'business-os-shell/slots',config.version));
     if(!slot.startsWith(resolve(root)+'/'))throw Error('Slot escapes private fixture');
     const manifest=JSON.parse(fs.readFileSync(join(slot,'.ctox-shell-release.v2.json')));
-    if(manifest.sourceCommit!==config.mainSha||manifest.version!==config.version)throw Error('Signed slot/main daemon source mismatch');
+    if(manifest.sourceCommit!==(config.slotSourceSha||config.mainSha)||manifest.version!==config.version)throw Error('Signed slot/main daemon source mismatch');
     result.signedSlot.sourceCommit=manifest.sourceCommit;result.signedSlot.artifactSha256=manifest.artifact.sha256;
+    if(config.slotSha256&&manifest.artifact.sha256!==config.slotSha256)throw Error('Signed slot archive checksum differs from pinned official asset');
     const active=await cli(['business-os','shell-update','activate'],{allowFailure:true});
     result.signedSlot.activateExit=active.code;result.signedSlot.status=active.code===0?'pass':'fail';
     if(active.code===0)expectedRoot=join(slot,'v4/index.html');
@@ -27,7 +28,7 @@ export async function performDressSmoke({config,root,output,env,cli,quiesce,phas
   // HttpSurface chooses its immutable asset root at startup. Restart only this
   // namespace's real service after official activation, never a host service.
   quiesce();result.serviceStartAtMs=Date.now();execFileSync('systemctl',['--user','start','ctox.service'],{env,timeout:30000});
-  env={...env,M7_SERVICE_START_AT:String(result.serviceStartAtMs)};
+  env={...env,M7_SERVICE_START_AT:String(result.serviceStartAtMs),M7_EXPECT_SIGNALING_DEPLOY:config.signalingPending?'1':'0'};
   const wrapper=join(resolve(env.BUILD_LANE_BIN,'..'),'tools/with-playwright.sh');
   const command=[wrapper,'node',new URL('./m7-t4-smoke.mjs',import.meta.url).pathname,'--base','http://127.0.0.1:8765','--expected-root',expectedRoot,'--output',out,'--proof',join(output,'sandbox.json')];
   const log=fs.openSync(join(out,'wrapper.log'),'w',0o600);

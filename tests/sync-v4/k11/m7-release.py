@@ -80,6 +80,10 @@ def main():
     def save():
         receipt.write_text(json.dumps(report, indent=2)+'\n')
     save()
+    def interrupted(signum, _):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise RuntimeError('Owned artifact producer interrupted: '+str(signum))
+    signal.signal(signal.SIGTERM, interrupted)
     try:
         # A release receipt must name the actual product bytes, including root
         # dependency inputs; callers must not accidentally certify a dirty tree.

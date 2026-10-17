@@ -159,7 +159,7 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
   if(dressSmoke)record.signedSmoke=await performDressSmoke({config:dressSmoke,root,output,env,cli,quiesce,phase:'after-update'});
   if(roundtrip){
    const startedAtMs=Date.now(),snapshot=record.updateState.state_backup_path;
-   quiesce();
+   quiesce();record.dataAfterUpdate=readback('update');
    await cli(['update','rollback']);
    const rolled=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json'))),oldCurrent=fs.realpathSync(join(installRoot,'current'));
    if(rolled.phase!=='rolled_back'||oldCurrent!==initial||hash(fs.readFileSync(join(oldCurrent,'bin/ctox')))!==before.binarySha256)throw Error('Supported rollback did not activate the verified old binary');
@@ -170,6 +170,10 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
    const finalCurrent=fs.realpathSync(join(installRoot,'current')),final=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json')));
    if(final.phase!=='completed'||finalCurrent!==join(releases,release)||hash(fs.readFileSync(join(finalCurrent,'bin/ctox')))!==after.binarySha256)throw Error('Forward re-install did not restore the verified candidate');
    record.forward={startedAtMs:forwardAt,durationMs:Date.now()-forwardAt,binarySha256:after.binarySha256,phase:final.phase};
+   const serviceCall=await cli(['status'],{allowFailure:true});
+   const statusText=fs.readFileSync(serviceCall.log,'utf8');let serviceStatus;try{serviceStatus=JSON.parse(statusText);}catch{}
+   record.forward.serviceStatus={exit:serviceCall.code,running:serviceStatus?.running===true,manager:serviceStatus?.manager,evidence:serviceCall.log,measuredAtMs:Date.now()};
+   if(serviceCall.code!==0||serviceStatus?.running!==true)throw Error('Installed forward service status is not running');
    quiesce();record.forward.dataReadback=readback('forward');
    record.forward.verifiedDurationMs=Date.now()-forwardAt;
    if(dressSmoke)record.forward.signedSmoke=await performDressSmoke({config:dressSmoke,root,output,env,cli,quiesce,phase:'after-forward'});
