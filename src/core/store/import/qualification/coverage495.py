@@ -34,7 +34,8 @@ def doc(collection,key,schemas):
 
 def main():
  a=argparse.ArgumentParser(description=__doc__)
- for k in ['binary','custody-snapshot','output','v4-root','platform','measurement','coverage']:a.add_argument('--'+k,required=True,type=Path)
+ for k in ['binary','output','v4-root','platform','measurement','coverage']:a.add_argument('--'+k,required=True,type=Path)
+ owner=a.add_mutually_exclusive_group(required=True);owner.add_argument('--custody-snapshot',type=Path);owner.add_argument('--fresh-owner',action='store_true',help='Initialize a separately owned empty daemon prefix; no copied custody fixture')
  args=a.parse_args();assert os.uname().sysname=='Linux' and os.environ.get('BUILD_LANE_BIN')
  signal.signal(signal.SIGTERM,lambda *_:(_ for _ in ()).throw(InterruptedError('qualification deadline')))
  measurement=json.loads(args.measurement.read_text());coverage=json.loads(args.coverage.read_text());models=measurement['tables'];assert len(models)==495
@@ -144,13 +145,18 @@ def main():
  fg.save(frozen/'cutover.json',snapshot);(frozen/'cutover.json').chmod(0o444);fg.save(out/'build-result.json',result);print('SYNTHETIC_495_CREATED',flush=True)
  # The accepted DevOps fixture supplies the held owner; the complete synthetic
  # V3 snapshot is separate, explicit input. No customer/default root is opened.
- custody=args.custody_snapshot.resolve(strict=True);meta=json.loads((custody/'snapshot.json').read_text());assert meta['owner']==fg.CUSTODIAN and meta['synthetic'] and meta['complete']
- marker=json.loads((Path(meta['sourceRoot'])/'.sync-v4-e2e.json').read_text());assert marker['owner']==fg.CUSTODIAN and marker['synthetic'] is True
  root=out/'daemon';state=root/'runtime';state.mkdir(parents=True)
- for row in meta['databases']:
-  relative=Path(row['relative']);assert not relative.is_absolute() and '..' not in relative.parts
-  if 'secret' not in str(relative).lower():fg.backup(custody/'databases'/relative,state/relative)
+ fg.save(root/'.sync-v4-e2e.json',{'owner':fg.OWNER,'synthetic':True})
+ if args.custody_snapshot:
+  custody=args.custody_snapshot.resolve(strict=True);meta=json.loads((custody/'snapshot.json').read_text());assert meta['owner']==fg.CUSTODIAN and meta['synthetic'] and meta['complete']
+  marker=json.loads((Path(meta['sourceRoot'])/'.sync-v4-e2e.json').read_text());assert marker['owner']==fg.CUSTODIAN and marker['synthetic'] is True
+  for row in meta['databases']:
+   relative=Path(row['relative']);assert not relative.is_absolute() and '..' not in relative.parts
+   if 'secret' not in str(relative).lower():fg.backup(custody/'databases'/relative,state/relative)
+  result['owner_fixture']='copied DevOps synthetic snapshot'
+ else:result['owner_fixture']='fresh isolated owner prefix; frozen synthetic V3 source is separate'
  with sqlite3.connect(state/'ctox-runtime.sqlite3') as db:
+  if args.fresh_owner:db.execute('CREATE TABLE runtime_env_kv(env_key TEXT PRIMARY KEY,env_value TEXT NOT NULL)')
   for key,value in [('CTOX_BUSINESS_OS_WEB_ADDR','127.0.0.1:0'),('CTOX_BUSINESS_OS_WEB_AUTOSTART','0')]:db.execute('INSERT INTO runtime_env_kv(env_key,env_value) VALUES(?,?) ON CONFLICT(env_key) DO UPDATE SET env_value=excluded.env_value',(key,value))
  for name in ['src','contracts','Cargo.toml']:(root/name).symlink_to(repo/name)
  home=root/'home';home.mkdir();env=dict(PATH=os.environ['PATH'],HOME=str(home),TMPDIR=os.environ['TMPDIR'],BUILD_LANE_BIN=os.environ['BUILD_LANE_BIN'],RUST_BACKTRACE='1',CTOX_ROOT=str(root),CTOX_STATE_ROOT=str(state),XDG_CONFIG_HOME=str(home/'.config'),XDG_CACHE_HOME=str(home/'.cache'))
