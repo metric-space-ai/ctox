@@ -70,3 +70,36 @@ test('byte budget reclaims oldest cache collections while preserving protected i
  assert.ok((await db.get('docs',['pending','a'])).data);assert.equal((await db.get('blobs','pinned')).pinned,true);
  const full=await reclaimCache(db,async()=>{},new Map(),new Set(),1);assert.equal(full.within_budget,false);assert.equal(full.reclaimed,false);assert.equal((await db.all('outbox')).length,1);
 });
+
+
+test('incremental cache tick stays below 5 ms for 5000 documents without eviction',async()=>{
+ const db=new MemoryBackend('cache-tick'),payload='x'.repeat(8192);
+ await db.tx(async t=>{for(let n=0;n<5000;n++)await t.put('docs',{collection:'large',id:String(n),data:{id:String(n),payload},base:{data:{payload}}});});
+ const elapsed=[];
+ for(let n=0;n<12;n++){
+  const start=performance.now(),result=await reclaimCache(db,async()=>{},new Map(),new Set(),2_000_000_000);
+  elapsed.push(performance.now()-start);assert.equal(result.reclaimed,false);assert.equal(result.within_budget,true);
+ }
+ console.log('CACHE_TICK_MS '+JSON.stringify({documents:5000,max:Math.max(...elapsed),samples:elapsed}));
+ assert.ok(Math.max(...elapsed)<=5,`cache tick exceeded 5 ms: ${Math.max(...elapsed)}`);
+});
+
+test('incremental bytes and pin counts survive overwrite delete and transaction rollback',async()=>{
+ const {CACHE_USAGE_KEY,cacheBytes}=await import('../cache-accounting.mjs');const db=new MemoryBackend('cache-accounting');
+ const row={collection:'notes',id:'a',data:{text:'ä'},legacy_unconfirmed:true};
+ await db.tx(t=>t.put('docs',row));assert.equal((await db.get('meta',CACHE_USAGE_KEY)).value,cacheBytes(row));
+ await assert.rejects(db.tx(async t=>{await t.put('docs',{...row,data:{text:'bad'.repeat(200)}});await t.put('blobs',{ref:'b',size:99});throw Error('rollback');}));
+ assert.equal((await db.get('meta',CACHE_USAGE_KEY)).value,cacheBytes(row));
+ const next={...row,legacy_unconfirmed:false,data:{text:'new'}};await db.tx(t=>t.put('docs',next));
+ await db.tx(t=>t.put('blobs',{ref:'b',size:100}));assert.equal((await db.get('meta',CACHE_USAGE_KEY)).value,cacheBytes(next)+100);
+ await db.tx(async t=>{await t.del('docs',['notes','a']);await t.del('blobs','b');});
+ assert.equal((await db.get('meta',CACHE_USAGE_KEY)).value,0);
+});
+
+test('cache eviction yields between bounded slices and retains input arriving between them',async()=>{
+ const db=new MemoryBackend('cache-slices');await db.tx(async t=>{for(let n=0;n<100;n++)await t.put('docs',{collection:'notes',id:String(n),data:{id:String(n)}});});
+ let inserted=false;const pending=new Promise(resolve=>setTimeout(()=>{db.tx(async t=>{await t.put('outbox',{op_id:'arrived',collection:'notes',id:'99'});await t.put('docs',{collection:'notes',id:'99',data:{id:'99',input:'keep'},pending:true});}).then(()=>{inserted=true;resolve();});},0));
+ const records=await evictCollection(db,'notes',async()=>{});await pending;
+ assert.equal(inserted,true);assert.ok(records.length>0&&records.length<100,'eviction must yield before all documents are removed');
+ assert.equal((await db.get('docs',['notes','99'])).data.input,'keep');assert.equal((await db.all('outbox')).length,1);
+});
