@@ -381,7 +381,7 @@
     "handlers/news.source.auth_assist.js": "e2bfefd2fc7bdad8b014f525aeb6a06fdfd81f9e0762f318fa77ae7a7ac48e17",
     "handlers/news.topic.schedule.js": "3e2d27bab35aad0607ff22f3042adb4f38e642ebbcacddc4f82e083899b0f79c",
     "icon.svg": "5e2c1836ab96f4cdb3e0ef8f0faa64f195287081f72501776b13d97c08123616",
-    "index.css": "9a8313e8202346ff98d73ec18604873dd6768bdba4e3d27a72ad5001c77573f4",
+    "index.css": "b13cc30d6b4a873bff06c4789caa31155f9049f3ca65f8579677f7a19a42b1a5",
     "index.html": "7a905bb62143b5f8c57f63a4e25b9103b881d26e4272d0fe59f70b461dd4067f",
     "index.js": "77fcc12b92f305381c6a14194e54b45b0ea95cda7ad9bd93c1b04db09f0f4842",
     "locales/de.json": "12e321cc6d9735d44fd54fbe83bddc73370cd2625805424760357815c23f6d64",
@@ -471,7 +471,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "d80bfc3660ef77bec618e460a4b37de36b424e3c59b633cb692d600f9c0b17f9",
+    "base_hash": "48b30965a5aed76ea6614f1d6ce80c28d02d5730792238a46861c999e35c904a",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

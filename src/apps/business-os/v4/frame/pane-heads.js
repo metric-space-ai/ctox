@@ -54,7 +54,8 @@ export function createPaneHeadSync({ raf = (fn) => requestAnimationFrame(fn), ca
     const zones = win ? zoneRects(win, content) : [];
     if (!zones.length) return;
     for (const el of rows) {
-      const hit = [...el.querySelectorAll(LABELLED)].some((b) => {
+      // Wörter weg, sobald irgendein Bedienelement der Zeile in einer Zone liegt (die Wörter schieben es dorthin).
+      const hit = [...el.querySelectorAll('button, a[href], input, select, [role="button"]')].some((b) => {
         const br = b.getBoundingClientRect();
         return br.width > 0 && zones.some((z) => br.left < z.right && br.right > z.left && br.top < z.bottom && br.bottom > z.top);
       });

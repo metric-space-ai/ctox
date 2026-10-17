@@ -2871,7 +2871,7 @@ function renderCampaignItem(campaign) {
         <span>${escapeHtml(meta)}</span>
       </button>
       <div class="outbound-campaign-actions" aria-label="${escapeHtml(t('campaignActions', 'Kampagnen-Aktionen'))}">
-        <button class="ctox-pane-icon" data-short-de="Bearbeiten" type="button" data-action="edit-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('editCampaign', 'Kampagne bearbeiten'))}" aria-label="${escapeHtml(t('editCampaign', 'Kampagne bearbeiten'))}">${actionIcon('edit')}</button>
+        <button class="ctox-pane-icon" type="button" data-action="edit-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('editCampaign', 'Kampagne bearbeiten'))}" aria-label="${escapeHtml(t('editCampaign', 'Kampagne bearbeiten'))}">${actionIcon('edit')}</button>
         ${renderMoreButton('campaign-more', campaign.id, t('moreActions', 'Weitere Aktionen'))}
       </div>
     </article>

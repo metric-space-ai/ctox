@@ -172,6 +172,15 @@ export function measureInPage({ app, vocab, allow, owner, withG5 }) {
       }
     }
   }
+  for (const x of words) {
+    const row = x.l.parentElement.closest('.ctox-pane-header, .ctox-filterbar') || x.l.parentElement.parentElement;
+    for (const t of row?.querySelectorAll('.ctox-pane-title, .ctox-pane-kicker') || []) {
+      const tr = t.getBoundingClientRect();
+      if (tr.width > 0 && Math.min(x.r.right, tr.right) - Math.max(x.r.left, tr.left) > 0.5 && Math.min(x.r.bottom, tr.bottom) - Math.max(x.r.top, tr.top) > 0.5) {
+        wordHits.push(`Wort „${x.l.textContent.trim()}“ überdeckt Titel „${t.textContent.trim().slice(0, 30)}“`);
+      }
+    }
+  }
   if (wordHits.length) out.G4.push(`${wordHits.length} Wortknopf-Fehler: ${wordHits.slice(0, 4).join('; ')}`);
 
   // ---- G7: Geschwister-Pane-Köpfe eines Fensters gleich hoch (±1 px) ----

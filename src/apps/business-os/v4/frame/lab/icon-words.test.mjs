@@ -6,6 +6,8 @@
 //   3 wieder breit → Markierung weg, Wörter zurück
 //   4 Titel wechselt ohne Größenänderung der Zeile und bräche mit Wörtern um → nur Icons, Titel einzeilig
 //   5 dispose → Markierung entfernt, keine weitere Reaktion auf Größenänderung
+//   6 Wortknopf in einer Listenzeile (.ctox-list-item) → kein Wort (Zeilenaktionen bleiben Icons)
+//   7 Wörter überdecken den Titel (Aktionen absolut über dem Titel) → nur Icons
 // Gegenprobe: Fall 4 ist auf d671453c9 (Beobachter nur auf Zeilengröße) rot.
 //
 // Lauf: node src/apps/business-os/v4/frame/lab/icon-words.test.mjs
@@ -108,6 +110,34 @@ try {
   await settle();
   s = await state();
   check('5 dispose: Markierung entfernt, keine Reaktion mehr', !s.marked, JSON.stringify(s));
+
+  // 6 + 7: frische Wurzel mit Listenzeile und überdeckendem Kopf.
+  await P.evaluate(() => {
+    const host = document.createElement('div');
+    host.id = 'app2';
+    host.style.width = '700px';
+    host.innerHTML = `
+      <article class="ctox-list-item"><span>Zeile</span>
+        <button class="ctox-pane-icon" type="button" aria-label="Bearbeiten" data-short-de="Bearbeiten"><svg viewBox="0 0 24 24"></svg></button></article>
+      <header class="ctox-pane-header" style="position:relative">
+        <div class="ctox-pane-titles"><h2 class="ctox-pane-title" style="white-space:nowrap">Kampagnen und Sequenzen im Überblick</h2></div>
+        <div class="ctox-pane-actions" style="position:absolute;left:120px;top:0">
+          <button class="ctox-pane-icon" type="button" aria-label="Neue Kampagne" data-short-de="Neu"><svg viewBox="0 0 24 24"></svg></button>
+          <button class="ctox-pane-icon" type="button" aria-label="Importieren" data-short-de="Import"><svg viewBox="0 0 24 24"></svg></button>
+        </div>
+      </header>`;
+    document.body.append(host);
+    window.__fit2 = window.__pil.applyPaneIconLabels(host, 'de');
+  });
+  await settle();
+  const s2 = await P.evaluate(() => {
+    const row = document.querySelector('#app2 .ctox-list-item .ctox-pane-icon');
+    const head = document.querySelector('#app2 .ctox-pane-header');
+    return { listWord: !!row.querySelector('.ctox-pane-icon-label'), listHasLabel: row.classList.contains('has-label'), headMarked: head.hasAttribute('data-icons-only') };
+  });
+  check('6 Listenzeile: Knopf ohne Wort', !s2.listWord && !s2.listHasLabel, JSON.stringify(s2));
+  check('7 Wörter über dem Titel: nur Icons', s2.headMarked, JSON.stringify(s2));
+  await P.evaluate(() => window.__fit2.dispose());
   check('keine Seitenfehler', errors.length === 0, errors.join(' | '));
 } finally {
   await browser.close();

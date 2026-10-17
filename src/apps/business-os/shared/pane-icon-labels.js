@@ -3,7 +3,7 @@
 // Der ausführliche Text bleibt in aria-label/title.
 //
 // Wörter nur, wo Platz ist: Je Kopf-/Werkzeugzeile mit Wortknöpfen misst ein Beobachter, ob die Wörter passen. Läuft
-// die Zeile über, ragt ein Wort aus seinem Knopf, überdecken sich Knöpfe, wird ein Titel abgeschnitten oder umgebrochen oder fällt ein
+// die Zeile über, ragt ein Wort aus seinem Knopf, überdecken sich Knöpfe (auch Titel und andere Bedienelemente), wird ein Titel abgeschnitten oder umgebrochen oder fällt ein
 // Suchfeld unter SEARCH_MIN, bekommt die Zeile `data-icons-only` (base.css: nur Icons). Neu entschieden bei jeder Größen- und Textänderung, höchstens einmal je Bild; der
 // Beobachter reagiert nicht auf das eigene Attribut (keine Rückkopplung). Der v4-Rahmen prüft zusätzlich die
 // reservierten Zonen (v4/frame/pane-heads.js, data-v4-icons-only).
@@ -39,8 +39,16 @@ const wordFor = (button, key) => (key === 'shortEn'
   ? (button.dataset.shortEn || EN[button.dataset.shortDe] || button.dataset.shortDe)
   : button.dataset.shortDe);
 
+// Zeilenaktionen in Listen bleiben Icons (wie in Mail- und Dateilisten üblich): dort kein Wort.
+const LIST_ROW = '.ctox-list-item, li, tr, [role="option"], [role="row"], [role="listitem"], [role="treeitem"]';
+
 function labelButtons(root, key) {
   for (const button of root.querySelectorAll('[data-short-de]')) {
+    if (button.closest(LIST_ROW)) {
+      button.querySelector(':scope > .ctox-pane-icon-label')?.remove();
+      if (button.classList.contains('has-label')) button.classList.remove('has-label');
+      continue;
+    }
     const word = wordFor(button, key);
     let label = button.querySelector(':scope > .ctox-pane-icon-label');
     if (!label) {
@@ -77,6 +85,11 @@ function rowIsTight(row) {
     if (lr && lr.width > 0 && (lr.right > br.right + 0.5 || lr.left < br.left - 0.5)) return true;
     boxes.push(br);
   }
+  // Wortknöpfe überdecken Titel, Kicker oder andere Bedienelemente der Zeile.
+  const others = [...row.querySelectorAll('.ctox-pane-title, .ctox-pane-kicker, button, input, select, a[href]')]
+    .filter((el) => !el.matches(LABELLED) && !el.closest(LABELLED)).map((el) => el.getBoundingClientRect()).filter((o) => o.width > 0);
+  const overlap = (a, c) => Math.min(a.right, c.right) - Math.max(a.left, c.left) > 0.5 && Math.min(a.bottom, c.bottom) - Math.max(a.top, c.top) > 0.5;
+  if (boxes.some((b) => others.some((o) => overlap(b, o)))) return true;
   // Wortknöpfe überdecken sich gegenseitig.
   for (let i = 0; i < boxes.length; i += 1) {
     for (let j = i + 1; j < boxes.length; j += 1) {
@@ -84,7 +97,7 @@ function rowIsTight(row) {
       if (Math.min(a.right, c.right) - Math.max(a.left, c.left) > 0.5 && Math.min(a.bottom, c.bottom) - Math.max(a.top, c.top) > 0.5) return true;
     }
   }
-  for (const t of row.querySelectorAll('.ctox-pane-title')) {
+  for (const t of row.querySelectorAll('.ctox-pane-title, .ctox-pane-kicker')) {
     if (cut(t)) return true;
     // Der Pane-Kopf ist einzeilig: bricht der Titel wegen der Wörter um, fehlen sie hier.
     const cs = t.ownerDocument.defaultView.getComputedStyle(t);
@@ -118,10 +131,11 @@ function createFitter(root) {
     frame = 0;
     if (disposed) return;
     labelButtons(root, key);
-    const rows = [...root.querySelectorAll(ROWS)].filter((el) => el.querySelector(LABELLED));
+    // Zeile = Kopf-/Werkzeugzeile des Wortknopfs, sonst sein Elternelement (Detail-Werkzeugleisten, Kartenaktionen).
+    const rows = [...new Set([...root.querySelectorAll(LABELLED)].map((b) => b.closest(ROWS) || b.parentElement).filter(Boolean))];
     // Beobachtet werden die Zeilen und darin Titel und Wortknöpfe: ein späterer Umbruch (Schrift nachgeladen, Text
     // geändert) ändert deren Größe, nicht die der Zeile.
-    const watch = new Set(rows.flatMap((el) => [el, ...el.querySelectorAll(`.ctox-pane-title, ${LABELLED}`)]));
+    const watch = new Set(rows.flatMap((el) => [el, ...el.querySelectorAll(`.ctox-pane-title, .ctox-pane-kicker, ${LABELLED}`)]));
     for (const el of observed) if (!watch.has(el)) { ro?.unobserve(el); observed.delete(el); }
     for (const el of watch) if (!observed.has(el)) { ro?.observe(el); observed.add(el); }
     // Mit Wörtern messen (alle Markierungen entfernen, ein Layout lesen), dann gezielt setzen.

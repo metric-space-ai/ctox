@@ -162,9 +162,6 @@
   width: min(30px, var(--news-row));
   height: min(30px, var(--news-row));
 }
-/* Icon + Wort: Wortknöpfe wachsen mit dem Text; ohne Platz (data-icons-only) wieder quadratisch. */
-[data-app="news"] .news-module :is(.ctox-pane-header, .ctox-filterbar) .ctox-pane-icon.has-label { width: auto; }
-[data-app="news"] .news-module :is([data-icons-only], [data-v4-icons-only]) .ctox-pane-icon.has-label { width: min(30px, var(--news-row)); }
 [data-app="news"] .news-module .ctox-filterbar { display: flex; gap: 6px; padding-right: 8px; }
 [data-app="news"] .news-module .ctox-filterbar .ctox-pane-search { min-height: 28px; height: 28px; }
 [data-app="news"] .news-module .news-left > .ctox-pane-header,
