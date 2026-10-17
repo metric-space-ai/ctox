@@ -296,6 +296,35 @@ fn success(doc: &Value, op: &Value) -> (Option<Value>, bool, bool) {
     (None, code == "204" || code == "205", false)
 }
 
+/// Object properties, merged through `allOf` (and `$ref`s inside it).
+fn props_of(doc: &Value, s: &Value, depth: u8) -> Option<Map<String, Value>> {
+    let s = deref(doc, s).unwrap_or(s);
+    let mut out = s.get("properties").and_then(Value::as_object).cloned().unwrap_or_default();
+    if depth < 4 {
+        for part in s.get("allOf").and_then(Value::as_array).into_iter().flatten() {
+            out.extend(props_of(doc, part, depth + 1).unwrap_or_default());
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
+/// Arrays of objects in a response: the response itself (`""`) or a
+/// top-level property (`"/results"`), with their item schema.
+fn item_arrays(doc: &Value, schema: &Value) -> Vec<(String, Value)> {
+    let s = deref(doc, schema).unwrap_or(schema);
+    let item_of = |v: &Value| -> Option<Value> {
+        let v = deref(doc, v).unwrap_or(v);
+        let is_array = v.get("type").and_then(Value::as_str) == Some("array") || v.get("items").is_some();
+        let it = v.get("items").filter(|_| is_array)?;
+        let it = deref(doc, it).unwrap_or(it);
+        props_of(doc, it, 0).map(|_| it.clone())
+    };
+    if let Some(it) = item_of(s) {
+        return vec![(String::new(), it)];
+    }
+    s.get("properties").and_then(Value::as_object).into_iter().flatten().filter_map(|(k, v)| item_of(v).map(|it| (format!("/{}", k.replace('~', "~0").replace('/', "~1")), it))).collect()
+}
+
 fn expect_for(schema: Option<&Value>, doc: &Value) -> Value {
     let Some(s) = schema.and_then(|s| deref(doc, s)) else { return json!({}) };
     let mut e = Map::new();
@@ -317,7 +346,8 @@ pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
     let info = doc.get("info").cloned().unwrap_or_else(|| json!({}));
     let title = text(&info, "title").unwrap_or_else(|| "API".into());
     let slug = match &opts.slug {
-        Some(s) => s.clone(),
+        // Mission slugs are kebab-case, toolkit slugs snake_case.
+        Some(s) => s.trim().to_ascii_lowercase().replace('-', "_"),
         None => {
             let mut s = snake(&title.replace(" API", "").replace(" Api", ""), false);
             s.truncate(40);
@@ -325,7 +355,7 @@ pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
         }
     };
     if slug.is_empty() || !slug.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_') || slug.len() > 40 {
-        bail!("cannot derive a toolkit slug from `{title}`; pass --slug");
+        bail!("`{slug}` is no valid toolkit slug (from `{title}`; lowercase a-z, 0-9, _; max 40); pass --slug");
     }
     let prefix = format!("{}_", slug.to_ascii_uppercase());
     let (api_base, host) = server(doc, &opts.source, &mut notes)?;
@@ -334,6 +364,9 @@ pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
 
     let mut actions: Vec<(bool, Value, Option<Value>, Value)> = Vec::new(); // (is_read, action, probe, missing)
     let mut slugs = BTreeSet::new();
+    // Probe chaining: list results that can feed detail probes.
+    let mut sources: Vec<(String, String, Value)> = Vec::new(); // (tool, pointer to an item array, item schema)
+    let mut chain_wanted: BTreeMap<String, (String, String, Value)> = BTreeMap::new(); // tool -> (arg, param name, response schema)
     for (raw_path, item) in paths {
         let item = deref(doc, item).unwrap_or(item);
         let shared: Vec<Value> = item.get("parameters").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -393,6 +426,7 @@ pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
             let mut path = raw_path.clone();
             let mut probe_args = Map::new();
             let mut missing = Vec::new();
+            let mut path_args: Vec<(String, String)> = Vec::new();
             let mut bad = None;
             let mut body_params = Vec::new();
             for key in &order {
@@ -433,6 +467,7 @@ pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
                         continue;
                     }
                     path = path.replace(&format!("{{{pname}}}"), &format!("{{{a}}}"));
+                    path_args.push((a.clone(), pname.to_string()));
                     if kind == "string" {
                         enc.insert(a.clone(), json!("component"));
                     }
@@ -547,6 +582,20 @@ pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
             });
             slugs.insert(aslug.clone());
             let is_read = risk == "read";
+            if is_read {
+                if let Some(rs) = resp_schema.as_ref() {
+                    if missing.is_empty() {
+                        for (ptr, item) in item_arrays(doc, rs) {
+                            sources.push((aslug.clone(), ptr, item));
+                        }
+                    }
+                    if let [(a, pname)] = path_args.as_slice() {
+                        if missing.iter().all(|m| m == a) {
+                            chain_wanted.insert(aslug.clone(), (a.clone(), pname.clone(), rs.clone()));
+                        }
+                    }
+                }
+            }
             let probe = (is_read && missing.is_empty()).then(|| {
                 let mut p = json!({"tool": aslug, "args": probe_args});
                 let e = expect_for(resp_schema.as_ref(), doc);
@@ -570,15 +619,57 @@ pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
         }
     }
     let mut probes = Vec::new();
+    let mut chained = Vec::new();
     let mut probes_missing = Vec::new();
     let mut list = Vec::new();
+    let kept: BTreeSet<String> = actions.iter().map(|(_, a, ..)| a["slug"].as_str().unwrap_or_default().to_string()).collect();
     for (_, a, p, m) in actions {
-        list.push(a);
-        probes.extend(p);
-        if !m.is_null() {
-            probes_missing.push(m);
+        let tool = a["slug"].as_str().unwrap_or_default().to_string();
+        // A detail probe takes its id from a list probe whose items have the
+        // same schema as the detail response (document examples go stale).
+        let chain = chain_wanted.get(&tool).and_then(|(arg, pname, rs)| {
+            let target = deref(doc, rs).unwrap_or(rs);
+            sources.iter().filter(|(t, ..)| kept.contains(t)).find_map(|(t, ptr, item)| {
+                let item = deref(doc, item).unwrap_or(item);
+                if item != target {
+                    return None;
+                }
+                let props = props_of(doc, item, 0)?;
+                let field = [pname.as_str(), "identifier", "id"].into_iter().find(|f| props.contains_key(*f)).map(String::from).or_else(|| props.keys().find(|k| k.to_ascii_lowercase().ends_with("id")).cloned())?;
+                Some((arg.clone(), format!("{t}#{ptr}/0/{}", field.replace('~', "~0").replace('/', "~1"))))
+            })
+        });
+        match (chain, p) {
+            (Some((arg, src)), p) => {
+                let mut p = p.unwrap_or_else(|| {
+                    let mut p = json!({"tool": tool, "args": {}});
+                    if let Some((_, _, rs)) = chain_wanted.get(&tool) {
+                        let e = expect_for(Some(rs), doc);
+                        if e.as_object().is_some_and(|m| !m.is_empty()) {
+                            p["expect"] = e;
+                        }
+                    }
+                    p
+                });
+                if let Some(o) = p["args"].as_object_mut() {
+                    o.remove(&arg);
+                }
+                p["from"] = json!({arg: src});
+                chained.push(p);
+            }
+            (None, p) => {
+                probes.extend(p);
+                if !m.is_null() {
+                    probes_missing.push(m);
+                }
+            }
         }
+        list.push(a);
     }
+    if !chained.is_empty() {
+        notes.push(format!("{} detail probe(s) take their id from a list probe (`from`), not from document examples", chained.len()));
+    }
+    probes.extend(chained);
     let name = clean(&title, 80);
     let about = text(&info, "description").map(|d| clean(&d, 240)).unwrap_or_else(|| name.clone());
     let auth_scheme = auth.get("scheme").filter(|s| !s.is_null()).cloned().unwrap_or_else(|| json!({"type": "none"}));

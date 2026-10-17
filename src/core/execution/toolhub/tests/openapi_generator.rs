@@ -35,6 +35,13 @@ fn autobahn_document_maps_to_a_valid_keyless_spec_with_probes() {
     let p = d.probes.iter().find(|p| p["tool"] == json!("AUTOBAHN_APP_LIST_ROADWORKS")).unwrap();
     assert_eq!(p["args"], json!({"roadId": "A1"}));
     assert_eq!(p["expect"]["kind"], json!("object"));
+    // Detail probes are chained to the list probes (examples go stale).
+    let g = d.probes.iter().find(|p| p["tool"] == json!("AUTOBAHN_APP_GET_ROADWORK")).unwrap();
+    assert_eq!(g["from"], json!({"roadworkId": "AUTOBAHN_APP_LIST_ROADWORKS#/roadworks/0/identifier"}), "{g}");
+    assert_eq!(g["args"], json!({}));
+    assert_eq!(d.probes.iter().filter(|p| p.get("from").is_some()).count(), 6);
+    let pos = |t: &str| d.probes.iter().position(|p| p["tool"] == json!(t)).unwrap();
+    assert!(pos("AUTOBAHN_APP_LIST_ROADWORKS") < pos("AUTOBAHN_APP_GET_ROADWORK"));
     let r = a.build_request("AUTOBAHN_APP_LIST_ROADWORKS", &p["args"]).unwrap();
     assert_eq!(r.url, "https://verkehr.autobahn.de/o/autobahn/A1/services/roadworks");
     assert_eq!(a.build_request("AUTOBAHN_APP_LIST_AUTOBAHNEN", &json!({})).unwrap().url, "https://verkehr.autobahn.de/o/autobahn/");
@@ -57,7 +64,8 @@ fn pegelonline_document_skips_binary_and_maps_query_types() {
     assert!(r.url.contains("waters=RHEIN%2CELBE") && r.url.contains("latitude=52.52") && r.url.contains("includeTimeseries=true"), "{}", r.url);
     // Non-empty example preferred over the doc's "no filter" example.
     let p = d.probes.iter().find(|p| p["tool"] == json!("PEGEL_ONLINE_GET_STATIONS_BY_ID")).unwrap();
-    assert_eq!(p["args"]["station"], json!("EITZE"));
+    // Chained to the station list instead of the doc's example `EITZE`.
+    assert_eq!(p["from"]["station"].as_str().map(|s| s.starts_with("PEGEL_ONLINE_GET_STATIONS#/0/")), Some(true), "{p}");
     assert_eq!(d.probes.len(), 5);
     assert_eq!(d.probes[0]["expect"]["kind"], json!("array"));
 }

@@ -100,7 +100,7 @@ impl Env {
 }
 
 fn zip_probe() -> Vec<Probe> {
-    vec![Probe { tool: "ZIPPOPOTAM_LOOKUP_POSTAL_CODE".into(), args: json!({"country": "de", "postal_code": "10115"}), cleanup: vec![], expect: None }]
+    vec![Probe { tool: "ZIPPOPOTAM_LOOKUP_POSTAL_CODE".into(), args: json!({"country": "de", "postal_code": "10115"}), cleanup: vec![], expect: None, from: Default::default() }]
 }
 
 const SVC: &str = r#"{
@@ -126,8 +126,8 @@ fn active_svc(e: &Env) {
     s.draft_spec(SVC).unwrap();
     assert_eq!(s.validate("testsvc", "1.0.0").unwrap()["ok"], json!(true));
     let probes = vec![
-        Probe { tool: "TESTSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None },
-        Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "probe"}), cleanup: vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None }], expect: None },
+        Probe { tool: "TESTSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None, from: Default::default() },
+        Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "probe"}), cleanup: vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None, from: Default::default() }], expect: None, from: Default::default() },
     ];
     let t = s.live_test("testsvc", "1.0.0", &probes, None).unwrap();
     assert_eq!(t["passed"], json!(true), "{t}");
@@ -255,12 +255,12 @@ fn live_test_probe_rules() {
     let e = env();
     let sup = e.b(AgentRole::Supervisor, &Allow);
     sup.draft_spec(SVC).unwrap();
-    let write_no_cleanup = vec![Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "x"}), cleanup: vec![], expect: None }];
+    let write_no_cleanup = vec![Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "x"}), cleanup: vec![], expect: None, from: Default::default() }];
     assert!(sup.live_test("testsvc", "1.0.0", &write_no_cleanup, None).unwrap_err().to_string().contains("cleanup"));
-    let destructive = vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None }];
+    let destructive = vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None, from: Default::default() }];
     assert!(sup.live_test("testsvc", "1.0.0", &destructive, None).unwrap_err().to_string().contains("never run"));
     assert!(sup.live_test("testsvc", "1.0.0", &[], None).is_err());
-    let write = vec![Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "x"}), cleanup: vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None }], expect: None }];
+    let write = vec![Probe { tool: "TESTSVC_CREATE_ITEM".into(), args: json!({"name": "x"}), cleanup: vec![Probe { tool: "TESTSVC_DELETE_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None, from: Default::default() }], expect: None, from: Default::default() }];
     assert!(e.b(AgentRole::Worker, &Allow).live_test("testsvc", "1.0.0", &write, None).unwrap_err().to_string().contains("delegate_to_supervisor"));
     assert!(e.b(AgentRole::Mcp, &Allow).draft_spec(SVC).is_err());
 }
@@ -271,7 +271,7 @@ fn missing_access_answer_depends_on_role() {
     let spec = SVC.replace(r#"[{"type": "none"}]"#, r#"[{"type": "bearer"}]"#).replace("testsvc", "authsvc").replace("TESTSVC", "AUTHSVC");
     let one = e.b(AgentRole::OneShot, &Allow);
     one.draft_spec(&spec).unwrap();
-    let probes = vec![Probe { tool: "AUTHSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None }];
+    let probes = vec![Probe { tool: "AUTHSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None, from: Default::default() }];
     let t = one.live_test("authsvc", "1.0.0", &probes, None).unwrap();
     assert_eq!(t["passed"], json!(false));
     assert!(t["access_missing"].as_str().unwrap().starts_with("Zugang fehlt"));
@@ -284,7 +284,7 @@ fn svc_v2(e: &Env) {
     let s = e.b(AgentRole::Supervisor, &Allow);
     let v2 = SVC.replace("\"version\": \"1.0.0\"", "\"version\": \"1.0.1\"");
     s.draft_spec(&v2).unwrap();
-    s.live_test("testsvc", "1.0.1", &[Probe { tool: "TESTSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None }], None).unwrap();
+    s.live_test("testsvc", "1.0.1", &[Probe { tool: "TESTSVC_GET_ITEM".into(), args: json!({"id": "1"}), cleanup: vec![], expect: None, from: Default::default() }], None).unwrap();
     s.activate("testsvc", "1.0.1", None).unwrap();
 }
 
@@ -382,7 +382,7 @@ fn live_test_checks_shape_retries_once_and_names_redirects() {
     let e = env();
     let s = e.b(AgentRole::Supervisor, &Allow);
     s.draft_spec(SVC).unwrap();
-    let get = |id: &str, expect: Option<probe::Expect>| vec![Probe { tool: "TESTSVC_GET_ITEM".into(), args: json!({"id": id}), cleanup: vec![], expect }];
+    let get = |id: &str, expect: Option<probe::Expect>| vec![Probe { tool: "TESTSVC_GET_ITEM".into(), args: json!({"id": id}), cleanup: vec![], expect, from: Default::default() }];
     // Empty body: fails unless allowed.
     let t = s.live_test("testsvc", "1.0.0", &get("empty", None), None).unwrap();
     assert_eq!(t["passed"], json!(false));
@@ -403,4 +403,29 @@ fn live_test_checks_shape_retries_once_and_names_redirects() {
     assert_eq!(t["redirects"][0]["suggested_host"], json!("api.testsvc.example.com"), "{t}");
     assert_eq!(t["redirects"][0]["suggested_api_base"], json!("https://api.testsvc.example.com/v2"), "{t}");
     assert!(t["review"]["results"][0]["detail"].as_str().unwrap().contains("api_base"));
+}
+
+#[test]
+fn chained_probe_takes_its_arg_from_an_earlier_probe() {
+    let e = env();
+    let s = e.b(AgentRole::Supervisor, &Allow);
+    s.draft_spec(SVC).unwrap();
+    let p = |id: &str, from: &[(&str, &str)]| Probe {
+        tool: "TESTSVC_GET_ITEM".into(),
+        args: json!({"id": id}),
+        cleanup: vec![],
+        expect: None,
+        from: from.iter().map(|(a, s)| (a.to_string(), s.to_string())).collect(),
+    };
+    let t = s.live_test("testsvc", "1.0.0", &[p("seed", &[]), p("ignored", &[("id", "TESTSVC_GET_ITEM#/id")])], None).unwrap();
+    assert_eq!(t["passed"], json!(true), "{t}");
+    let calls = e.mock.calls.lock().unwrap().clone();
+    assert!(calls.iter().any(|c| c.ends_with("/items/seed")) && calls.iter().any(|c| c.ends_with("/items/1")), "{calls:?}");
+    assert!(!calls.iter().any(|c| c.ends_with("/items/ignored")));
+    // A missing source value fails the probe instead of guessing.
+    let t = s.live_test("testsvc", "1.0.0", &[p("seed", &[]), p("x", &[("id", "TESTSVC_GET_ITEM#/nope")])], None).unwrap();
+    assert_eq!(t["passed"], json!(false));
+    assert!(t["review"]["results"][1]["detail"].as_str().unwrap().contains("no value at `/nope`"), "{t}");
+    let t = s.live_test("testsvc", "1.0.0", &[p("x", &[("id", "TESTSVC_LIST#/0/id")])], None).unwrap();
+    assert!(t["review"]["results"][0]["detail"].as_str().unwrap().contains("has not passed"), "{t}");
 }

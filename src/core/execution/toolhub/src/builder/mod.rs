@@ -23,6 +23,7 @@ pub mod catalog;
 pub mod probe;
 pub mod roles;
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -145,6 +146,11 @@ pub struct Probe {
     /// Result-shape assertion; without it an empty result still fails.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub expect: Option<probe::Expect>,
+    /// Probe chaining: `{arg: "TOOL#/json/pointer"}` takes the arg from the
+    /// result of an earlier probe in the same run (e.g. an id from a list),
+    /// so detail probes don't depend on stale document examples.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub from: BTreeMap<String, String>,
 }
 
 fn empty_object() -> Value {
@@ -689,22 +695,39 @@ impl<'a> Builder<'a> {
         hub.register(Box::new(SpecAdapter::from_json(&text)?));
         let base = adapter_base(&text);
         let mut redirects: Vec<Value> = Vec::new();
+        let mut outputs: BTreeMap<String, Value> = BTreeMap::new();
         let mut run = |p: &Probe| -> ProbeResult {
             let risk = risk_str(adapter.risk(&p.tool).unwrap_or(Risk::Write)).to_string();
-            let mut outcome = hub.execute(&self.project, &p.tool, &p.args, account);
+            let mut args = p.args.clone();
+            for (arg, src) in &p.from {
+                let (tool, ptr) = src.split_once('#').unwrap_or((src.as_str(), ""));
+                match outputs.get(tool).and_then(|d| d.pointer(ptr)).filter(|v| !v.is_null()) {
+                    Some(v) if args.is_object() => {
+                        args[arg.as_str()] = v.clone();
+                    }
+                    _ => {
+                        let why = if outputs.contains_key(tool) { format!("no value at `{ptr}`") } else { "has not passed earlier in this run".into() };
+                        return ProbeResult { tool: p.tool.clone(), risk, result: "fail".into(), status: None, detail: Some(format!("chained arg `{arg}`: source probe {tool} {why}")) };
+                    }
+                }
+            }
+            let mut outcome = hub.execute(&self.project, &p.tool, &args, account);
             // One retry on a transient network/TLS error (never on HTTP answers).
             if let Err(e) = &outcome {
                 if probe::is_transient(&format!("{e:#}")) {
-                    outcome = hub.execute(&self.project, &p.tool, &p.args, account);
+                    outcome = hub.execute(&self.project, &p.tool, &args, account);
                 }
             }
             let (result, status, detail) = match outcome {
                 Ok(ToolOutcome::Success { data }) => match probe::check(&data, p.expect.as_ref()) {
-                    Ok(()) => ("pass", None, None),
+                    Ok(()) => {
+                        outputs.insert(p.tool.clone(), data);
+                        ("pass", None, None)
+                    }
                     Err(why) => ("fail", None, Some(short(format!("result shape: {why}")))),
                 },
                 Ok(ToolOutcome::ProviderError { status, .. }) if (300..400).contains(&status) => {
-                    let url = adapter.build_request(&p.tool, &p.args).map(|r| r.url).unwrap_or_default();
+                    let url = adapter.build_request(&p.tool, &args).map(|r| r.url).unwrap_or_default();
                     let suffix = url.strip_prefix(base.as_str()).unwrap_or("");
                     match probe::redirect_hint(self.transport.as_ref(), &url, suffix) {
                         Some(h) => {
