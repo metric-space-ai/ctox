@@ -61,7 +61,7 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '..', '..', '..'));
 const MODULES = join(BOS, 'modules');
 const MANIFESTS = join(BOS, 'v4', 'manifests');
-const STUB = normalize(process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7'));
+const STUB = normalize(process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac'));
 const VOCAB = JSON.parse(readFileSync(join(BOS, 'v4', 'tools', 'guards', 'vocabulary.json'), 'utf8')).entries;
 
 const args = process.argv.slice(2);

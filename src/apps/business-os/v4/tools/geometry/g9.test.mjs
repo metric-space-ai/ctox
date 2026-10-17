@@ -23,7 +23,7 @@ import { g9Pixel, G9_MAX_DE } from './g9.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 // Stub-Pin 8265bd7 (abweichend per CTOX_APP_API_STUB); vor dem Laden von serve.mjs, das den Pfad beim Import liest.
-process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
 const { startServer } = await import('../../frame/lab/serve.mjs');
 const BOS = path.resolve(HERE, '../../..');
 const MOD = path.join(BOS, 'modules');

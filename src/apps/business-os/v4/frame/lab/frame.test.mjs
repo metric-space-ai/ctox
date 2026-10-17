@@ -7,10 +7,11 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { realManifestRoutes } from '../../tools/port/real-manifest.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // Stub-Pin 8265bd7 (abweichend per CTOX_APP_API_STUB); vor dem Laden von serve.mjs, das den Pfad beim Import liest.
-process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
 const { startServer } = await import('./serve.mjs');
 const { chatCss } = await import('./extract-desktop-css.mjs');
 const require = createRequire(path.join(os.homedir(), 'Documents/ctox/src/apps/business-os/package.json'));
@@ -612,7 +613,7 @@ async function fr6b() {
 // Eigene Seite, nur gegen den Kern-Stub (braucht kernel.source). Ab Stub-Pin 51b1e33 bildet der Stub §16.44 ab
 // (ctox.coding.turn/cancel mit exakten Ablehnungen, coding_turns, CAS-Rückschreiben, Patch files/coding-patch:<turn_id>,
 // draft.info().rev); die Shell spricht ihn über ihre App-API (v4/source/coding-port.js). Ältere Pins: nur AG-0.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/51b1e33 AG_ONLY=1 node …/frame.test.mjs stub
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac AG_ONLY=1 node …/frame.test.mjs stub
 // AG_MUTATE=<name> liefert eine mutierte Datei aus (Mutationsbeleg: der zugehörige Fall muss rot werden).
 const AG_MUTATIONS = {
   enter: ['agent-panel.js', "if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); }", ''],
@@ -665,7 +666,15 @@ async function ag() {
   await P.waitForFunction(() => window.__labReady === true && document.querySelector('[data-v4-ready]'));
   const H = (fn, arg) => P.evaluate(fn, arg);
   const caLayout = JSON.parse(fs.readFileSync(path.join(caDir, 'module.json'), 'utf8')).layout;
-  await H((icon) => window.__lab.kernel.sim.publishAppVersion('coding-agents', '1.0.0', { title: 'Coding Agents', layout: { icon_svg: icon, category: 'Entwicklung', default_width: 520, default_height: 420 }, styles: ['index.css'] }), caLayout.icon_svg);
+  // FIXT-R (Pin 4b0d0ac): ohne Routen/collections des echten Manifests sperrt der Kern das Lesen von coding_turns, die App
+  // bricht beim Start ab und die Shell schließt ihr Fenster wieder. Eigentümer (ctox-platform) zuerst, dann die eigene Version.
+  const caRoutes = realManifestRoutes('coding-agents');
+  await H(async ([icon, routes]) => {
+    const sim = window.__lab.kernel.sim;
+    for (const o of routes._fixture_owners ?? []) if (!(await sim.inspect('business_apps', o.app))?.data?.active_ver) await sim.publishAppVersion(o.app, o.ver, o.publish);
+    const { _fixture_owners, ...manifestExtra } = routes;
+    await sim.publishAppVersion('coding-agents', '1.0.0', { title: 'Coding Agents', layout: { icon_svg: icon, category: 'Entwicklung', default_width: 520, default_height: 420 }, styles: ['index.css'], manifestExtra });
+  }, [caLayout.icon_svg, caRoutes]);
   const seeded = await H(async (text) => {
     const src = window.__lab.kernel.source('notes');
     await src.draft.write('index.js', text);
@@ -999,6 +1008,17 @@ const LOOP_MUTATIONS = {
   name: ['source/reports-tab.js', 'if (fromDir) return fromDir;', 'if (fromDir) return id;'], // LOOP-8
   rueckfall: ['source/reports-tab.js', 'return stored && stored !== id ? stored : REPORTER_FALLBACK;', 'return stored || id;'], // LOOP-8
 };
+// Pin 4b0d0ac: Fremdlesen der Shell (business_module_reports, business_users, … Eigentümer ctox) braucht ein aktives
+// Eigentümer-Manifest mit collections + exports. stub-lab.html veröffentlicht Eigentümer bewusst nicht (der Fall, der sie
+// braucht, tut es) – Muster _fixture_owners aus v4/tools/port/real-manifest.mjs.
+async function publishShellOwners(H, apps) {
+  const owners = (realManifestRoutes('shell')._fixture_owners ?? []).filter((o) => apps.includes(o.app));
+  await H(async (owners) => {
+    const sim = window.__lab.kernel.sim;
+    for (const o of owners) if (!(await sim.inspect('business_apps', o.app))?.data?.active_ver) await sim.publishAppVersion(o.app, o.ver, o.publish);
+  }, owners);
+}
+
 async function loop() {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const P = await ctx.newPage();
@@ -1042,6 +1062,7 @@ async function loop() {
   await P.goto(`${base}/v4/frame/lab/stub-lab.html?inst=loop-${Date.now().toString(36)}`);
   await P.waitForFunction(() => window.__labReady === true && document.querySelector('[data-v4-ready]'));
   const H = (fn, arg) => P.evaluate(fn, arg);
+  await publishShellOwners(H, ['ctox']);
   const caps = await H(async () => {
     const s = window.__lab.kernel.source('tasks');
     await s.draft.rebase(window.__lab.kernel.apps.get().find((a) => a.id === 'tasks').active_ver);
@@ -1057,7 +1078,7 @@ async function loop() {
   if (seeded?.status !== 'accepted') throw new Error(`LOOP: Basis nicht veröffentlicht: ${JSON.stringify(seeded)}`);
   const open = (id, g) => H(async ([id, g]) => { const h = window.__lab.frame.shellHandle(); const o = h.openWindow(id, { geometry: g }); await h.win(o).host.ready; return o; }, [id, g]);
   const reportsDb = () => H(async () => {
-    const api = window.__lab.kernel.appApi('reports', '1.0.0');
+    const api = window.__lab.kernel.appApi('ctox', '1');
     const lq = api.query('business_module_reports', {});
     for (let i = 0; i < 30 && !(lq.get() || []).length; i++) await new Promise((r) => setTimeout(r, 50));
     return (lq.get() || []).map((r) => ({ id: r.id, module_id: r.module_id, kind: r.kind, title: r.title, status: r.status, coding_turn_id: r.coding_turn_id ?? null, fixed_in_ver: r.fixed_in_ver ?? null, fixed_note: r.fixed_note ?? null, reporter_seen_at_ms: r.reporter_seen_at_ms ?? null, reporter_id: r.reporter_id }));
@@ -1124,7 +1145,7 @@ async function loop() {
   const p3 = l3.payload ?? {};
   const db3 = (await reportsDb()).find((r) => r.id === bugId) ?? {};
   const r3 = (await rows()).find((r) => r.id === bugId) ?? {};
-  const cmd3 = await H((tid) => window.__lab.kernel.appApi('reports', '1.0.0').query('business_commands', {}).get()?.find((c) => c.payload?.turn_id === tid)?.record_id ?? null, p3.turn_id);
+  const cmd3 = await H((tid) => window.__lab.kernel.appApi('ctox-platform', '1').query('business_commands', {}).get()?.find((c) => c.payload?.turn_id === tid)?.record_id ?? null, p3.turn_id);
   await P.click(`${NWL} [data-report-turn]`).catch(() => {});
   await P.waitForTimeout(100);
   const focused = await P.$eval(`${NWL} .v4-agent__turn.is-focused`, (c) => c.dataset.turnId).catch(() => null);
@@ -1140,7 +1161,10 @@ async function loop() {
   const side = () => P.$eval(`${NWL} [data-v4-source]`, (e) => e.dataset.side).catch(() => null);
   await P.click(`${NWL} [data-src-tab="files"]`).catch(() => {});
   const side6a = await side();
-  await H(() => window.__lab.kernel.sim.publishAppVersion('reports', '1.0.0', { title: 'Bugs & Features', layout: { icon_asset: 'icon.svg', category: 'Arbeit' }, styles: ['index.css'] }));
+  // Pin 4b0d0ac: „Bugs & Features“ liest business_module_reports als Fremd-Collection (Eigentümer ctox) – nur mit der
+  // Deklaration aus dem echten Manifest; ohne sie liefert der Kern eine leere Liste.
+  const { _fixture_owners: _repOwners, ...repRoutes } = realManifestRoutes('reports');
+  await H((extra) => window.__lab.kernel.sim.publishAppVersion('reports', '1.0.0', { title: 'Bugs & Features', layout: { icon_asset: 'icon.svg', category: 'Arbeit' }, styles: ['index.css'], manifestExtra: extra }), repRoutes);
   const rep = await open('reports', { x: 560, y: 300, w: 700, h: 470 });
   const RWL = '.shell-window[data-window-app="reports"]';
   await P.waitForSelector(`${RWL} [data-reports-list] [data-report-id="${wishId}"]`, { timeout: 8000 }).catch(() => {});
@@ -1226,11 +1250,11 @@ async function loop() {
   // „Teammitglied“ – nie eine ID.
   const now8 = Date.now();
   const seed8 = await H(async ([now]) => {
-    const api = window.__lab.kernel.appApi('reports', '1.0.0');
+    const api = window.__lab.kernel.appApi('ctox', '1');
     const row = (id, who, title, extra = {}) => ({ id, report_id: id, module_id: 'notes', kind: 'bug', title, summary: title, status: 'open', reporter_id: who, created_at_ms: now, updated_at_ms: now, ...extra });
     const out = [];
     for (const [c, d] of [
-      ['business_users', { id: 'u-kim', user_id: 'kim', display_name: 'Kim Berger', role: 'user', active: true }],
+      ['business_users', { id: 'u-kim', user_id: 'kim', display_name: 'Kim Berger', role: 'user', active: true, updated_at_ms: now }],
       ['business_module_reports', row('rep-kim', 'kim', 'Fremde Meldung mit Namen')],
       ['business_module_reports', row('rep-ghost', 'ghost-7f3a', 'Fremde Meldung ohne Nutzer')],
       ['business_module_reports', row('rep-self', 'u-lena', 'Fremde Meldung mit ID als Name', { reporter_display_name: 'u-lena' })],

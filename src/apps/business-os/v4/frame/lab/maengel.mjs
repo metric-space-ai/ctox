@@ -3,7 +3,7 @@
 // wo es um Breite geht zusätzlich 420×800. Screenshots: shots/maengel-M-XX-*.png.
 //
 // Lauf (aus src/apps/business-os):
-//   CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node v4/frame/lab/maengel.mjs [M01,M02,…]
+//   CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac node v4/frame/lab/maengel.mjs [M01,M02,…]
 // Rahmen-Fälle laufen gegen lab/stub-lab.html (Kern-Stub, gebundene Shell-URL wie im echten Ladeweg), echte Apps
 // (credentials, coding-agents, reports, news) über den Server des Geometrie-Labors (v4/tools/geometry/geometry-v4.mjs).
 import { createRequire } from 'node:module';
@@ -11,8 +11,9 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { realManifestRoutes } from '../../tools/port/real-manifest.mjs';
 // Default-Pin vor dem Laden von serve.mjs/geometry-v4.mjs setzen (serve.mjs teilt seinen Default mit anderen Laboren).
-process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
 const { startServer } = await import('./serve.mjs');
 const { serve: geoServe, appConfig, configs } = await import('../../tools/geometry/geometry-v4.mjs');
 
@@ -94,18 +95,27 @@ async function lab({ w = 1280, h = 800, crew = false, extra = true, source = fal
   await P.goto(`${base}/v4/frame/lab/stub-lab.html?shell=bound&inst=mg-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`);
   await P.waitForFunction(() => window.__labReady === true && document.querySelector('[data-v4-ready]'));
   const caIcon = JSON.parse(fs.readFileSync(path.join(caDir, 'module.json'), 'utf8')).layout.icon_svg;
-  await P.evaluate(async ([extra, crew, crewList, crmSvg, caIcon]) => {
-    const add = (id, title, layout, ver = '1.0.0', styles = []) => window.__lab.kernel.sim.publishAppVersion(id, ver, { title, layout, styles });
+  // FIXT-R (Pin 4b0d0ac): coding-agents mit Routen/collections des echten Manifests, Eigentümer (ctox-platform) zuerst –
+  // sonst sperrt der Kern das Lesen von coding_turns und die Shell schließt das Fenster gleich wieder.
+  const caRoutes = realManifestRoutes('coding-agents');
+  // …und die Eigentümer der Shell-Fremdlesungen (ctox: business_module_reports, business_users) vor dem ersten Öffnen der
+  // Code-Ansicht – eine schon offene Meldungsliste sieht einen später veröffentlichten Eigentümer nicht.
+  const shellOwners = (realManifestRoutes('shell')._fixture_owners ?? []).filter((o) => o.app === 'ctox');
+  await P.evaluate(async ([extra, crew, crewList, crmSvg, caIcon, caRoutes, shellOwners]) => {
+    const sim = window.__lab.kernel.sim;
+    const add = (id, title, layout, ver = '1.0.0', styles = [], manifestExtra) => sim.publishAppVersion(id, ver, { title, layout, styles, ...(manifestExtra ? { manifestExtra } : {}) });
     if (extra) {
       await add('studio', 'Black Hole Studio', { category: 'Arbeit', frame_palette: { start: '#00ff00', middle: '#00ff00', end: '#00ff00', top_joint: '#00ff00', left_joint: '#00ff00' }, default_width: 900, default_height: 520 });
       await add('crm', 'Kontakte', { category: 'Vertrieb', icon_svg: crmSvg, default_width: 900, default_height: 520 }, '2.0.0');
-      await add('coding-agents', 'Coding Agents', { icon_svg: caIcon, category: 'Entwicklung', default_width: 560, default_height: 440 }, '1.0.0', ['index.css']); // v4-allow: en (Laborprüfung: App-Titel)
+      for (const o of [...(caRoutes._fixture_owners ?? []), ...shellOwners]) if (!(await sim.inspect('business_apps', o.app))?.data?.active_ver) await sim.publishAppVersion(o.app, o.ver, o.publish);
+      const { _fixture_owners, ...caExtra } = caRoutes;
+      await add('coding-agents', 'Coding Agents', { icon_svg: caIcon, category: 'Entwicklung', default_width: 560, default_height: 440 }, '1.0.0', ['index.css'], caExtra); // v4-allow: en (Laborprüfung: App-Titel)
     }
     if (crew) for (const [id, name, color] of crewList) {
       const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="${color}"/><circle cx="32" cy="26" r="11" fill="#fff"/><path d="M12 58c3-13 12-19 20-19s17 6 20 19" fill="#fff"/></svg>`;
       await add(id, `Crew ${name}`, { category: 'Crew', icon_svg: svg, default_width: 420, default_height: 320, presentation: { taskbar_group: 'crew' } });
     }
-  }, [extra, crew, CREW, crmSvg, caIcon]);
+  }, [extra, crew, CREW, crmSvg, caIcon, caRoutes, shellOwners]);
   if (extra) await P.waitForSelector('[data-v4-app="studio"]', { state: 'attached' });
   if (source) {
     const seeded = await P.evaluate(async (text) => { const src = window.__lab.kernel.source('notes'); await src.draft.write('index.js', text); return src.draft.publish({}).result; }, fs.readFileSync(path.join(notesDir, 'index.js'), 'utf8'));
@@ -255,6 +265,7 @@ try {
 
     // ---- M-06 Kreislauf: Melden per App-Menü (echte Maus) → Reiter „Meldungen“ → Agent beauftragen ----
     await P.evaluate((o) => window.__lab.frame.shellHandle().closeWindow(o), ca);
+    // Pin 4b0d0ac: Eigentümer ctox ist seit dem Seitenaufbau aktiv (Reiter „Meldungen“ liest business_module_reports).
     await settle(P, 300);
     await mclick(P, `${W('notes')} .shell-window-v2-icon`); await settle(P, 200);
     await mclick(P, `${W('notes')} [data-v4-appmenu="app"]`, { must: false }); await settle(P, 300);
@@ -272,14 +283,16 @@ try {
     await mclick(P, `${W('notes')} [data-v4-sheet-ok]`);
     await settle(P, 600);
     const stored = await P.evaluate(async () => {
-      const api = window.__lab.kernel.appApi('reports', '1.0.0');
+      const api = window.__lab.kernel.appApi('ctox', '1'); // Eigentümer liest (Pin 4b0d0ac)
       const lq = api.query('business_module_reports', {});
       for (let i = 0; i < 30 && !(lq.get() || []).length; i++) await new Promise((r) => setTimeout(r, 50));
       const r = (lq.get() || []).at(-1) || {};
-      return { id: r.id, module_id: r.module_id, kind: r.kind, summary: r.summary, expected: r.expected, status: r.status, app: r.client_context?.app_id, window_image: r.client_context?.window_image ?? null };
+      return { id: r.id, module_id: r.module_id, kind: r.kind, summary: r.summary, expected: r.expected, status: r.status, app: r.client_context?.app_id, window_image: r.client_context?.window_image ?? null, ctx: Object.keys(r.client_context ?? {}).sort() };
     });
     rec('M-06', 'Melden aus dem Fenster per App-Menü (echte Maus): Meldung mit App und Erwartung gespeichert', stored.module_id === 'notes' && stored.summary && stored.expected, { menu3, stored });
-    rec('M-06', 'Meldung nimmt das Fensterbild mit (Bedienkonzept §3a)', stored.window_image != null, { window_image: stored.window_image });
+    // M-06 entschieden (docs/owner-maengel.md, Sa 17.10.): KEIN Fensterbild – Bildschirmfreigabe wäre ein Dialog außerhalb
+    // der App; stattdessen strukturierter Kontext (App, Version, Fenstergröße …) in client_context (v4/shell/report.js).
+    rec('M-06', 'Meldung trägt strukturierten Kontext statt Fensterbild (Entscheidung M-06)', stored.window_image === null && stored.app === 'notes' && stored.ctx.includes('app_ver'), { window_image: stored.window_image, ctx: stored.ctx });
     await mclick(P, `${W('notes')} .shell-window-v2-icon`); await settle(P, 200);
     await mclick(P, `${W('notes')} [data-v4-appmenu="code"]`);
     await P.waitForSelector(`${W('notes')} [data-src-tab="reports"]`, { timeout: 8000 }).catch(() => {});

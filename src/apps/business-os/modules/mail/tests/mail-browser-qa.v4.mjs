@@ -12,7 +12,7 @@
 // Jede V2-Prüfung ohne v4-Gegenstück steht im Inventar unten (NO_V4) mit Grund; nichts wird wegassertiert.
 //
 // Lauf (aus src/apps/business-os): node modules/mail/tests/mail-browser-qa.v4.mjs
-//   CTOX_APP_API_STUB=<dir>          Stub (Standard ~/.local/state/shell-v4/stub-pins/8265bd7)
+//   CTOX_APP_API_STUB=<dir>          Stub (Standard ~/.local/state/shell-v4/stub-pins/4b0d0ac)
 //   CTOX_MAIL_ICON_PROVIDER_MODE     shell|absent|empty (v4: kein Anbieter, alle Modi erwarten mail-action-*)
 //   CTOX_MAIL_ICON_QA_ONLY=1         nur Posteingang + Icon-Abnahme
 //   CTOX_EVIDENCE_DIR=<dir>          Screenshots (Standard tests/shots)
@@ -25,7 +25,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const OUT = process.env.CTOX_EVIDENCE_DIR || join(HERE, 'shots');

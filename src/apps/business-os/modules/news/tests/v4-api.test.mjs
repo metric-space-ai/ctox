@@ -1,6 +1,6 @@
 // news gegen den App-API-4.0-Kern-Stub (createStubKernel, read-only unter /__stub/) in echtem Chromium.
-// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/68b83a3), sonst ~/.local/state/ctox-sync-v4/stub.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/68b83a3 node --test src/apps/business-os/modules/news/tests/v4-api.test.mjs
+// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/4b0d0ac), sonst ~/.local/state/ctox-sync-v4/stub.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac node --test src/apps/business-os/modules/news/tests/v4-api.test.mjs
 // Screenshots (1280/420) nach tests/shots/ mit NEWS_SHOTS=1.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,9 +12,8 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-// Pin b6624eb (Kern 16.10.): der aktuelle Stub veröffentlicht das ctox-platform-Manifest (business_commands) noch nicht
-// automatisch; bis dahin gegen den letzten Stand, der es tut.
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
+// Gemeinsamer Pin 4b0d0acb (Kern M7-FINISH): der Stub veröffentlicht das ctox-platform-Manifest selbst (aus der Repo-Datei).
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
@@ -64,6 +63,9 @@ before(async () => {
     // FIXT-R: Eigentümer der Fremd-Collections (echte Manifeste, inkl. ctox-platform) vor der eigenen Version.
     for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
     await kernel.sim.publishAppVersion(APP, '1', { title: 'News', manifestExtra: window.__routes });
+    // Stub 4b0d0acb: der App-Handler news.issue.generate ist veröffentlicht, sein Artefakt nicht – ein expliziter Simulator
+    // liefert den Erfolg (E42.1: Simulator vor Artefakt; failCommand bleibt für den Fehlerlauf zuerst).
+    kernel.sim.onCommand('news.issue.generate', (payload) => ({ ok: true, issue_id: payload?.issue_id ?? null }));
     const ts = Date.now();
     await kernel.sim.push('news_topics', [
       { id: 'topic_ai', title: 'KI-Labs', prompt: 'Neue Modelle', cadence: 'daily', run_time: '07:00', cron_expr: '0 7 * * *', enabled: true, language: 'de', max_posts: 12, categories: [], payload: {}, created_at_ms: ts, updated_at_ms: ts },

@@ -2,7 +2,7 @@
 // eine Löschung (Tombstone/_deleted oder is_deleted) entfernt den Thread sofort – auch den ausgewählten –, und keine
 // spätere Emission bringt ihn zurück. In App-API 4.0 ist die lokale Abfrage vollständig und live; die frühere
 // Scan-/Abbruch-Maschinerie (Seiten, Generationen, Sichtbarkeitsprüfung) entfällt, die Regel bleibt.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node --test src/apps/business-os/modules/threads/tests/search-rescan.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac node --test src/apps/business-os/modules/threads/tests/search-rescan.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { startHarness, mountMain, rowTexts } from './_v4-harness.mjs';

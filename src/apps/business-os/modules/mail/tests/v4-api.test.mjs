@@ -1,6 +1,6 @@
 // mail gegen den App-API-4.0-Kern-Stub (createStubKernel, Pin cff5ba5) in echtem Chromium.
 // Muster: modules/knowledge/tests/v4-api.test.mjs, modules/matching/tests/v4-api.test.mjs. Abo-Zähler über countingApi.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/f967baf node --test src/apps/business-os/modules/mail/tests/v4-api.test.mjs
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/4b0d0ac node --test src/apps/business-os/modules/mail/tests/v4-api.test.mjs
 // Screenshots: MAIL_SHOTS=1 zusätzlich → tests/shots/mail-{1280,420}.png
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -12,7 +12,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/f967baf');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/4b0d0ac');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);
