@@ -60,76 +60,80 @@ fn document(
 
 #[test]
 fn guest_observe_without_owner_fails_closed_and_writes_failed_receipt() -> anyhow::Result<()> {
-    let root = tempdir()?;
-    seed_guest_command_users(root.path())?;
-    let command_id = "cmd-guest-observe-unregistered";
-    let outcome = accept_rxdb_business_command(
-        root.path(),
-        document(
-            command_id,
-            "ctox.guest.observe",
-            json!({"guest_id": "guest-a"}),
-            actor("owner-1", "admin"),
-            None,
-        ),
-    );
-    let error = outcome.expect_err("unregistered guest owner must fail closed");
-    assert!(
-        error
-            .to_string()
-            .contains("guest command owner is not registered for this runtime"),
-        "{error}"
-    );
-    let stored = load_rxdb_collection_record(root.path(), "business_commands", command_id)?
-        .expect("failed guest command must persist a receipt");
-    assert_eq!(stored["status"], "failed");
-    assert_eq!(stored["command_id"], command_id);
-    assert_eq!(stored["command_type"], "ctox.guest.observe");
-    let result = &stored["result"];
-    assert_eq!(result["ok"], false);
-    assert!(
-        result["error"]
-            .as_str()
-            .is_some_and(|value| value.contains("guest command owner is not registered")),
-        "{result}"
-    );
-    assert!(result.get("png").is_none());
-    assert!(!result.to_string().contains("png"));
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let root = tempdir()?;
+        seed_guest_command_users(root.path())?;
+        let command_id = "cmd-guest-observe-unregistered";
+        let outcome = accept_rxdb_business_command(
+            root.path(),
+            document(
+                command_id,
+                "ctox.guest.observe",
+                json!({"guest_id": "guest-a"}),
+                actor("owner-1", "admin"),
+                None,
+            ),
+        );
+        let error = outcome.expect_err("unregistered guest owner must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("guest command owner is not registered for this runtime"),
+            "{error}"
+        );
+        let stored = load_rxdb_collection_record(root.path(), "business_commands", command_id)?
+            .expect("failed guest command must persist a receipt");
+        assert_eq!(stored["status"], "failed");
+        assert_eq!(stored["command_id"], command_id);
+        assert_eq!(stored["command_type"], "ctox.guest.observe");
+        let result = &stored["result"];
+        assert_eq!(result["ok"], false);
+        assert!(
+            result["error"]
+                .as_str()
+                .is_some_and(|value| value.contains("guest command owner is not registered")),
+            "{result}"
+        );
+        assert!(result.get("png").is_none());
+        assert!(!result.to_string().contains("png"));
+        Ok(())
+    })
 }
 
 #[test]
 fn guest_input_user_is_denied_before_dispatch() -> anyhow::Result<()> {
-    let root = tempdir()?;
-    seed_guest_command_users(root.path())?;
-    let issued_at_ms = now_ms() as i64;
-    let (token, _) = issue_business_os_capability_token_for_managed_user(
-        root.path(),
-        "guest-user",
-        "Guest User",
-        "user",
-        issued_at_ms,
-    )?;
-    let result = accept_rxdb_business_command_with_origin(
-        root.path(),
-        document(
-            "cmd-guest-input-user",
-            "ctox.guest.input",
-            json!({
-                "guest_id": "guest-a",
-                "frame_id": "frame-current",
-                "input": {"kind": "click", "x": 1, "y": 1, "button": "left"}
-            }),
-            actor("guest-user", "user"),
-            Some(&token),
-        ),
-        CommandOrigin::ReplicatedPeer,
-    )?;
-    assert!(
-        result.to_string().contains("denied"),
-        "user must be policy-denied without guest ownership: {result}"
-    );
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let root = tempdir()?;
+        seed_guest_command_users(root.path())?;
+        let issued_at_ms = now_ms() as i64;
+        let (token, _) = issue_business_os_capability_token_for_managed_user(
+            root.path(),
+            "guest-user",
+            "Guest User",
+            "user",
+            issued_at_ms,
+        )?;
+        let result = accept_rxdb_business_command_with_origin(
+            root.path(),
+            document(
+                "cmd-guest-input-user",
+                "ctox.guest.input",
+                json!({
+                    "guest_id": "guest-a",
+                    "frame_id": "frame-current",
+                    "input": {"kind": "click", "x": 1, "y": 1, "button": "left"}
+                }),
+                actor("guest-user", "user"),
+                Some(&token),
+            ),
+            CommandOrigin::ReplicatedPeer,
+        )?;
+        assert!(
+            result.to_string().contains("denied"),
+            "user must be policy-denied without guest ownership: {result}"
+        );
+        Ok(())
+    })
 }
 
 #[test]

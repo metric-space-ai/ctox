@@ -265,70 +265,72 @@ mod tests {
     }
     #[test]
     fn e25_native_command_bus_preserves_user_and_skips_legacy_intake() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
-        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
-            root.path(),
-            "e25-owner",
-            "E25 owner",
-            "chef",
-            chrono::Utc::now().timestamp_millis(),
-        )?;
-        fn commands_at(root: &Path) -> anyhow::Result<i64> {
-            let conn = store::open_store(root)?;
-            let exists: bool = conn.query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='business_commands')",
-                [],
-                |r| r.get(0),
-            )?;
-            if exists {
-                Ok(conn.query_row("SELECT COUNT(*) FROM business_commands", [], |r| r.get(0))?)
-            } else {
-                Ok(0)
-            }
-        }
-        let before = commands_at(root.path())?;
-        for kind in [
-            "ctox.workjet.project.list",
-            "ctox.workjet.computer.list",
-            "ctox.workjet.session.list",
-        ] {
-            let command = NativeCommand {
-                command_id: uuid::Uuid::new_v4().to_string(),
-                kind: kind.into(),
-                app_id: "ctox".into(),
-                actor_id: "e25-owner".into(),
-                payload: serde_json::json!({}),
-            };
-            let result = execute(
+        crate::persistence::test_support::run_scoped(move || {
+            let root = crate::persistence::test_support::scoped_tempdir()?;
+            let (token, _) = store::issue_business_os_capability_token_for_managed_user(
                 root.path(),
-                command.clone(),
-                "admitted-browser",
-                &token,
-                Arc::new(RetainedTestAuthority),
-            )
-            .map_err(|e| anyhow::anyhow!("{}: {} {}", kind, e.code, e.reason))?;
-            assert!(result.is_object());
-            assert_ne!(result["ok"], serde_json::json!(false));
-            let mut forged = command;
-            forged.actor_id = "foreign-owner".into();
-            assert_eq!(
-                execute(
+                "e25-owner",
+                "E25 owner",
+                "chef",
+                chrono::Utc::now().timestamp_millis(),
+            )?;
+            fn commands_at(root: &Path) -> anyhow::Result<i64> {
+                let conn = store::open_store(root)?;
+                let exists: bool = conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='business_commands')",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if exists {
+                    Ok(conn.query_row("SELECT COUNT(*) FROM business_commands", [], |r| r.get(0))?)
+                } else {
+                    Ok(0)
+                }
+            }
+            let before = commands_at(root.path())?;
+            for kind in [
+                "ctox.workjet.project.list",
+                "ctox.workjet.computer.list",
+                "ctox.workjet.session.list",
+            ] {
+                let command = NativeCommand {
+                    command_id: uuid::Uuid::new_v4().to_string(),
+                    kind: kind.into(),
+                    app_id: "ctox".into(),
+                    actor_id: "e25-owner".into(),
+                    payload: serde_json::json!({}),
+                };
+                let result = execute(
                     root.path(),
-                    forged,
+                    command.clone(),
                     "admitted-browser",
                     &token,
-                    Arc::new(RetainedTestAuthority)
+                    Arc::new(RetainedTestAuthority),
                 )
-                .unwrap_err()
-                .reason,
-                "native_actor_mismatch"
+                .map_err(|e| anyhow::anyhow!("{}: {} {}", kind, e.code, e.reason))?;
+                assert!(result.is_object());
+                assert_ne!(result["ok"], serde_json::json!(false));
+                let mut forged = command;
+                forged.actor_id = "foreign-owner".into();
+                assert_eq!(
+                    execute(
+                        root.path(),
+                        forged,
+                        "admitted-browser",
+                        &token,
+                        Arc::new(RetainedTestAuthority)
+                    )
+                    .unwrap_err()
+                    .reason,
+                    "native_actor_mismatch"
+                );
+            }
+            assert_eq!(
+                commands_at(root.path())?,
+                before,
+                "V4 native dispatch must not use the V3 command intake or duplicate its ledger"
             );
-        }
-        assert_eq!(
-            commands_at(root.path())?,
-            before,
-            "V4 native dispatch must not use the V3 command intake or duplicate its ledger"
-        );
-        Ok(())
+            Ok(())
+        })
     }
 }
