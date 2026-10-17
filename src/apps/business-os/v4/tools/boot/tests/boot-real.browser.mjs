@@ -384,13 +384,15 @@ check('(g) HTTP nur /, /sw.js, /kernel/*, /business-os/*, Startkontext; kein and
 {
   const wanted = EXTRA_APPS.map((a) => a.id).sort();
   const asked = (state?.grantRequests ?? []).map((g) => g.app_id).sort();
-  // Kernel-WIP 4d5921435 fragt zusätzlich das Shell-Grant (steht schon im hello_ok) und ctox-platform doppelt an – als
-  // Befund an den Kern, hier nur protokolliert (duplicates); geprüft wird Vollständigkeit, Lane und Grösse.
   const duplicates = asked.filter((id, i) => asked.indexOf(id) !== i);
   check('(h) E55: hello_ok nur Shell-Grant (< 16384 B), jede Eigentümer-App holt ihr Grant über die Control-Lane',
     state?.helloOkBytes > 0 && state.helloOkBytes < 16384 && wanted.every((id) => asked.includes(id))
       && (state?.grantRequests ?? []).every((g) => g.lane === 0),
-    JSON.stringify({ helloOkBytes: state?.helloOkBytes, asked, wanted, duplicates }));
+    JSON.stringify({ helloOkBytes: state?.helloOkBytes, asked, wanted }));
+  // Kern M7-FINISH (0cd0889a2): das Shell-Grant kommt nur aus hello_ok, je App genau eine Anfrage pro Boot.
+  check('(h2) E55: kein scope.grant.request für shell', !asked.includes('shell'), JSON.stringify({ asked }));
+  check('(h3) E55: genau ein scope.grant.request je Eigentümer-App', duplicates.length === 0 && asked.length === wanted.length,
+    JSON.stringify({ asked, wanted, duplicates }));
 }check('Manifest aktuell (alle sha256 = Dateibytes)', staleFiles.length === 0, staleFiles.length ? `${staleFiles.length} veraltet` : `${Object.keys(manifestFile.files).length} Dateien`);
 
 console.log(`[${tag}] HTTP-Protokoll (Laborserver, ${http.length}):`);
