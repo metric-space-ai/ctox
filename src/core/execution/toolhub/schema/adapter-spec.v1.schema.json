@@ -85,9 +85,9 @@
     "response": {
       "type": "object", "required": ["mode"],
       "properties": {
-        "mode": {"enum": ["body", "pick", "list", "object", "merge_success", "const", "array"], "description": "array: top-level array at `pointer` (default whole doc), each item projected by optional `each`"},
+        "mode": {"enum": ["body", "pick", "list", "object", "merge_success", "const", "array", "status"], "description": "array: top-level array at `pointer` (default whole doc), each item projected by optional `each`; status: answer from the 2xx code via `values`"},
         "pointer": {"type": "string"}, "required": {"type": "boolean"}, "empty_error": {"type": "string"}, "require": {"type": "object", "required": ["pointer", "message"], "description": "object mode: fail with `message` unless `pointer` is an object", "properties": {"pointer": {"type": "string"}, "message": {"type": "string"}}},
-        "as": {"type": "string"}, "value": {}, "each": {"type": "object", "description": "array mode: item projection"},
+        "as": {"type": "string"}, "value": {}, "values": {"type": "object", "propertyNames": {"pattern": "^2[0-9][0-9]$"}, "description": "status mode: 2xx code -> result, e.g. {\"200\": true, \"204\": false}"}, "each": {"type": "object", "description": "array mode: item projection"},
         "fields": {"type": "object", "description": "object mode: key -> {pointer, default?, each? (item projection, nested allowed), count? (array length)}. A pointer segment `-` selects the last array element."}
       }
     },

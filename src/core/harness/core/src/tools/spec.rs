@@ -306,6 +306,7 @@ pub(crate) struct ToolsConfig {
     pub web_search_config: Option<WebSearchConfig>,
     pub ctox_web_stack_enabled: bool,
     pub ctox_doc_stack_enabled: bool,
+    pub ctox_toolhub_role: Option<String>,
     pub web_search_tool_type: WebSearchToolType,
     pub image_gen_tool: bool,
     pub agent_roles: BTreeMap<String, AgentRoleConfig>,
@@ -444,6 +445,7 @@ impl ToolsConfig {
             web_search_config: None,
             ctox_web_stack_enabled: false,
             ctox_doc_stack_enabled: false,
+            ctox_toolhub_role: None,
             web_search_tool_type: model_info.web_search_tool_type,
             image_gen_tool: include_image_gen_tool,
             agent_roles: BTreeMap::new(),
@@ -520,6 +522,11 @@ impl ToolsConfig {
 
     pub fn with_ctox_doc_stack_enabled(mut self, ctox_doc_stack_enabled: bool) -> Self {
         self.ctox_doc_stack_enabled = ctox_doc_stack_enabled;
+        self
+    }
+
+    pub fn with_ctox_toolhub_role(mut self, ctox_toolhub_role: Option<String>) -> Self {
+        self.ctox_toolhub_role = ctox_toolhub_role;
         self
     }
 
@@ -4294,6 +4301,16 @@ pub(crate) fn build_specs_with_discoverable_tools(
         );
         builder.register_handler("ctox_doc_search", ctox_doc_handler.clone());
         builder.register_handler("ctox_doc_read", ctox_doc_handler);
+    }
+
+    if let Some(role) = config.ctox_toolhub_role.as_deref() {
+        let role = crate::tools::handlers::ToolhubRole::resolve(Some(role));
+        let handler = Arc::new(crate::tools::handlers::CtoxToolhubHandler);
+        for spec in crate::tools::handlers::ctox_toolhub_create_tools(role) {
+            let name = spec.name().to_string();
+            push_tool_spec(&mut builder, spec, /*supports_parallel_tool_calls*/ false, config.code_mode_enabled);
+            builder.register_handler(&name, handler.clone());
+        }
     }
 
     // Agent-job leaves have no meeting surface; parent sessions own communication.

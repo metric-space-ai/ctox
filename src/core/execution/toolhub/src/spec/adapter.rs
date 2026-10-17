@@ -212,6 +212,15 @@ fn eval(v: &Val, args: &Value) -> Result<Option<Value>> {
             let n = x.as_i64().or_else(|| x.as_str().and_then(|s| s.trim().parse().ok())).ok_or_else(|| anyhow!("`{}` must be a whole number", a.name))?;
             Some(json!(a.clamp.map_or(n, |(lo, hi)| n.clamp(lo, hi))))
         }
+        (Kind::Number, Some(x)) => {
+            if let Some(n) = x.as_i64().or_else(|| x.as_str().and_then(|s| s.trim().parse::<i64>().ok())) {
+                Some(json!(a.clamp.map_or(n, |(lo, hi)| n.clamp(lo, hi))))
+            } else {
+                let f = x.as_f64().or_else(|| x.as_str().and_then(|s| s.trim().parse::<f64>().ok())).filter(|f| f.is_finite()).ok_or_else(|| anyhow!("`{}` must be a number", a.name))?;
+                let f = a.clamp.map_or(f, |(lo, hi)| f.clamp(lo as f64, hi as f64));
+                Some(json!(f))
+            }
+        }
         (Kind::Boolean, Some(Value::Bool(b))) => Some(Value::Bool(*b)),
         (Kind::Boolean, Some(_)) => bail!("`{}` must be true or false", a.name),
         (Kind::Tristate, Some(Value::Bool(b))) => Some(Value::Bool(*b)),
@@ -747,6 +756,10 @@ impl ToolkitAdapter for SpecAdapter {
                 Value::Object(m)
             }
             Response::Const(v) => v.clone(),
+            Response::Status(values) => match values.iter().find(|(c, _)| *c == response.status) {
+                Some((_, v)) => v.clone(),
+                None => bail!("unexpected status {} (spec maps {})", response.status, values.iter().map(|(c, _)| c.to_string()).collect::<Vec<_>>().join(", ")),
+            },
         })
     }
 

@@ -232,6 +232,8 @@ web_search = true
             web_search: None,
             ctox_web: None,
             ctox_doc: None,
+            ctox_toolhub: None,
+            ctox_toolhub_role: None,
             view_image: None,
         })
     );
@@ -253,6 +255,8 @@ web_search = false
             web_search: None,
             ctox_web: None,
             ctox_doc: None,
+            ctox_toolhub: None,
+            ctox_toolhub_role: None,
             view_image: None,
         })
     );
@@ -274,6 +278,8 @@ ctox_web = true
             web_search: None,
             ctox_web: Some(true),
             ctox_doc: None,
+            ctox_toolhub: None,
+            ctox_toolhub_role: None,
             view_image: None,
         })
     );
@@ -295,6 +301,8 @@ ctox_doc = true
             web_search: None,
             ctox_web: None,
             ctox_doc: Some(true),
+            ctox_toolhub: None,
+            ctox_toolhub_role: None,
             view_image: None,
         })
     );
@@ -4384,6 +4392,7 @@ fn test_precedence_fixture_with_o3_profile() -> std::io::Result<()> {
             web_search_config: None,
             ctox_web_stack_enabled: false,
             ctox_doc_stack_enabled: false,
+            ctox_toolhub_role: None,
             use_experimental_unified_exec_tool: !cfg!(windows),
             background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
             ghost_snapshot: GhostSnapshotConfig::default(),
@@ -4527,6 +4536,7 @@ fn test_precedence_fixture_with_gpt3_profile() -> std::io::Result<()> {
         web_search_config: None,
         ctox_web_stack_enabled: false,
         ctox_doc_stack_enabled: false,
+        ctox_toolhub_role: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -4668,6 +4678,7 @@ fn test_precedence_fixture_with_zdr_profile() -> std::io::Result<()> {
         web_search_config: None,
         ctox_web_stack_enabled: false,
         ctox_doc_stack_enabled: false,
+        ctox_toolhub_role: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -4795,6 +4806,7 @@ fn test_precedence_fixture_with_gpt5_profile() -> std::io::Result<()> {
         web_search_config: None,
         ctox_web_stack_enabled: false,
         ctox_doc_stack_enabled: false,
+        ctox_toolhub_role: None,
         use_experimental_unified_exec_tool: !cfg!(windows),
         background_terminal_max_timeout: DEFAULT_MAX_BACKGROUND_TERMINAL_TIMEOUT_MS,
         ghost_snapshot: GhostSnapshotConfig::default(),
@@ -6189,4 +6201,14 @@ fn test_tui_notification_method() {
     let parsed: RootTomlTest =
         toml::from_str(toml).expect("deserialize notification_method=\"bel\"");
     assert_eq!(parsed.tui.notification_method, NotificationMethod::Bel);
+}
+
+#[test]
+fn tools_ctox_toolhub_resolves_role() {
+    let cfg: ConfigToml = toml::from_str("[tools]\nctox_toolhub = true\n").expect("toml");
+    assert_eq!(resolve_ctox_toolhub_role(&cfg, &ConfigProfile::default()).as_deref(), Some("oneshot"));
+    let cfg: ConfigToml = toml::from_str("[tools]\nctox_toolhub = true\nctox_toolhub_role = \"supervisor\"\n").expect("toml");
+    assert_eq!(resolve_ctox_toolhub_role(&cfg, &ConfigProfile::default()).as_deref(), Some("supervisor"));
+    let cfg: ConfigToml = toml::from_str("[tools]\nctox_toolhub_role = \"supervisor\"\n").expect("toml");
+    assert_eq!(resolve_ctox_toolhub_role(&cfg, &ConfigProfile::default()), None);
 }

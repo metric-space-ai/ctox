@@ -3184,6 +3184,7 @@ pub(crate) fn sandboxed_cli_command_allowed(argv: &[String]) -> bool {
     ) {
         (Some("scrape"), Some("register-script" | "register-source-module" | "execute")) => true,
         (Some("continuity-update"), _) => true,
+        (Some("toolhub"), Some(_)) => true,
         _ => false,
     }
 }
@@ -3417,6 +3418,9 @@ fn run_sandboxed_cli_direct(root: &Path, argv: &[String]) -> Result<()> {
     match argv {
         [command, rest @ ..] if command == "scrape" => {
             crate::scrape::handle_scrape_command(root, rest)
+        }
+        [command, rest @ ..] if command == "toolhub" => {
+            crate::execution::toolhub_cli::handle_toolhub_command(root, rest)
         }
         [command, rest @ ..] if command == "continuity-update" => {
             crate::handle_continuity_update(rest)

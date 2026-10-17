@@ -529,6 +529,9 @@ pub struct Config {
     /// document search/read tools.
     pub ctox_doc_stack_enabled: bool,
 
+    /// `Some(role)` when the `ctox_toolhub_*` tools are enabled.
+    pub ctox_toolhub_role: Option<String>,
+
     /// If set to `true`, used only the experimental unified exec tool.
     pub use_experimental_unified_exec_tool: bool,
 
@@ -1601,6 +1604,16 @@ pub struct ToolsToml {
     #[serde(default)]
     pub ctox_doc: Option<bool>,
 
+    /// Enable the `ctox_toolhub_*` tools (adapter builder, RFC
+    /// toolhub-adapter-builder). Off by default.
+    #[serde(default)]
+    pub ctox_toolhub: Option<bool>,
+
+    /// ToolHub role of this session: `supervisor`, `worker` or `oneshot`
+    /// (default). Decides which `ctox_toolhub_*` tools and rules appear.
+    #[serde(default)]
+    pub ctox_toolhub_role: Option<String>,
+
     /// Enable the `view_image` tool that lets the agent attach local images.
     #[serde(default)]
     pub view_image: Option<bool>,
@@ -2049,6 +2062,21 @@ fn resolve_ctox_web_stack_enabled(
         .unwrap_or(false)
 }
 
+fn resolve_ctox_toolhub_role(config_toml: &ConfigToml, config_profile: &ConfigProfile) -> Option<String> {
+    let profile = config_profile.tools.as_ref();
+    let base = config_toml.tools.as_ref();
+    let enabled = profile
+        .and_then(|tools| tools.ctox_toolhub)
+        .or_else(|| base.and_then(|tools| tools.ctox_toolhub))
+        .unwrap_or(false);
+    enabled.then(|| {
+        profile
+            .and_then(|tools| tools.ctox_toolhub_role.clone())
+            .or_else(|| base.and_then(|tools| tools.ctox_toolhub_role.clone()))
+            .unwrap_or_else(|| "oneshot".to_string())
+    })
+}
+
 fn resolve_ctox_doc_stack_enabled(
     config_toml: &ConfigToml,
     config_profile: &ConfigProfile,
@@ -2364,6 +2392,7 @@ impl Config {
         let web_search_config = resolve_web_search_config(&cfg, &config_profile);
         let ctox_web_stack_enabled = resolve_ctox_web_stack_enabled(&cfg, &config_profile);
         let ctox_doc_stack_enabled = resolve_ctox_doc_stack_enabled(&cfg, &config_profile);
+        let ctox_toolhub_role = resolve_ctox_toolhub_role(&cfg, &config_profile);
 
         let agent_roles =
             agent_roles::load_agent_roles(&cfg, &config_layer_stack, &mut startup_warnings)?;
@@ -2783,6 +2812,7 @@ impl Config {
             web_search_config,
             ctox_web_stack_enabled,
             ctox_doc_stack_enabled,
+            ctox_toolhub_role,
             use_experimental_unified_exec_tool,
             background_terminal_max_timeout,
             ghost_snapshot,

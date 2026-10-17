@@ -1,0 +1,71 @@
+{
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "open_meteo",
+  "version": "1.0.0",
+  "docs": ["https://open-meteo.com/en/docs"],
+  "notes": "Built by the autonomous adapter builder (dogfood 2026-10-17). Keyless public API. Forecast host only: geocoding (geocoding-api.open-meteo.com) and archive (archive-api.open-meteo.com) are other hosts and the format has one api_base per spec.",
+  "api_base": "https://api.open-meteo.com",
+  "allowed_hosts": ["api.open-meteo.com"],
+  "name": "Open-Meteo",
+  "description": {"de": "Wettervorhersage und aktuelles Wetter für Koordinaten, ohne Zugangsdaten.", "en": "Weather forecast and current weather for coordinates, no credentials."},
+  "auth_schemes": [{"type": "none"}],
+  "actions": [
+    {
+      "slug": "OPEN_METEO_GET_FORECAST",
+      "title": {"de": "Wettervorhersage abrufen", "en": "Get weather forecast"},
+      "description": {"de": "Stündliche und tägliche Vorhersage sowie aktuelle Werte für einen Ort (Breite/Länge). Variablen frei wählbar, z. B. temperature_2m, precipitation, wind_speed_10m.", "en": "Hourly and daily forecast plus current values for a location (latitude/longitude). Variables are free to choose, e.g. temperature_2m, precipitation, wind_speed_10m."},
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "latitude": {"type": "number", "description": "Breitengrad, z. B. 52.52."},
+          "longitude": {"type": "number", "description": "Längengrad, z. B. 13.41."},
+          "current": {"type": "array", "items": {"type": "string"}, "description": "Aktuelle Variablen, z. B. [\"temperature_2m\", \"wind_speed_10m\"]."},
+          "hourly": {"type": "array", "items": {"type": "string"}, "description": "Stündliche Variablen."},
+          "daily": {"type": "array", "items": {"type": "string"}, "description": "Tägliche Variablen, z. B. [\"temperature_2m_max\", \"precipitation_sum\"]."},
+          "timezone": {"type": "string", "description": "Zeitzone, z. B. Europe/Berlin oder auto (Standard)."},
+          "forecast_days": {"type": "integer", "minimum": 1, "maximum": 16, "description": "Tage Vorhersage, 1 bis 16 (Standard 7)."}
+        },
+        "required": ["latitude", "longitude"]
+      },
+      "request": {"method": "GET", "path": "/v1/forecast", "query": {
+        "latitude": {"arg": "latitude", "type": "number", "required": true},
+        "longitude": {"arg": "longitude", "type": "number", "required": true},
+        "current": {"arg": "current", "type": "string_list", "join": ","},
+        "hourly": {"arg": "hourly", "type": "string_list", "join": ","},
+        "daily": {"arg": "daily", "type": "string_list", "join": ","},
+        "timezone": {"arg": "timezone", "type": "string", "default": "auto"},
+        "forecast_days": {"arg": "forecast_days", "type": "integer", "clamp": [1, 16]}
+      }},
+      "response": {"mode": "object", "fields": {
+        "latitude": {"pointer": "/latitude"}, "longitude": {"pointer": "/longitude"}, "timezone": {"pointer": "/timezone"},
+        "current": {"pointer": "/current", "default": null}, "current_units": {"pointer": "/current_units", "default": null},
+        "hourly": {"pointer": "/hourly", "default": null}, "hourly_units": {"pointer": "/hourly_units", "default": null},
+        "daily": {"pointer": "/daily", "default": null}, "daily_units": {"pointer": "/daily_units", "default": null}
+      }}
+    },
+    {
+      "slug": "OPEN_METEO_GET_CURRENT_WEATHER",
+      "title": {"de": "Aktuelles Wetter abrufen", "en": "Get current weather"},
+      "description": {"de": "Temperatur, gefühlte Temperatur, Niederschlag, Wettercode und Wind jetzt an einem Ort.", "en": "Temperature, apparent temperature, precipitation, weather code and wind right now at a location."},
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "latitude": {"type": "number", "description": "Breitengrad."},
+          "longitude": {"type": "number", "description": "Längengrad."}
+        },
+        "required": ["latitude", "longitude"]
+      },
+      "request": {"method": "GET", "path": "/v1/forecast", "query": {
+        "latitude": {"arg": "latitude", "type": "number", "required": true},
+        "longitude": {"arg": "longitude", "type": "number", "required": true},
+        "current": {"const": "temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m"},
+        "timezone": {"const": "auto"}
+      }},
+      "response": {"mode": "object", "fields": {"timezone": {"pointer": "/timezone"}, "current": {"pointer": "/current"}, "units": {"pointer": "/current_units"}}}
+    }
+  ]
+}

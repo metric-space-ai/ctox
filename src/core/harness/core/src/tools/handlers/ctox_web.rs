@@ -648,7 +648,7 @@ fn web_tool_is_mutating(tool_name: &str, payload: &ToolPayload) -> bool {
     }
 }
 
-fn business_os_command_session_from_turn(turn: &crate::codex::TurnContext) -> Option<&str> {
+pub(crate) fn business_os_command_session_from_turn(turn: &crate::codex::TurnContext) -> Option<&str> {
     let server = turn.config.mcp_servers.get().get("ctox-business-os")?;
     let McpServerTransportConfig::StreamableHttp { http_headers, .. } = &server.transport else {
         return None;
@@ -886,7 +886,7 @@ impl ToolHandler for CtoxBrowserAutomationHandler {
     }
 }
 
-fn resolve_ctox_binary() -> Result<String, FunctionCallError> {
+pub(crate) fn resolve_ctox_binary() -> Result<String, FunctionCallError> {
     for env_key in ["CTOX_DOC_BIN", "CTOX_WEB_BIN", "CTOX_CHANNEL_BIN"] {
         if let Ok(path) = std::env::var(env_key)
             && !path.trim().is_empty()

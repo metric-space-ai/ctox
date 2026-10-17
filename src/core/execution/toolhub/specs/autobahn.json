@@ -1,0 +1,442 @@
+{
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "autobahn",
+  "version": "1.0.2",
+  "name": "Autobahn App API",
+  "description": {
+    "de": "Was passiert auf Deutschlands Bundesstraßen? API für aktuelle Verwaltungsdaten zu Baustellen, Staus und Ladestationen. Außerdem Zugang zu Verkehrsüberwachungskameras und vielen weiteren Datensätzen.",
+    "en": "Was passiert auf Deutschlands Bundesstraßen? API für aktuelle Verwaltungsdaten zu Baustellen, Staus und Ladestationen. Außerdem Zugang zu Verkehrsüberwachungskameras und vielen weiteren Datensätzen."
+  },
+  "docs": [
+    "https://autobahn.api.bund.dev/openapi.yaml"
+  ],
+  "notes": "Drafted by `ctox toolhub draft-spec --from-openapi` from https://autobahn.api.bund.dev/openapi.yaml (OpenAPI 3.0.0).",
+  "api_base": "https://verkehr.autobahn.de/o/autobahn",
+  "allowed_hosts": [
+    "verkehr.autobahn.de"
+  ],
+  "auth_schemes": [
+    {
+      "type": "none"
+    }
+  ],
+  "actions": [
+    {
+      "slug": "AUTOBAHN_LIST_AUTOBAHNEN",
+      "title": {
+        "de": "Liste verfügbarer Autobahnen",
+        "en": "Liste verfügbarer Autobahnen"
+      },
+      "description": {
+        "de": "Gibt eine Liste der verfügbaren Autobahnen zurück.",
+        "en": "Gibt eine Liste der verfügbaren Autobahnen zurück."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/"
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "AUTOBAHN_LIST_ROADWORKS",
+      "title": {
+        "de": "Liste aktueller Baustellen",
+        "en": "Liste aktueller Baustellen"
+      },
+      "description": {
+        "de": "Gibt eine Liste der aktuellen Baustellen zu einer Autobahn zurück.",
+        "en": "Gibt eine Liste der aktuellen Baustellen zu einer Autobahn zurück."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "roadId": {
+            "type": "string",
+            "description": "Kann jede gültige Straßenbezeichnung sein (nicht auf Autobahnen beschränkt). Die Gültigkeit wird nicht überprüft: Abfragen mit nicht existierenden Straßenbezeichnungen liefern einen leeren Datensatz zurück. Die Schreibweise kann von der sonst üblichen Form abweichen (z.B. S1234 statt St1234 für Sta…"
+          }
+        },
+        "required": [
+          "roadId"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{roadId}/services/roadworks",
+        "path_encoding": {
+          "roadId": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "AUTOBAHN_GET_ROADWORK",
+      "title": {
+        "de": "Details einer Baustelle",
+        "en": "Details einer Baustelle"
+      },
+      "description": {
+        "de": "Gibt Details zu einer konkreten Baustelle zurück.",
+        "en": "Gibt Details zu einer konkreten Baustelle zurück."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "roadworkId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "roadworkId"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/details/roadworks/{roadworkId}",
+        "path_encoding": {
+          "roadworkId": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "AUTOBAHN_LIST_WEBCAMS",
+      "title": {
+        "de": "Liste verfügbarer Webcams",
+        "en": "Liste verfügbarer Webcams"
+      },
+      "description": {
+        "de": "Gibt eine Liste der Webcams zu einer Autobahn zurück.",
+        "en": "Gibt eine Liste der Webcams zu einer Autobahn zurück."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "roadId": {
+            "type": "string",
+            "description": "Kann jede gültige Straßenbezeichnung sein (nicht auf Autobahnen beschränkt). Die Gültigkeit wird nicht überprüft: Abfragen mit nicht existierenden Straßenbezeichnungen liefern einen leeren Datensatz zurück. Die Schreibweise kann von der sonst üblichen Form abweichen (z.B. S1234 statt St1234 für Sta…"
+          }
+        },
+        "required": [
+          "roadId"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{roadId}/services/webcam",
+        "path_encoding": {
+          "roadId": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "AUTOBAHN_LIST_PARKING_LORRIES",
+      "title": {
+        "de": "Liste verfügbarer Rastplätze",
+        "en": "Liste verfügbarer Rastplätze"
+      },
+      "description": {
+        "de": "Gibt eine Liste der Rastplätze zu einer Autobahn zurück.",
+        "en": "Gibt eine Liste der Rastplätze zu einer Autobahn zurück."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "roadId": {
+            "type": "string",
+            "description": "Kann jede gültige Straßenbezeichnung sein (nicht auf Autobahnen beschränkt). Die Gültigkeit wird nicht überprüft: Abfragen mit nicht existierenden Straßenbezeichnungen liefern einen leeren Datensatz zurück. Die Schreibweise kann von der sonst üblichen Form abweichen (z.B. S1234 statt St1234 für Sta…"
+          }
+        },
+        "required": [
+          "roadId"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{roadId}/services/parking_lorry",
+        "path_encoding": {
+          "roadId": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "AUTOBAHN_GET_PARKING_LORRY",
+      "title": {
+        "de": "Details eines Rastplatzes",
+        "en": "Details eines Rastplatzes"
+      },
+      "description": {
+        "de": "Gibt Details eines konkreten Rastplatzes zurück.",
+        "en": "Gibt Details eines konkreten Rastplatzes zurück."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "lorryId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "lorryId"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/details/parking_lorry/{lorryId}",
+        "path_encoding": {
+          "lorryId": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "AUTOBAHN_LIST_WARNINGS",
+      "title": {
+        "de": "Liste aktueller Verkehrsmeldungen",
+        "en": "Liste aktueller Verkehrsmeldungen"
+      },
+      "description": {
+        "de": "Gibt eine Liste der Verkehrsmeldungen zu einer Autobahn zurück.",
+        "en": "Gibt eine Liste der Verkehrsmeldungen zu einer Autobahn zurück."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "roadId": {
+            "type": "string",
+            "description": "Kann jede gültige Straßenbezeichnung sein (nicht auf Autobahnen beschränkt). Die Gültigkeit wird nicht überprüft: Abfragen mit nicht existierenden Straßenbezeichnungen liefern einen leeren Datensatz zurück. Die Schreibweise kann von der sonst üblichen Form abweichen (z.B. S1234 statt St1234 für Sta…"
+          }
+        },
+        "required": [
+          "roadId"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{roadId}/services/warning",
+        "path_encoding": {
+          "roadId": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "AUTOBAHN_GET_WARNING",
+      "title": {
+        "de": "Details zu einer Verkehrsmeldung",
+        "en": "Details zu einer Verkehrsmeldung"
+      },
+      "description": {
+        "de": "Gibt Details zu einer konkreten Verkehrsmeldung zurück.",
+        "en": "Gibt Details zu einer konkreten Verkehrsmeldung zurück."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "warningId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "warningId"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/details/warning/{warningId}",
+        "path_encoding": {
+          "warningId": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "AUTOBAHN_LIST_CLOSURES",
+      "title": {
+        "de": "Liste aktueller Sperrungen",
+        "en": "Liste aktueller Sperrungen"
+      },
+      "description": {
+        "de": "Gibt eine Liste der Sperrungen zu einer Autobahn zurück.",
+        "en": "Gibt eine Liste der Sperrungen zu einer Autobahn zurück."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "roadId": {
+            "type": "string",
+            "description": "Kann jede gültige Straßenbezeichnung sein (nicht auf Autobahnen beschränkt). Die Gültigkeit wird nicht überprüft: Abfragen mit nicht existierenden Straßenbezeichnungen liefern einen leeren Datensatz zurück. Die Schreibweise kann von der sonst üblichen Form abweichen (z.B. S1234 statt St1234 für Sta…"
+          }
+        },
+        "required": [
+          "roadId"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{roadId}/services/closure",
+        "path_encoding": {
+          "roadId": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "AUTOBAHN_GET_CLOSURE",
+      "title": {
+        "de": "Details zu einer Sperrung",
+        "en": "Details zu einer Sperrung"
+      },
+      "description": {
+        "de": "Gibt Details zu einer konkreten Sperrung zurück.",
+        "en": "Gibt Details zu einer konkreten Sperrung zurück."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "closureId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "closureId"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/details/closure/{closureId}",
+        "path_encoding": {
+          "closureId": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "AUTOBAHN_LIST_CHARGING_STATIONS",
+      "title": {
+        "de": "Liste aktueller Ladestationen",
+        "en": "Liste aktueller Ladestationen"
+      },
+      "description": {
+        "de": "Gibt eine Liste der Ladestationen zu einer Autobahn zurück.",
+        "en": "Gibt eine Liste der Ladestationen zu einer Autobahn zurück."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "roadId": {
+            "type": "string",
+            "description": "Kann jede gültige Straßenbezeichnung sein (nicht auf Autobahnen beschränkt). Die Gültigkeit wird nicht überprüft: Abfragen mit nicht existierenden Straßenbezeichnungen liefern einen leeren Datensatz zurück. Die Schreibweise kann von der sonst üblichen Form abweichen (z.B. S1234 statt St1234 für Sta…"
+          }
+        },
+        "required": [
+          "roadId"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/{roadId}/services/electric_charging_station",
+        "path_encoding": {
+          "roadId": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "AUTOBAHN_GET_CHARGING_STATION",
+      "title": {
+        "de": "Details zu einer Ladestation",
+        "en": "Details zu einer Ladestation"
+      },
+      "description": {
+        "de": "Gibt Details zu einer konkreten Ladestation zurück.",
+        "en": "Gibt Details zu einer konkreten Ladestation zurück."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "stationId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "stationId"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/details/electric_charging_station/{stationId}",
+        "path_encoding": {
+          "stationId": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    }
+  ]
+}

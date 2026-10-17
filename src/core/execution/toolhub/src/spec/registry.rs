@@ -107,6 +107,22 @@ impl SpecStore {
         Ok(InstalledSpec { slug, version, sha256: adapter.sha256().into(), new: true })
     }
 
+    /// Directory of one adapter (`<dir>/<slug>`), for review/approval records.
+    pub fn slug_path(&self, slug: &str) -> Result<PathBuf> {
+        self.slug_dir(slug)
+    }
+
+    /// Installed spec text of `slug@version`.
+    pub fn version_text(&self, slug: &str, version: &str) -> Result<String> {
+        self.read_version(slug, version)
+    }
+
+    /// Append an audit event to `<slug>/history.jsonl` (append-only).
+    pub fn append_history(&self, slug: &str, event: serde_json::Value) -> Result<()> {
+        fs::create_dir_all(self.slug_dir(slug)?)?;
+        self.log(slug, event)
+    }
+
     fn read_version(&self, slug: &str, version: &str) -> Result<String> {
         let p = self.slug_dir(slug)?.join("versions").join(format!("{}.json", safe_name(version)?));
         fs::read_to_string(&p).with_context(|| format!("{slug} {version} is not installed"))
@@ -175,7 +191,12 @@ impl SpecStore {
                 .filter_map(|v| v.file_name().to_string_lossy().strip_suffix(".json").map(String::from))
                 .collect();
             versions.sort_by_key(|v| version_key(v));
-            out.push(SpecStatus { active: self.active(&slug).unwrap_or(None), slug, versions });
+            let active = self.active(&slug).unwrap_or(None);
+            if versions.is_empty() && active.is_none() {
+                // Audit-only directory (e.g. executions of a built-in toolkit).
+                continue;
+            }
+            out.push(SpecStatus { active, slug, versions });
         }
         out.sort_by(|a, b| a.slug.cmp(&b.slug));
         Ok(out)

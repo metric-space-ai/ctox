@@ -1021,6 +1021,10 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         }
         Some("scrape") => scrape::handle_scrape_command(&root, &args[1..]),
         Some("secret") => secrets::handle_secret_command(&root, &args[1..]),
+        Some("toolhub") if service::sandboxed_cli_command_allowed(args) => {
+            service::run_sandboxed_cli(root, args)
+        }
+        Some("toolhub") => execution::toolhub_cli::handle_toolhub_command(&root, &args[1..]),
         Some("skills") => handle_skills_command(&root, &args[1..]),
         Some("schedule") => schedule::handle_schedule_command(&root, &args[1..]),
         Some("strategy") => strategy::handle_strategy_command(&root, &args[1..]),

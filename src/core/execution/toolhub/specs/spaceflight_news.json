@@ -1,0 +1,825 @@
+{
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "spaceflight_news",
+  "version": "1.0.0",
+  "name": "Spaceflight News API",
+  "description": {
+    "de": "The Spaceflight News API (SNAPI) is a product by [The Space Devs](https://thespacedevs.com) (TSD). It's the most complete and up-to-date spaceflight news API currently available. While this API is free to use, we do encourage developers to…",
+    "en": "The Spaceflight News API (SNAPI) is a product by [The Space Devs](https://thespacedevs.com) (TSD). It's the most complete and up-to-date spaceflight news API currently available. While this API is free to use, we do encourage developers to…"
+  },
+  "docs": [
+    "https://api.spaceflightnewsapi.net/v4/schema/"
+  ],
+  "notes": "Drafted by `ctox toolhub draft-spec --from-openapi` from https://api.spaceflightnewsapi.net/v4/schema/ (OpenAPI 3.0.3).",
+  "api_base": "https://api.spaceflightnewsapi.net",
+  "allowed_hosts": [
+    "api.spaceflightnewsapi.net"
+  ],
+  "auth_schemes": [
+    {
+      "type": "none"
+    }
+  ],
+  "actions": [
+    {
+      "slug": "SPACEFLIGHT_NEWS_ARTICLES_LIST",
+      "title": {
+        "de": "articles list",
+        "en": "articles list"
+      },
+      "description": {
+        "de": "GET /v4/articles/",
+        "en": "GET /v4/articles/"
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Search for all documents related to a specific event using its Launch Library 2 ID."
+          },
+          "has_event": {
+            "type": "boolean",
+            "description": "Get all documents that have a related event."
+          },
+          "has_launch": {
+            "type": "boolean",
+            "description": "Get all documents that have a related launch."
+          },
+          "is_featured": {
+            "type": "boolean",
+            "description": "Get all documents that are featured."
+          },
+          "launch": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Search for all documents related to a specific launch using its Launch Library 2 ID."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Number of results to return per page."
+          },
+          "news_site": {
+            "type": "string",
+            "description": "Search for documents with a news_site__name present in a list of comma-separated values. Case insensitive."
+          },
+          "news_site_exclude": {
+            "type": "string",
+            "description": "Search for documents with a news_site__name not present in a list of comma-separated values. Case insensitive."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "The initial index from which to return the results."
+          },
+          "ordering": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Order the result on published_at, -published_at, updated_at, -updated_at. * published_at - Published at * -published_at - Published at (descending) * updated_at - Updated at * -updated_at - Updated at (descending)"
+          },
+          "published_at_gt": {
+            "type": "string",
+            "description": "Get all documents published after a given ISO8601 timestamp (excluded)."
+          },
+          "published_at_gte": {
+            "type": "string",
+            "description": "Get all documents published after a given ISO8601 timestamp (included)."
+          },
+          "published_at_lt": {
+            "type": "string",
+            "description": "Get all documents published before a given ISO8601 timestamp (excluded)."
+          },
+          "published_at_lte": {
+            "type": "string",
+            "description": "Get all documents published before a given ISO8601 timestamp (included)."
+          },
+          "search": {
+            "type": "string",
+            "description": "Search for documents with a specific phrase in the title or summary."
+          },
+          "summary_contains": {
+            "type": "string",
+            "description": "Search for all documents with a specific phrase in the summary."
+          },
+          "summary_contains_all": {
+            "type": "string",
+            "description": "Search for documents with a summary containing all keywords from comma-separated values."
+          },
+          "summary_contains_one": {
+            "type": "string",
+            "description": "Search for documents with a summary containing at least one keyword from comma-separated values."
+          },
+          "title_contains": {
+            "type": "string",
+            "description": "Search for all documents with a specific phrase in the title."
+          },
+          "title_contains_all": {
+            "type": "string",
+            "description": "Search for documents with a title containing all keywords from comma-separated values."
+          },
+          "title_contains_one": {
+            "type": "string",
+            "description": "Search for documents with a title containing at least one keyword from comma-separated values."
+          },
+          "updated_at_gt": {
+            "type": "string",
+            "description": "Get all documents updated after a given ISO8601 timestamp (excluded)."
+          },
+          "updated_at_gte": {
+            "type": "string",
+            "description": "Get all documents updated after a given ISO8601 timestamp (included)."
+          },
+          "updated_at_lt": {
+            "type": "string",
+            "description": "Get all documents updated before a given ISO8601 timestamp (excluded)."
+          },
+          "updated_at_lte": {
+            "type": "string",
+            "description": "Get all documents updated before a given ISO8601 timestamp (included)."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/v4/articles/",
+        "query": {
+          "event": {
+            "arg": "event",
+            "type": "string_list",
+            "join": ","
+          },
+          "has_event": {
+            "arg": "has_event",
+            "type": "boolean"
+          },
+          "has_launch": {
+            "arg": "has_launch",
+            "type": "boolean"
+          },
+          "is_featured": {
+            "arg": "is_featured",
+            "type": "boolean"
+          },
+          "launch": {
+            "arg": "launch",
+            "type": "string_list",
+            "join": ","
+          },
+          "limit": {
+            "arg": "limit",
+            "type": "integer"
+          },
+          "news_site": {
+            "arg": "news_site",
+            "type": "string"
+          },
+          "news_site_exclude": {
+            "arg": "news_site_exclude",
+            "type": "string"
+          },
+          "offset": {
+            "arg": "offset",
+            "type": "integer"
+          },
+          "ordering": {
+            "arg": "ordering",
+            "type": "string_list",
+            "join": ","
+          },
+          "published_at_gt": {
+            "arg": "published_at_gt",
+            "type": "string"
+          },
+          "published_at_gte": {
+            "arg": "published_at_gte",
+            "type": "string"
+          },
+          "published_at_lt": {
+            "arg": "published_at_lt",
+            "type": "string"
+          },
+          "published_at_lte": {
+            "arg": "published_at_lte",
+            "type": "string"
+          },
+          "search": {
+            "arg": "search",
+            "type": "string"
+          },
+          "summary_contains": {
+            "arg": "summary_contains",
+            "type": "string"
+          },
+          "summary_contains_all": {
+            "arg": "summary_contains_all",
+            "type": "string"
+          },
+          "summary_contains_one": {
+            "arg": "summary_contains_one",
+            "type": "string"
+          },
+          "title_contains": {
+            "arg": "title_contains",
+            "type": "string"
+          },
+          "title_contains_all": {
+            "arg": "title_contains_all",
+            "type": "string"
+          },
+          "title_contains_one": {
+            "arg": "title_contains_one",
+            "type": "string"
+          },
+          "updated_at_gt": {
+            "arg": "updated_at_gt",
+            "type": "string"
+          },
+          "updated_at_gte": {
+            "arg": "updated_at_gte",
+            "type": "string"
+          },
+          "updated_at_lt": {
+            "arg": "updated_at_lt",
+            "type": "string"
+          },
+          "updated_at_lte": {
+            "arg": "updated_at_lte",
+            "type": "string"
+          }
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "SPACEFLIGHT_NEWS_ARTICLES_RETRIEVE",
+      "title": {
+        "de": "articles retrieve",
+        "en": "articles retrieve"
+      },
+      "description": {
+        "de": "GET /v4/articles/{id}/",
+        "en": "GET /v4/articles/{id}/"
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "A unique integer value identifying this article."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/v4/articles/{id}/"
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "SPACEFLIGHT_NEWS_BLOGS_LIST",
+      "title": {
+        "de": "blogs list",
+        "en": "blogs list"
+      },
+      "description": {
+        "de": "GET /v4/blogs/",
+        "en": "GET /v4/blogs/"
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "event": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Search for all documents related to a specific event using its Launch Library 2 ID."
+          },
+          "has_event": {
+            "type": "boolean",
+            "description": "Get all documents that have a related event."
+          },
+          "has_launch": {
+            "type": "boolean",
+            "description": "Get all documents that have a related launch."
+          },
+          "is_featured": {
+            "type": "boolean",
+            "description": "Get all documents that are featured."
+          },
+          "launch": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Search for all documents related to a specific launch using its Launch Library 2 ID."
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Number of results to return per page."
+          },
+          "news_site": {
+            "type": "string",
+            "description": "Search for documents with a news_site__name present in a list of comma-separated values. Case insensitive."
+          },
+          "news_site_exclude": {
+            "type": "string",
+            "description": "Search for documents with a news_site__name not present in a list of comma-separated values. Case insensitive."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "The initial index from which to return the results."
+          },
+          "ordering": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Order the result on published_at, -published_at, updated_at, -updated_at. * published_at - Published at * -published_at - Published at (descending) * updated_at - Updated at * -updated_at - Updated at (descending)"
+          },
+          "published_at_gt": {
+            "type": "string",
+            "description": "Get all documents published after a given ISO8601 timestamp (excluded)."
+          },
+          "published_at_gte": {
+            "type": "string",
+            "description": "Get all documents published after a given ISO8601 timestamp (included)."
+          },
+          "published_at_lt": {
+            "type": "string",
+            "description": "Get all documents published before a given ISO8601 timestamp (excluded)."
+          },
+          "published_at_lte": {
+            "type": "string",
+            "description": "Get all documents published before a given ISO8601 timestamp (included)."
+          },
+          "search": {
+            "type": "string",
+            "description": "Search for documents with a specific phrase in the title or summary."
+          },
+          "summary_contains": {
+            "type": "string",
+            "description": "Search for all documents with a specific phrase in the summary."
+          },
+          "summary_contains_all": {
+            "type": "string",
+            "description": "Search for documents with a summary containing all keywords from comma-separated values."
+          },
+          "summary_contains_one": {
+            "type": "string",
+            "description": "Search for documents with a summary containing at least one keyword from comma-separated values."
+          },
+          "title_contains": {
+            "type": "string",
+            "description": "Search for all documents with a specific phrase in the title."
+          },
+          "title_contains_all": {
+            "type": "string",
+            "description": "Search for documents with a title containing all keywords from comma-separated values."
+          },
+          "title_contains_one": {
+            "type": "string",
+            "description": "Search for documents with a title containing at least one keyword from comma-separated values."
+          },
+          "updated_at_gt": {
+            "type": "string",
+            "description": "Get all documents updated after a given ISO8601 timestamp (excluded)."
+          },
+          "updated_at_gte": {
+            "type": "string",
+            "description": "Get all documents updated after a given ISO8601 timestamp (included)."
+          },
+          "updated_at_lt": {
+            "type": "string",
+            "description": "Get all documents updated before a given ISO8601 timestamp (excluded)."
+          },
+          "updated_at_lte": {
+            "type": "string",
+            "description": "Get all documents updated before a given ISO8601 timestamp (included)."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/v4/blogs/",
+        "query": {
+          "event": {
+            "arg": "event",
+            "type": "string_list",
+            "join": ","
+          },
+          "has_event": {
+            "arg": "has_event",
+            "type": "boolean"
+          },
+          "has_launch": {
+            "arg": "has_launch",
+            "type": "boolean"
+          },
+          "is_featured": {
+            "arg": "is_featured",
+            "type": "boolean"
+          },
+          "launch": {
+            "arg": "launch",
+            "type": "string_list",
+            "join": ","
+          },
+          "limit": {
+            "arg": "limit",
+            "type": "integer"
+          },
+          "news_site": {
+            "arg": "news_site",
+            "type": "string"
+          },
+          "news_site_exclude": {
+            "arg": "news_site_exclude",
+            "type": "string"
+          },
+          "offset": {
+            "arg": "offset",
+            "type": "integer"
+          },
+          "ordering": {
+            "arg": "ordering",
+            "type": "string_list",
+            "join": ","
+          },
+          "published_at_gt": {
+            "arg": "published_at_gt",
+            "type": "string"
+          },
+          "published_at_gte": {
+            "arg": "published_at_gte",
+            "type": "string"
+          },
+          "published_at_lt": {
+            "arg": "published_at_lt",
+            "type": "string"
+          },
+          "published_at_lte": {
+            "arg": "published_at_lte",
+            "type": "string"
+          },
+          "search": {
+            "arg": "search",
+            "type": "string"
+          },
+          "summary_contains": {
+            "arg": "summary_contains",
+            "type": "string"
+          },
+          "summary_contains_all": {
+            "arg": "summary_contains_all",
+            "type": "string"
+          },
+          "summary_contains_one": {
+            "arg": "summary_contains_one",
+            "type": "string"
+          },
+          "title_contains": {
+            "arg": "title_contains",
+            "type": "string"
+          },
+          "title_contains_all": {
+            "arg": "title_contains_all",
+            "type": "string"
+          },
+          "title_contains_one": {
+            "arg": "title_contains_one",
+            "type": "string"
+          },
+          "updated_at_gt": {
+            "arg": "updated_at_gt",
+            "type": "string"
+          },
+          "updated_at_gte": {
+            "arg": "updated_at_gte",
+            "type": "string"
+          },
+          "updated_at_lt": {
+            "arg": "updated_at_lt",
+            "type": "string"
+          },
+          "updated_at_lte": {
+            "arg": "updated_at_lte",
+            "type": "string"
+          }
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "SPACEFLIGHT_NEWS_BLOGS_RETRIEVE",
+      "title": {
+        "de": "blogs retrieve",
+        "en": "blogs retrieve"
+      },
+      "description": {
+        "de": "GET /v4/blogs/{id}/",
+        "en": "GET /v4/blogs/{id}/"
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "A unique integer value identifying this blog."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/v4/blogs/{id}/"
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "SPACEFLIGHT_NEWS_INFO_RETRIEVE",
+      "title": {
+        "de": "info retrieve",
+        "en": "info retrieve"
+      },
+      "description": {
+        "de": "GET /v4/info/",
+        "en": "GET /v4/info/"
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {},
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/v4/info/"
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "SPACEFLIGHT_NEWS_REPORTS_LIST",
+      "title": {
+        "de": "reports list",
+        "en": "reports list"
+      },
+      "description": {
+        "de": "GET /v4/reports/",
+        "en": "GET /v4/reports/"
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "Number of results to return per page."
+          },
+          "news_site": {
+            "type": "string",
+            "description": "Search for documents with a news_site__name present in a list of comma-separated values. Case insensitive."
+          },
+          "news_site_exclude": {
+            "type": "string",
+            "description": "Search for documents with a news_site__name not present in a list of comma-separated values. Case insensitive."
+          },
+          "offset": {
+            "type": "integer",
+            "description": "The initial index from which to return the results."
+          },
+          "ordering": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Order the result on published_at, -published_at, updated_at, -updated_at. * published_at - Published at * -published_at - Published at (descending) * updated_at - Updated at * -updated_at - Updated at (descending)"
+          },
+          "published_at_gt": {
+            "type": "string",
+            "description": "Get all documents published after a given ISO8601 timestamp (excluded)."
+          },
+          "published_at_gte": {
+            "type": "string",
+            "description": "Get all documents published after a given ISO8601 timestamp (included)."
+          },
+          "published_at_lt": {
+            "type": "string",
+            "description": "Get all documents published before a given ISO8601 timestamp (excluded)."
+          },
+          "published_at_lte": {
+            "type": "string",
+            "description": "Get all documents published before a given ISO8601 timestamp (included)."
+          },
+          "search": {
+            "type": "string",
+            "description": "Search for documents with a specific phrase in the title or summary."
+          },
+          "summary_contains": {
+            "type": "string",
+            "description": "Search for all documents with a specific phrase in the summary."
+          },
+          "summary_contains_all": {
+            "type": "string",
+            "description": "Search for documents with a summary containing all keywords from comma-separated values."
+          },
+          "summary_contains_one": {
+            "type": "string",
+            "description": "Search for documents with a summary containing at least one keyword from comma-separated values."
+          },
+          "title_contains": {
+            "type": "string",
+            "description": "Search for all documents with a specific phrase in the title."
+          },
+          "title_contains_all": {
+            "type": "string",
+            "description": "Search for documents with a title containing all keywords from comma-separated values."
+          },
+          "title_contains_one": {
+            "type": "string",
+            "description": "Search for documents with a title containing at least one keyword from comma-separated values."
+          },
+          "updated_at_gt": {
+            "type": "string",
+            "description": "Get all documents updated after a given ISO8601 timestamp (excluded)."
+          },
+          "updated_at_gte": {
+            "type": "string",
+            "description": "Get all documents updated after a given ISO8601 timestamp (included)."
+          },
+          "updated_at_lt": {
+            "type": "string",
+            "description": "Get all documents updated before a given ISO8601 timestamp (excluded)."
+          },
+          "updated_at_lte": {
+            "type": "string",
+            "description": "Get all documents updated before a given ISO8601 timestamp (included)."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/v4/reports/",
+        "query": {
+          "limit": {
+            "arg": "limit",
+            "type": "integer"
+          },
+          "news_site": {
+            "arg": "news_site",
+            "type": "string"
+          },
+          "news_site_exclude": {
+            "arg": "news_site_exclude",
+            "type": "string"
+          },
+          "offset": {
+            "arg": "offset",
+            "type": "integer"
+          },
+          "ordering": {
+            "arg": "ordering",
+            "type": "string_list",
+            "join": ","
+          },
+          "published_at_gt": {
+            "arg": "published_at_gt",
+            "type": "string"
+          },
+          "published_at_gte": {
+            "arg": "published_at_gte",
+            "type": "string"
+          },
+          "published_at_lt": {
+            "arg": "published_at_lt",
+            "type": "string"
+          },
+          "published_at_lte": {
+            "arg": "published_at_lte",
+            "type": "string"
+          },
+          "search": {
+            "arg": "search",
+            "type": "string"
+          },
+          "summary_contains": {
+            "arg": "summary_contains",
+            "type": "string"
+          },
+          "summary_contains_all": {
+            "arg": "summary_contains_all",
+            "type": "string"
+          },
+          "summary_contains_one": {
+            "arg": "summary_contains_one",
+            "type": "string"
+          },
+          "title_contains": {
+            "arg": "title_contains",
+            "type": "string"
+          },
+          "title_contains_all": {
+            "arg": "title_contains_all",
+            "type": "string"
+          },
+          "title_contains_one": {
+            "arg": "title_contains_one",
+            "type": "string"
+          },
+          "updated_at_gt": {
+            "arg": "updated_at_gt",
+            "type": "string"
+          },
+          "updated_at_gte": {
+            "arg": "updated_at_gte",
+            "type": "string"
+          },
+          "updated_at_lt": {
+            "arg": "updated_at_lt",
+            "type": "string"
+          },
+          "updated_at_lte": {
+            "arg": "updated_at_lte",
+            "type": "string"
+          }
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "SPACEFLIGHT_NEWS_REPORTS_RETRIEVE",
+      "title": {
+        "de": "reports retrieve",
+        "en": "reports retrieve"
+      },
+      "description": {
+        "de": "GET /v4/reports/{id}/",
+        "en": "GET /v4/reports/{id}/"
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "A unique integer value identifying this report."
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/v4/reports/{id}/"
+      },
+      "response": {
+        "mode": "body"
+      }
+    }
+  ]
+}

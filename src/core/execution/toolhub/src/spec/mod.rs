@@ -13,6 +13,7 @@
 //! Format: `schema/adapter-spec.v1.schema.json` (`"schema": "ctox.adapter-spec/v1"`).
 pub mod adapter;
 pub mod egress;
+pub mod openapi;
 pub mod registry;
 pub mod validate;
 

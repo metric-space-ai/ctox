@@ -587,6 +587,32 @@ fn configure_worker_tool_stack(
     );
 }
 
+/// ToolHub tools for workers (RFC toolhub-adapter-builder P2). The role is
+/// fixed here, never by the model: persistent workers get `worker`, all
+/// other sessions `oneshot`. A supervisor role already set upstream stays.
+fn configure_worker_toolhub(
+    cli_overrides: &mut Vec<(String, toml::Value)>,
+    disable_active_tools: bool,
+    persistent_worker: bool,
+) {
+    if disable_active_tools {
+        return;
+    }
+    let supervisor = cli_overrides.iter().any(|(key, value)| {
+        key == "tools.ctox_toolhub_role" && value.as_str() == Some("supervisor")
+    });
+    cli_overrides.retain(|(key, _)| key != "tools.ctox_toolhub" && key != "tools.ctox_toolhub_role");
+    let role = if supervisor {
+        "supervisor"
+    } else if persistent_worker {
+        "worker"
+    } else {
+        "oneshot"
+    };
+    cli_overrides.push(("tools.ctox_toolhub".into(), toml::Value::Boolean(true)));
+    cli_overrides.push(("tools.ctox_toolhub_role".into(), toml::Value::String(role.into())));
+}
+
 fn persistent_worker_thread_name(root: &Path) -> String {
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let digest = Sha256::digest(canonical_root.to_string_lossy().as_bytes());
@@ -2174,6 +2200,7 @@ impl PersistentSession {
         // from these overrides.
         configure_managed_linux_sandbox(&mut cli_overrides);
         configure_worker_tool_stack(&mut cli_overrides, disable_active_tools);
+        configure_worker_toolhub(&mut cli_overrides, disable_active_tools, persistent_worker);
         if native_guest {
             super::session_continuity::constrain_native_guest_startup(&mut cli_overrides);
             // Both fresh thread/start and protected original-session load use
@@ -3345,6 +3372,24 @@ mod shutdown_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn worker_toolhub_role_is_fixed_by_session_kind() {
+        let mut overrides = vec![("tools.ctox_toolhub_role".to_string(), toml::Value::String("supervisor".into()))];
+        configure_worker_toolhub(&mut overrides, false, false);
+        assert!(overrides.contains(&("tools.ctox_toolhub_role".to_string(), toml::Value::String("supervisor".into()))));
+        let mut overrides = Vec::new();
+        configure_worker_toolhub(&mut overrides, false, true);
+        assert!(overrides.contains(&("tools.ctox_toolhub".to_string(), toml::Value::Boolean(true))));
+        assert!(overrides.contains(&("tools.ctox_toolhub_role".to_string(), toml::Value::String("worker".into()))));
+        let mut overrides = Vec::new();
+        configure_worker_toolhub(&mut overrides, false, false);
+        assert!(overrides.contains(&("tools.ctox_toolhub_role".to_string(), toml::Value::String("oneshot".into()))));
+        let mut overrides = Vec::new();
+        configure_worker_toolhub(&mut overrides, true, true);
+        assert!(overrides.is_empty());
+    }
+
 
     #[test]
     fn queue_cancel_terminal_witness_requires_exact_thread_and_turn() {
