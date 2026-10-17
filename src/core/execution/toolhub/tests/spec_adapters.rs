@@ -835,3 +835,45 @@ fn notion_spec_matches_compiled_adapter() {
     let r = a.build_request("NOTION_APPEND_TO_PAGE", &json!({"block_id": "b1", "content": "# T"})).unwrap();
     assert!(String::from_utf8_lossy(r.body.as_ref().unwrap()).contains("heading_1"));
 }
+
+// ------------------------------------------------------------------ dogfood format fixes (2026-10-17)
+
+const OPEN_METEO: &str = include_str!("../specs/open_meteo.json");
+const FRANKFURTER: &str = include_str!("../specs/frankfurter.json");
+const NAGER_DATE: &str = include_str!("../specs/nager_date.json");
+
+#[test]
+fn number_args_keep_decimals_and_integers_stay_whole() {
+    let a = SpecAdapter::from_json(OPEN_METEO).unwrap();
+    let r = a.build_request("OPEN_METEO_GET_FORECAST", &json!({"latitude": 52.52, "longitude": "13.41", "current": ["temperature_2m", "wind_speed_10m"], "forecast_days": 40})).unwrap();
+    assert!(r.url.contains("latitude=52.52") && r.url.contains("longitude=13.41"), "{}", r.url);
+    assert!(r.url.contains("current=temperature_2m%2Cwind_speed_10m") || r.url.contains("current=temperature_2m,wind_speed_10m"), "{}", r.url);
+    assert!(r.url.contains("forecast_days=16") && r.url.contains("timezone=auto"), "{}", r.url);
+    assert!(a.build_request("OPEN_METEO_GET_FORECAST", &json!({"latitude": "north", "longitude": 1})).is_err());
+    let f = SpecAdapter::from_json(FRANKFURTER).unwrap();
+    let r = f.build_request("FRANKFURTER_GET_LATEST_RATES", &json!({"amount": 10})).unwrap();
+    assert!(r.url.ends_with("amount=10"), "{}", r.url);
+}
+
+#[test]
+fn dot_dot_is_text_inside_a_segment_but_never_a_segment() {
+    let f = SpecAdapter::from_json(FRANKFURTER).unwrap();
+    let r = f.build_request("FRANKFURTER_GET_TIME_SERIES", &json!({"start_date": "2026-10-01", "end_date": "2026-10-09", "symbols": ["USD"]})).unwrap();
+    assert!(r.url.starts_with("https://api.frankfurter.dev/v1/2026-10-01..2026-10-09?"), "{}", r.url);
+    assert!(f.build_request("FRANKFURTER_GET_TIME_SERIES", &json!({"start_date": "a/b", "end_date": "x"})).is_err());
+    rejects(|v| v["actions"][0]["request"]["path"] = json!("/items/.."), "path must");
+    rejects(|v| v["actions"][0]["request"]["path"] = json!("/./items/{id}"), "path must");
+}
+
+#[test]
+fn status_mode_maps_empty_2xx_answers() {
+    let a = SpecAdapter::from_json(NAGER_DATE).unwrap();
+    let r = a.build_request("NAGER_DATE_IS_TODAY_PUBLIC_HOLIDAY", &json!({"country_code": "DE", "county_code": "DE-BY"})).unwrap();
+    assert_eq!(r.url, "https://date.nager.at/api/v3/IsTodayPublicHoliday/DE?countyCode=DE-BY");
+    let resp = |status| HttpResponse { status, body: vec![], session_id: None };
+    assert_eq!(a.parse_response("NAGER_DATE_IS_TODAY_PUBLIC_HOLIDAY", &resp(200)).unwrap(), json!({"public_holiday": true}));
+    assert_eq!(a.parse_response("NAGER_DATE_IS_TODAY_PUBLIC_HOLIDAY", &resp(204)).unwrap(), json!({"public_holiday": false}));
+    assert!(a.parse_response("NAGER_DATE_IS_TODAY_PUBLIC_HOLIDAY", &resp(202)).is_err());
+    rejects(|v| v["actions"][0]["response"] = json!({"mode": "status", "values": {"404": false}}), "2xx");
+    rejects(|v| v["actions"][0]["response"] = json!({"mode": "status"}), "values");
+}

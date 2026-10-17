@@ -1,0 +1,73 @@
+{
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "frankfurter",
+  "version": "1.0.0",
+  "docs": ["https://frankfurter.dev/"],
+  "notes": "Built by the autonomous adapter builder (dogfood 2026-10-17). Keyless; reference rates of the European Central Bank, published on working days around 16:00 CET. api.frankfurter.app answers 301 to api.frankfurter.dev/v1; the transport does not follow redirects, so the spec targets the final host.",
+  "api_base": "https://api.frankfurter.dev",
+  "allowed_hosts": ["api.frankfurter.dev"],
+  "name": "Frankfurter (EZB-Wechselkurse / ECB exchange rates)",
+  "description": {"de": "Wechselkurse der Europäischen Zentralbank: aktuell, zu einem Datum und als Zeitreihe, ohne Zugangsdaten.", "en": "European Central Bank exchange rates: latest, for a date and as a time series, no credentials."},
+  "auth_schemes": [{"type": "none"}],
+  "actions": [
+    {
+      "slug": "FRANKFURTER_GET_LATEST_RATES",
+      "title": {"de": "Aktuelle Wechselkurse abrufen", "en": "Get latest exchange rates"},
+      "description": {"de": "Neueste EZB-Kurse zu einer Basiswährung; mit amount zugleich eine Umrechnung.", "en": "Latest ECB rates for a base currency; with amount this is also a conversion."},
+      "risk": "read", "scopes": [],
+      "input_schema": {"type": "object", "additionalProperties": false, "properties": {
+        "base": {"type": "string", "description": "Basiswährung (ISO 4217), Standard EUR."},
+        "symbols": {"type": "array", "items": {"type": "string"}, "description": "Zielwährungen, z. B. [\"USD\", \"CHF\"]; leer = alle."},
+        "amount": {"type": "number", "description": "Betrag in der Basiswährung, Standard 1."}
+      }},
+      "request": {"method": "GET", "path": "/v1/latest", "query": {
+        "base": {"arg": "base", "type": "string", "trim": true},
+        "symbols": {"arg": "symbols", "type": "string_list", "join": ","},
+        "amount": {"arg": "amount", "type": "number"}
+      }},
+      "response": {"mode": "body"}
+    },
+    {
+      "slug": "FRANKFURTER_GET_HISTORICAL_RATES",
+      "title": {"de": "Wechselkurse zu einem Datum abrufen", "en": "Get exchange rates for a date"},
+      "description": {"de": "EZB-Kurse eines Tages (ab 1999-01-04); an Tagen ohne Veröffentlichung gilt der letzte Werktag davor.", "en": "ECB rates for one day (from 1999-01-04); on days without publication the previous working day applies."},
+      "risk": "read", "scopes": [],
+      "input_schema": {"type": "object", "additionalProperties": false, "properties": {
+        "date": {"type": "string", "description": "Datum YYYY-MM-DD."},
+        "base": {"type": "string", "description": "Basiswährung, Standard EUR."},
+        "symbols": {"type": "array", "items": {"type": "string"}, "description": "Zielwährungen."}
+      }, "required": ["date"]},
+      "request": {"method": "GET", "path": "/v1/{date}", "query": {
+        "base": {"arg": "base", "type": "string", "trim": true},
+        "symbols": {"arg": "symbols", "type": "string_list", "join": ","}
+      }},
+      "response": {"mode": "body"}
+    },
+    {
+      "slug": "FRANKFURTER_GET_TIME_SERIES",
+      "title": {"de": "Wechselkurs-Zeitreihe abrufen", "en": "Get exchange rate time series"},
+      "description": {"de": "EZB-Kurse für jeden Werktag eines Zeitraums.", "en": "ECB rates for every working day in a date range."},
+      "risk": "read", "scopes": [],
+      "input_schema": {"type": "object", "additionalProperties": false, "properties": {
+        "start_date": {"type": "string", "description": "Beginn YYYY-MM-DD."},
+        "end_date": {"type": "string", "description": "Ende YYYY-MM-DD."},
+        "base": {"type": "string", "description": "Basiswährung, Standard EUR."},
+        "symbols": {"type": "array", "items": {"type": "string"}, "description": "Zielwährungen."}
+      }, "required": ["start_date", "end_date"]},
+      "request": {"method": "GET", "path": "/v1/{start_date}..{end_date}", "query": {
+        "base": {"arg": "base", "type": "string", "trim": true},
+        "symbols": {"arg": "symbols", "type": "string_list", "join": ","}
+      }},
+      "response": {"mode": "body"}
+    },
+    {
+      "slug": "FRANKFURTER_LIST_CURRENCIES",
+      "title": {"de": "Währungen auflisten", "en": "List currencies"},
+      "description": {"de": "Alle Währungen mit EZB-Referenzkurs: Code und Name.", "en": "All currencies with an ECB reference rate: code and name."},
+      "risk": "read", "scopes": [],
+      "input_schema": {"type": "object", "additionalProperties": false, "properties": {}},
+      "request": {"method": "GET", "path": "/v1/currencies"},
+      "response": {"mode": "body"}
+    }
+  ]
+}

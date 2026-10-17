@@ -1,0 +1,211 @@
+{
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "nager_date",
+  "version": "1.0.1",
+  "docs": [
+    "https://date.nager.at/Api"
+  ],
+  "notes": "Built by the autonomous adapter builder (dogfood 2026-10-17). Keyless public-holiday API. IsTodayPublicHoliday answers 200 or 204 with an empty body, so the answer lives in the status code only.",
+  "api_base": "https://date.nager.at",
+  "allowed_hosts": [
+    "date.nager.at"
+  ],
+  "name": "Nager.Date (Feiertage / public holidays)",
+  "description": {
+    "de": "Gesetzliche Feiertage und Brückentage für über 100 Länder, ohne Zugangsdaten.",
+    "en": "Public holidays and long weekends for more than 100 countries, no credentials."
+  },
+  "auth_schemes": [
+    {
+      "type": "none"
+    }
+  ],
+  "actions": [
+    {
+      "slug": "NAGER_DATE_LIST_PUBLIC_HOLIDAYS",
+      "title": {
+        "de": "Feiertage eines Jahres auflisten",
+        "en": "List public holidays of a year"
+      },
+      "description": {
+        "de": "Alle Feiertage eines Landes in einem Jahr, mit Datum, Namen und Regionen (counties, z. B. DE-BY).",
+        "en": "All public holidays of a country in a year, with date, names and regions (counties, e.g. DE-BY)."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "year": {
+            "type": "string",
+            "description": "Jahr, z. B. 2026."
+          },
+          "country_code": {
+            "type": "string",
+            "description": "Ländercode ISO 3166-1 alpha-2, z. B. DE."
+          }
+        },
+        "required": [
+          "year",
+          "country_code"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/api/v3/PublicHolidays/{year}/{country_code}"
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "NAGER_DATE_LIST_NEXT_PUBLIC_HOLIDAYS",
+      "title": {
+        "de": "Nächste Feiertage auflisten",
+        "en": "List upcoming public holidays"
+      },
+      "description": {
+        "de": "Die Feiertage der nächsten 365 Tage für ein Land.",
+        "en": "The public holidays of the next 365 days for a country."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "country_code": {
+            "type": "string",
+            "description": "Ländercode, z. B. DE."
+          }
+        },
+        "required": [
+          "country_code"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/api/v3/NextPublicHolidays/{country_code}"
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "NAGER_DATE_LIST_LONG_WEEKENDS",
+      "title": {
+        "de": "Brückentage auflisten",
+        "en": "List long weekends"
+      },
+      "description": {
+        "de": "Lange Wochenenden eines Jahres, mit Hinweis, ob ein Brückentag nötig ist.",
+        "en": "Long weekends of a year, noting whether a bridge day is needed."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "year": {
+            "type": "string",
+            "description": "Jahr, z. B. 2026."
+          },
+          "country_code": {
+            "type": "string",
+            "description": "Ländercode, z. B. DE."
+          }
+        },
+        "required": [
+          "year",
+          "country_code"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/api/v3/LongWeekend/{year}/{country_code}"
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "NAGER_DATE_LIST_COUNTRIES",
+      "title": {
+        "de": "Unterstützte Länder auflisten",
+        "en": "List supported countries"
+      },
+      "description": {
+        "de": "Alle Länder mit Feiertagsdaten: Code und Name.",
+        "en": "All countries with holiday data: code and name."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "request": {
+        "method": "GET",
+        "path": "/api/v3/AvailableCountries"
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "NAGER_DATE_IS_TODAY_PUBLIC_HOLIDAY",
+      "title": {
+        "de": "Ist heute Feiertag?",
+        "en": "Is today a public holiday?"
+      },
+      "description": {
+        "de": "Prüft, ob heute in einem Land (optional einer Region) Feiertag ist.",
+        "en": "Checks whether today is a public holiday in a country (optionally a region)."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "country_code": {
+            "type": "string",
+            "description": "Ländercode, z. B. DE."
+          },
+          "county_code": {
+            "type": "string",
+            "description": "Region, z. B. DE-BY."
+          }
+        },
+        "required": [
+          "country_code"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/api/v3/IsTodayPublicHoliday/{country_code}",
+        "query": {
+          "countyCode": {
+            "arg": "county_code",
+            "type": "string",
+            "trim": true
+          }
+        }
+      },
+      "response": {
+        "mode": "status",
+        "values": {
+          "200": {
+            "public_holiday": true
+          },
+          "204": {
+            "public_holiday": false
+          }
+        }
+      }
+    }
+  ]
+}

@@ -21,6 +21,8 @@ pub enum Risk {
 pub enum Kind {
     String,
     Integer,
+    /// Any JSON number (decimals allowed, e.g. coordinates); whole numbers stay whole.
+    Number,
     Boolean,
     StringList,
     Object,
@@ -234,6 +236,9 @@ pub enum Response {
     Object(Vec<(String, String, Option<Value>, FieldShape)>, Option<(String, String)>),
     MergeSuccess { pointer: String },
     Const(Value),
+    /// The answer lives in the 2xx status code only (e.g. 200 = yes, 204 = no,
+    /// empty body): `{"mode": "status", "values": {"200": true, "204": false}}`.
+    Status(Vec<(u16, Value)>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -439,7 +444,8 @@ fn parse_val(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTreeS
     used.insert(name.clone());
     let kind = match v.get("type").and_then(Value::as_str).or_else(|| prop.get("type").and_then(Value::as_str)).unwrap_or("string") {
         "string" => Kind::String,
-        "integer" | "number" => Kind::Integer,
+        "integer" => Kind::Integer,
+        "number" => Kind::Number,
         "boolean" => Kind::Boolean,
         "string_list" | "array" => Kind::StringList,
         "object" => Kind::Object,
@@ -551,8 +557,11 @@ fn parse_tmpl(v: &Value, props: &Map<String, Value>, ctx: &str, used: &mut BTree
 }
 
 fn parse_path(raw: &str, props: &Map<String, Value>, enc: &Map<String, Value>, ctx: &str, used: &mut BTreeSet<String>) -> Result<Vec<PathPart>> {
-    if !raw.starts_with('/') || raw.contains("..") || raw.contains('?') || raw.contains('#') || raw.contains("//") {
-        bail!("{ctx}: path must start with `/` and contain no `..`, `?`, `#` or `//`");
+    // `..` is only a traversal as a whole segment; inside a segment between
+    // placeholders (Frankfurter `/v1/{start}..{end}`) it is literal text, and
+    // placeholder values are never empty, `.` or `..`.
+    if !raw.starts_with('/') || raw.split('/').any(|s| s == ".." || s == ".") || raw.contains('?') || raw.contains('#') || raw.contains("//") {
+        bail!("{ctx}: path must start with `/` and contain no `..` or `.` segment, `?`, `#` or `//`");
     }
     let mut out = Vec::new();
     let mut rest = raw;
@@ -601,7 +610,7 @@ fn parse_path(raw: &str, props: &Map<String, Value>, enc: &Map<String, Value>, c
 
 fn parse_response(v: Option<&Value>, ctx: &str) -> Result<Response> {
     let Some(v) = v else { return Ok(Response::Body) };
-    known_keys(v, &["mode", "pointer", "required", "empty_error", "as", "fields", "value", "require", "each"], ctx)?;
+    known_keys(v, &["mode", "pointer", "required", "empty_error", "as", "fields", "value", "require", "each", "values"], ctx)?;
     let ptr = |v: &Value| -> Result<String> {
         let p = v.get("pointer").and_then(Value::as_str).unwrap_or("").to_string();
         if !(p.is_empty() || p.starts_with('/')) {
@@ -652,6 +661,15 @@ fn parse_response(v: Option<&Value>, ctx: &str) -> Result<Response> {
         }
         "merge_success" => Response::MergeSuccess { pointer: ptr(v)? },
         "const" => Response::Const(v.get("value").cloned().ok_or_else(|| anyhow!("{ctx}: const mode needs `value`"))?),
+        "status" => {
+            let m = v.get("values").and_then(Value::as_object).filter(|m| !m.is_empty()).ok_or_else(|| anyhow!("{ctx}: status mode needs `values` {{\"200\": ..}}"))?;
+            let mut out = Vec::new();
+            for (k, x) in m {
+                let code: u16 = k.parse().ok().filter(|c| (200..300).contains(c)).ok_or_else(|| anyhow!("{ctx}: status values are keyed by 2xx codes, got `{k}`"))?;
+                out.push((code, x.clone()));
+            }
+            Response::Status(out)
+        }
         o => bail!("{ctx}: unknown response mode `{o}`"),
     })
 }

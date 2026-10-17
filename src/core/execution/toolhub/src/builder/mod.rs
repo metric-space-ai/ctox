@@ -658,7 +658,8 @@ impl<'a> Builder<'a> {
         if self.role == AgentRole::Worker {
             let id = mission.ok_or_else(|| anyhow!("delegate_to_supervisor: workers activate only inside a builder mission (--mission <work_id>)"))?;
             match self.gates.builder_mission_service(id)? {
-                Some(service) if service == slug => {}
+                // request-adapter writes `nager-date`; toolkit slugs usually say `nager_date`.
+                Some(service) if service.replace('_', "-") == slug.replace('_', "-") => {}
                 Some(service) => bail!("builder mission {id} is for `{service}`, not `{slug}`"),
                 None => bail!("{id} is not a live builder mission"),
             }

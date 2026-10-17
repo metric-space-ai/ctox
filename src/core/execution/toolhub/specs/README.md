@@ -34,6 +34,8 @@ Calendly (`calendly.json`) is the first spec-only build (no compiled code change
 
 `airtable.json` was converted from the compiled adapter with the generator `examples/spec_from_builtin.rs` plus hand fixes; `support::spec_parity` checks it against every recorded case in `tests/port_airtable.rs`.
 
+`open_meteo.json`, `frankfurter.json` and `nager_date.json` are the first specs the autonomous builder wrote itself from public docs (dogfood 2026-10-17, keyless). They needed three format fixes: `number` args keep decimals (coordinates), `..` is allowed as text inside a path segment (Frankfurter `/v1/{start}..{end}`, still rejected as a segment), and response mode `status` maps an empty 2xx answer (Nager.Date 200/204) to a value.
+
 Known limits of v1 (use a compiled adapter for these): multipart uploads, request signing
 (HMAC/AWS SigV4), binary downloads, multi-step calls (e.g. upload session then commit),
-per-tool response logic beyond pick/list/object/merge/const.
+per-tool response logic beyond pick/list/object/merge/const/array/status, several API hosts in one spec (Open-Meteo geocoding/archive need their own specs).

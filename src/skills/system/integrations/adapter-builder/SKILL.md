@@ -177,7 +177,55 @@ always applies. Destructive calls still need a single-use per-call gate. Every s
   catalog view) need a sync collection with a profile and typed commands, which
   is ctox sync v3 stage S2 work (label `sync-v3:S2` from the sync owner).
 
+- **Dogfood (2026-10-17): first fully autonomous builds** with only the built
+  `ctox toolhub` CLI as worker on a local instance root: Open-Meteo
+  (`specs/open_meteo.json`, 2 actions), Frankfurter/ECB (`specs/frankfurter.json`,
+  4 actions), Nager.Date (`specs/nager_date.json`, 5 actions). Flow per service:
+  `request-adapter` -> spec written by hand from the public docs -> `draft-spec
+  --spec-file` -> `validate` -> `live-test --probes-json` (all actions, reads) ->
+  `activate --mission <work_id>` -> `execute`. 11/11 actions live PASS; no
+  approval gate was created. It needed three format fixes, one builder fix and
+  one instance-config step (see Lessons "Dogfood").
+
 ## Lessons
+
+### Dogfood 2026-10-17 (Open-Meteo, Frankfurter, Nager.Date)
+
+- **There is no docs -> spec generator.** `spec_from_builtin.rs` only converts
+  Rust adapters. For a new service you write the JSON yourself from the docs;
+  check every endpoint with one real request first (curl or a read probe) and
+  copy the shapes, not the docs prose.
+- **`number` means decimals.** Coordinates, amounts: use `"type": "number"`
+  (since 2026-10-17 it keeps decimals; before, it was an alias of `integer` and
+  rejected 52.52). Use `integer` only where the API wants whole numbers.
+- **Path arguments are strings or whole numbers.** Year or id in the path:
+  declare it as `string` (or `integer`); `segment` encoding sends 2026 as `2026`.
+- **`..` inside a segment is fine, as a segment never.** Frankfurter ranges
+  (`/v1/{start_date}..{end_date}`) validate since 2026-10-17; `/a/../b` and `/./`
+  are still refused.
+- **Empty 2xx answers:** when the answer is only the status code (Nager.Date
+  `IsTodayPublicHoliday`: 200 = yes, 204 = no), use
+  `{"mode": "status", "values": {"200": {...}, "204": {...}}}`. In `body` mode both
+  look like `{"text": ""}` and the live test passes without telling you anything:
+  look at what a probe returns, not only at PASS.
+- **No redirects.** If the documented host answers 301 (api.frankfurter.app ->
+  api.frankfurter.dev/v1), point `api_base` and `allowed_hosts` at the final host.
+  `curl -sI` the base once before writing the spec.
+- **One host per spec.** Open-Meteo geocoding and archive live on other hosts;
+  each needs its own spec (and its own builder mission). Keep the first spec to
+  the host the task needs.
+- **Mission name vs. slug.** `request-adapter` stores `nager-date`; toolkit slugs
+  use `nager_date`. Activation treats `-` and `_` the same (since 2026-10-17).
+- **Fake-IP boxes:** on a box whose DNS answers 198.18.0.0/15, every probe fails
+  with "resolves only to private or reserved addresses" until the instance config
+  key `CTOX_TOOLHUB_FAKE_IP_EGRESS=1` is set in `runtime/ctox-runtime.sqlite3`.
+  There is no CLI command for it; that is an operator step, not a builder step.
+- **Transient TLS errors** (box proxy) fail a probe; the live test has no retry.
+  Run the live test again; a fresh passing run replaces the proof.
+- **Close the mission yourself.** Activation does not close the builder mission;
+  the work item stays `open` until the worker closes it with its report.
+
+### Earlier
 
 - Fake-IP DNS egress (box resolves to 198.18.0.0/15): live tests need
   `TransportOptions { fake_ip_egress: true }`; production instances keep the default.

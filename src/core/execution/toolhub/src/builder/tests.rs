@@ -321,3 +321,16 @@ fn catalog_specs_all_validate() {
         assert_eq!(a.spec().slug, *slug);
     }
 }
+
+#[test]
+fn mission_service_matches_dash_and_underscore_slugs() {
+    // request-adapter stores `nager-date`; the toolkit slug is `nager_date` (dogfood 2026-10-17).
+    let e = env();
+    let worker = e.b(AgentRole::Worker, &Allow);
+    worker.draft_from_catalog("nager_date").unwrap();
+    e.gates.missions.borrow_mut().insert("m-nd".into(), "nager-date".into());
+    let err = worker.activate("nager_date", "1.0.1", Some("m-nd")).unwrap_err().to_string();
+    assert!(!err.contains("builder mission"), "mission accepted, proof still missing: {err}");
+    e.gates.missions.borrow_mut().insert("m-x".into(), "nager-dates".into());
+    assert!(worker.activate("nager_date", "1.0.1", Some("m-x")).unwrap_err().to_string().contains("builder mission"));
+}

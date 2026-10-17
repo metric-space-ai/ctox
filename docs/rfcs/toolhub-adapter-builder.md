@@ -205,3 +205,9 @@ Prüfpfad laut `.github/workflows/sync-scope-guard.yml`:
 - P0–P2 (crate, CLI, harness tools, MCP read tools, builder mission) need **no sync label**: `mcp_channel.rs` is not on the guard path.
 - P3 (typed commands in `command_plane.rs`, browser cards, a status collection) needs **`sync-v3:S2`**.
 - P4 (the audit projection) needs S2/S4.
+
+## Dogfood 2026-10-17 / Erprobung
+
+**DE.** Drei neue Dienste (Open-Meteo, Frankfurter/EZB, Nager.Date) wurden nur mit `ctox toolhub` als Worker auf einer lokalen Instanz gebaut, getestet (11/11 Aktionen live bestanden) und ohne Nutzerschritt aktiviert. Nötig waren drei Formatkorrekturen (`number` mit Nachkommastellen, `..` innerhalb eines Pfadsegments, Antwortmodus `status`) und eine Builder-Korrektur (Mission `nager-date` = Slug `nager_date`). Offene Lücken: kein Generator von API-Doku/OpenAPI zu Spec, ein Host pro Spec, keine Weiterleitungen, kein Wiederholen bei Netzfehlern im Live-Test, Mission wird nach Aktivierung nicht geschlossen, Fake-IP-Schalter nur per Instanzkonfiguration ohne CLI.
+
+**EN.** Three new services were built, live-tested (11/11 actions pass) and activated by a worker with no user step. Needed three format fixes and one builder fix; open gaps: no docs/OpenAPI-to-spec generator, one host per spec, no redirects, no retry on transient network errors in the live test, mission not closed on activation, fake-IP egress switch only via instance config (no CLI).
