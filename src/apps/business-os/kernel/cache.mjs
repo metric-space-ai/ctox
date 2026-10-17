@@ -4,11 +4,11 @@ export const CLIENT_CACHE_BUDGET = 2_000_000_000;
 const yieldTurn=()=>new Promise(resolve=>setTimeout(resolve,0));
 function empty(row,lseq){return {collection:row.collection,id:row.id,data:null,base:{data:null,deleted:false,rev:null,seq:'0'},rev:null,seq:'0',deleted:true,pending:false,cache_evicted:true,lseq};}
 async function invalidate(t,collections){
- for(const meta of await t.all('meta'))if(meta.key.startsWith('cursor:') && collections.has(meta.collection))await t.put('meta',{...meta,evicted_at_seq:meta.cursor_to,cursor_to:'0',complete:false,evicted:true});
+ for(const collection of collections)for(const meta of await t.checkpointsFor(collection))await t.put('meta',{...meta,evicted_at_seq:meta.cursor_to,cursor_to:'0',complete:false,evicted:true});
 }
 async function canEvict(t,collection){
  const group=await t.get('meta',CACHE_COLLECTION_PREFIX+collection);
- return !group?.pinned && !(await t.all('outbox')).some(e=>e.collection===collection);
+ return !group?.pinned && !await t.hasOutboxForCollection(collection);
 }
 /** Bounded transactions recheck leader and pending input before each slice.
  * Cursor invalidation and lseq tombstones remain atomic with each changed row.
@@ -46,12 +46,11 @@ export async function reclaimCache(db,assertGeneration,lastUsed=new Map(),protec
  if(budget!==undefined && usage<=budget)return result();
  const metadata=[];let cursor=null;
  do {const page=await read(t=>t.scan('meta',cursor,32));metadata.push(...page.rows);cursor=page.next;if(cursor!==null)await yieldTurn();}while(cursor!==null);
- const outbox=await read(t=>t.all('outbox')),pinned=new Set(outbox.map(e=>e.collection));
  const rejectedRefs=new Set(metadata.filter(m=>m.key.startsWith(CACHE_REJECT_PREFIX)&&m.count).map(m=>m.ref));
  const candidates=[];
  for(const m of metadata){
-  if(m.key.startsWith(CACHE_COLLECTION_PREFIX)&&m.bytes&&!m.pinned&&!pinned.has(m.cache_collection)&&!protectedCollections.has(m.cache_collection))candidates.push({collection:m.cache_collection,at:lastUsed.get(m.cache_collection)??0});
-  if(m.key.startsWith(CACHE_BLOB_PREFIX)&&!m.pinned&&!rejectedRefs.has(m.ref)&&!outbox.some(e=>e.op==='upload'&&e.id===m.ref))candidates.push({blob:m.ref,at:m.at});
+  if(m.key.startsWith(CACHE_COLLECTION_PREFIX)&&m.bytes&&!m.pinned&&!protectedCollections.has(m.cache_collection))candidates.push({collection:m.cache_collection,at:lastUsed.get(m.cache_collection)??0});
+  if(m.key.startsWith(CACHE_BLOB_PREFIX)&&!m.pinned&&!rejectedRefs.has(m.ref))candidates.push({blob:m.ref,at:m.at});
  }
  candidates.sort((a,b)=>a.at-b.at);
  for(const candidate of candidates){
@@ -59,7 +58,7 @@ export async function reclaimCache(db,assertGeneration,lastUsed=new Map(),protec
   if(candidate.blob){
    const removed=await transaction(async t=>{
     await assertGeneration(t);const blob=await t.get('blobs',candidate.blob);
-    if(!blob||blob.pinned||(await t.get('meta',CACHE_REJECT_PREFIX+candidate.blob))?.count||(await t.all('outbox')).some(e=>e.op==='upload'&&e.id===candidate.blob))return false;
+    if(!blob||blob.pinned||(await t.get('meta',CACHE_REJECT_PREFIX+candidate.blob))?.count||await t.hasUpload(candidate.blob))return false;
     await t.del('blobs',candidate.blob);return true;
    },'readwrite');
    if(removed)evictedBlobs.push(candidate.blob);

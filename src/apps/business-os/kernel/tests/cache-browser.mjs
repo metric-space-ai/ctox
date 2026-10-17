@@ -19,9 +19,10 @@ try{
   const name='cache-before-accounting';
   const rows=Array.from({length:100},(_,n)=>({collection:'cold',id:String(n).padStart(3,'0'),data:{id:String(n),value:'ä'.repeat(1000)}}));
   const pinned={collection:'pending',id:'p',data:{value:'my local input'},legacy_unconfirmed:true};
+  const queued={collection:'queued',id:'q',data:{value:'queued local input'}};
   await new Promise((resolve,reject)=>{const q=indexedDB.open(name,5);q.onupgradeneeded=()=>{for(const [s,keyPath] of Object.entries(STORES)){const store=q.result.createObjectStore(s,{keyPath});if(s==='outbox')store.createIndex('by_doc',['collection','id']);}};
-   q.onerror=()=>reject(q.error);q.onsuccess=()=>{const db=q.result,t=db.transaction(['docs','blobs','outbox'],'readwrite');for(const row of [...rows,pinned])t.objectStore('docs').put(row);t.objectStore('blobs').put({ref:'blob',size:50,pinned:true});t.oncomplete=()=>{db.close();resolve();};t.onabort=()=>reject(t.error);};});
-  let db=await IdbBackend.open(name);const expected=[...rows,pinned].reduce((n,r)=>n+cacheBytes(r),50);
+   q.onerror=()=>reject(q.error);q.onsuccess=()=>{const db=q.result,t=db.transaction(['docs','blobs','outbox'],'readwrite');for(const row of [...rows,pinned,queued])t.objectStore('docs').put(row);t.objectStore('blobs').put({ref:'blob',size:50});t.objectStore('outbox').put({op_id:'upload',op:'upload',collection:'files',id:'blob'});t.objectStore('outbox').put({op_id:'queued',collection:'queued',id:'q'});t.oncomplete=()=>{db.close();resolve();};t.onabort=()=>reject(t.error);};});
+  let db=await IdbBackend.open(name);const expected=[...rows,pinned,queued].reduce((n,r)=>n+cacheBytes(r),50);
   if((await db.get('meta',CACHE_USAGE_KEY)).value!==expected)throw Error('existing V5 accounting mismatch');
   await db.close();db=await IdbBackend.open(name);if((await db.get('meta',CACHE_USAGE_KEY)).value!==expected)throw Error('reopen counted twice');
   try{await db.tx(async t=>{await t.del('docs',['cold','000']);throw Error('rollback');});}catch(e){if(e.message!=='rollback')throw e;}
@@ -29,8 +30,13 @@ try{
   let turns=0;const timer=setInterval(()=>turns++,0);const result=await reclaimCache(db,async()=>{},new Map([['cold',0]]),new Set(),1);clearInterval(timer);
   if(!turns||result.records.length!==100||result.within_budget)throw Error('bounded IDB eviction/pinned budget contract');
   if((await db.get('docs',['pending','p'])).data.value!=='my local input')throw Error('input discarded');
-  if((await db.get('meta',CACHE_USAGE_KEY)).value!==cacheBytes(pinned)+50)throw Error('post-eviction accounting mismatch');
-  await db.close();return {existingV5:true,reopen:true,rollback:true,yieldedTurns:turns,retainedInput:true,cacheRows:result.records.length};
+  if((await db.get('docs',['queued','q'])).data.value!=='queued local input'||!(await db.get('blobs','blob')))throw Error('pending document/upload discarded');
+  if((await db.get('meta',CACHE_USAGE_KEY)).value!==cacheBytes(pinned)+cacheBytes(queued)+50)throw Error('post-eviction accounting mismatch');
+  await db.tx(async t=>{await t.del('outbox','queued');await t.del('outbox','upload');});
+  const released=await reclaimCache(db,async()=>{},new Map(),new Set(),1);
+  if((await db.get('blobs','blob'))||(await db.get('docs',['queued','q'])).data!==null||!released.reclaimed)throw Error('completed outbox pins were not released');
+  if((await db.get('meta',CACHE_USAGE_KEY)).value!==cacheBytes(pinned))throw Error('released-pin accounting mismatch');
+  await db.close();return {existingV5:true,reopen:true,rollback:true,yieldedTurns:turns,retainedInput:true,releasedPins:true,cacheRows:result.records.length};
  });
  console.log('CACHE_IDB '+JSON.stringify(result));
 }finally{await browser?.close();await new Promise(r=>server.close(r));}

@@ -94,6 +94,13 @@ test('incremental bytes and pin counts survive overwrite delete and transaction 
  await db.tx(t=>t.put('blobs',{ref:'b',size:100}));assert.equal((await db.get('meta',CACHE_USAGE_KEY)).value,cacheBytes(next)+100);
  await db.tx(async t=>{await t.del('docs',['notes','a']);await t.del('blobs','b');});
  assert.equal((await db.get('meta',CACHE_USAGE_KEY)).value,0);
+ const upload={op_id:'u',collection:'files',id:'blob',op:'upload'};
+ await db.tx(async t=>{await t.put('outbox',upload);await t.put('outbox',{...upload,dispatched_at:1});});
+ assert.equal(await db.read(t=>t.hasUpload('blob')),true);
+ await assert.rejects(db.tx(async t=>{await t.del('outbox','u');throw Error('rollback');}));
+ assert.equal(await db.read(t=>t.hasOutboxForCollection('files')),true);
+ await db.tx(t=>t.del('outbox','u'));assert.equal(await db.read(t=>t.hasUpload('blob')),false);
+ assert.equal(await db.read(t=>t.hasOutboxForCollection('files')),false);
 });
 
 test('cache eviction yields between bounded slices and retains input arriving between them',async()=>{
@@ -102,4 +109,18 @@ test('cache eviction yields between bounded slices and retains input arriving be
  const records=await evictCollection(db,'notes',async()=>{});await pending;
  assert.equal(inserted,true);assert.ok(records.length>0&&records.length<100,'eviction must yield before all documents are removed');
  assert.equal((await db.get('docs',['notes','99'])).data.input,'keep');assert.equal((await db.all('outbox')).length,1);
+});
+
+
+test('pressure guards never clone the pending outbox to choose evictable cache',async()=>{
+ const db=new MemoryBackend('cache-no-outbox-clone');await db.tx(async t=>{
+  await t.put('docs',{collection:'cold',id:'a',data:{value:'rebuildable'}});
+  await t.put('docs',{collection:'pending',id:'a',data:{value:'local input'}});
+  await t.put('outbox',{op_id:'pending',collection:'pending',id:'a',body:{value:'local input'}});
+  await t.put('blobs',{ref:'uploading',size:1000});await t.put('outbox',{op_id:'upload',collection:'files',id:'uploading',op:'upload'});
+ });
+ const ops=db._ops.bind(db);db._ops=(...args)=>{const t=ops(...args),all=t.all;return {...t,all:s=>{assert.notEqual(s,'outbox','cache pressure cloned the pending outbox');assert.notEqual(s,'docs','cache pressure cloned all documents');assert.notEqual(s,'meta','cache pressure cloned all metadata');return all(s);}};};
+ const result=await reclaimCache(db,async()=>{},new Map(),new Set(),1);
+ assert.deepEqual(result.collections,['cold']);assert.equal(result.within_budget,false);
+ assert.equal((await db.get('docs',['pending','a'])).data.value,'local input');assert.equal((await db.get('blobs','uploading')).size,1000);
 });

@@ -1,4 +1,4 @@
-import { cacheAccounting, CACHE_USAGE_KEY } from './cache-accounting.mjs';
+import { cacheAccounting, CACHE_USAGE_KEY, CACHE_OUTBOX_PREFIX, CACHE_UPLOAD_PREFIX, CACHE_OUTBOX_READY_KEY } from './cache-accounting.mjs';
 import { migrateV3Upgrade } from './migrate-v3.mjs';
 import { CtoxError, cloneValue } from './values.mjs';
 export const IDB_VERSION = 5;
@@ -41,6 +41,9 @@ export class MemoryBackend {
       del: async (s, k) => { st(s).delete(memKey(k)); },
       all: async (s) => [...st(s).values()].map(cloneValue),
       outboxFor: async (ns, id) => [...st('outbox').values()].filter((e) => e.collection === ns && e.id === id).map(cloneValue),
+      hasOutboxForCollection: async collection => !!st('meta').get(CACHE_OUTBOX_PREFIX+JSON.stringify(collection))?.count,
+      hasUpload: async ref => !!st('meta').get(CACHE_UPLOAD_PREFIX+JSON.stringify(ref))?.count,
+      checkpointsFor: async collection => {const rows=[];for(const row of st('meta').values())if(row.key.startsWith('cursor:')&&row.collection===collection)rows.push(cloneValue(row));return rows;},
       scan: async (s, cursor, limit=32, collection) => {
         const iterator=cursor??st(s).values();const rows=[];let done=false;
         for(let i=0;i<limit;i++){const item=iterator.next();if(item.done){done=true;break;}
@@ -114,6 +117,13 @@ export class IdbBackend {
       del: (s, k) => req(t.objectStore(s).delete(k)),
       all: (s) => req(t.objectStore(s).getAll()),
       outboxFor: (ns, id) => req(t.objectStore('outbox').index('by_doc').getAll([ns, id])),
+      hasOutboxForCollection: async collection => !!(await req(t.objectStore('meta').get(CACHE_OUTBOX_PREFIX+JSON.stringify(collection))))?.count,
+      hasUpload: async ref => !!(await req(t.objectStore('meta').get(CACHE_UPLOAD_PREFIX+JSON.stringify(ref))))?.count,
+      checkpointsFor: collection => new Promise((resolve,reject)=>{
+        const rows=[],request=t.objectStore('meta').openCursor(IDBKeyRange.bound('cursor:','cursor;',false,true));
+        request.onerror=()=>reject(request.error);request.onsuccess=()=>{const cursor=request.result;if(!cursor){resolve(rows);return;}
+          if(cursor.value.collection===collection)rows.push(cursor.value);cursor.continue();};
+      }),
       scan: (s, after, limit=32, collection) => new Promise((resolve,reject)=>{
         const range=collection===undefined?(after==null?undefined:IDBKeyRange.lowerBound(after,true)):IDBKeyRange.bound(after??[collection],[collection,[]],after!=null,false);
         const rows=[],request=t.objectStore(s).openCursor(range);
@@ -127,15 +137,19 @@ export class IdbBackend {
   // other writes, never clones an entire store, and runs only before open().
   async initializeCacheAccounting() {
     return this.transaction(async t=>{
-      if(await t.get('meta',CACHE_USAGE_KEY))return;
-      await t.put('meta',{key:CACHE_USAGE_KEY,value:0});
-      for(const store of ['docs','blobs']) {
+      const seed=async stores=>{for(const store of stores) {
         let cursor=null;
         do {const page=await t.scan(store,cursor);cursor=page.next;
-          const emptyBefore={...t,get:async(s,k)=>s==='docs'||s==='blobs'?undefined:t.get(s,k)};
+          const emptyBefore={...t,get:async(s,k)=>s==='meta'?t.get(s,k):undefined};
           const account=cacheAccounting(emptyBefore);
           for(const row of page.rows)await account.put(store,row);
         }while(cursor!==null);
+      }};
+      if(!await t.get('meta',CACHE_USAGE_KEY)){
+        await t.put('meta',{key:CACHE_USAGE_KEY,value:0});await seed(['docs','blobs']);
+      }
+      if(!await t.get('meta',CACHE_OUTBOX_READY_KEY)){
+        await seed(['outbox']);await t.put('meta',{key:CACHE_OUTBOX_READY_KEY,value:true});
       }
     },'readwrite',false);
   }
