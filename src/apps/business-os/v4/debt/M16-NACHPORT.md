@@ -489,3 +489,10 @@ Nicht zurückgenommen (bewusst): `customer-modules/outbound-lead-generation/modu
   8-s-Rückgängig im Themen-Dialog + Laufvertrag, f66534cb2 Wochen-Digest mit eigenem Zeitplan `news-digest:<topic>`).
   Bewusst weggelassen: Checkpoint-Datei im Laufvertrag (v4-Handler haben kein Dateisystem), HN-Zitate/Trend-Kürzung aus dem
   V2-Writeback (außerhalb der drei Funktionen).
+- **OLG 1.0.319–1.0.323** (0c77e8b6c Quelle samt aller Adapter entfernen, 33488a0c4 doppelte Alt-Adapter beim Start entfernen,
+  8354b96be/04cd69ccd/d04b69120/13d1ed351 lokaler Store zuerst, a60b8eb7f gestapelte Detailansicht): im v4-OLG bereits
+  enthalten (`removeAllSourceAdapters`, `payload.removed`, Pflegeschritt `dedupe-adapters` mit `adapter-dedupe.mjs`,
+  `revealDetailIfStacked`). Die übrigen OLG-main-only-Zeilen oben sind V2-Datenpfad (`state.collections.*.find`,
+  `storageCollection`) und entfallen. Kein Nachport nötig.
+- **ctox d86fb3ac8 „Ablehnungsgründe anzeigen“**: in v4 abgedeckt (`humanTaskActionError` → Zone); „Neu gestartet“-Statustext
+  bewusst nicht (keine Zustandstexte im Inhalt); das Neu-Einreichen terminaler Befehle ist Kernverhalten.
