@@ -474,6 +474,10 @@ jobs:
       - name: Windows encrypted Secret Store runtime smoke
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: pwsh
+        # The full ctox test binary exceeds the MSVC PDB limit (LNK1318) with
+        # debug info; like the other heavy workflows, build it without.
+        env:
+          CARGO_PROFILE_DEV_DEBUG: '0'
         run: |
           cargo test --locked --bin ctox `
             "secrets::tests::secret_store_encrypts_values_at_rest_and_round_trips" `
