@@ -15,11 +15,11 @@ Regel: Für nach v4 portierte Apps blieb der v4-Stand; Blöcke, in denen main me
   import { startCrewMotion } from '../../shared/crew-motion.js?v=20260928-crew-truth-v7';
   import { renderCrewReference, crewModeForTaskState } from '../../shared/crew-renderer.js?v=20260928-crew-truth-v7';
   import { workspaceDataState } from './data-state.js?v=20260906-data-state-v1';
-  import { subscribeTaskHistoryChanges } from '../../shared/task-history-native-changes.js?v=20261017-shell-v2-v4-train16m';
+  import { subscribeTaskHistoryChanges } from '../../shared/task-history-native-changes.js?v=20261017-shell-v2-v4-train17';
   ```
 - Block bei Zeile 46 (main-only, 1 Zeilen):
   ```
-  const CTOX_STYLE_BUILD = '20261017-shell-v2-v4-train16m';
+  const CTOX_STYLE_BUILD = '20261017-shell-v2-v4-train17';
   ```
 - Block bei Zeile 171 (main-only, 8 Zeilen):
   ```
@@ -265,7 +265,7 @@ Regel: Für nach v4 portierte Apps blieb der v4-Stand; Blöcke, in denen main me
 
 - Block bei Zeile 1128 (main-only, 1 Zeilen):
   ```
-      const mod = await import('../../vendor/store-shelf/store-shelf.mjs?v=20261017-shell-v2-v4-train16m');
+      const mod = await import('../../vendor/store-shelf/store-shelf.mjs?v=20261017-shell-v2-v4-train17');
   ```
 
 ## `customer-modules/outbound-lead-generation/index.js`
