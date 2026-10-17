@@ -168,7 +168,6 @@ struct Snapshot {
     event_sequence: u64,
     error: Option<&'static str>,
     committed: Option<Value>,
-    text: Option<String>,
     finished: bool,
 }
 struct Session {
@@ -214,7 +213,7 @@ impl Session {
         Ok(
             json!({"streamId":id, "state":if self.canceled.load(Ordering::SeqCst) {"canceled"} else if s.error.is_some() {"failed"} else if s.committed.is_some() {"committed"} else if s.finished {"finishing"} else {"open"},
             "events":s.events.iter().filter(|e| e["sequence"].as_u64().unwrap_or(0) > after).collect::<Vec<_>>(),
-            "receipt":s.committed, "text":if self.canceled.load(Ordering::SeqCst) || s.error.is_some() {None} else {s.text.as_ref()}, "error":s.error}),
+            "receipt":s.committed, "error":s.error}),
         )
     }
     fn cancel(&self) {
@@ -558,7 +557,6 @@ async fn run(
                 },
                 Some(Ok(VerifiedTranscriptEvent::Final(final_value))) => {
                     if !finishing { break Err("invalid_response"); }
-                    let final_text=final_value.text().to_owned();
                     let a = Arc::clone(&authority); let stop = Arc::clone(&canceled); let gate = Arc::clone(&commit_gate);
                     let committed = crate::persistence::run_core_sync(move || Ok((|| {
                         let _fence = gate.lock().map_err(|_| anyhow::anyhow!("speech commit fence unavailable"))?;
@@ -569,7 +567,7 @@ async fn run(
                         let revision = jour_fixe_speech::committed_revision(&a.root, &a.token, &a.binding, bound.stream_id())?;
                         Ok::<_, anyhow::Error>(revision)
                     })())).await;
-                    match committed { Ok(Ok(revision)) => { {let mut s=snapshot.lock().unwrap();s.committed=Some(json!({"handle":Uuid::new_v4().to_string(), "meetingRevision":revision}));s.text=Some(final_text);} updates.send_replace(()); return; },
+                    match committed { Ok(Ok(revision)) => { {let mut s=snapshot.lock().unwrap();s.committed=Some(json!({"handle":Uuid::new_v4().to_string(), "meetingRevision":revision}));} updates.send_replace(()); return; },
                         _ => { snapshot.lock().unwrap().error = Some("commit_failed"); updates.send_replace(()); return; } }
                 },
                 Some(Err(_)) => break Err("gateway_failed"),
