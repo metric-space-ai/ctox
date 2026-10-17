@@ -264,6 +264,32 @@ pub fn prepare_xai_responses_body(
     body: &[u8],
     policy: XaiRequestPolicy<'_>,
 ) -> Result<XaiPreparedRequest, serde_json::Error> {
+    use crate::sdk::cliproxy::executor::{ExecutionMetadata, Options, Request};
+    let request = Request {
+        model: policy.model.into(),
+        payload: body.to_vec(),
+        ..Request::default()
+    };
+    let options = Options {
+        metadata: ExecutionMetadata {
+            execution_session_id: policy.session_id.map(str::to_owned),
+            reasoning_effort: policy.reasoning_effort.map(str::to_owned),
+            ..ExecutionMetadata::default()
+        },
+        ..Options::default()
+    };
+    super::xai_executor_prepare::XaiRequestOwner::default().prepare(
+        &request,
+        &options,
+        policy.stream,
+        policy.inject_x_search,
+    )
+}
+
+pub(crate) fn shape_xai_responses_body(
+    body: &[u8],
+    policy: XaiRequestPolicy<'_>,
+) -> Result<XaiPreparedRequest, serde_json::Error> {
     let mut root: Value = serde_json::from_slice(body)?;
     let object = root
         .as_object_mut()

@@ -17,8 +17,8 @@ use super::xai_executor::{
 };
 use super::xai_executor_media::{xai_image_endpoint_path, xai_video_endpoint_path};
 use super::xai_executor_request::{
-    apply_xai_chat_headers, apply_xai_headers, normalize_image_refs, prepare_xai_responses_body,
-    xai_chat_base_url, xai_compact_base_url, xai_credentials, XaiRequestPolicy,
+    apply_xai_chat_headers, apply_xai_headers, normalize_image_refs, xai_chat_base_url,
+    xai_compact_base_url, xai_credentials,
 };
 use super::xai_executor_response::normalize_reasoning_event_data;
 use super::xai_reasoning_replay::{
@@ -32,6 +32,7 @@ pub struct XaiExecutor {
     replay_store: Option<Arc<dyn XaiReasoningReplayStore>>,
     timeout: Duration,
     inject_x_search: bool,
+    request_owner: Arc<super::xai_executor_prepare::XaiRequestOwner>,
 }
 
 impl XaiExecutor {
@@ -48,7 +49,27 @@ impl XaiExecutor {
             replay_store: None,
             timeout,
             inject_x_search: false,
+            request_owner: Arc::new(super::xai_executor_prepare::XaiRequestOwner::default()),
         })
+    }
+    /// Bind the gateway's existing translator, thinking and client owners.
+    #[must_use]
+    pub fn with_request_owner(
+        mut self,
+        owner: Arc<super::xai_executor_prepare::XaiRequestOwner>,
+    ) -> Self {
+        self.request_owner = owner;
+        self
+    }
+    pub(crate) fn prepare_request(
+        &self,
+        request: &Request,
+        options: &Options,
+        stream: bool,
+    ) -> Result<super::xai_executor_request::XaiPreparedRequest, XaiExecutionError> {
+        self.request_owner
+            .prepare(request, options, stream, self.inject_search())
+            .map_err(|error| XaiExecutionError::Request(error.to_string()))
     }
     pub fn with_stream_transport(mut self, transport: Arc<dyn XaiStreamingTransport>) -> Self {
         self.stream_transport = Some(transport);
@@ -96,17 +117,7 @@ impl XaiExecutor {
         let (body, mut headers) = if media {
             (normalize_image_refs(&request.payload), Headers::new())
         } else {
-            let mut prepared = prepare_xai_responses_body(
-                &request.payload,
-                XaiRequestPolicy {
-                    model: &request.model,
-                    stream: path == "/responses",
-                    inject_x_search: self.inject_x_search,
-                    session_id: options.metadata.execution_session_id.as_deref(),
-                    reasoning_effort: options.metadata.reasoning_effort.as_deref(),
-                },
-            )
-            .map_err(|error| XaiExecutionError::Request(error.to_string()))?;
+            let mut prepared = self.prepare_request(request, options, path == "/responses")?;
             if let (Some(store), Some(scope)) = (
                 self.replay_store.as_deref(),
                 self.reasoning_replay_scope(options, &credentials.token),

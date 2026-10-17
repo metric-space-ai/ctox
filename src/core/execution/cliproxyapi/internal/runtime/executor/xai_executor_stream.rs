@@ -14,10 +14,7 @@ use crate::sdk::cliproxy::executor::{Options, Request};
 
 use super::xai_executor::{xai_status_error, XaiHttpRequest, XaiStreamResponse, XaiUpstreamTarget};
 use super::xai_executor_execute::{sanitize_compact_body, XaiExecutionError, XaiExecutor};
-use super::xai_executor_request::{
-    apply_xai_chat_headers, prepare_xai_responses_body, xai_chat_base_url, xai_credentials,
-    XaiRequestPolicy,
-};
+use super::xai_executor_request::{apply_xai_chat_headers, xai_chat_base_url, xai_credentials};
 use super::xai_executor_response::{normalize_sse_stream, InternalXSearchResponseFilter};
 use super::xai_reasoning_replay::{
     apply_reasoning_replay, cache_reasoning_replay_from_completed, XaiReasoningReplayScope,
@@ -47,17 +44,7 @@ impl XaiExecutor {
         let credentials = xai_credentials(auth);
         let target = XaiUpstreamTarget::new(&xai_chat_base_url(auth))
             .map_err(|_| XaiExecutionError::InvalidTarget)?;
-        let mut prepared = prepare_xai_responses_body(
-            &request.payload,
-            XaiRequestPolicy {
-                model: &request.model,
-                stream: true,
-                inject_x_search: self.inject_search(),
-                session_id: options.metadata.execution_session_id.as_deref(),
-                reasoning_effort: options.metadata.reasoning_effort.as_deref(),
-            },
-        )
-        .map_err(|error| XaiExecutionError::Request(error.to_string()))?;
+        let mut prepared = self.prepare_request(request, options, true)?;
         let replay_scope = self.reasoning_replay_scope(options, &credentials.token);
         if let (Some(store), Some(scope)) = (self.replay_store().map(Arc::as_ref), &replay_scope) {
             prepared.body = apply_reasoning_replay(store, Some(scope), &prepared.body);

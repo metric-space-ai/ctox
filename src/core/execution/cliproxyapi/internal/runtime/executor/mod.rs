@@ -62,6 +62,7 @@ pub mod xai_executor;
 pub mod xai_executor_auth;
 pub mod xai_executor_execute;
 pub mod xai_executor_media;
+pub mod xai_executor_prepare;
 pub mod xai_executor_request;
 pub mod xai_executor_response;
 pub mod xai_executor_stream;
@@ -167,6 +168,8 @@ mod openai_responses_signature_test;
 mod websocket_lifecycle_bind_test;
 #[cfg(test)]
 mod websocket_session_target_test;
+#[cfg(test)]
+mod xai_executor_configuration_test;
 #[cfg(test)]
 mod xai_executor_test;
 #[cfg(test)]
@@ -347,6 +350,7 @@ pub use xai_executor::*;
 pub use xai_executor_auth::*;
 pub use xai_executor_execute::*;
 pub use xai_executor_media::*;
+pub use xai_executor_prepare::*;
 pub use xai_executor_request::*;
 pub use xai_executor_response::*;
 pub use xai_executor_stream::*;
