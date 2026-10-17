@@ -49,6 +49,37 @@ fn same_business_command_intent(
     serde_json::from_str::<Value>(intent_json).is_ok_and(|intent| intent == claim.intent)
 }
 
+// An intake failure rebuilds its claim from the replicated document, which
+// never carries the native authority (`native_authorization` or
+// `native_owner`) bound at admission. Compare such a replay with that stored
+// authority adopted; command, payload and context still decide the conflict.
+// Without it every failure of an admitted command was recorded as an
+// idempotency conflict, replacing the real error (customer tenant: research
+// adapters terminal with "already claimed with different immutable intent").
+fn intake_replay_claim_with_stored_authority(
+    claim: &BusinessCommandClaimRequest,
+    intent_json: &str,
+) -> Option<BusinessCommandClaimRequest> {
+    use sha2::{Digest, Sha256};
+    let stored = serde_json::from_str::<Value>(intent_json).ok()?;
+    let stored = stored.as_object()?;
+    let mut replay = claim.clone();
+    let intent = replay.intent.as_object_mut()?;
+    let mut adopted = false;
+    for key in ["native_authorization", "native_owner"] {
+        if let (false, Some(value)) = (intent.contains_key(key), stored.get(key)) {
+            intent.insert(key.to_string(), value.clone());
+            adopted = true;
+        }
+    }
+    if !adopted {
+        return None;
+    }
+    let bytes = serde_json::to_vec(&replay.intent).ok()?;
+    replay.payload_hash = format!("sha256:{:x}", Sha256::digest(&bytes));
+    Some(replay)
+}
+
 pub(crate) fn claim_business_command_with_queue(
     root: &Path,
     claim: BusinessCommandClaimRequest,
@@ -2822,7 +2853,13 @@ fn record_business_command_intake_failure_inner(
         canonical
             .as_ref()
             .is_some_and(|(idempotency_key, payload_hash, _, _, _, intent_json)| {
-                !same_business_command_intent(idempotency_key, payload_hash, intent_json, &claim)
+                let replay = intake_replay_claim_with_stored_authority(&claim, intent_json);
+                !same_business_command_intent(
+                    idempotency_key,
+                    payload_hash,
+                    intent_json,
+                    replay.as_ref().unwrap_or(&claim),
+                )
             });
     let canonical_already_terminal =
         canonical

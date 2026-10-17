@@ -15723,18 +15723,32 @@ fn recoverable_background_control_authorization(
     }))
 }
 
+/// The receipt is part of the immutable claim intent. An admitted command
+/// keeps the receipt it was admitted with: recomputing it from the current
+/// session changed the hash whenever the same actor's display name, role or
+/// policy reason drifted, and the replay was rejected as an idempotency
+/// conflict. Only a different authenticated actor gets a fresh receipt, so
+/// that replay still conflicts instead of borrowing the original authority.
 pub(super) fn recoverable_background_control_claim_authorization(
     root: &Path,
     command: &BusinessCommand,
 ) -> Option<Value> {
-    recoverable_background_control_authorization(root, command).or_else(|| {
-        recoverable_background_control_permission(&command.command_type)?;
-        let command_id = command.id.as_deref()?;
-        channels::business_command_projection(root, command_id)
-            .ok()?
-            .get("native_authorization")
-            .cloned()
-    })
+    recoverable_background_control_permission(&command.command_type)?;
+    let stored = command
+        .id
+        .as_deref()
+        .and_then(|command_id| channels::business_command_projection(root, command_id).ok())
+        .and_then(|projection| projection.get("native_authorization").cloned());
+    let fresh = recoverable_background_control_authorization(root, command);
+    match (stored, fresh) {
+        (Some(stored), Some(fresh))
+            if stored.pointer("/actor/id") != fresh.pointer("/actor/id") =>
+        {
+            Some(fresh)
+        }
+        (Some(stored), _) => Some(stored),
+        (None, fresh) => fresh,
+    }
 }
 
 fn recoverable_background_control_permission(command_type: &str) -> Option<BusinessOsPermission> {
@@ -47213,6 +47227,165 @@ pub(super) mod tests {
         let recovered = authorize_recoverable_background_control_command(root, &redacted)?;
         assert_eq!(recovered.origin, CommandOrigin::TrustedLocal);
         assert_eq!(recovered.client_context["actor"]["id"], "operator");
+        Ok(())
+    }
+
+    /// Admit a replicated research-source test command the way the command
+    /// plane does: the claim carries the native authorization receipt.
+    fn admit_research_source_test_command(
+        root: &Path,
+        command_id: &str,
+    ) -> anyhow::Result<(BusinessCommand, Value)> {
+        let (capability_token, _) =
+            issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
+        let document = serde_json::json!({
+            "id": command_id,
+            "command_id": command_id,
+            "module": "outbound",
+            "command_type": "outbound.research_source.test",
+            "record_id": "adapter_leadgen_google-de",
+            "status": "pending_sync",
+            "payload": {"adapter_id": "adapter_leadgen_google-de", "source_id": "google-de"},
+            "client_context": {
+                "source_module": "outbound-lead-generation",
+                "actor": {"id": "operator"},
+                "capability_token": capability_token
+            }
+        });
+        let command = BusinessCommand {
+            origin: CommandOrigin::ReplicatedPeer,
+            id: Some(command_id.to_string()),
+            module: "outbound".to_string(),
+            command_type: "outbound.research_source.test".to_string(),
+            record_id: Some("adapter_leadgen_google-de".to_string()),
+            payload: document["payload"].clone(),
+            client_context: document["client_context"].clone(),
+        };
+        let authorization = recoverable_background_control_claim_authorization(root, &command)
+            .context("an authenticated research source test needs a receipt")?;
+        let claim = channels::claim_business_control_command(
+            root,
+            business_command_core_claim_with_authorization(
+                command_id,
+                &command,
+                Some(&authorization),
+            )?,
+        )?;
+        assert_eq!(claim.disposition, "new");
+        Ok((command, document))
+    }
+
+    #[test]
+    fn intake_failure_of_admitted_research_command_keeps_its_error() -> anyhow::Result<()> {
+        // Customer tenant: every failed research adapter probe was recorded
+        // as "command id was already claimed with different immutable intent"
+        // because the failure claim lacked the admitted native authorization.
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "cmd_leadgen_source_intake_failure_replay";
+        seed_business_user(root, "operator", "chef")?;
+        let (_, document) = admit_research_source_test_command(root, command_id)?;
+        let admitted = channels::business_command_projection(root, command_id)?;
+
+        let failure =
+            record_business_command_intake_failure(root, &document, "adapter probe failed", 1)?;
+        assert_eq!(failure["idempotency_conflict"], Value::Bool(false));
+        assert_eq!(failure["exhausted"], Value::Bool(true));
+        assert_eq!(failure["canonical_failure_created"], Value::Bool(true));
+        let terminal = channels::business_command_projection(root, command_id)?;
+        assert_eq!(terminal["terminal_status"], "failed");
+        assert_eq!(terminal["error_code"], "native_unavailable");
+        assert_eq!(terminal["error_message"], "adapter probe failed");
+        assert_eq!(terminal["payload_hash"], admitted["payload_hash"]);
+        assert_eq!(
+            terminal["native_authorization"],
+            admitted["native_authorization"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn admitted_research_command_replay_survives_session_drift() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "cmd_leadgen_source_session_drift";
+        seed_business_user(root, "operator", "chef")?;
+        let (mut command, document) = admit_research_source_test_command(root, command_id)?;
+        let admitted = channels::business_command_projection(root, command_id)?;
+        assert_eq!(admitted["native_authorization"]["actor"]["role"], "chef");
+
+        // Same actor, new display name and role, and therefore a new token.
+        open_store(root)?.execute(
+            "UPDATE business_users SET display_name = 'Operator Renamed', role = 'admin',
+                 updated_at_ms = ?2
+             WHERE user_id = ?1",
+            params!["operator", now_ms() as i64],
+        )?;
+        let (capability_token, _) =
+            issue_business_os_capability_token(root, "operator", now_ms() as i64)?;
+        command.client_context["capability_token"] = Value::from(capability_token);
+        let fresh = recoverable_background_control_authorization(root, &command)
+            .context("the drifted session still authenticates")?;
+        assert_ne!(fresh, admitted["native_authorization"]);
+
+        let replay_authorization =
+            recoverable_background_control_claim_authorization(root, &command)
+                .context("an admitted command keeps its receipt")?;
+        assert_eq!(replay_authorization, admitted["native_authorization"]);
+        let replay = channels::claim_business_control_command(
+            root,
+            business_command_core_claim_with_authorization(
+                command_id,
+                &command,
+                Some(&replay_authorization),
+            )?,
+        )?;
+        assert_ne!(replay.disposition, "new");
+
+        let failure =
+            record_business_command_intake_failure(root, &document, "adapter probe failed", 1)?;
+        assert_eq!(failure["idempotency_conflict"], Value::Bool(false));
+        let terminal = channels::business_command_projection(root, command_id)?;
+        assert_eq!(terminal["error_message"], "adapter probe failed");
+        assert_eq!(terminal["payload_hash"], admitted["payload_hash"]);
+
+        // Another authenticated actor still gets its own receipt, so it
+        // cannot borrow the admitted authority.
+        seed_business_user(root, "intruder", "chef")?;
+        let (intruder_token, _) =
+            issue_business_os_capability_token(root, "intruder", now_ms() as i64)?;
+        command.client_context = serde_json::json!({
+            "source_module": "outbound-lead-generation",
+            "actor": {"id": "intruder"},
+            "capability_token": intruder_token
+        });
+        let intruder = recoverable_background_control_claim_authorization(root, &command)
+            .context("another actor authenticates")?;
+        assert_eq!(intruder["actor"]["id"], "intruder");
+        Ok(())
+    }
+
+    #[test]
+    fn intake_failure_with_changed_payload_still_conflicts() -> anyhow::Result<()> {
+        let temp = tempdir()?;
+        let root = temp.path();
+        let command_id = "cmd_leadgen_source_changed_payload";
+        seed_business_user(root, "operator", "chef")?;
+        let (_, mut document) = admit_research_source_test_command(root, command_id)?;
+        let admitted = channels::business_command_projection(root, command_id)?;
+        document["payload"]["source_id"] = Value::from("another-source");
+
+        let failure =
+            record_business_command_intake_failure(root, &document, "adapter probe failed", 1)?;
+        assert_eq!(failure["idempotency_conflict"], Value::Bool(true));
+        assert_eq!(failure["canonical_failure_created"], Value::Bool(false));
+        assert_eq!(
+            failure["failure_document"]["error_code"],
+            "idempotency_conflict"
+        );
+        let unchanged = channels::business_command_projection(root, command_id)?;
+        assert_eq!(unchanged["payload_hash"], admitted["payload_hash"]);
+        assert_eq!(unchanged["execution_phase"], admitted["execution_phase"]);
         Ok(())
     }
 
