@@ -1,20 +1,20 @@
 //! One V4 sender per association, with strict 0–2 priority and byte DRR 8:3:1.
 //! No producer writes a V4 DataChannel directly. Session admission means bounded
 //! retention until delivery ACK; handoff counters report SCTP separately.
-use super::super::connection_handler_rs::send_result::{MessageClass, transport_diagnostics};
+use super::super::connection_handler_rs::send_result::{transport_diagnostics, MessageClass};
 use super::super::connection_handler_rs::send_under_publication;
 use super::super::webrtc_types::WebRTCPublicationGuard;
-use super::framing::{Framer, MAX_MESSAGE, Reassembler};
+use super::framing::{Framer, Reassembler, MAX_MESSAGE};
 use super::hello::{TransportSelection, WireSeq};
-use super::lanes::{ASSOCIATION_BUDGET, BULK_WEIGHTS, FRAME_BYTES, Lane, REALTIME_LABEL};
-use crate::rx_error::{RxError, RxResult, new_rx_error};
+use super::lanes::{Lane, ASSOCIATION_BUDGET, BULK_WEIGHTS, FRAME_BYTES, REALTIME_LABEL};
+use crate::rx_error::{new_rx_error, RxError, RxResult};
 use crate::rxjs_compat::{RxStream, RxSubject};
-use futures::{FutureExt, StreamExt, stream::FuturesUnordered};
+use futures::{stream::FuturesUnordered, FutureExt, StreamExt};
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Semaphore};
 use webrtc::data_channel::{DataChannel, DataChannelEvent, RTCDataChannelInit};
 use webrtc::peer_connection::PeerConnection;
 #[path = "v4_scheduler/lane_artifacts.rs"]
@@ -370,8 +370,8 @@ impl NativeSendScheduler {
         transport: TransportSelection,
         session: SessionBinding,
         authorize: impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Arc<dyn WebRTCPublicationGuard>>
-        + Send
-        + Sync,
+            + Send
+            + Sync,
     ) -> RxResult<Self> {
         tokio::time::timeout(SEND_TIMEOUT, async {
             let scheduler = Self::create_inner(pc, transport, Some(session)).await?;
@@ -386,9 +386,9 @@ impl NativeSendScheduler {
     }
     async fn replay_pending(
         &self,
-        authorize: &(
-             impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Arc<dyn WebRTCPublicationGuard>> + Send + Sync
-         ),
+        authorize: &(impl Fn(Lane, WireSeq, &[u8]) -> RxResult<Arc<dyn WebRTCPublicationGuard>>
+              + Send
+              + Sync),
     ) -> RxResult<()> {
         let binding = self
             .session
@@ -1216,12 +1216,10 @@ mod native_tests {
             )
             .await
             .unwrap();
-            assert!(
-                sender
-                    .send(Lane::Commands, WireSeq(98), &vec![0; MAX_MESSAGE + 1], None)
-                    .await
-                    .is_err()
-            );
+            assert!(sender
+                .send(Lane::Commands, WireSeq(98), &vec![0; MAX_MESSAGE + 1], None)
+                .await
+                .is_err());
             assert!(
                 state
                     .replay(first.generation, Lane::Commands)
@@ -1248,15 +1246,13 @@ mod native_tests {
             )
             .await
             .unwrap();
-            assert!(
-                resumed
-                    .replay_pending(&|_, _, _| Err(new_rx_error(
-                        "ctox_webrtc_publication_denied",
-                        None
-                    )))
-                    .await
-                    .is_err()
-            );
+            assert!(resumed
+                .replay_pending(&|_, _, _| Err(new_rx_error(
+                    "ctox_webrtc_publication_denied",
+                    None
+                )))
+                .await
+                .is_err());
             assert!(
                 channels[1].sent.lock().is_empty(),
                 "replay requires fresh publication authority"
@@ -1770,12 +1766,10 @@ mod native_tests {
             !draining.is_finished(),
             "drain cannot acknowledge bytes still owned by SCTP"
         );
-        assert!(
-            scheduler
-                .send(Lane::Commands, WireSeq(2), b"too-late", None)
-                .await
-                .is_err()
-        );
+        assert!(scheduler
+            .send(Lane::Commands, WireSeq(2), b"too-late", None)
+            .await
+            .is_err());
         channels[0].drain();
         tokio::time::timeout(Duration::from_secs(2), draining)
             .await
@@ -1811,19 +1805,15 @@ mod native_tests {
             .await
             .unwrap();
         scheduler.close_now();
-        assert!(
-            retained
-                .send(Lane::Control, WireSeq(2), b"stale-clone", None)
-                .await
-                .is_err()
-        );
-        assert!(
-            tokio::time::timeout(Duration::from_secs(2), pending)
-                .await
-                .unwrap()
-                .unwrap()
-                .is_err()
-        );
+        assert!(retained
+            .send(Lane::Control, WireSeq(2), b"stale-clone", None)
+            .await
+            .is_err());
+        assert!(tokio::time::timeout(Duration::from_secs(2), pending)
+            .await
+            .unwrap()
+            .unwrap()
+            .is_err());
         assert!(channels[5].sent.lock().is_empty());
     }
     struct DeniedAfterCallback;
@@ -1844,17 +1834,15 @@ mod native_tests {
         )
         .await
         .unwrap();
-        assert!(
-            scheduler
-                .send(
-                    Lane::Commands,
-                    WireSeq(1),
-                    b"handed-before-revocation",
-                    Some(Arc::new(DeniedAfterCallback))
-                )
-                .await
-                .is_err()
-        );
+        assert!(scheduler
+            .send(
+                Lane::Commands,
+                WireSeq(1),
+                b"handed-before-revocation",
+                Some(Arc::new(DeniedAfterCallback))
+            )
+            .await
+            .is_err());
         assert_eq!(channels[1].sent.lock().len(), 1);
         assert_eq!(scheduler.handoff_counters().attempted, [1, 0]);
         assert_eq!(scheduler.handoff_counters().handed_to_sctp, [1, 0]);
@@ -1878,17 +1866,15 @@ mod native_tests {
         )
         .await
         .unwrap();
-        assert!(
-            scheduler
-                .send(
-                    Lane::Commands,
-                    WireSeq(1),
-                    b"revoked",
-                    Some(Arc::new(Denied))
-                )
-                .await
-                .is_err()
-        );
+        assert!(scheduler
+            .send(
+                Lane::Commands,
+                WireSeq(1),
+                b"revoked",
+                Some(Arc::new(Denied))
+            )
+            .await
+            .is_err());
         assert!(channels[1].sent.lock().is_empty());
         scheduler
             .send(Lane::Control, WireSeq(2), b"still-live", None)
