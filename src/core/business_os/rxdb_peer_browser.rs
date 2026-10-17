@@ -3500,6 +3500,7 @@ pub(super) async fn upsert_browser_session(
     access: Option<&BrowserSessionAccess>,
     metadata_patch: Option<&Value>,
 ) -> anyhow::Result<()> {
+    let _observer_access = e44::OBSERVER_ACCESS_LOCK.read().await;
     let now = now_ms() as u64;
     let existing = find_browser_document(database, "browser_sessions", session_id).await?;
     let existing_command_created_at_ms = existing
@@ -3664,6 +3665,7 @@ pub(super) async fn upsert_browser_tab(
     frame_seq: u64,
     access: Option<&BrowserSessionAccess>,
 ) -> anyhow::Result<()> {
+    let _observer_access = e44::OBSERVER_ACCESS_LOCK.read().await;
     let now = now_ms() as u64;
     let session = find_browser_document(database, "browser_sessions", session_id).await?;
     let tenant_id = access
@@ -3727,6 +3729,7 @@ pub(super) async fn upsert_browser_frame(
     frame_hash: &str,
     access: Option<&BrowserSessionAccess>,
 ) -> anyhow::Result<()> {
+    let _observer_access = e44::OBSERVER_ACCESS_LOCK.read().await;
     let now = now_ms() as u64;
     let session = find_browser_document(database, "browser_sessions", session_id).await?;
     let tenant_id = access

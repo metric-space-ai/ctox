@@ -1,6 +1,9 @@
 //! E44 native responses. No browser-supplied credentials or filesystem paths.
 use super::*;
 
+// A stale native projection must never restore a revoked observer.
+pub(super) static OBSERVER_ACCESS_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
 pub(super) fn is_control_response(command: &str) -> bool {
     matches!(command, "browser.http_auth.respond" | "browser.observer.grant"
         | "browser.observer.revoke" | "browser.upload.select" | "browser.webauthn.respond")
@@ -18,6 +21,11 @@ pub(super) fn require_owned_session(session: &Value, actor: &str) -> anyhow::Res
 pub(super) async fn update_observers(
     database: &Arc<RxDatabase>, session: &Value, actor: &str, command: &str, payload: &Value,
 ) -> anyhow::Result<Value> {
+    require_owned_session(session, actor)?;
+    let _access = OBSERVER_ACCESS_LOCK.write().await;
+    let session_id = session.get("id").and_then(Value::as_str).context("browser session id missing")?;
+    let current_session = find_browser_document(database, "browser_sessions", session_id).await?;
+    let session = &current_session;
     require_owned_session(session, actor)?;
     let user = payload.get("user_id").and_then(Value::as_str).map(str::trim)
         .filter(|user| !user.is_empty() && user.len() <= 256)
