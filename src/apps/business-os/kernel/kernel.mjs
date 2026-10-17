@@ -134,6 +134,7 @@ export function createKernel(opts = {}) {
   let outboxStat = { count: 0, oldest_at: null };
   const waiters = new Map(); // op_id -> resolve(WriteResult)
   const cmdRejected = new Map();
+  const cmdSubmitFailed = new Map();
   const zone = [];
   const moduleCache = new Map();
   const routeListeners = new Map();
@@ -1047,8 +1048,8 @@ export function createKernel(opts = {}) {
   function writeVersion(app,collection) {
     const {owner,ver,definition,gen}=collectionVersion(app,collection);
     // Wire versions describe the collection owner, never the calling app.
-    // The fixed platform bootstrap version is not the sender's app version.
-    // An outdated bootstrap is rejected/migrated by the core's registry CAS.
+    // Production needs the authoritative platform catalog before a local write.
+    if(!fakeCore&&owner===PLATFORM_APP_ID&&(!ver||!definition?.schema?.version))throw new CtoxError('unavailable','Active platform catalog missing',{collection});
     return {schema_ver:definition?.schema?.version??1,app_ver:ver??(owner===PLATFORM_APP_ID?PLATFORM_APP.ver:app.ver),...(gen===undefined?{}:{gen})};
   }
   // §16.19 Nr. 3: shell_preferences – eine Zeile je Nutzer (id = actor.id), lesen und schreiben nur die eigene.
@@ -1694,6 +1695,7 @@ export function createKernel(opts = {}) {
         // UUIDv8: first 128 SHA-256 bits, RFC variant/version bits normalized.
         const hash = key === undefined ? null : sha256Js(new TextEncoder().encode(`${appId}|${actor.id}|${key}`));
         const id = hash === null ? uuidv7() : `${hash.slice(0,8)}-${hash.slice(8,12)}-8${hash.slice(13,16)}-${((parseInt(hash[16],16)&3)|8).toString(16)}${hash.slice(17,20)}-${hash.slice(20,32)}`;
+        cmdSubmitFailed.delete(id);
         const write = localWrite(app, 'put', 'business_commands', id, {
           id, ...(commandOptions.record_id===undefined?{}:{record_id:commandOptions.record_id}),
           // §16.39 Nr. 3: Rückruf-Befehlstypen der auslösenden App als Felder am Befehlsdokument (Core-PR #848 liest sie dort)
@@ -1702,7 +1704,9 @@ export function createKernel(opts = {}) {
           type, payload, status: 'queued', app_id: appId, actor_id: actor.id, created_at: new Date().toISOString(),
           ...(commandOptions.target_app!==undefined ? {target_app:commandOptions.target_app} : !route.error && !route.platform && route.target!==appId ? {target_app:route.target} : {}),
         }, key !== undefined);
+        write.local.catch(error=>{cmdSubmitFailed.set(id,{status:'submit_failed',error:{code:error.code??'local_error',reason:error.message??String(error)},local_inserted:false});notify('commands');});
         const status = makeLive(['c:business_commands', 'commands'], () => {
+          if(cmdSubmitFailed.has(id))return cmdSubmitFailed.get(id);
           const d = visible(mirrorGet('business_commands', id));
           if (!d) {
             if (cmdRejected.has(id)) return { status: 'failed', error: cmdRejected.get(id) };
@@ -2611,8 +2615,8 @@ export function createKernel(opts = {}) {
       if(db.kind!=='indexeddb')throw new CtoxError('invalid','V3 takeover requires IndexedDB');
       await takeoverV3Database(db,opts.legacyDatabase,{instanceId,userId});
     }
-    // E48: trusted built-in platform publication; never replaces a Core catalog row.
-    const builtinPlatform = await db.tx(async t=>{
+    // E48.1: only the fake core owns a built-in catalog. Production consumes Core metadata.
+    const builtinPlatform = fakeCore ? await db.tx(async t=>{
       const existing = await t.get('docs',['business_apps','ctox-platform']);
       if (existing) return [];
       const rows = [
@@ -2626,6 +2630,15 @@ export function createKernel(opts = {}) {
         await putDoc(t,row);result.push(row);
       }
       return result;
+    }) : await db.tx(async t=>{
+      // Retire bootstrap rows left by older clients, but preserve every native catalog row.
+      for(const row of await t.all('docs'))if(row.collection==='business_app_versions'&&row.data?.app_id===PLATFORM_APP_ID&&row.data?.builtin===true){
+        await t.del('docs',[row.collection,row.id]);
+        const active=await t.get('docs',['business_apps',PLATFORM_APP_ID]);
+        if(active?.data?.active_ver===row.data.app_ver&&active.rev==null&&row.seq==='0')await t.del('docs',['business_apps',PLATFORM_APP_ID]);
+        await t.del('meta','activation:'+PLATFORM_APP_ID);
+      }
+      return [];
     });
     if (fakeCore) for (const row of builtinPlatform) if (!fakeCore.core.docs.has(fakeCore.key(row.collection,row.id))) await fakeCore.push(row.collection,[row.data]);
     await loadFromStorage();

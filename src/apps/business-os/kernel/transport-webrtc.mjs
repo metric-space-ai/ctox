@@ -252,9 +252,11 @@ export class WebRTCKernelTransport extends KernelTransport {
   if(app_id==='shell'){if(existing)return existing;throw new CtoxError('forbidden','Collection grant missing');}
   if(existing&&!renew)return existing;
   if(!renew&&this.grantFailures.has(app_id))throw this.grantFailures.get(app_id);
-  const done=deferred(),timer=setTimeout(()=>{this.grantRequests.delete(app_id);const error=new CtoxError('forbidden','Collection grant missing',{app_id});this.grantFailures.set(app_id,error);done.reject(error);},this.options.grantTimeoutMs??10000);
-  this.requestedApps.add(app_id);this.grantRequests.set(app_id,{...done,timer});
-  this.scheduler.send('control',{type:'scope.grant.request',app_id}).catch(error=>{clearTimeout(timer);this.grantRequests.delete(app_id);this.grantFailures.set(app_id,error);done.reject(error);});return done.promise;
+  const done=deferred(),pending={...done,timer:null};
+  this.requestedApps.add(app_id);this.grantRequests.set(app_id,pending);
+  this.scheduler.send('control',{type:'scope.grant.request',app_id}).then(()=>{
+   if(this.grantRequests.get(app_id)===pending)pending.timer=setTimeout(()=>{this.grantRequests.delete(app_id);const error=new CtoxError('forbidden','Collection grant missing',{app_id});this.grantFailures.set(app_id,error);done.reject(error);},this.options.grantTimeoutMs??10000);
+  },error=>{clearTimeout(pending.timer);this.grantRequests.delete(app_id);this.grantFailures.set(app_id,error);done.reject(error);});return done.promise;
  }
  async scope(collection){await this.ready;if(this.options.authSession)return this.options.authSession.scope(collection);const resolved=await this.options.resolveScope?.(collection,this.session);if(!resolved?.scope_hash || !Number.isSafeInteger(resolved.gen))throw new CtoxError('forbidden','Canonical subscription scope missing');return {...resolved,collection,epoch:this.session.epoch};}
  async subscribe(scope){await this.ready;const sub={...scope,epoch:this.session.epoch};decimalSeq(sub.checkpoint_seq??'0');this.scopes.set(scope.collection,sub);if(this.options.wireFormat==='k2-fixture')await this.scheduler.send('control',{type:'subscribe',...sub,checkpoint:sub.checkpoint_seq==='0'?null:{instance_id:this.identity.instanceId,participant:sub.participant??this.identity.userId,collection:sub.collection,scope_hash:sub.scope_hash,gen:sub.gen,epoch:String(this.session.epoch),seq:sub.checkpoint_seq}});
@@ -266,9 +268,11 @@ export class WebRTCKernelTransport extends KernelTransport {
  priority(hint){this.ready.then(()=>Promise.all(hint.collections.map(collection=>this.scheduler.send('control',{type:'priority',collection,priority:'P1'})))).catch(e=>this.events?.status?.('kernel',{level:'warn',code:'transport.priority',text:e.message}));}
  async request(type,body){
   await this.ready;if(this.closed)throw new CtoxError('unavailable','Transport closed');const request_id=uuidv7(),done=deferred();
-  const timer=setTimeout(()=>{this.pending.delete(request_id);done.reject(new CtoxError('unavailable','Transfer deadline exceeded'));},this.options.transferTimeoutMs??10000);
-  this.pending.set(request_id,{...done,timer});
-  this.scheduler.send('transfer',{type,request_id,...body}).catch(error=>{clearTimeout(timer);this.pending.delete(request_id);done.reject(error)});return done.promise;
+  const pending={...done,timer:null};this.pending.set(request_id,pending);
+  // A queued frame has no remote response deadline. Never recycle the peer for local queue time.
+  this.scheduler.send('transfer',{type,request_id,...body}).then(()=>{
+   if(this.pending.get(request_id)===pending)pending.timer=setTimeout(()=>{this.pending.delete(request_id);done.reject(new CtoxError('unavailable','Transfer deadline exceeded'));},this.options.transferTimeoutMs??10000);
+  },error=>{clearTimeout(pending.timer);this.pending.delete(request_id);done.reject(error)});return done.promise;
  }
  async download(ref,kind){
   const parts=[];let total=null,mime='application/octet-stream';

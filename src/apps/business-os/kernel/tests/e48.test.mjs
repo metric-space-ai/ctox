@@ -43,3 +43,20 @@ test('E48 read grants end with the session even though their audit persists',asy
  const reload=createStubKernel(opts);t.after(()=>reload.close());await reload.ready;
  await assert.rejects(reload.appApi('viewer','1').files.get({ref:file.ref}),e=>e.code==='forbidden');
 });
+
+
+test('E48.1 real kernel never publishes a platform catalog and writes the native active version',async t=>{
+ const {createKernel}=await import('../kernel.mjs');const {KernelTransport}=await import('../transport.mjs');
+ const {openBackend}=await import('../store-idb-v5.mjs');
+ class Core extends KernelTransport{async connect(_,events){this.events=events;events.link({state:'online'});}async write(entry){this.entry=entry;}}
+ const transport=new Core(),k=createKernel({instanceId:'real-catalog-'+process.pid,userId:'alice',storage:'memory',multiTab:false,latencyMs:0,transport});t.after(()=>k.close());await k.ready;
+ const db=await openBackend(k.dbName,'memory');
+ assert.equal((await db.all('docs')).some(r=>r.collection==='business_apps'&&r.id==='ctox-platform'),false,'real kernel must not publish a platform manifest');
+ const api=k.appApi('sender','99');const early=api.command('ctox.task.create',{});await assert.rejects(early.local,e=>e.code==='unavailable');await early.result;assert.equal(early.status.get().status,'submit_failed');assert.equal(early.status.get().local_inserted,false);
+ const page=(collection,data)=>transport.events.page({collection,epoch:'1',scope_hash:'local',gen:1,cursor_to:'0',complete:true,backlog:0,docs:data.map(doc=>({id:doc.id,seq:'0',rev:'native',body:doc}))});
+ await page('business_apps',[{id:'ctox-platform',active_ver:'platform-7'}]);
+ await page('business_app_versions',[{id:'ctox-platform@platform-7',manifest:{collections:{business_commands:{schema:{version:3,type:'object'}}},exports:{business_commands:['read','write']}}}]);
+ const h=api.command('ctox.task.create',{});await h.local;
+ for(let n=0;n<100&&!transport.entry;n++)await new Promise(r=>setTimeout(r,2));
+ assert.equal(transport.entry.schema_ver,3);assert.equal(transport.entry.app_ver,'platform-7');
+});

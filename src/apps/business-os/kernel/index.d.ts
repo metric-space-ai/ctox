@@ -89,11 +89,13 @@ export interface WriteHandle<Extra = {}> {
 }
 
 export type CommandState = {
-  status: 'queued' | 'accepted' | 'running' | 'done' | 'failed' | 'cancelled' | 'rejected';
+  status: 'queued' | 'accepted' | 'running' | 'done' | 'failed' | 'cancelled' | 'rejected' | 'submit_failed';
   progress?: number;
   result?: unknown;
-  error?: string;
+  error?: string | { code: string; reason: string };
+  local_inserted?: false;
 };
+/** submit_failed means local persistence failed; no command was submitted. */
 export interface CommandHandle {
   /** ID des Befehlsdokuments in `business_commands`. */
   id: string;
