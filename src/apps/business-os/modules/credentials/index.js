@@ -228,7 +228,7 @@ export function recordDetailHtml(entry) {
   rows.push(field(tr('field_source'), esc(sourceLabel(entry))));
   if (entry?.is_set && entry?.updated_at) rows.push(field(tr('field_updated'), esc(formatUpdated(entry.updated_at))));
   const deleteIcon = entry?.is_set
-    ? '<button type="button" class="ctox-pane-icon" data-action="delete" data-name="' + esc(name) + '" aria-label="' + esc(tr('btn_delete')) + '" title="' + esc(tr('btn_delete')) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg></button>'
+    ? '<button type="button" class="ctox-pane-icon" data-short-de="Löschen" data-action="delete" data-name="' + esc(name) + '" aria-label="' + esc(tr('btn_delete')) + '" title="' + esc(tr('btn_delete')) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg></button>'
     : '';
   return '<header class="cred-detail-head">'
     + '<div class="cred-detail-titles">'

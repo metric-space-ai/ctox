@@ -52,7 +52,7 @@
     "collections.schema.json": "14cd8313fd7fa19fd2e80ce6a226e5f7b6b16824b034914daa5b9b4d18321d19",
     "icon.svg": "da577c7cfa4604f7002cbb004a7be18eca5e00664914ba6b39e6247fe07b0e20",
     "index.css": "ffed2279ecab03a13d79920e8119cfc69ee53c6bbc2219d56b4202e6ddbeff95",
-    "index.html": "5c6bc907f36efbc96fddf45597709c579539a9da80b784870b3848eab997de2e",
+    "index.html": "c0e2baeceb8c1d27169f056ceff83f47584adad547707ebd8d92b05aaf992b48",
     "index.js": "ca9bdc5e2b12a2d0aade17efe76b207fec979bbfc9669e4cba2ca18bf8de949c",
     "locales/de.json": "8ab9b7c32aeccc8a3f6b1ff7c480431ec62a67fdad27c2e713d52f8a4b70e108",
     "locales/en.json": "bdda3f7c4dd8468ccd040eb0e023fdb5a015eb4ab317ea5f1c7f675e5efdc753",
@@ -264,7 +264,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "2c2499b488b4ee89887059738ee791a60063965080fad26636e7635c9fd40186",
+    "base_hash": "8cd301bc4942a49f6b017f9eeb1c6fe81d73f6c620863dd8bee9bceeec5f83aa",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

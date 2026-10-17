@@ -401,8 +401,8 @@
     "core/tariff.js": "4590d03e47212ed3c2eeee97f937e26df36f52669c88ad1b45f54fb2b9e8a4c7",
     "icon.svg": "d204d3a5db7c586f16e6c3e8226107bad9202c3e740db4d609ac75ac770599e4",
     "index.css": "3d2b55982c7d6d5b9db40b97202cbf748e2a0ce314e117ce3528cb9d5081bb9e",
-    "index.html": "b9a981ac4302f9c8baa7185139656883ddea02fdf1611929ffe7839dc9362356",
-    "index.js": "48199020c4247a4e937bbbc014420ef0d6dff0cca54b1abb699bd73a1aafc9c2",
+    "index.html": "7c33d614c393352942b9c6992e365c9518249e69b515620803d3a75540391a39",
+    "index.js": "0d752c563309b1bd614a0d154529663053a2060a2e76fdbbc35a1cc409a2ffe9",
     "locales/de.json": "2bbb317d55768b5a161e72073918acfbe733c051eab66af037b3e30f644cf0d2",
     "locales/en.json": "64c0d9d49d36220134dc07b2e9d333ca81f2916f45145b135d74a61fcdd50b7e",
     "module.json": "aaf623eee1d3fe10df63ccf20d6a059dbae71c70813448f3b1d2f663c3d761a5",
@@ -493,7 +493,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "7251df7ebc4883b5418d40318728d25db483fd2e380d453009874d9374cf0bd2",
+    "base_hash": "fb69ec0544e53d7335246ade90c75a1d4980e8acb1310757522415c81cf83ceb",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

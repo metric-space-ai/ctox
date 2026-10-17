@@ -1154,8 +1154,8 @@ function renderClarification(item) {
   const canResolve = !['resolved', 'cancelled'].includes(status);
   const missing = Array.isArray(item.missing_inputs) ? item.missing_inputs.join(', ') : '';
   const actions = [
-    canPublish ? `<button type="button" class="ctox-pane-icon" data-clarification-action="publish" data-clarification-id="${escapeAttr(item.clarification_id)}" aria-label="${escapeAttr(state.t('publishClarification', 'Geprüft senden'))}" title="${escapeAttr(state.t('publishClarification', 'Geprüft senden'))}">${iconSvg(ICON.publish)}</button>` : '',
-    canResolve ? `<button type="button" class="ctox-pane-icon" data-clarification-action="resolve" data-clarification-id="${escapeAttr(item.clarification_id)}" aria-label="${escapeAttr(state.t('resolveClarification', 'Antwort erfassen'))}" title="${escapeAttr(state.t('resolveClarification', 'Antwort erfassen'))}">${iconSvg(ICON.resolve)}</button>` : '',
+    canPublish ? `<button type="button" class="ctox-pane-icon" data-short-de="Senden" data-clarification-action="publish" data-clarification-id="${escapeAttr(item.clarification_id)}" aria-label="${escapeAttr(state.t('publishClarification', 'Geprüft senden'))}" title="${escapeAttr(state.t('publishClarification', 'Geprüft senden'))}">${iconSvg(ICON.publish)}</button>` : '',
+    canResolve ? `<button type="button" class="ctox-pane-icon" data-short-de="Antwort" data-clarification-action="resolve" data-clarification-id="${escapeAttr(item.clarification_id)}" aria-label="${escapeAttr(state.t('resolveClarification', 'Antwort erfassen'))}" title="${escapeAttr(state.t('resolveClarification', 'Antwort erfassen'))}">${iconSvg(ICON.resolve)}</button>` : '',
   ].filter(Boolean).join('');
   return `
     <article class="ctox-card" ${recordContextAttrs({

@@ -206,7 +206,7 @@ export async function mount(host, api, { restored } = {}) {
       + `<div class="esign-recipient-actions">`
       + `<button type="button" class="ctox-pane-icon" data-esign-move="up" aria-label="${escAttr(text.moveUp)}" title="${escAttr(text.moveUp)}"${i === 0 ? ' disabled' : ''}>${ICON_UP}</button>`
       + `<button type="button" class="ctox-pane-icon" data-esign-move="down" aria-label="${escAttr(text.moveDown)}" title="${escAttr(text.moveDown)}"${i === n - 1 ? ' disabled' : ''}>${ICON_DOWN}</button>`
-      + `<button type="button" class="ctox-pane-icon" data-esign-remove aria-label="${escAttr(text.remove)}" title="${escAttr(text.remove)}">${ICON_REMOVE}</button>`
+      + `<button type="button" class="ctox-pane-icon" data-short-de="Entfernen" data-esign-remove aria-label="${escAttr(text.remove)}" title="${escAttr(text.remove)}">${ICON_REMOVE}</button>`
       + '</div></li>').join('');
   }
   function onSignerPickerClick(event) {

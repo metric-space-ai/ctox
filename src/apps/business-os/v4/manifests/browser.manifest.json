@@ -543,7 +543,7 @@
     "handlers/web_stack.auth_assist.complete.js": "329a61254e0a141f416be5af55147ba28095e049fe54cd5b99aa7e5df119fa98",
     "icon.svg": "1d93361daa8125b7ecf09b0ac528afd907a3ff0755e3a989cd6ce8f2a42274d1",
     "index.css": "2f985c1a44b49075c34824da0715bec993b70d549395f7525722511e924d2cfc",
-    "index.html": "5e2d339ae0bd4c038c1663b3e9bac68479ac8b7649a40f5882a768ee0cb5e284",
+    "index.html": "83199e96478eb6e0e49abaef2e8bce36a0fecd7c51ce718a29070744f641213e",
     "index.js": "f9c9ee40b995c8e72d56177cd8c0ef414713b7928f057d32fed98148f1bf7f0e",
     "locales/de.json": "c4fb07795c02d2f14628c0b895eca38fcc122068febfa4ba5f36d8cf61c11ac0",
     "locales/en.json": "6ebac11f2f69a6a7a5d835180812cc22b965b8f0048961328eb06407635f817b",
@@ -721,7 +721,7 @@
   },
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "55f8eb8bc46e1f9682522c322d381c6a85f6ff70d210e25b49fa1eef1c3a9b87",
+    "base_hash": "5343c1d9cd9806a1da7cb83203d5889de7d957f310a55225c0721ea1fda792a2",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

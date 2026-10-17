@@ -3,6 +3,7 @@
 // Zustände nur in die Zustandszone (api.status). Fachlogik liegt in handlers/ (V4-HANDLERS.md).
 import { renderHtmlIfChanged } from 'ctox:shared/stable-dom.js';
 import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
+import { applyPaneIconLabels } from 'ctox:shared/pane-icon-labels.js';
 import { normalizeInternalDeepLink, sourceDeepLinkFor as buildSourceDeepLink, sourceFocusSupported } from './links.js';
 import { THREAD_COLLECTIONS, buildApprovalRequestPayload, buildNotePayload, splitUserIds } from './commands.js';
 import { isIdentifier, namingLookupIds, threadName } from './naming.js';
@@ -141,6 +142,8 @@ export async function mount(root, api, { restored } = {}) {
   root.innerHTML = await loadModuleMarkup();
   bindElements(root);
   autoWirePaneGrammar(root);
+  // Icon + Wort (workjet#801): Kurzwörter der Kopfknöpfe; der Rahmen blendet sie aus, wo der Kopf zu eng ist.
+  disposers.push(applyPaneIconLabels(root, state.lang).dispose);
   api.shell.setTitle('Threads');
   applyRestoredView(state.pendingRestore);
   applyLabels();
@@ -188,6 +191,7 @@ export async function mount(root, api, { restored } = {}) {
     if (lang === state.lang) return;
     state.lang = lang;
     applyLabels();
+    applyPaneIconLabels(root, lang);
     scheduleRender();
   }));
   disposers.push(api.shell.onRoute((event) => {

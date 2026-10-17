@@ -1883,7 +1883,7 @@ function renderLeft() {
           <h2 class="ctox-pane-title">${escapeHtml(state.t('knowledgeDashboards', 'Recherchen'))}</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon is-primary" data-action="new-task" aria-label="${escapeHtml(state.t('createResearch', 'Research anlegen'))}" title="${escapeHtml(state.t('createResearch', 'Research anlegen'))}">${iconSvg('plus')}</button>
+          <button type="button" class="ctox-pane-icon is-primary" data-short-de="Neu" data-action="new-task" aria-label="${escapeHtml(state.t('createResearch', 'Research anlegen'))}" title="${escapeHtml(state.t('createResearch', 'Research anlegen'))}">${iconSvg('plus')}</button>
         </div>
       </div>
     </header>
@@ -1990,7 +1990,7 @@ function renderCenter() {
                doppelt: die gleichnamige Schaltflaeche liegt IM Graphen und ist
                weg, sobald das Diagramm ausgeblendet wird. -->
           <button type="button"
-                  class="ctox-pane-icon is-primary"
+                  class="ctox-pane-icon is-primary" data-short-de="Research"
                   data-action="graph-ai"
                   data-graph-ai="research"
                   ${state.graph.busyAction ? 'disabled aria-disabled="true"' : ''}
@@ -2650,7 +2650,7 @@ function renderNoTaskCenter() {
           <h2 class="ctox-pane-title">${escapeHtml(state.t('evidenceWorkbench', 'Portfolio Map & Evidence Workbench'))}</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon is-primary" data-action="new-task" aria-label="${escapeHtml(state.t('createResearch', 'Research anlegen'))}" title="${escapeHtml(state.t('createResearch', 'Research anlegen'))}">${iconSvg('plus')}</button>
+          <button type="button" class="ctox-pane-icon is-primary" data-short-de="Neu" data-action="new-task" aria-label="${escapeHtml(state.t('createResearch', 'Research anlegen'))}" title="${escapeHtml(state.t('createResearch', 'Research anlegen'))}">${iconSvg('plus')}</button>
         </div>
       </div>
     </header>

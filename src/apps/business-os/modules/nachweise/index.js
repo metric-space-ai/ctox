@@ -219,7 +219,7 @@ export function recordDetailHtml(r, nowMs) {
     + '<strong class="nachweise-detail-name">' + esc(typeLabel(r.credential_type, locale)) + '</strong>'
     + '</div>'
     + '<div class="nachweise-detail-actions">'
-    + (r.subject_id ? '<button type="button" class="ctox-pane-icon" data-action="deploy-check" aria-label="' + esc(text.deployCheckRow) + '" title="' + esc(text.deployCheckRow) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 12l2 2 4-4"/><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/></svg></button>' : '')
+    + (r.subject_id ? '<button type="button" class="ctox-pane-icon" data-short-de="Prüfen" data-action="deploy-check" aria-label="' + esc(text.deployCheckRow) + '" title="' + esc(text.deployCheckRow) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 12l2 2 4-4"/><path d="M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z"/></svg></button>' : '')
     + '<button type="button" class="ctox-pane-icon" data-action="collapse-detail" aria-label="' + esc(text.closeDetail) + '" title="' + esc(text.closeDetail) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>'
     + '</div>'
     + '</header>'

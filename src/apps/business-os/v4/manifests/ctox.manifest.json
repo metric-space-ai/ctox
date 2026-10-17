@@ -3864,7 +3864,7 @@
     "icon.svg": "b0e39a31950163f74430e75f10e54946aa56b896a38c2e8d8bc069faf714fa20",
     "index.css": "7465020600d204abcd08096048753545bab6bdd8177add409b9ea102b064b8b5",
     "index.html": "e4ecc48f41fa232c52fe7c490d41418e85d826f183ac0c8e66ec98fbc501c0e8",
-    "index.js": "e330af0b869495c86600ee9f26650a910dc76df75dacad1dc037a269414ae65d",
+    "index.js": "3ea05a6bb8beaeae9737b7685d8de06a3e63c87ebebe8e0492931592bf59cfff",
     "locales/de.json": "0d3a6766c9f9002ded40e015c270e1fe09c5ae5c0e5079f3973848e92aad75d0",
     "locales/en.json": "515778d61cc570c1502bfb94fc6d046503be831a78522908bf1d9b5892895113",
     "module.json": "dc8917de377caa303b2b3c5b6578edc2dde25723dd27ec847edf0df9e7919047",
@@ -4183,7 +4183,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "75e037a13256e20b0b463485947bec0bd4417958c0cf5933247dcb992f2239cb",
+    "base_hash": "0afa738cc03a10668f10d0eb691c36b313a2666220f35881ebf8f2fa2c2ec27f",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

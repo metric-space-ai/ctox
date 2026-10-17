@@ -447,7 +447,7 @@
     "handlers/knowledge.view.window.js": "a911620fcc2dc879f5f1d481e2b6f4c759d9781b023f5d352a990196d4723bde",
     "icon.svg": "39331bc093f21f20296c5350c204a84bfaf0fa6b2de92c71f3220a30f47c58cd",
     "index.css": "ce63a75adf3effdea0e2286f52089a1e9ac72076c56369b50d652e440874d299",
-    "index.html": "0c59a4d2db16a8ef1f1824e8086854d6660058fe8881e708f9618eaf549daada",
+    "index.html": "b844123b6db55b0143d6c8b19922243ca7f9e7b75ddbf3b1b874c1ce0e1beb55",
     "index.js": "552b8ecc16c7036f29483e25d60867cadd76dd8dac097e04eb0fbaa7aec8d610",
     "locales/de.json": "43d63fe2b9f278b547072b6af2cc65f293b8c57e446a0686eeddc81a0b3593f1",
     "locales/en.json": "9a49ca5ae3e234165f69776172a052773383db762ec6c10d455b1328b6f7880a",
@@ -573,7 +573,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "e20e9960752f1c89bdf8cc3cd7b40f3d249a68baac902e3188bc4b7e87de6e75",
+    "base_hash": "dac768e212a1402f191b25c5fd63c260566ec615e2baa25dfe37f99053b05fe6",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

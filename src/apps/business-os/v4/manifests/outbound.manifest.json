@@ -1568,7 +1568,7 @@
     "icon.svg": "4e2de59b8083a3e9134cc49d2db6343c7f69bf381c03206d2a6560b4406573f6",
     "index.css": "eecc9985a9660ab8f08ba343c2bc19074863c8d2a485af8f0b6b7badbf4d8f2a",
     "index.html": "dbe6b817b1ae793a09e5c4d3b303b5de206512d468b52c9c344048a5a85d675a",
-    "index.js": "3d0e1951e314eaacf06822c8a26923a71207dd00cf3fc2388f6304c113d8fa0c",
+    "index.js": "3faede3edacc08d1d9a4d66b6deda20fa7e5081f094f319617ca29a59a16b491",
     "locales/de.json": "154bd5d38712d0fa26bb746ba770e38cec6961fa30258f44703472ec83acc8d6",
     "locales/en.json": "2baeb3b29bc91ff57d20b558e9a8f2b3c722eff7be369b11ea775d5587c7cbd5",
     "module.json": "e91b6e57aa83655c88ad09f1e0499c8980b96596f3d431b0d0d406f2059db6c5",
@@ -2008,7 +2008,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "4a93ed0ce5adf4f9a2a6cbd4567cadb70c4c872cee7fe38eac457aed2f0f84df",
+    "base_hash": "b3f1a444fe49f7fedef4a1b05b1f4204496e6863127d9ae6964e38e0ff16e280",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

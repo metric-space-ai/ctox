@@ -12,10 +12,13 @@
 // Idempotent über die DOM-Marke data-pg-wired: Panes, die die App selbst verdrahtet hat, bleiben unangetastet
 // (gleicher Griff pane.__ctoxPaneGrammar, keine doppelten Listener).
 //
+// Icon + Wort (workjet#801): derselbe Lebenszyklus setzt die Kurzwörter der Knöpfe mit data-short-de/-en
+// (shared/pane-icon-labels.js, locale aus dem Kern) und nimmt sie beim Abbau wieder ab.
+//
 // Persistenz: kernel.windowState je Fenster und App unter `cols:<app>:<fenster>` = {app, widths: {cssVar: px}}.
 // Zusätzlich die zuletzt gezogene Breite je App unter `cols:<app>` als Startwert für neue Fenster derselben App.
 //
-//   createColumnResizers({ appId, windowId, windowState }) → {
+//   createColumnResizers({ appId, windowId, windowState, locale }) → {
 //     attach(root)   nach jedem mount: gespeicherte Breiten vor dem ersten Bild setzen, Griffe + Grammatik verdrahten, beobachten
 //     detach()       vor unmount / bei destroy: Griffe lösen, Beobachter trennen
 //     widths()       aktuelle Breiten (Test)
@@ -27,13 +30,15 @@ import { CtoxResizer } from '../../shared/resizer.js';
 import { autoWirePaneGrammar } from '../../shared/pane-grammar.js';
 import { createPaneHeadSync } from '../frame/pane-heads.js';
 import { createPaneNarrow } from '../frame/pane-narrow.js';
+import { applyPaneIconLabels } from '../../shared/pane-icon-labels.js';
 
 const HANDLE = '.ctox-column-resizer[data-resizer-var], .ctox-row-resizer[data-resizer-var]';
 const SIDES = ['left', 'right', 'top', 'bottom'];
 // Was eine (neue) Grammatik-Pane ankündigt; autoWirePaneGrammar prüft danach selbst .ctox-pane + Marke.
 const GRAMMAR = '.ctox-pane, [data-pg-search], [data-pg-tray-toggle], [data-pg-view], [data-pg-band]';
 
-export function createColumnResizers({ appId, windowId, windowState }) {
+export function createColumnResizers({ appId, windowId, windowState, locale }) {
+  let labels = null;
   const winKey = `cols:${appId}:${windowId}`;
   const appKey = `cols:${appId}`;
   let widths = {};
@@ -104,8 +109,12 @@ export function createColumnResizers({ appId, windowId, windowState }) {
       observer.observe(appRoot, { childList: true, subtree: true });
       heads.attach(appRoot);
       narrow.attach(appRoot);
+      // Icon + Wort (workjet#801): Kurzwörter aus data-short-de/-en, nur wo Platz ist (shared/pane-icon-labels.js).
+      labels = applyPaneIconLabels(appRoot, typeof locale === 'function' ? locale() : locale);
     },
     detach() {
+      labels?.dispose();
+      labels = null;
       narrow.detach();
       heads.detach();
       observer?.disconnect();

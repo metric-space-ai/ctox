@@ -944,7 +944,7 @@ function renderStageHead(state, item) {
   if (title) title.textContent = displayCandidateName(model);
   if (actions) {
     actions.innerHTML = `
-      <button class="ctox-pane-icon${model.print?.anonymize ? ' is-active' : ''}" type="button" data-cv-toggle-anon title="${escapeAttr(tr('Anonymisieren', 'Anonymize'))}" aria-label="${escapeAttr(tr('Anonymisieren', 'Anonymize'))}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconEyeOff()}</button>
+      <button class="ctox-pane-icon${model.print?.anonymize ? ' is-active' : ''}" data-short-de="Anonymisieren" type="button" data-cv-toggle-anon title="${escapeAttr(tr('Anonymisieren', 'Anonymize'))}" aria-label="${escapeAttr(tr('Anonymisieren', 'Anonymize'))}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconEyeOff()}</button>
       <button class="ctox-pane-icon${model.print?.showLogo ? ' is-active' : ''}" type="button" data-cv-logo-control title="${escapeAttr(model.print?.logoDataUrl ? tr('Logo anzeigen', 'Show logo') : tr('Logo wählen', 'Choose logo'))}" aria-label="${escapeAttr(model.print?.logoDataUrl ? tr('Logo anzeigen', 'Show logo') : tr('Logo wählen', 'Choose logo'))}" ${controlsDisabled || approved ? 'disabled' : ''}>${iconImage()}</button>
       <button class="ctox-pane-icon is-primary" type="button" data-cv-action title="${escapeAttr(action.title)}" aria-label="${escapeAttr(action.title)}" ${phase === 'parsing' ? 'disabled' : ''}>${action.icon}</button>
       <button class="ctox-pane-icon" type="button" data-toggle-stage title="${escapeAttr(tr('Bühne ausblenden', 'Hide stage'))}" aria-label="${escapeAttr(tr('Bühne ausblenden', 'Hide stage'))}" aria-pressed="false">${iconCollapse()}</button>

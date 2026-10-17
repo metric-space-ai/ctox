@@ -923,8 +923,8 @@
     "handlers/ctox.iot.widget.upsert.js": "91f5142de9e2d4121bc5694a8f1ffeadd0f5b4adcd9914be407312c30a1cddb4",
     "icon.svg": "03d06470cf66ed52fc302cddff34cfb318efe1a4fb34e7ee5edd38158a716562",
     "index.css": "1702ef0f550f82da62fec239e14b183147ac28770b283a9ee5b70c4d479842c4",
-    "index.html": "c834cc84726633f158f4a7e4fd46172eaa62f2d8617d0229a65dd9204416671b",
-    "index.js": "21e210fe2e07eacdf11d4e06f1823a364ba80c0f95501f75a408db3fb82d1892",
+    "index.html": "b56a760f15393c8119dc829cd53e8e56c8605286f0f38d092d34cb54ace6cb97",
+    "index.js": "2f1f2767058703401559bb9bd5829b397d089056c98a08e9ce903d987ad0e7a7",
     "locales/de.json": "330fd0211cec86c4959af0e52a0695f2dbbc2645c779d3cbc588b48425606d62",
     "locales/en.json": "3f22ee58ca6d27d1fafd91e6dc0e9f7b0ccfcbc5980073e40d4d965e73b840cc",
     "module.json": "6f25c4c1126f525459c9b6b83c2da014f1a4ec6d8c7ae0ecb6c2254a8f40998c",
@@ -1006,7 +1006,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "6cc885c7da50426ff20334f80688864098f65b668d31a0e47fa41995bb348526",
+    "base_hash": "e66ed66b2f94373f91e5a9aeeef0bbf240e1d87d8dfe0066449781647fb6c32d",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

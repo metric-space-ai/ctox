@@ -5224,7 +5224,7 @@ function renderRequirementSelector() {
           <span>${escapeHtml(source.name || 'Quelle')} · ${escapeHtml(location)} · ${matchCount} Match${matchCount === 1 ? '' : 'es'}</span>
         </div>
         <div class="matching-row-actions">
-          <button type="button" class="ctox-pane-icon" data-delete-requirement aria-label="Anforderung löschen" title="Anforderung löschen">${actionIcon('trash')}</button>
+          <button type="button" class="ctox-pane-icon" data-short-de="Löschen" data-delete-requirement aria-label="Anforderung löschen" title="Anforderung löschen">${actionIcon('trash')}</button>
         </div>`;
       const select = () => selectRequirementInPlace(requirement.id, source.id);
       row.addEventListener('click', (event) => {
@@ -5320,7 +5320,7 @@ function renderMatchWorkbench() {
         <div class="matching-score ${score == null ? 'is-unscored' : ''}" data-match-key="${escapeHtml(key(requirement.id, object.id))}">${score == null ? '—' : `${score}%`}</div>
         <div class="matching-row-actions">
           <button type="button" class="ctox-pane-icon" data-open-notes aria-label="Notizen und Fortschritt" title="Notizen und Fortschritt">${actionIcon('file')}</button>
-          <button type="button" class="ctox-pane-icon" data-remove-match aria-label="Match entfernen" title="Match entfernen">${actionIcon('trash')}</button>
+          <button type="button" class="ctox-pane-icon" data-short-de="Entfernen" data-remove-match aria-label="Match entfernen" title="Match entfernen">${actionIcon('trash')}</button>
         </div>`;
       const select = () => selectCandidateInPlace(requirement.id, object.id);
       row.addEventListener('click', (event) => {

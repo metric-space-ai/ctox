@@ -174,7 +174,7 @@
     "handlers/ats.interview.transcribe.js": "93abb692d07018adac8430ecd0476d83314d451a2e571e63f592d6c2fe169dab",
     "icon.svg": "1df8cdafb7fedf6d27b036a70cd78f5f5bd38637ff864da43d9f85efb4e2a4fe",
     "index.css": "ab805699115a3be43d9e47449ae7dae9d695219962133da0a44928c7e4cbe156",
-    "index.html": "ddb09a541f0120260697c6b91f03a3415c6833f4b54e591039a7f70012057b15",
+    "index.html": "f30077fd0ed3559631b77a8d42cb073af5fee140b7de387a5eb88a18fdd1fc1d",
     "index.js": "6ef75480ca688b8a58ce2efa4e9df5374895af58ff6e313f1ebaf2abcf90d6dc",
     "locales/de.json": "d5b48d83a96f380e0e491289e5978f2a5860b1d0ce9d6dacc8ffb887500301ec",
     "locales/en.json": "912e05a46f89804bc6bd36534cde85b510182786167224b20370ca83c9e3499b",
@@ -435,7 +435,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "145251ba82af150b9221044e2191cb202cc8a238130e227c39e1a89729712308",
+    "base_hash": "5daf46f84f4b41b20607f2db2a46d5b213898d1e9c4afbb9dff7dd48e128636d",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

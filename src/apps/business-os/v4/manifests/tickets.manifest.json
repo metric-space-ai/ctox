@@ -462,8 +462,8 @@
     "handlers/ctox.ticket.writeback_transition.js": "a6e1d9e394385c25b2c25481484014d1b0229c40ae3c9fff3c22f5862ae08744",
     "icon.svg": "02242294f8dcf18e332f3a63e8b422264ae14b507b83ffe670ddc3175ccde327",
     "index.css": "f9afe2adb0c7b398800c2733a0cdbb40979b38fe57111c9ac731185bf516eba0",
-    "index.html": "17ef45d04e73fa3e6fd8986da31a86305fc7ced47533179d55cc808bc153b67a",
-    "index.js": "77431ab9edf5380bbfdf015af81bdabc130ca946b91e10203125f9119f6a7805",
+    "index.html": "b05ce9ba03c9757f90ca17c556e17d00c22e2a2a348590b4ff7d4e4cde432b92",
+    "index.js": "d6e90cbdc146351cbdc4f4a9b8c87aae42c9d8e0acbacc96af9574b21e0bf90a",
     "locales/de.json": "ef3ea6b126608be2a9eb95ea8ed9a903b1ada7a55b785f11ac8fcea1252e8e6a",
     "locales/en.json": "7ad202c9e6cbe8c6f77ad33db59e03a314228fccb509925a87dc54367aaebde0",
     "module.json": "4ad2041748546b6233dd38c62ac53e3e1239ed612c2fad3433b19ab506e1ddd5",
@@ -603,7 +603,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "ed6847a167212139173b366a2734d9bb08ef75a3e3f6ad1a9b2f8f46d55b28d9",
+    "base_hash": "e278bd2e9ddd544157c79bc98b9bc507e020aaae1264de33b38f7edea70176ab",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

@@ -298,8 +298,8 @@
     "handlers/research.systematic.run.js": "1cd3014f36fa0fd322be285274e1cdfb009c48a62ae21ebc55fb730dd9843ad1",
     "icon.svg": "2d8b8ef72e461476f16ddd2cba18ead04097970c06bd0fe4594254650a6a3f7a",
     "index.css": "150e49cd3fcceb10a1dd47585b2438b538f10c99c9c43382125e1036e0ff8572",
-    "index.html": "25f868d023f9ac56d329d88c0df53247094d5cb600e8faef8673ceba0709c7e6",
-    "index.js": "68214f9e8b5daafd09f63ae7a7c395a4dd6e6d15704f7cada1626b1a4b4eef89",
+    "index.html": "a809622d86bafef5d9af76bc24632628d8e488caec80de0591d056288d746bb3",
+    "index.js": "8fd5053ccdef75e50cd4a0af39c68b06a508f120dfbf40f7c9186ee291e3d4ff",
     "locales/de.json": "cd71d3819ba3e17d7ba944d1d6256dcc6fe09983dd4bb7e6aa2fdaa486414562",
     "locales/en.json": "dfe78bce15c01f0413162edc264ca10dcd229623a873c8a38fd6daab5cc98f65",
     "module.json": "cb7c1e9e8fa99ecc6ab3ad3165639d6f06a8c360a0332d0db9928b79b843956d",
@@ -576,7 +576,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "ad3eafdf28c2647dbb8ed30c2bb118fe49147e619304257d3b6d02a89769f41d",
+    "base_hash": "58a12a122475b2e819db300a6d973c20a3dae97f139f2cee5ac548495b266bfa",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

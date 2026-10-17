@@ -357,7 +357,7 @@
     "handlers/spreadsheet.summarize.js": "c2230157bafaca68789d6df0c9555f1ab2cd6d9a1e398ca55368944a29ea2531",
     "icon.svg": "d5b5698068703e2a2268052bf3c3e02387a8caa9a9ac9a35759209f5c1d07d50",
     "index.css": "0fc23e70f160dfb8d03ef9746bba20743faee70f5641e3e4dbfcc883ee9350c0",
-    "index.html": "66b82c3b1467f1b8a941721c564e94b2f781597d8bb016328d14ac49858da594",
+    "index.html": "3372f68cf9fadb26db1c1e1f4f3fbb00769a360ee2fda1dd6d274d637d956897",
     "index.js": "3f36eb09b67619ad28f7175e2599acc27b71d31cd91bffc66b77c9f64dae55aa",
     "locales/de.json": "8e75baee02efa036b5dc2b93fbce19a766a866f7fa8bb4b61d3632594b728afc",
     "locales/en.json": "bf081b1f4c1dc0a1125abb79d05c88a63385534de01fe7b3a796a86ee85f6e67",
@@ -542,7 +542,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "01643dd0c07e3156920193026dd99865cd5d6e3a7529658dfc4b4b3c857f7a5b",
+    "base_hash": "082f2a23b07202854ca93ed559d16930b201216f716ff4c1fa6ad17610cb0f9e",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },
