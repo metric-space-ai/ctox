@@ -4398,3 +4398,83 @@ mod queue_task_projection_clock_tests {
         fs::remove_dir_all(root).expect("remove temp root");
     }
 }
+
+// Owned ACKs receive a fenced non-secret runtime snapshot; the current
+// owner-profile rows are read from the same Core transaction.
+pub(super) fn protected_founder_inbound_message_with_settings(
+    conn: &Connection,
+    message_key: &str,
+    settings: Option<&BTreeMap<String, String>>,
+) -> Result<bool> {
+    let Some((channel, direction, sender_address)) = conn
+        .query_row(
+            r#"
+            SELECT channel, direction, sender_address
+            FROM communication_messages
+            WHERE message_key = ?1
+            LIMIT 1
+            "#,
+            params![message_key],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .optional()?
+    else {
+        return Ok(false);
+    };
+    if channel != "email" || direction != "inbound" {
+        return Ok(false);
+    }
+    let settings = settings.context("email ACK requires a current runtime policy snapshot")?;
+    let policy = classify_email_sender(settings, &sender_address);
+    Ok(matches!(
+        policy.role.as_str(),
+        "owner" | "founder" | "admin"
+    ))
+}
+
+pub(super) fn guard_founder_handled_ack_with_settings(
+    conn: &Connection,
+    message_keys: &[String],
+    status: &str,
+    settings: Option<&BTreeMap<String, String>>,
+) -> Result<()> {
+    if status != "handled" {
+        return Ok(());
+    }
+    let mut settings = settings.cloned();
+    if let Some(settings) = settings.as_mut() {
+        super::merge_owner_profile_settings_in_connection(conn, settings)?;
+    }
+    for message_key in message_keys {
+        if !protected_founder_inbound_message_with_settings(conn, message_key, settings.as_ref())? {
+            continue;
+        }
+        if founder_reply_sent_after_review(conn, message_key)? {
+            continue;
+        }
+        // Bug #1: an auto-submitted (RFC 3834) founder/owner/admin
+        // mail does not require a reviewed reply. The structured
+        // header marker is checked at ingestion time and persisted
+        // into metadata_json; we only consult the structured field
+        // here, never subject/body strings.
+        if message_metadata_marks_auto_submitted(conn, message_key)? {
+            continue;
+        }
+        // Bug #3: an explicit terminal NO-SEND verdict closes the
+        // inbound without a reply.
+        if message_has_terminal_no_send_in_conn(conn, message_key)? {
+            continue;
+        }
+        anyhow::bail!(
+            "cannot mark founder/owner/admin inbound mail as handled before an exact reviewed reply was accepted by the email adapter: {}",
+            message_key
+        );
+    }
+    Ok(())
+}

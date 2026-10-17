@@ -14,6 +14,22 @@ use rxdb::{
 };
 use std::{io, panic::AssertUnwindSafe, sync::Arc, time::Duration};
 
+/// Preserve the typed transport/setup cause while identifying the lifecycle
+/// phase that failed. Callers must not mistake a rejected bring-up for a live
+/// session or lose the underlying RxDB error when reporting startup failure.
+#[derive(Debug)]
+struct BringupFailure(rxdb::rx_error::RxError);
+impl std::fmt::Display for BringupFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "native sync bring-up failed: {}", self.0)
+    }
+}
+impl std::error::Error for BringupFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(&self.0)
+    }
+}
+
 pub type NativePool = Arc<RxWebRTCReplicationPool<WebRTCRsConnectionHandler>>;
 pub use rxdb::plugins::replication_webrtc::NativePeerRole;
 pub type SignalingUrls = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
@@ -359,7 +375,7 @@ impl NativeSyncSession {
                     data_client,
                 })
             }
-            Ok(Ok(Err(error))) => io::Error::other(error),
+            Ok(Ok(Err(error))) => io::Error::other(BringupFailure(error)),
             Ok(Err(_)) => io::Error::other("native sync bring-up panicked"),
             Err(_) => io::Error::new(
                 io::ErrorKind::TimedOut,

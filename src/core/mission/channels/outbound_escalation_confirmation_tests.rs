@@ -48,14 +48,10 @@ fn founder_escalation_chat_receipts_keep_their_existing_send_semantics() {
 
 #[test]
 fn founder_escalation_never_self_approves_or_completes_request() {
-    let root = std::env::temp_dir().join(format!(
-        "ctox-escalation-confirmation-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    crate::persistence::test_support::run_scoped(move || {
+    let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+let root = owner_root.path().to_path_buf();
+crate::persistence::test_support::with_queue(&root.clone(), move || {
     std::fs::create_dir_all(&root).unwrap();
     let db_path = resolve_db_path(&root, None);
     std::fs::create_dir_all(db_path.parent().unwrap()).unwrap();
@@ -262,6 +258,12 @@ fn founder_escalation_never_self_approves_or_completes_request() {
     assert_eq!(serde_json::from_str::<Value>(&stored).unwrap(), receipt);
     drop(conn);
     std::fs::remove_dir_all(root).unwrap();
+
+Ok(())
+
+})
+
+}).unwrap();
 }
 
 #[test]

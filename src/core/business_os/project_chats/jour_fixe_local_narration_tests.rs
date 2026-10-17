@@ -101,233 +101,257 @@ fn copies(root: &Path) -> anyhow::Result<i64> {
 }
 #[test]
 fn real_owner_wav_is_copied_with_exact_duration_hash_and_local_provenance() -> anyhow::Result<()> {
-    let (root, t, p) = fixture()?;
-    let result = send(root.path(), "publish", "owner", &t, p.clone())?;
-    assert_eq!(result["status"], "completed", "{result}");
-    let r = &result["result"]["local_narration"];
-    let _: wire::LocalNarrationReceipt = serde_json::from_value(r.clone())?;
-    assert_eq!(r["provider_verified"], false);
-    assert_eq!(r["provenance"], "authenticated_owner_local_audio");
-    assert_eq!(r["audio"]["sha256"], p["audio_sha256"]);
-    assert_eq!(r["audio"]["duration_ms"], 2000);
-    assert_ne!(r["audio"]["file_id"], "upload");
-    assert_eq!(r["audio"]["model"], "owner-uploaded-local-audio");
-    assert_eq!(r["audio"]["synthesis_duration_ms"], 0);
-    assert_eq!(saved(root.path())?["state"], "ready");
-    assert_eq!(copies(root.path())?, 1);
-    let file_id = r["audio"]["file_id"].as_str().context("native file")?;
-    let doc = store::rxdb_desktop_file_document(root.path(), file_id)?;
-    assert_eq!(doc["content_hash"], sha(&wav()));
-    let db = Connection::open(store::rxdb_store_path(root.path()))?;
-    db.execute("DELETE FROM ctox_business_os__desktop_file_chunks__v0 WHERE json_extract(data,'$.file_id')='upload'",[])?;
-    db.execute(
-        "DELETE FROM ctox_business_os__desktop_files__v0 WHERE id='upload'",
-        [],
-    )?;
-    let replay = send(root.path(), "replay", "owner", &t, p.clone())?;
-    assert_eq!(replay["result"], result["result"]);
-    let recovered =
-        command_plane::recover_applied_domain_effect_for_intake(root.path(), "publish")?
-            .context("native recovery")?;
-    assert_eq!(recovered["result"], result["result"]);
-    assert_eq!(saved(root.path())?["revision"], 1);
-    assert_eq!(copies(root.path())?, 1);
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let (root, t, p) = fixture()?;
+        let result = send(root.path(), "publish", "owner", &t, p.clone())?;
+        assert_eq!(result["status"], "completed", "{result}");
+        let r = &result["result"]["local_narration"];
+        let _: wire::LocalNarrationReceipt = serde_json::from_value(r.clone())?;
+        assert_eq!(r["provider_verified"], false);
+        assert_eq!(r["provenance"], "authenticated_owner_local_audio");
+        assert_eq!(r["audio"]["sha256"], p["audio_sha256"]);
+        assert_eq!(r["audio"]["duration_ms"], 2000);
+        assert_ne!(r["audio"]["file_id"], "upload");
+        assert_eq!(r["audio"]["model"], "owner-uploaded-local-audio");
+        assert_eq!(r["audio"]["synthesis_duration_ms"], 0);
+        assert_eq!(saved(root.path())?["state"], "ready");
+        assert_eq!(copies(root.path())?, 1);
+        let file_id = r["audio"]["file_id"].as_str().context("native file")?;
+        let doc = store::rxdb_desktop_file_document(root.path(), file_id)?;
+        assert_eq!(doc["content_hash"], sha(&wav()));
+        let db = Connection::open(store::rxdb_store_path(root.path()))?;
+        db.execute("DELETE FROM ctox_business_os__desktop_file_chunks__v0 WHERE json_extract(data,'$.file_id')='upload'",[])?;
+        db.execute(
+            "DELETE FROM ctox_business_os__desktop_files__v0 WHERE id='upload'",
+            [],
+        )?;
+        let replay = send(root.path(), "replay", "owner", &t, p.clone())?;
+        assert_eq!(replay["result"], result["result"]);
+        let recovered =
+            command_plane::recover_applied_domain_effect_for_intake(root.path(), "publish")?
+                .context("native recovery")?;
+        assert_eq!(recovered["result"], result["result"]);
+        assert_eq!(saved(root.path())?["revision"], 1);
+        assert_eq!(copies(root.path())?, 1);
+        Ok(())
+    })
 }
 #[test]
 fn every_slide_requires_real_audio_before_ready_and_new_operations_do_not_overwrite(
 ) -> anyhow::Result<()> {
-    let (root, t, p) = fixture()?;
-    change(root.path(), |v| {
-        let mut slide = v["slides"][0].clone();
-        slide["id"] = json!("slide-2");
-        slide["position"] = json!(1);
-        v["slides"].as_array_mut().unwrap().push(slide);
-    })?;
-    let first = send(root.path(), "first", "owner", &t, p.clone())?;
-    assert_eq!(first["status"], "completed", "{first}");
-    assert_eq!(saved(root.path())?["state"], "preparing");
-    let mut q = p.clone();
-    q["operation_id"] = json!("overwriting");
-    q["expected_revision"] = json!(1);
-    rejected(send(root.path(), "overwrite", "owner", &t, q));
-    assert_eq!(copies(root.path())?, 1);
-    let mut q = p;
-    q["operation_id"] = json!("second-op");
-    q["slide_id"] = json!("slide-2");
-    q["expected_revision"] = json!(1);
-    let second = send(root.path(), "second", "owner", &t, q)?;
-    assert_eq!(second["status"], "completed", "{second}");
-    assert_eq!(saved(root.path())?["state"], "ready");
-    assert_eq!(copies(root.path())?, 2);
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let (root, t, p) = fixture()?;
+        change(root.path(), |v| {
+            let mut slide = v["slides"][0].clone();
+            slide["id"] = json!("slide-2");
+            slide["position"] = json!(1);
+            v["slides"].as_array_mut().unwrap().push(slide);
+        })?;
+        let first = send(root.path(), "first", "owner", &t, p.clone())?;
+        assert_eq!(first["status"], "completed", "{first}");
+        assert_eq!(saved(root.path())?["state"], "preparing");
+        let mut q = p.clone();
+        q["operation_id"] = json!("overwriting");
+        q["expected_revision"] = json!(1);
+        rejected(send(root.path(), "overwrite", "owner", &t, q));
+        assert_eq!(copies(root.path())?, 1);
+        let mut q = p;
+        q["operation_id"] = json!("second-op");
+        q["slide_id"] = json!("slide-2");
+        q["expected_revision"] = json!(1);
+        let second = send(root.path(), "second", "owner", &t, q)?;
+        assert_eq!(second["status"], "completed", "{second}");
+        assert_eq!(saved(root.path())?["state"], "ready");
+        assert_eq!(copies(root.path())?, 2);
+        Ok(())
+    })
 }
 #[test]
 fn foreign_peer_and_client_provider_owner_duration_claims_are_rejected() -> anyhow::Result<()> {
-    let (root, t, p) = fixture()?;
-    let foreign = token(root.path(), "foreign")?;
-    rejected(send(root.path(), "foreign", "foreign", &foreign, p.clone()));
-    for (key, value) in [
-        ("owner_user_id", json!("owner")),
-        ("model", json!("Apple")),
-        ("provider_verified", json!(true)),
-        ("duration_ms", json!(1)),
-        ("source_run_id", json!("fake-gateway")),
-    ] {
-        let mut q = p.clone();
-        q[key] = value;
-        rejected(send(root.path(), key, "owner", &t, q));
-    }
-    assert_eq!(copies(root.path())?, 0);
-    assert_eq!(saved(root.path())?["revision"], 0);
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let (root, t, p) = fixture()?;
+        let foreign = token(root.path(), "foreign")?;
+        rejected(send(root.path(), "foreign", "foreign", &foreign, p.clone()));
+        for (key, value) in [
+            ("owner_user_id", json!("owner")),
+            ("model", json!("Apple")),
+            ("provider_verified", json!(true)),
+            ("duration_ms", json!(1)),
+            ("source_run_id", json!("fake-gateway")),
+        ] {
+            let mut q = p.clone();
+            q[key] = value;
+            rejected(send(root.path(), key, "owner", &t, q));
+        }
+        assert_eq!(copies(root.path())?, 0);
+        assert_eq!(saved(root.path())?["revision"], 0);
+        Ok(())
+    })
 }
 #[test]
 fn missing_corrupt_stale_generation_and_foreign_owner_uploads_never_publish() -> anyhow::Result<()>
 {
-    for mode in ["missing", "corrupt", "generation", "owner", "oversized"] {
-        let (root, t, p) = fixture()?;
-        let db = Connection::open(store::rxdb_store_path(root.path()))?;
-        match mode {
-            "missing" => {
-                db.execute(
+    crate::persistence::test_support::run_scoped(move || {
+        for mode in ["missing", "corrupt", "generation", "owner", "oversized"] {
+            let (root, t, p) = fixture()?;
+            let db = Connection::open(store::rxdb_store_path(root.path()))?;
+            match mode {
+                "missing" => {
+                    db.execute(
                     "DELETE FROM ctox_business_os__desktop_file_chunks__v0 WHERE id LIKE '%000000'",
                     [],
                 )?;
+                }
+                "corrupt" => {
+                    db.execute("UPDATE ctox_business_os__desktop_file_chunks__v0 SET data=json_set(data,'$.data','corrupt') WHERE id LIKE '%000000'",[])?;
+                }
+                "generation" => {
+                    db.execute("UPDATE ctox_business_os__desktop_files__v0 SET data=json_set(data,'$.content_generation_id','stale')",[])?;
+                }
+                "owner" => {
+                    db.execute("UPDATE ctox_business_os__desktop_files__v0 SET data=json_set(data,'$.owner_id','foreign')",[])?;
+                }
+                _ => {
+                    db.execute("UPDATE ctox_business_os__desktop_files__v0 SET data=json_set(data,'$.size_bytes',8388609)",[])?;
+                }
             }
-            "corrupt" => {
-                db.execute("UPDATE ctox_business_os__desktop_file_chunks__v0 SET data=json_set(data,'$.data','corrupt') WHERE id LIKE '%000000'",[])?;
-            }
-            "generation" => {
-                db.execute("UPDATE ctox_business_os__desktop_files__v0 SET data=json_set(data,'$.content_generation_id','stale')",[])?;
-            }
-            "owner" => {
-                db.execute("UPDATE ctox_business_os__desktop_files__v0 SET data=json_set(data,'$.owner_id','foreign')",[])?;
-            }
-            _ => {
-                db.execute("UPDATE ctox_business_os__desktop_files__v0 SET data=json_set(data,'$.size_bytes',8388609)",[])?;
-            }
+            rejected(send(root.path(), mode, "owner", &t, p));
+            assert_eq!(copies(root.path())?, 0);
+            assert_eq!(saved(root.path())?["state"], "preparing");
         }
-        rejected(send(root.path(), mode, "owner", &t, p));
-        assert_eq!(copies(root.path())?, 0);
-        assert_eq!(saved(root.path())?["state"], "preparing");
-    }
-    Ok(())
+        Ok(())
+    })
 }
 #[test]
 fn malformed_wav_has_no_duration_attestation() {
-    let valid = wav();
-    assert_eq!(
-        super::super::jour_fixe_local_narration::wav_duration(&valid).unwrap(),
-        2000
-    );
-    for mode in ["truncated", "size", "format", "rate", "frames", "data"] {
-        let mut v = valid.clone();
-        match mode {
-            "truncated" => {
-                v.truncate(20);
-            }
-            "size" => v[4] = 0,
-            "format" => v[20] = 7,
-            "rate" => v[24] = 0,
-            "frames" => v[40] = 255,
-            _ => v[36] = b'x',
-        };
-        assert!(
-            super::super::jour_fixe_local_narration::wav_duration(&v).is_err(),
-            "{mode}"
+    crate::persistence::test_support::run_scoped(move || {
+        let valid = wav();
+        assert_eq!(
+            super::super::jour_fixe_local_narration::wav_duration(&valid).unwrap(),
+            2000
         );
-    }
+        for mode in ["truncated", "size", "format", "rate", "frames", "data"] {
+            let mut v = valid.clone();
+            match mode {
+                "truncated" => {
+                    v.truncate(20);
+                }
+                "size" => v[4] = 0,
+                "format" => v[20] = 7,
+                "rate" => v[24] = 0,
+                "frames" => v[40] = 255,
+                _ => v[36] = b'x',
+            };
+            assert!(
+                super::super::jour_fixe_local_narration::wav_duration(&v).is_err(),
+                "{mode}"
+            );
+        }
+
+        Ok(())
+    })
+    .unwrap();
 }
 #[test]
 fn stale_instance_project_deck_slide_text_revision_and_closed_meeting_are_rejected(
 ) -> anyhow::Result<()> {
-    for (field, value) in [
-        ("instance_id", json!("biz_other")),
-        ("project_id", json!("foreign-project")),
-        ("deck_revision", json!(2)),
-        ("slide_id", json!("other-slide")),
-        ("narration_text_sha256", json!("a".repeat(64))),
-        ("expected_revision", json!(99)),
-    ] {
-        let (root, t, mut p) = fixture()?;
-        p[field] = value;
-        rejected(send(root.path(), field, "owner", &t, p));
+    crate::persistence::test_support::run_scoped(move || {
+        for (field, value) in [
+            ("instance_id", json!("biz_other")),
+            ("project_id", json!("foreign-project")),
+            ("deck_revision", json!(2)),
+            ("slide_id", json!("other-slide")),
+            ("narration_text_sha256", json!("a".repeat(64))),
+            ("expected_revision", json!(99)),
+        ] {
+            let (root, t, mut p) = fixture()?;
+            p[field] = value;
+            rejected(send(root.path(), field, "owner", &t, p));
+            assert_eq!(copies(root.path())?, 0);
+        }
+        let (root, t, p) = fixture()?;
+        change(root.path(), |v| v["state"] = json!("review"))?;
+        rejected(send(root.path(), "closed", "owner", &t, p));
         assert_eq!(copies(root.path())?, 0);
-    }
-    let (root, t, p) = fixture()?;
-    change(root.path(), |v| v["state"] = json!("review"))?;
-    rejected(send(root.path(), "closed", "owner", &t, p));
-    assert_eq!(copies(root.path())?, 0);
-    Ok(())
+        Ok(())
+    })
 }
 #[test]
 fn receipt_failure_rolls_back_actual_file_chunks_and_meeting_before_retry() -> anyhow::Result<()> {
-    let (root, t, p) = fixture()?;
-    open_store(root.path())?.execute_batch("CREATE TRIGGER fail_local_audio BEFORE INSERT ON business_command_domain_effects BEGIN SELECT RAISE(ABORT,'isolated receipt failure'); END;")?;
-    rejected(send(root.path(), "failed", "owner", &t, p.clone()));
-    assert_eq!(copies(root.path())?, 0);
-    assert_eq!(saved(root.path())?["revision"], 0);
-    let chunks: i64 = open_store(root.path())?.query_row(
-        "SELECT count(*) FROM business_records WHERE collection='desktop_file_chunks'",
-        [],
-        |r| r.get(0),
-    )?;
-    assert_eq!(chunks, 0);
-    open_store(root.path())?.execute_batch("DROP TRIGGER fail_local_audio")?;
-    let result = send(root.path(), "retry", "owner", &t, p)?;
-    assert_eq!(result["status"], "completed", "{result}");
-    assert_eq!(copies(root.path())?, 1);
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let (root, t, p) = fixture()?;
+        open_store(root.path())?.execute_batch("CREATE TRIGGER fail_local_audio BEFORE INSERT ON business_command_domain_effects BEGIN SELECT RAISE(ABORT,'isolated receipt failure'); END;")?;
+        rejected(send(root.path(), "failed", "owner", &t, p.clone()));
+        assert_eq!(copies(root.path())?, 0);
+        assert_eq!(saved(root.path())?["revision"], 0);
+        let chunks: i64 = open_store(root.path())?.query_row(
+            "SELECT count(*) FROM business_records WHERE collection='desktop_file_chunks'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(chunks, 0);
+        open_store(root.path())?.execute_batch("DROP TRIGGER fail_local_audio")?;
+        let result = send(root.path(), "retry", "owner", &t, p)?;
+        assert_eq!(result["status"], "completed", "{result}");
+        assert_eq!(copies(root.path())?, 1);
+        Ok(())
+    })
 }
 #[test]
 fn concurrent_commands_for_one_operation_copy_and_narrate_exactly_once() -> anyhow::Result<()> {
-    let (root, t, p) = fixture()?;
-    let barrier = Arc::new(Barrier::new(2));
-    let mut threads = vec![];
-    for id in ["race-1", "race-2"] {
-        let path = root.path().to_owned();
-        let token = t.clone();
-        let payload = p.clone();
-        let b = barrier.clone();
-        threads.push(std::thread::spawn(move || {
-            b.wait();
-            send(&path, id, "owner", &token, payload)
-        }));
-    }
-    let a = threads.remove(0).join().unwrap()?;
-    let b = threads.remove(0).join().unwrap()?;
-    assert_eq!(a["status"], "completed", "{a}");
-    assert_eq!(b["status"], "completed", "{b}");
-    assert_eq!(a["result"], b["result"]);
-    assert_eq!(copies(root.path())?, 1);
-    assert_eq!(saved(root.path())?["revision"], 1);
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let (root, t, p) = fixture()?;
+        let barrier = Arc::new(Barrier::new(2));
+        let mut threads = vec![];
+        for id in ["race-1", "race-2"] {
+            let path = root.path().to_owned();
+            let token = t.clone();
+            let payload = p.clone();
+            let b = barrier.clone();
+            threads.push(std::thread::spawn(move || {
+                b.wait();
+                crate::persistence::run_core_blocking_at(&path.clone(), move || {
+                    send(&path, id, "owner", &token, payload)
+                })
+            }));
+        }
+        let a = threads.remove(0).join().unwrap()?;
+        let b = threads.remove(0).join().unwrap()?;
+        assert_eq!(a["status"], "completed", "{a}");
+        assert_eq!(b["status"], "completed", "{b}");
+        assert_eq!(a["result"], b["result"]);
+        assert_eq!(copies(root.path())?, 1);
+        assert_eq!(saved(root.path())?["revision"], 1);
+        Ok(())
+    })
 }
 #[test]
 fn closed_or_rebound_scope_and_revoked_owner_cannot_replay_an_applied_receipt() -> anyhow::Result<()>
 {
-    for mode in ["closed", "rebound", "revoked"] {
-        let (root, t, p) = fixture()?;
-        let first = send(root.path(), "first", "owner", &t, p.clone())?;
-        assert_eq!(first["status"], "completed", "{first}");
-        match mode {
-            "closed" => change(root.path(), |v| v["state"] = json!("review"))?,
-            "rebound" => change(root.path(), |v| {
-                v["supervisor"]["workjet_thread_id"] = json!("missing")
-            })?,
-            _ => {
-                open_store(root.path())?.execute(
-                    "UPDATE business_users SET active=0 WHERE user_id='owner'",
-                    [],
-                )?;
+    crate::persistence::test_support::run_scoped(move || {
+        for mode in ["closed", "rebound", "revoked"] {
+            let (root, t, p) = fixture()?;
+            let first = send(root.path(), "first", "owner", &t, p.clone())?;
+            assert_eq!(first["status"], "completed", "{first}");
+            match mode {
+                "closed" => change(root.path(), |v| v["state"] = json!("review"))?,
+                "rebound" => change(root.path(), |v| {
+                    v["supervisor"]["workjet_thread_id"] = json!("missing")
+                })?,
+                _ => {
+                    open_store(root.path())?.execute(
+                        "UPDATE business_users SET active=0 WHERE user_id='owner'",
+                        [],
+                    )?;
+                }
             }
+            rejected(send(root.path(), "replay", "owner", &t, p));
+            assert!(
+                command_plane::recover_applied_domain_effect_for_intake(root.path(), "first")
+                    .is_err()
+            );
+            assert_eq!(copies(root.path())?, 1);
         }
-        rejected(send(root.path(), "replay", "owner", &t, p));
-        assert!(
-            command_plane::recover_applied_domain_effect_for_intake(root.path(), "first").is_err()
-        );
-        assert_eq!(copies(root.path())?, 1);
-    }
-    Ok(())
+        Ok(())
+    })
 }

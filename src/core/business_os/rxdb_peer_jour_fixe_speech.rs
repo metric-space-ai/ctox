@@ -168,7 +168,6 @@ struct Snapshot {
     event_sequence: u64,
     error: Option<&'static str>,
     committed: Option<Value>,
-    text: Option<String>,
     finished: bool,
 }
 struct Session {
@@ -214,7 +213,7 @@ impl Session {
         Ok(
             json!({"streamId":id, "state":if self.canceled.load(Ordering::SeqCst) {"canceled"} else if s.error.is_some() {"failed"} else if s.committed.is_some() {"committed"} else if s.finished {"finishing"} else {"open"},
             "events":s.events.iter().filter(|e| e["sequence"].as_u64().unwrap_or(0) > after).collect::<Vec<_>>(),
-            "receipt":s.committed, "text":if self.canceled.load(Ordering::SeqCst) || s.error.is_some() {None} else {s.text.as_ref()}, "error":s.error}),
+            "receipt":s.committed, "error":s.error}),
         )
     }
     fn cancel(&self) {
@@ -260,16 +259,38 @@ pub(super) fn register(
     });
     let weak_pool = Arc::downgrade(pool);
     let root = root.to_path_buf();
-    let observe=Arc::clone(&registry);
-    pool.register_native_session_observer(METHOD,Arc::new(move |peer,token,id| {
-        let entries=observe.sessions.lock().map_err(|_|"speech observer unavailable".to_string())?;
-        let (owner,session)=entries.get(&id).ok_or("SPEECH_STREAM_CLOSED")?;
-        if owner!=&peer || session.authority.token!=token || session.opened.elapsed()>=Duration::from_secs(50) {return Err("SPEECH_STREAM_CLOSED".into());}
-        let session=Arc::clone(session);let changes=session.updates.subscribe();
-        Ok(rxdb::plugins::replication_webrtc::index_mod::NativeSessionFeed::new(changes,Arc::new(move |after| {
-            session.snapshot(&id,after).map_err(|_|ctox_store::change_log::subscription::write_contract::routes::error("not_found","SPEECH_STREAM_CLOSED"))
-        })))
-    }))?;
+    let observe = Arc::clone(&registry);
+    pool.register_native_session_observer(
+        METHOD,
+        Arc::new(move |peer, token, id| {
+            let entries = observe
+                .sessions
+                .lock()
+                .map_err(|_| "speech observer unavailable".to_string())?;
+            let (owner, session) = entries.get(&id).ok_or("SPEECH_STREAM_CLOSED")?;
+            if owner != &peer
+                || session.authority.token != token
+                || session.opened.elapsed() >= Duration::from_secs(50)
+            {
+                return Err("SPEECH_STREAM_CLOSED".into());
+            }
+            let session = Arc::clone(session);
+            let changes = session.updates.subscribe();
+            Ok(
+                rxdb::plugins::replication_webrtc::index_mod::NativeSessionFeed::new(
+                    changes,
+                    Arc::new(move |after| {
+                        session.snapshot(&id, after).map_err(|_| {
+                            ctox_store::change_log::subscription::write_contract::routes::error(
+                                "not_found",
+                                "SPEECH_STREAM_CLOSED",
+                            )
+                        })
+                    }),
+                ),
+            )
+        }),
+    )?;
     pool.register_guarded_auxiliary_request_handler(
         METHOD,
         Arc::new(move |peer, token, params| {
@@ -330,7 +351,7 @@ async fn handle<P: Eq + Clone>(
         };
         if let Some((id, session)) = existing {
             let a = Arc::clone(&session.authority);
-            tokio::task::spawn_blocking(move || a.check()).await??;
+            crate::persistence::run_core_sync(move || Ok(a.check())).await??;
             let after = session.snapshot.lock().unwrap().event_sequence;
             let mut value = session.snapshot(&id, after)?;
             value["requestId"] = json!(r.request_id);
@@ -355,18 +376,20 @@ async fn handle<P: Eq + Clone>(
         let pre_root = root.clone();
         let pre_token = token.clone();
         let pre_scope = scope.clone();
-        let binding = tokio::task::spawn_blocking(move || {
-            ensure!(
-                store::existing_instance_id(&pre_root)? == pre_scope.instance_id,
-                "speech instance changed"
-            );
-            jour_fixe_speech::open_binding(
-                &pre_root,
-                &pre_token,
-                &pre_scope.project_id,
-                &pre_scope.meeting_id,
-                pre_scope.deck_revision,
-            )
+        let binding = crate::persistence::run_core_sync(move || {
+            Ok((|| {
+                ensure!(
+                    store::existing_instance_id(&pre_root)? == pre_scope.instance_id,
+                    "speech instance changed"
+                );
+                jour_fixe_speech::open_binding(
+                    &pre_root,
+                    &pre_token,
+                    &pre_scope.project_id,
+                    &pre_scope.meeting_id,
+                    pre_scope.deck_revision,
+                )
+            })())
         })
         .await??;
         ensure!(current(), "speech connection retired");
@@ -386,9 +409,11 @@ async fn handle<P: Eq + Clone>(
             current,
         });
         let a = Arc::clone(&authority);
-        let bound = tokio::task::spawn_blocking(move || {
-            a.check()?;
-            BoundTranscription::bind(&a.root, &a.token, binding, stream)
+        let bound = crate::persistence::run_core_sync(move || {
+            Ok((|| {
+                a.check()?;
+                BoundTranscription::bind(&a.root, &a.token, binding, stream)
+            })())
         })
         .await??;
         let id = bound.stream_id().to_owned();
@@ -429,11 +454,11 @@ async fn handle<P: Eq + Clone>(
     }
     let session = registry.lookup(&peer, &token, &r)?;
     let a = Arc::clone(&session.authority);
-    tokio::task::spawn_blocking(move || a.check()).await??;
+    crate::persistence::run_core_sync(move || Ok(a.check())).await??;
     let id = r.stream_id.as_ref().unwrap();
     if r.op == "cancel" {
         let owned = Arc::clone(&session);
-        tokio::task::spawn_blocking(move || owned.cancel()).await?;
+        crate::persistence::run_core_sync(move || Ok(owned.cancel())).await?;
     }
     if r.op == "finish" && session.snapshot.lock().unwrap().committed.is_some() {
         let after = session.snapshot.lock().unwrap().event_sequence;
@@ -501,7 +526,7 @@ async fn run(
                 if started.elapsed() > Duration::from_secs(40) || touched.elapsed() > Duration::from_secs(5) && !finishing
                     || finish_at.is_some_and(|at: Instant| at.elapsed() > Duration::from_secs(15)) { break Err("timeout"); }
                 let a = Arc::clone(&authority);
-                if !matches!(tokio::task::spawn_blocking(move || a.check()).await, Ok(Ok(()))) { break Err("retired"); }
+                if !matches!(crate::persistence::run_core_sync(move || Ok(a.check())).await, Ok(Ok(()))) { break Err("retired"); }
             },
             cmd = commands.recv() => {
                 touched = Instant::now();
@@ -532,9 +557,8 @@ async fn run(
                 },
                 Some(Ok(VerifiedTranscriptEvent::Final(final_value))) => {
                     if !finishing { break Err("invalid_response"); }
-                    let final_text=final_value.text().to_owned();
                     let a = Arc::clone(&authority); let stop = Arc::clone(&canceled); let gate = Arc::clone(&commit_gate);
-                    let committed = tokio::task::spawn_blocking(move || {
+                    let committed = crate::persistence::run_core_sync(move || Ok((|| {
                         let _fence = gate.lock().map_err(|_| anyhow::anyhow!("speech commit fence unavailable"))?;
                         ensure!(!stop.load(Ordering::SeqCst), "speech canceled"); a.check()?;
                         bound.stage_final(&a.root, &a.token, final_value)?;
@@ -542,8 +566,8 @@ async fn run(
                         ensure!(result["status"] == "completed", "speech domain commit failed");
                         let revision = jour_fixe_speech::committed_revision(&a.root, &a.token, &a.binding, bound.stream_id())?;
                         Ok::<_, anyhow::Error>(revision)
-                    }).await;
-                    match committed { Ok(Ok(revision)) => { {let mut s=snapshot.lock().unwrap();s.committed=Some(json!({"handle":Uuid::new_v4().to_string(), "meetingRevision":revision}));s.text=Some(final_text);} updates.send_replace(()); return; },
+                    })())).await;
+                    match committed { Ok(Ok(revision)) => { {let mut s=snapshot.lock().unwrap();s.committed=Some(json!({"handle":Uuid::new_v4().to_string(), "meetingRevision":revision}));} updates.send_replace(()); return; },
                         _ => { snapshot.lock().unwrap().error = Some("commit_failed"); updates.send_replace(()); return; } }
                 },
                 Some(Err(_)) => break Err("gateway_failed"),

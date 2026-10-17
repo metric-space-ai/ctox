@@ -410,8 +410,7 @@ async fn minority_cannot_confirm_worker_admission() {
         "a minority cannot confirm admission: {result:?}"
     );
     for id in 1..=3 {
-        let store = SqliteStore::open(&c.root.path().join(format!("{id}.sqlite"))).unwrap();
-        assert!(store.worker(4).await.unwrap().is_none());
+        assert!(c.nodes[&id].local_worker(4).await.unwrap().is_none());
     }
     // The unconfirmed command may commit after healing; no success was reported here.
     c.close().await;
@@ -558,6 +557,7 @@ struct Cluster {
     config: openraft::Config,
     bus: Arc<Bus>,
     nodes: BTreeMap<NodeId, Arc<AuthorityNode>>,
+    retired: BTreeMap<NodeId, tokio::sync::watch::Receiver<bool>>,
     peers: BTreeMap<NodeId, Peer>,
     keys: BTreeMap<NodeId, Arc<SigningIdentity>>,
 }
@@ -621,6 +621,7 @@ impl Cluster {
             config,
             bus,
             nodes: BTreeMap::new(),
+            retired: BTreeMap::new(),
             peers,
             keys,
         };
@@ -634,6 +635,12 @@ impl Cluster {
         c
     }
     async fn start(&mut self, id: NodeId) {
+        if let Some(mut closed) = self.retired.remove(&id) {
+            tokio::time::timeout(Duration::from_secs(10), closed.wait_for(|closed| *closed))
+                .await
+                .unwrap()
+                .unwrap();
+        }
         let config = self.config.clone();
         let transport = Arc::new(SignedTransport::new(
             self.keys[&id].clone(),
@@ -665,7 +672,10 @@ impl Cluster {
             .write()
             .unwrap()
             .remove(&self.peers[&id].identity);
+        let closed = n.storage_closed_signal();
         n.shutdown().await.unwrap();
+        drop(n);
+        self.retired.insert(id, closed);
     }
     async fn close(mut self) {
         for id in 1..=3 {
@@ -1763,8 +1773,7 @@ async fn additional_worker_requires_committed_membership_but_never_gets_a_vote()
     assert_eq!(c.nodes[&leader].leader(), Some(leader));
 
     // The directory is part of the same durable snapshot as jobs and replay receipts.
-    let mut store = SqliteStore::open(&c.root.path().join(format!("{leader}.sqlite"))).unwrap();
-    let snapshot = store.build_snapshot().await.unwrap();
+    let snapshot = c.nodes[&leader].local_snapshot().await.unwrap();
     assert_eq!(snapshot.meta.last_membership.nodes().count(), 3);
     let mut restored = SqliteStore::open(&c.root.path().join("restored.sqlite")).unwrap();
     restored
@@ -1857,7 +1866,7 @@ async fn additional_worker_requires_committed_membership_but_never_gets_a_vote()
             .await,
         Receipt::Rejected(Rejection::AlreadyExists)
     );
-    let snapshot = store.build_snapshot().await.unwrap();
+    let snapshot = c.nodes[&leader].local_snapshot().await.unwrap();
     restored
         .install_snapshot(&snapshot.meta, snapshot.snapshot)
         .await
@@ -1865,6 +1874,7 @@ async fn additional_worker_requires_committed_membership_but_never_gets_a_vote()
     assert_eq!(restored.worker(4).await.unwrap(), Some(revoked.clone()));
 
     // Closing and reopening the store must not resurrect the revoked executor.
+    drop(ipc);
     for id in 1..=3 {
         c.stop(id).await;
     }
@@ -1884,7 +1894,6 @@ async fn additional_worker_requires_committed_membership_but_never_gets_a_vote()
             ctox_sync::authority::network::AuthorityFailure::Rejected { .. }
         ))
     ));
-    let reopened = SqliteStore::open(&c.root.path().join(format!("{leader}.sqlite"))).unwrap();
     assert_eq!(
         c.nodes[&leader].worker_membership(4).await.unwrap(),
         Some(revoked.clone())
@@ -1901,7 +1910,10 @@ async fn additional_worker_requires_committed_membership_but_never_gets_a_vote()
                 | ctox_sync::authority::network::AuthorityFailure::NotLeader { .. }
         ))
     ));
-    assert_eq!(reopened.worker(4).await.unwrap(), Some(revoked));
+    assert_eq!(
+        c.nodes[&leader].local_worker(4).await.unwrap(),
+        Some(revoked)
+    );
     c.close().await;
 }
 

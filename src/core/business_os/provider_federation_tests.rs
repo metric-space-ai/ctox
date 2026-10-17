@@ -5,7 +5,7 @@ use super::super::{capability::CapabilityDeviceBinding, mobile_invites, store_wo
 use super::*;
 
 pub(super) struct Fixture {
-    pub(super) root: tempfile::TempDir,
+    pub(super) root: std::sync::Arc<tempfile::TempDir>,
     pub(super) conn: Connection,
 }
 
@@ -13,7 +13,8 @@ impl Fixture {
     pub(super) fn new() -> Result<Self> {
         Self::with_root(tempfile::tempdir()?)
     }
-    pub(super) fn with_root(root: tempfile::TempDir) -> Result<Self> {
+    pub(super) fn with_root(root: impl Into<std::sync::Arc<tempfile::TempDir>>) -> Result<Self> {
+        let root = root.into();
         store::issue_business_os_capability_token_for_managed_user(
             root.path(),
             "owner",
@@ -120,301 +121,317 @@ pub(super) fn account_id(state: &Value) -> &str {
 #[test]
 fn inherited_main_account_retirement_preserves_identity_withdrawals_and_other_accounts(
 ) -> Result<()> {
-    let f = Fixture::new()?;
-    f.enroll("first")?;
-    let mut main = account(INHERITED_NATIVE_ACCOUNT_ID);
-    main.provider = "ctox_proxy".into();
-    let original = f.adopt(&[main, account("private-subscription")])?;
-    let entry = original["accounts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["provider"] == "ctox_proxy")
-        .unwrap();
-    let id = entry["id"].as_str().unwrap().to_owned();
-    withdraw(
-        &f.conn,
-        "owner",
-        &WithdrawRequest {
-            _inbound_channel: None,
-            account_id: id.clone(),
-            computer_id: "first".into(),
-            withdrawn: true,
-            expected_revision: 1,
-        },
-    )?;
-    let before = policy_revision(&f.conn, "owner")?;
-    retire_inherited_route(&f.conn, "foreign", "native-instance", None, 101)?;
-    retire_inherited_route(&f.conn, "owner", "other-holder", None, 101)?;
-    retire_inherited_route(&f.conn, "owner", "native-instance", Some("ctox_proxy"), 101)?;
-    assert_eq!(policy_revision(&f.conn, "owner")?, before);
-    retire_inherited_route(&f.conn, "owner", "native-instance", None, 102)?;
-    let retired_revision = policy_revision(&f.conn, "owner")?;
-    assert_eq!(retired_revision, before + 1);
-    retire_inherited_route(&f.conn, "owner", "native-instance", None, 103)?;
-    assert_eq!(policy_revision(&f.conn, "owner")?, retired_revision);
-    assert!(consumable(&f.conn, &f.facts("second"), &id, 1).is_err());
-    let retired = list(&f.conn, "owner")?;
-    let main = retired["accounts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["id"] == id)
-        .unwrap();
-    assert_eq!(main["enabled"], false);
-    assert_eq!(main["credentialReady"], false);
-    assert_eq!(main["revision"], 2);
-    let subscription = retired["accounts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["provider"] == "minimax")
-        .unwrap();
-    assert_eq!(subscription["enabled"], true);
-    assert_eq!(subscription["credentialReady"], true);
+    crate::persistence::test_support::run(move |root| {
+        let f = Fixture::with_root(root)?;
+        f.enroll("first")?;
+        let mut main = account(INHERITED_NATIVE_ACCOUNT_ID);
+        main.provider = "ctox_proxy".into();
+        let original = f.adopt(&[main, account("private-subscription")])?;
+        let entry = original["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["provider"] == "ctox_proxy")
+            .unwrap();
+        let id = entry["id"].as_str().unwrap().to_owned();
+        withdraw(
+            &f.conn,
+            "owner",
+            &WithdrawRequest {
+                _inbound_channel: None,
+                account_id: id.clone(),
+                computer_id: "first".into(),
+                withdrawn: true,
+                expected_revision: 1,
+            },
+        )?;
+        let before = policy_revision(&f.conn, "owner")?;
+        retire_inherited_route(&f.conn, "foreign", "native-instance", None, 101)?;
+        retire_inherited_route(&f.conn, "owner", "other-holder", None, 101)?;
+        retire_inherited_route(&f.conn, "owner", "native-instance", Some("ctox_proxy"), 101)?;
+        assert_eq!(policy_revision(&f.conn, "owner")?, before);
+        retire_inherited_route(&f.conn, "owner", "native-instance", None, 102)?;
+        let retired_revision = policy_revision(&f.conn, "owner")?;
+        assert_eq!(retired_revision, before + 1);
+        retire_inherited_route(&f.conn, "owner", "native-instance", None, 103)?;
+        assert_eq!(policy_revision(&f.conn, "owner")?, retired_revision);
+        assert!(consumable(&f.conn, &f.facts("second"), &id, 1).is_err());
+        let retired = list(&f.conn, "owner")?;
+        let main = retired["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == id)
+            .unwrap();
+        assert_eq!(main["enabled"], false);
+        assert_eq!(main["credentialReady"], false);
+        assert_eq!(main["revision"], 2);
+        let subscription = retired["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["provider"] == "minimax")
+            .unwrap();
+        assert_eq!(subscription["enabled"], true);
+        assert_eq!(subscription["credentialReady"], true);
 
-    let mut main = account(INHERITED_NATIVE_ACCOUNT_ID);
-    main.provider = "ctox_proxy".into();
-    let restored = f.adopt(&[main])?;
-    let restored_main = restored["accounts"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|entry| entry["id"] == id)
-        .unwrap();
-    assert_eq!(restored_main["revision"], 3);
-    assert!(consumable(&f.conn, &f.facts("first"), &id, 3).is_err());
-    assert!(consumable(&f.conn, &f.facts("second"), &id, 3).is_ok());
-    for private in [INHERITED_NATIVE_ACCOUNT_ID, "private-subscription"] {
-        assert!(!restored.to_string().contains(private));
-    }
-    Ok(())
+        let mut main = account(INHERITED_NATIVE_ACCOUNT_ID);
+        main.provider = "ctox_proxy".into();
+        let restored = f.adopt(&[main])?;
+        let restored_main = restored["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["id"] == id)
+            .unwrap();
+        assert_eq!(restored_main["revision"], 3);
+        assert!(consumable(&f.conn, &f.facts("first"), &id, 3).is_err());
+        assert!(consumable(&f.conn, &f.facts("second"), &id, 3).is_ok());
+        for private in [INHERITED_NATIVE_ACCOUNT_ID, "private-subscription"] {
+            assert!(!restored.to_string().contains(private));
+        }
+        Ok(())
+    })
 }
 
 #[test]
 fn inherited_provider_switch_retires_only_the_previous_provider_and_keeps_its_uuid() -> Result<()> {
-    let f = Fixture::new()?;
-    let mut original = account(INHERITED_NATIVE_ACCOUNT_ID);
-    original.provider = "ctox_proxy".into();
-    let first = f.adopt(&[original])?;
-    let original_id = account_id(&first).to_owned();
-    retire_inherited_route(&f.conn, "owner", "native-instance", Some("zai"), 101)?;
-    let mut current = account(INHERITED_NATIVE_ACCOUNT_ID);
-    current.provider = "zai".into();
-    let switched = f.adopt(&[current])?;
-    let entries = switched["accounts"].as_array().unwrap();
-    assert_eq!(entries.len(), 2);
-    let old = entries
-        .iter()
-        .find(|entry| entry["provider"] == "ctox_proxy")
-        .unwrap();
-    let new = entries
-        .iter()
-        .find(|entry| entry["provider"] == "zai")
-        .unwrap();
-    assert_eq!(old["id"], original_id);
-    assert_eq!(old["enabled"], false);
-    assert_eq!(new["enabled"], true);
-    assert_ne!(new["id"], original_id);
-    assert!(consumable(&f.conn, &f.facts("consumer"), &original_id, 1).is_err());
-    assert!(consumable(
-        &f.conn,
-        &f.facts("consumer"),
-        new["id"].as_str().unwrap(),
-        1
-    )
-    .is_ok());
-    Ok(())
+    crate::persistence::test_support::run(move |root| {
+        let f = Fixture::with_root(root)?;
+        let mut original = account(INHERITED_NATIVE_ACCOUNT_ID);
+        original.provider = "ctox_proxy".into();
+        let first = f.adopt(&[original])?;
+        let original_id = account_id(&first).to_owned();
+        retire_inherited_route(&f.conn, "owner", "native-instance", Some("zai"), 101)?;
+        let mut current = account(INHERITED_NATIVE_ACCOUNT_ID);
+        current.provider = "zai".into();
+        let switched = f.adopt(&[current])?;
+        let entries = switched["accounts"].as_array().unwrap();
+        assert_eq!(entries.len(), 2);
+        let old = entries
+            .iter()
+            .find(|entry| entry["provider"] == "ctox_proxy")
+            .unwrap();
+        let new = entries
+            .iter()
+            .find(|entry| entry["provider"] == "zai")
+            .unwrap();
+        assert_eq!(old["id"], original_id);
+        assert_eq!(old["enabled"], false);
+        assert_eq!(new["enabled"], true);
+        assert_ne!(new["id"], original_id);
+        assert!(consumable(&f.conn, &f.facts("consumer"), &original_id, 1).is_err());
+        assert!(consumable(
+            &f.conn,
+            &f.facts("consumer"),
+            new["id"].as_str().unwrap(),
+            1
+        )
+        .is_ok());
+        Ok(())
+    })
 }
 
 #[test]
 fn adoption_is_stable_private_and_does_not_invent_model_or_health_proof() -> Result<()> {
-    let f = Fixture::new()?;
-    let trusted = observations(&json!({"accounts":[{
-        "id":"private-account-selector","provider":"minimax","enabled":true,"status":"ready",
-        "models":["MiniMax-M3"],"preset_ids":["ignored-preset"],"secret":"ignored-sensitive-value",
-    }]}))?;
-    let first = f.adopt(&trusted)?;
-    let second = f.adopt(&trusted)?;
-    assert_eq!(first, second);
-    assert_eq!(first["revision"], 1);
-    assert_eq!(first["accounts"][0]["credentialReady"], true);
-    assert_eq!(first["accounts"][0]["modelCatalogObserved"], false);
-    assert_eq!(first["accounts"][0]["inferenceVerified"], false);
-    let serialized = first.to_string();
-    for private in [
-        "private-account-selector",
-        "ignored-sensitive-value",
-        "ignored-preset",
-        "MiniMax-M3",
-    ] {
-        assert!(!serialized.contains(private));
-    }
-    assert_eq!(
-        f.adopt(&[])?,
-        first,
-        "an absent snapshot is not account removal"
-    );
-    assert_eq!(list(&f.conn, "foreign")?["accounts"], json!([]));
-    Ok(())
+    crate::persistence::test_support::run(move |root| {
+        let f = Fixture::with_root(root)?;
+        let trusted = observations(&json!({"accounts":[{
+            "id":"private-account-selector","provider":"minimax","enabled":true,"status":"ready",
+            "models":["MiniMax-M3"],"preset_ids":["ignored-preset"],"secret":"ignored-sensitive-value",
+        }]}))?;
+        let first = f.adopt(&trusted)?;
+        let second = f.adopt(&trusted)?;
+        assert_eq!(first, second);
+        assert_eq!(first["revision"], 1);
+        assert_eq!(first["accounts"][0]["credentialReady"], true);
+        assert_eq!(first["accounts"][0]["modelCatalogObserved"], false);
+        assert_eq!(first["accounts"][0]["inferenceVerified"], false);
+        let serialized = first.to_string();
+        for private in [
+            "private-account-selector",
+            "ignored-sensitive-value",
+            "ignored-preset",
+            "MiniMax-M3",
+        ] {
+            assert!(!serialized.contains(private));
+        }
+        assert_eq!(
+            f.adopt(&[])?,
+            first,
+            "an absent snapshot is not account removal"
+        );
+        assert_eq!(list(&f.conn, "foreign")?["accounts"], json!([]));
+        Ok(())
+    })
 }
 
 #[test]
 fn default_consumption_survives_new_accounts_and_new_computers_without_opt_in() -> Result<()> {
-    let f = Fixture::new()?;
-    let first = f.adopt(&[account("held-a")])?;
-    for computer in ["first", "second", "new-after-adoption"] {
-        assert!(consumable(&f.conn, &f.facts(computer), account_id(&first), 1).is_ok());
-    }
-    f.adopt(&[account("held-a"), account("held-b")])?;
-    let state = list(&f.conn, "owner")?;
-    for entry in state["accounts"].as_array().unwrap() {
+    crate::persistence::test_support::run(move |root| {
+        let f = Fixture::with_root(root)?;
+        let first = f.adopt(&[account("held-a")])?;
         for computer in ["first", "second", "new-after-adoption"] {
-            let selected = consumable(
-                &f.conn,
-                &f.facts(computer),
-                entry["id"].as_str().unwrap(),
-                1,
-            )?;
-            assert_eq!(selected.account_id, entry["id"].as_str().unwrap());
-            assert_eq!(selected.holder_instance_id, "native-instance");
-            assert_eq!(selected.provider, "minimax");
-            assert!(matches!(
-                selected.private_local_account_id.as_str(),
-                "held-a" | "held-b"
-            ));
-            assert_eq!(selected.account_revision, 1);
-            assert_eq!(selected.policy_revision, 2);
+            assert!(consumable(&f.conn, &f.facts(computer), account_id(&first), 1).is_ok());
         }
-    }
-    Ok(())
+        f.adopt(&[account("held-a"), account("held-b")])?;
+        let state = list(&f.conn, "owner")?;
+        for entry in state["accounts"].as_array().unwrap() {
+            for computer in ["first", "second", "new-after-adoption"] {
+                let selected = consumable(
+                    &f.conn,
+                    &f.facts(computer),
+                    entry["id"].as_str().unwrap(),
+                    1,
+                )?;
+                assert_eq!(selected.account_id, entry["id"].as_str().unwrap());
+                assert_eq!(selected.holder_instance_id, "native-instance");
+                assert_eq!(selected.provider, "minimax");
+                assert!(matches!(
+                    selected.private_local_account_id.as_str(),
+                    "held-a" | "held-b"
+                ));
+                assert_eq!(selected.account_revision, 1);
+                assert_eq!(selected.policy_revision, 2);
+            }
+        }
+        Ok(())
+    })
 }
 
 #[test]
 fn explicit_withdrawal_blocks_only_the_actual_consumer_and_restoration_is_idempotent() -> Result<()>
 {
-    let f = Fixture::new()?;
-    f.enroll("first")?;
-    f.enroll("second")?;
-    let state = f.adopt(&[account("held-a")])?;
-    let id = account_id(&state);
-    let mut request = WithdrawRequest {
-        _inbound_channel: None,
-        account_id: id.into(),
-        computer_id: "first".into(),
-        withdrawn: true,
-        expected_revision: 1,
-    };
-    withdraw(&f.conn, "owner", &request)?;
-    assert_eq!(policy_revision(&f.conn, "owner")?, 2);
-    assert!(consumable(&f.conn, &f.facts("first"), id, 1).is_err());
-    assert!(consumable(&f.conn, &f.facts("second"), id, 1).is_ok());
-    assert!(consumable(&f.conn, &f.facts("new-after-withdrawal"), id, 1).is_ok());
-    request.expected_revision = 2;
-    withdraw(&f.conn, "owner", &request)?;
-    assert_eq!(policy_revision(&f.conn, "owner")?, 2);
-    request.withdrawn = false;
-    withdraw(&f.conn, "owner", &request)?;
-    assert!(consumable(&f.conn, &f.facts("first"), id, 1).is_ok());
-    assert_eq!(policy_revision(&f.conn, "owner")?, 3);
-    Ok(())
+    crate::persistence::test_support::run(move |root| {
+        let f = Fixture::with_root(root)?;
+        f.enroll("first")?;
+        f.enroll("second")?;
+        let state = f.adopt(&[account("held-a")])?;
+        let id = account_id(&state);
+        let mut request = WithdrawRequest {
+            _inbound_channel: None,
+            account_id: id.into(),
+            computer_id: "first".into(),
+            withdrawn: true,
+            expected_revision: 1,
+        };
+        withdraw(&f.conn, "owner", &request)?;
+        assert_eq!(policy_revision(&f.conn, "owner")?, 2);
+        assert!(consumable(&f.conn, &f.facts("first"), id, 1).is_err());
+        assert!(consumable(&f.conn, &f.facts("second"), id, 1).is_ok());
+        assert!(consumable(&f.conn, &f.facts("new-after-withdrawal"), id, 1).is_ok());
+        request.expected_revision = 2;
+        withdraw(&f.conn, "owner", &request)?;
+        assert_eq!(policy_revision(&f.conn, "owner")?, 2);
+        request.withdrawn = false;
+        withdraw(&f.conn, "owner", &request)?;
+        assert!(consumable(&f.conn, &f.facts("first"), id, 1).is_ok());
+        assert_eq!(policy_revision(&f.conn, "owner")?, 3);
+        Ok(())
+    })
 }
 
 #[test]
 fn stale_foreign_unassigned_or_revoked_withdrawal_targets_fail_closed() -> Result<()> {
-    let f = Fixture::new()?;
-    f.enroll("first")?;
-    let state = f.adopt(&[account("held-a")])?;
-    let mut request = WithdrawRequest {
-        _inbound_channel: None,
-        account_id: account_id(&state).into(),
-        computer_id: "first".into(),
-        withdrawn: true,
-        expected_revision: 2,
-    };
-    assert!(withdraw(&f.conn, "owner", &request).is_err());
-    request.expected_revision = 1;
-    assert!(withdraw(&f.conn, "foreign", &request).is_err());
-    request.computer_id = "unassigned".into();
-    assert!(withdraw(&f.conn, "owner", &request).is_err());
-    request.computer_id = "first".into();
-    mobile_invites::revoke_by_device_pairing_id(f.root.path(), "pairing-first")?;
-    assert!(withdraw(&f.conn, "owner", &request).is_err());
-    assert_eq!(policy_revision(&f.conn, "owner")?, 1);
-    Ok(())
+    crate::persistence::test_support::run(move |root| {
+        let f = Fixture::with_root(root)?;
+        f.enroll("first")?;
+        let state = f.adopt(&[account("held-a")])?;
+        let mut request = WithdrawRequest {
+            _inbound_channel: None,
+            account_id: account_id(&state).into(),
+            computer_id: "first".into(),
+            withdrawn: true,
+            expected_revision: 2,
+        };
+        assert!(withdraw(&f.conn, "owner", &request).is_err());
+        request.expected_revision = 1;
+        assert!(withdraw(&f.conn, "foreign", &request).is_err());
+        request.computer_id = "unassigned".into();
+        assert!(withdraw(&f.conn, "owner", &request).is_err());
+        request.computer_id = "first".into();
+        mobile_invites::revoke_by_device_pairing_id(f.root.path(), "pairing-first")?;
+        assert!(withdraw(&f.conn, "owner", &request).is_err());
+        assert_eq!(policy_revision(&f.conn, "owner")?, 1);
+        Ok(())
+    })
 }
 
 #[test]
 fn adoption_changes_fence_old_account_snapshots_without_reassigning_custody() -> Result<()> {
-    let f = Fixture::new()?;
-    let state = f.adopt(&[account("held-a")])?;
-    let id = account_id(&state);
-    let mut disabled = account("held-a");
-    disabled.enabled = false;
-    f.adopt(&[disabled])?;
-    assert!(consumable(&f.conn, &f.facts("first"), id, 1).is_err());
-    assert_eq!(policy_revision(&f.conn, "owner")?, 2);
-    f.adopt(&[account("held-a")])?;
-    assert!(consumable(&f.conn, &f.facts("first"), id, 1).is_err());
-    assert!(consumable(&f.conn, &f.facts("first"), id, 3).is_ok());
-    assert!(adopt(
-        &f.conn,
-        "foreign",
-        "native-instance",
-        &[account("held-a")],
-        101
-    )
-    .is_err());
-    assert_eq!(list(&f.conn, "owner")?["accounts"][0]["id"], id);
-    let mut foreign = f.facts("first");
-    foreign.owner_user_id = "foreign".into();
-    assert!(consumable(&f.conn, &foreign, id, 3).is_err());
-    Ok(())
+    crate::persistence::test_support::run(move |root| {
+        let f = Fixture::with_root(root)?;
+        let state = f.adopt(&[account("held-a")])?;
+        let id = account_id(&state);
+        let mut disabled = account("held-a");
+        disabled.enabled = false;
+        f.adopt(&[disabled])?;
+        assert!(consumable(&f.conn, &f.facts("first"), id, 1).is_err());
+        assert_eq!(policy_revision(&f.conn, "owner")?, 2);
+        f.adopt(&[account("held-a")])?;
+        assert!(consumable(&f.conn, &f.facts("first"), id, 1).is_err());
+        assert!(consumable(&f.conn, &f.facts("first"), id, 3).is_ok());
+        assert!(adopt(
+            &f.conn,
+            "foreign",
+            "native-instance",
+            &[account("held-a")],
+            101
+        )
+        .is_err());
+        assert_eq!(list(&f.conn, "owner")?["accounts"][0]["id"], id);
+        let mut foreign = f.facts("first");
+        foreign.owner_user_id = "foreign".into();
+        assert!(consumable(&f.conn, &foreign, id, 3).is_err());
+        Ok(())
+    })
 }
 
 #[test]
 fn metadata_commands_reject_caller_identity_secret_models_and_missing_admission() -> Result<()> {
-    let f = Fixture::new()?;
-    for payload in [
-        json!({"owner_user_id":"owner"}),
-        json!({"models":["MiniMax-M3"]}),
-        json!({"secret":"ignored-sensitive-value"}),
-        json!({"holder":"other-computer"}),
-    ] {
+    crate::persistence::test_support::run(move |root| {
+        let f = Fixture::with_root(root)?;
+        for payload in [
+            json!({"owner_user_id":"owner"}),
+            json!({"models":["MiniMax-M3"]}),
+            json!({"secret":"ignored-sensitive-value"}),
+            json!({"holder":"other-computer"}),
+        ] {
+            assert!(handle_command(
+                f.root.path(),
+                &command("ctox.workjet.providers.adopt_native", payload),
+                "owner",
+                None
+            )
+            .is_err());
+        }
         assert!(handle_command(
             f.root.path(),
-            &command("ctox.workjet.providers.adopt_native", payload),
+            &command("ctox.workjet.providers.adopt_native", json!({})),
             "owner",
             None
         )
         .is_err());
-    }
-    assert!(handle_command(
-        f.root.path(),
-        &command("ctox.workjet.providers.adopt_native", json!({})),
-        "owner",
-        None
-    )
-    .is_err());
-    assert!(handle_command(
-        f.root.path(),
-        &command("ctox.workjet.providers.list", json!({})),
-        "foreign",
-        None
-    )
-    .is_err());
-    f.conn.execute(
-        "UPDATE business_users SET active=0 WHERE user_id='owner'",
-        [],
-    )?;
-    assert!(handle_command(
-        f.root.path(),
-        &command("ctox.workjet.providers.list", json!({})),
-        "owner",
-        None
-    )
-    .is_err());
-    Ok(())
+        assert!(handle_command(
+            f.root.path(),
+            &command("ctox.workjet.providers.list", json!({})),
+            "foreign",
+            None
+        )
+        .is_err());
+        f.conn.execute(
+            "UPDATE business_users SET active=0 WHERE user_id='owner'",
+            [],
+        )?;
+        assert!(handle_command(
+            f.root.path(),
+            &command("ctox.workjet.providers.list", json!({})),
+            "owner",
+            None
+        )
+        .is_err());
+        Ok(())
+    })
 }
 
 #[test]
@@ -435,44 +452,49 @@ fn bounded_native_observations_reject_duplicates_and_control_characters() -> Res
 
 #[test]
 fn policy_mutation_and_replay_receipt_share_one_transaction() -> Result<()> {
-    let f = Fixture::new()?;
-    let admission = DomainEffectAdmission::newly_claimed("fixture-command", "intent", "owner")?;
-    let mut conn = store::open_store(f.root.path())?;
-    let apply = |tx: &rusqlite::Transaction<'_>| -> Result<AppliedDomainEffect> {
-        adopt(tx, "owner", "native-instance", &[account("held-a")], 100)?;
-        Ok(AppliedDomainEffect {
-            result: list(tx, "owner")?,
-            projections: vec![],
-        })
-    };
-    let first = admission.apply(&mut conn, apply)?;
-    let second = admission.apply(&mut conn, |_| {
-        anyhow::bail!("replay must not invoke effect")
-    })?;
-    assert_eq!(first, second);
-    let rejected = DomainEffectAdmission::newly_claimed("rejected-command", "intent2", "owner")?;
-    assert!(rejected
-        .apply(&mut conn, |tx| {
-            adopt(tx, "owner", "native-instance", &[account("held-b")], 101)?;
-            anyhow::bail!("effect fails before commit")
-        })
-        .is_err());
-    assert_eq!(
-        list(&conn, "owner")?["accounts"].as_array().unwrap().len(),
-        1
-    );
-    assert_eq!(policy_revision(&conn, "owner")?, 1);
-    Ok(())
+    crate::persistence::test_support::run(move |root| {
+        let f = Fixture::with_root(root)?;
+        let admission = DomainEffectAdmission::newly_claimed("fixture-command", "intent", "owner")?;
+        let mut conn = store::open_store(f.root.path())?;
+        let apply = |tx: &rusqlite::Transaction<'_>| -> Result<AppliedDomainEffect> {
+            adopt(tx, "owner", "native-instance", &[account("held-a")], 100)?;
+            Ok(AppliedDomainEffect {
+                result: list(tx, "owner")?,
+                projections: vec![],
+            })
+        };
+        let first = admission.apply(&mut conn, apply)?;
+        let second = admission.apply(&mut conn, |_| {
+            anyhow::bail!("replay must not invoke effect")
+        })?;
+        assert_eq!(first, second);
+        let rejected =
+            DomainEffectAdmission::newly_claimed("rejected-command", "intent2", "owner")?;
+        assert!(rejected
+            .apply(&mut conn, |tx| {
+                adopt(tx, "owner", "native-instance", &[account("held-b")], 101)?;
+                anyhow::bail!("effect fails before commit")
+            })
+            .is_err());
+        assert_eq!(
+            list(&conn, "owner")?["accounts"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(policy_revision(&conn, "owner")?, 1);
+        Ok(())
+    })
 }
 
 #[test]
 fn provider_list_treats_empty_record_id_from_command_bus_as_absent() -> Result<()> {
-    let f = Fixture::new()?;
-    let mut empty = command("ctox.workjet.providers.list", json!({}));
-    empty.record_id = Some(String::new());
-    assert!(handle_command(f.root.path(), &empty, "owner", None).is_ok());
-    let mut scoped = command("ctox.workjet.providers.list", json!({}));
-    scoped.record_id = Some("acc_1".into());
-    assert!(handle_command(f.root.path(), &scoped, "owner", None).is_err());
-    Ok(())
+    crate::persistence::test_support::run(move |root| {
+        let f = Fixture::with_root(root)?;
+        let mut empty = command("ctox.workjet.providers.list", json!({}));
+        empty.record_id = Some(String::new());
+        assert!(handle_command(f.root.path(), &empty, "owner", None).is_ok());
+        let mut scoped = command("ctox.workjet.providers.list", json!({}));
+        scoped.record_id = Some("acc_1".into());
+        assert!(handle_command(f.root.path(), &scoped, "owner", None).is_err());
+        Ok(())
+    })
 }

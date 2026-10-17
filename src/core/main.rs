@@ -5862,19 +5862,24 @@ mod tests {
 
     #[test]
     fn persist_runtime_turn_timeout_writes_to_runtime_env_store() {
-        let root = make_fake_ctox_root("runtime-timeout");
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
 
-        persist_runtime_turn_timeout(&root, Some("900")).unwrap();
+            persist_runtime_turn_timeout(&root, Some("900")).unwrap();
 
-        let env_map = runtime_env::load_runtime_env_map(&root).unwrap();
-        assert_eq!(
-            env_map
-                .get("CTOX_CHAT_TURN_TIMEOUT_SECS")
-                .map(String::as_str),
-            Some("900")
-        );
+            let env_map = runtime_env::load_runtime_env_map(&root).unwrap();
+            assert_eq!(
+                env_map
+                    .get("CTOX_CHAT_TURN_TIMEOUT_SECS")
+                    .map(String::as_str),
+                Some("900")
+            );
 
-        cleanup_test_dir(&root);
+            // Root cleanup follows owner shutdown.
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

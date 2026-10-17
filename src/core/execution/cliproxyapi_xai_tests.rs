@@ -1,186 +1,217 @@
 use super::*;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-#[tokio::test]
-async fn retired_creator_cancels_without_poll_and_never_commits() {
-    use std::sync::atomic::{AtomicBool, Ordering};
-    let root = tempfile::tempdir().unwrap();
-    let controller = CtoxXaiLogin::with_auth(
-        root.path(),
-        Arc::new(XaiAuth::new(
-            Arc::new(FixtureLogin),
-            Arc::new(SystemXaiClock),
-            Arc::new(XaiRefreshCoordinator::default()),
-        )),
-    );
-    let current = Arc::new(AtomicBool::new(true));
-    let c = current.clone();
-    let public = controller
-        .start_authorized(
-            Arc::new(move || c.load(Ordering::SeqCst)),
-            Arc::new(|| Ok(())),
-        )
-        .await
-        .unwrap();
-    current.store(false, Ordering::SeqCst);
-    tokio::time::sleep(Duration::from_millis(400)).await;
-    assert_eq!(
-        controller.poll(&public.login_id).unwrap(),
-        XaiLoginProgress::Cancelled
-    );
-    assert!(!subscription_installed(root.path()));
-}
-#[tokio::test]
-async fn commit_revalidates_authority_after_upstream_acceptance() {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    let root = tempfile::tempdir().unwrap();
-    let controller = CtoxXaiLogin::with_auth(
-        root.path(),
-        Arc::new(XaiAuth::new(
-            Arc::new(FixtureLogin),
-            Arc::new(SystemXaiClock),
-            Arc::new(XaiRefreshCoordinator::default()),
-        )),
-    );
-    let checks = Arc::new(AtomicUsize::new(0));
-    let c = checks.clone();
-    let public = controller
-        .start_authorized(
-            Arc::new(|| true),
-            Arc::new(move || {
-                anyhow::ensure!(c.fetch_add(1, Ordering::SeqCst) == 0, "retired");
-                Ok(())
-            }),
-        )
-        .await
-        .unwrap();
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while controller.poll(&public.login_id).unwrap() == XaiLoginProgress::Pending {
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+#[test]
+fn retired_creator_cancels_without_poll_and_never_commits() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let root = owner_root;
+        let controller = CtoxXaiLogin::with_auth(
+            root.path(),
+            Arc::new(XaiAuth::new(
+                Arc::new(FixtureLogin),
+                Arc::new(SystemXaiClock),
+                Arc::new(XaiRefreshCoordinator::default()),
+            )),
+        );
+        let current = Arc::new(AtomicBool::new(true));
+        let c = current.clone();
+        let public = controller
+            .start_authorized(
+                Arc::new(move || c.load(Ordering::SeqCst)),
+                Arc::new(|| Ok(())),
+            )
+            .await
+            .unwrap();
+        current.store(false, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(400)).await;
+        assert_eq!(
+            controller.poll(&public.login_id).unwrap(),
+            XaiLoginProgress::Cancelled
+        );
+        assert!(!subscription_installed(root.path()));
+
+        Ok(())
     })
-    .await
     .unwrap();
-    assert_eq!(checks.load(Ordering::SeqCst), 2);
-    assert_eq!(
-        controller.poll(&public.login_id).unwrap(),
-        XaiLoginProgress::Failed
-    );
-    assert!(!subscription_installed(root.path()));
 }
-#[tokio::test]
-async fn removal_invalidates_binding_and_cancels_pending() {
-    let root = tempfile::tempdir().unwrap();
-    let controller = CtoxXaiLogin::with_auth(
-        root.path(),
-        Arc::new(XaiAuth::new(
-            Arc::new(FixtureLogin),
-            Arc::new(SystemXaiClock),
-            Arc::new(XaiRefreshCoordinator::default()),
-        )),
-    );
-    let public = controller.start().await.unwrap();
-    controller.remove().await.unwrap();
-    assert_eq!(
-        controller.poll(&public.login_id).unwrap(),
-        XaiLoginProgress::Cancelled
-    );
-    save_bundle(root.path(), &bundle()).unwrap();
-    let before = credential_binding(root.path()).unwrap();
-    assert!(before.is_some());
-    controller.remove().await.unwrap();
-    assert!(credential_binding(root.path()).unwrap().is_none());
+#[test]
+fn commit_revalidates_authority_after_upstream_acceptance() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let root = owner_root;
+        let controller = CtoxXaiLogin::with_auth(
+            root.path(),
+            Arc::new(XaiAuth::new(
+                Arc::new(FixtureLogin),
+                Arc::new(SystemXaiClock),
+                Arc::new(XaiRefreshCoordinator::default()),
+            )),
+        );
+        let checks = Arc::new(AtomicUsize::new(0));
+        let c = checks.clone();
+        let public = controller
+            .start_authorized(
+                Arc::new(|| true),
+                Arc::new(move || {
+                    anyhow::ensure!(c.fetch_add(1, Ordering::SeqCst) == 0, "retired");
+                    Ok(())
+                }),
+            )
+            .await
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while controller.poll(&public.login_id).unwrap() == XaiLoginProgress::Pending {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(checks.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            controller.poll(&public.login_id).unwrap(),
+            XaiLoginProgress::Failed
+        );
+        assert!(!subscription_installed(root.path()));
+
+        Ok(())
+    })
+    .unwrap();
+}
+#[test]
+fn removal_invalidates_binding_and_cancels_pending() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        let controller = CtoxXaiLogin::with_auth(
+            root.path(),
+            Arc::new(XaiAuth::new(
+                Arc::new(FixtureLogin),
+                Arc::new(SystemXaiClock),
+                Arc::new(XaiRefreshCoordinator::default()),
+            )),
+        );
+        let public = controller.start().await.unwrap();
+        controller.remove().await.unwrap();
+        assert_eq!(
+            controller.poll(&public.login_id).unwrap(),
+            XaiLoginProgress::Cancelled
+        );
+        save_bundle(root.path(), &bundle()).unwrap();
+        let before = credential_binding(root.path()).unwrap();
+        assert!(before.is_some());
+        controller.remove().await.unwrap();
+        assert!(credential_binding(root.path()).unwrap().is_none());
+
+        Ok(())
+    })
+    .unwrap();
 }
 struct StalledLogin;
-#[tokio::test]
-async fn operator_login_shutdown_cancels_without_storing_a_credential() {
-    let root = tempfile::tempdir().unwrap();
-    let controller = CtoxXaiLogin::with_auth(
-        root.path(),
-        Arc::new(XaiAuth::new(
-            Arc::new(FixtureLogin),
-            Arc::new(SystemXaiClock),
-            Arc::new(XaiRefreshCoordinator::default()),
-        )),
-    );
-    let stop = Arc::new(tokio::sync::Notify::new());
-    let signal = stop.clone();
-    let phase = operator_login(
-        &controller,
-        |_| {
-            stop.notify_one();
-            Ok(())
-        },
-        async move {
-            signal.notified().await;
-            Ok(())
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(phase, XaiLoginProgress::Cancelled);
-    assert!(!subscription_installed(root.path()));
-}
-
-#[tokio::test]
-async fn device_commit_does_not_overwrite_a_concurrently_installed_account() {
-    let root = tempfile::tempdir().unwrap();
-    let controller = CtoxXaiLogin::with_auth(
-        root.path(),
-        Arc::new(XaiAuth::new(
-            Arc::new(FixtureLogin),
-            Arc::new(SystemXaiClock),
-            Arc::new(XaiRefreshCoordinator::default()),
-        )),
-    );
-    let phase = tokio::time::timeout(
-        Duration::from_secs(10),
-        operator_login(
+#[test]
+fn operator_login_shutdown_cancels_without_storing_a_credential() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        let controller = CtoxXaiLogin::with_auth(
+            root.path(),
+            Arc::new(XaiAuth::new(
+                Arc::new(FixtureLogin),
+                Arc::new(SystemXaiClock),
+                Arc::new(XaiRefreshCoordinator::default()),
+            )),
+        );
+        let stop = Arc::new(tokio::sync::Notify::new());
+        let signal = stop.clone();
+        let phase = operator_login(
             &controller,
             |_| {
-                crate::secrets::write_secret_record(
-                    root.path(),
-                    SCOPE,
-                    NAME,
-                    "concurrent-account-fixture",
-                    None,
-                    serde_json::json!({}),
-                )
-                .map(|_| ())
+                stop.notify_one();
+                Ok(())
             },
-            futures_util::future::pending(),
-        ),
-    )
-    .await
-    .unwrap()
+            async move {
+                signal.notified().await;
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(phase, XaiLoginProgress::Cancelled);
+        assert!(!subscription_installed(root.path()));
+
+        Ok(())
+    })
     .unwrap();
-    assert_eq!(phase, XaiLoginProgress::Failed);
-    assert_eq!(
-        crate::secrets::read_secret_value(root.path(), SCOPE, NAME).unwrap(),
-        "concurrent-account-fixture"
-    );
+}
+
+#[test]
+fn device_commit_does_not_overwrite_a_concurrently_installed_account() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        let controller = CtoxXaiLogin::with_auth(
+            root.path(),
+            Arc::new(XaiAuth::new(
+                Arc::new(FixtureLogin),
+                Arc::new(SystemXaiClock),
+                Arc::new(XaiRefreshCoordinator::default()),
+            )),
+        );
+        let phase = tokio::time::timeout(
+            Duration::from_secs(10),
+            operator_login(
+                &controller,
+                |_| {
+                    crate::secrets::write_secret_record(
+                        root.path(),
+                        SCOPE,
+                        NAME,
+                        "concurrent-account-fixture",
+                        None,
+                        serde_json::json!({}),
+                    )
+                    .map(|_| ())
+                },
+                futures_util::future::pending(),
+            ),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(phase, XaiLoginProgress::Failed);
+        assert_eq!(
+            crate::secrets::read_secret_value(root.path(), SCOPE, NAME).unwrap(),
+            "concurrent-account-fixture"
+        );
+
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]
 fn device_install_keeps_the_original_account_and_other_secrets() {
-    let root = tempfile::tempdir().unwrap();
-    crate::secrets::write_secret_record(
-        root.path(),
-        "operator-fixture",
-        "untouched",
-        "retained-fixture",
-        None,
-        serde_json::json!({}),
-    )
+    crate::persistence::test_support::run(move |owner_root| {
+        let root = owner_root;
+        crate::secrets::write_secret_record(
+            root.path(),
+            "operator-fixture",
+            "untouched",
+            "retained-fixture",
+            None,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        install_bundle(root.path(), &bundle()).unwrap();
+        let before = credential_binding(root.path()).unwrap();
+        assert!(install_bundle(root.path(), &bundle()).is_err());
+        assert_eq!(credential_binding(root.path()).unwrap(), before);
+        assert_eq!(
+            crate::secrets::read_secret_value(root.path(), "operator-fixture", "untouched")
+                .unwrap(),
+            "retained-fixture"
+        );
+
+        Ok(())
+    })
     .unwrap();
-    install_bundle(root.path(), &bundle()).unwrap();
-    let before = credential_binding(root.path()).unwrap();
-    assert!(install_bundle(root.path(), &bundle()).is_err());
-    assert_eq!(credential_binding(root.path()).unwrap(), before);
-    assert_eq!(
-        crate::secrets::read_secret_value(root.path(), "operator-fixture", "untouched").unwrap(),
-        "retained-fixture"
-    );
 }
 impl XaiHttpTransport for StalledLogin {
     fn execute<'a>(
@@ -192,94 +223,110 @@ impl XaiHttpTransport for StalledLogin {
         Box::pin(futures_util::future::pending())
     }
 }
-#[tokio::test]
-async fn abandoned_start_releases_pending_admission() {
-    let root = tempfile::tempdir().unwrap();
-    let controller = CtoxXaiLogin::with_auth(
-        root.path(),
-        Arc::new(XaiAuth::new(
-            Arc::new(StalledLogin),
-            Arc::new(SystemXaiClock),
-            Arc::new(XaiRefreshCoordinator::default()),
-        )),
-    );
-    assert!(
-        tokio::time::timeout(Duration::from_millis(10), controller.start())
-            .await
-            .is_err()
-    );
-    assert!(controller
-        .sessions
-        .lock()
-        .unwrap()
-        .values()
-        .all(|login| login.progress == XaiLoginProgress::Cancelled && login.cancel.is_cancelled()));
-    // A second request is admitted (it times out in the fixture transport),
-    // rather than failing immediately with "login already pending".
-    assert!(
-        tokio::time::timeout(Duration::from_millis(10), controller.start())
-            .await
-            .is_err()
-    );
+#[test]
+fn abandoned_start_releases_pending_admission() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        let controller = CtoxXaiLogin::with_auth(
+            root.path(),
+            Arc::new(XaiAuth::new(
+                Arc::new(StalledLogin),
+                Arc::new(SystemXaiClock),
+                Arc::new(XaiRefreshCoordinator::default()),
+            )),
+        );
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), controller.start())
+                .await
+                .is_err()
+        );
+        assert!(controller
+            .sessions
+            .lock()
+            .unwrap()
+            .values()
+            .all(|login| login.progress == XaiLoginProgress::Cancelled
+                && login.cancel.is_cancelled()));
+        // A second request is admitted (it times out in the fixture transport),
+        // rather than failing immediately with "login already pending".
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), controller.start())
+                .await
+                .is_err()
+        );
+
+        Ok(())
+    })
+    .unwrap();
 }
 
-#[tokio::test]
-async fn catalog_absence_denies_execution() {
-    let root = tempfile::tempdir().unwrap();
-    save_bundle(root.path(), &bundle()).unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = format!("http://{}", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let mut data = [0; 8192];
-        let read = socket.read(&mut data).await.unwrap();
-        assert!(data[..read].starts_with(b"GET /models"));
-        socket
+#[test]
+fn catalog_absence_denies_execution() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        save_bundle(root.path(), &bundle()).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut data = [0; 8192];
+            let read = socket.read(&mut data).await.unwrap();
+            assert!(data[..read].starts_with(b"GET /models"));
+            socket
             .write_all(
                 b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"data\":[]}",
             )
             .await
             .unwrap();
-        drop(socket);
-        assert!(
-            tokio::time::timeout(Duration::from_millis(200), listener.accept())
-                .await
-                .is_err()
-        );
-    });
-    assert!(execute_route_at(
-        root.path(),
-        br#"{"model":"grok-4.7","input":"fixture"}"#,
-        &endpoint
-    )
-    .await
-    .is_err());
-    server.await.unwrap();
+            drop(socket);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(200), listener.accept())
+                    .await
+                    .is_err()
+            );
+        });
+        assert!(execute_route_at(
+            root.path(),
+            br#"{"model":"grok-4.7","input":"fixture"}"#,
+            &endpoint
+        )
+        .await
+        .is_err());
+        server.await.unwrap();
+
+        Ok(())
+    })
+    .unwrap();
 }
 
-#[tokio::test]
-async fn native_router_starts_for_subscription_without_creating_a_default() {
-    use ctox_cliproxyapi::sdk::api::handlers::openai::openai_responses_handlers::{
-        OpenAiResponsesRouteHandler, OpenAiResponsesRouteResponse,
-    };
-    let root = tempfile::tempdir().unwrap();
-    save_bundle(root.path(), &bundle()).unwrap();
-    let router =
-        crate::execution::cliproxyapi_host::build_instance_codex_responses_router(root.path())
-            .unwrap()
-            .unwrap();
-    let response = router
-        .handle_provider_route(None, br#"{"model":"grok-4.7","input":"fixture"}"#)
-        .await;
-    assert!(matches!(
-        response,
-        OpenAiResponsesRouteResponse::Buffered(_)
-    ));
-    assert!(
-        crate::execution::cliproxyapi_host::load_instance_proxy_config(root.path())
-            .unwrap()
-            .is_none()
-    );
+#[test]
+fn native_router_starts_for_subscription_without_creating_a_default() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        use ctox_cliproxyapi::sdk::api::handlers::openai::openai_responses_handlers::{
+            OpenAiResponsesRouteHandler, OpenAiResponsesRouteResponse,
+        };
+        let root = owner_root;
+        save_bundle(root.path(), &bundle()).unwrap();
+        let router =
+            crate::execution::cliproxyapi_host::build_instance_codex_responses_router(root.path())
+                .unwrap()
+                .unwrap();
+        let response = router
+            .handle_provider_route(None, br#"{"model":"grok-4.7","input":"fixture"}"#)
+            .await;
+        assert!(matches!(
+            response,
+            OpenAiResponsesRouteResponse::Buffered(_)
+        ));
+        assert!(
+            crate::execution::cliproxyapi_host::load_instance_proxy_config(root.path())
+                .unwrap()
+                .is_none()
+        );
+
+        Ok(())
+    })
+    .unwrap();
 }
 
 struct FixtureLogin;
@@ -302,33 +349,38 @@ impl XaiHttpTransport for FixtureLogin {
         })
     }
 }
-#[tokio::test]
-async fn device_start_projects_only_public_code_and_accepts_into_secret_store() {
-    let root = tempfile::tempdir().unwrap();
-    let controller = CtoxXaiLogin::with_auth(
-        root.path(),
-        Arc::new(XaiAuth::new(
-            Arc::new(FixtureLogin),
-            Arc::new(SystemXaiClock),
-            Arc::new(XaiRefreshCoordinator::default()),
-        )),
-    );
-    let public = controller.start().await.unwrap();
-    let json = serde_json::to_string(&public).unwrap();
-    assert!(json.contains("PUBLIC-CODE"));
-    assert!(!json.contains("private-device-fixture"));
-    assert!(!json.contains("fixture-access"));
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            if controller.poll(&public.login_id).unwrap() == XaiLoginProgress::Accepted {
-                break;
+#[test]
+fn device_start_projects_only_public_code_and_accepts_into_secret_store() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        let controller = CtoxXaiLogin::with_auth(
+            root.path(),
+            Arc::new(XaiAuth::new(
+                Arc::new(FixtureLogin),
+                Arc::new(SystemXaiClock),
+                Arc::new(XaiRefreshCoordinator::default()),
+            )),
+        );
+        let public = controller.start().await.unwrap();
+        let json = serde_json::to_string(&public).unwrap();
+        assert!(json.contains("PUBLIC-CODE"));
+        assert!(!json.contains("private-device-fixture"));
+        assert!(!json.contains("fixture-access"));
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if controller.poll(&public.login_id).unwrap() == XaiLoginProgress::Accepted {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        })
+        .await
+        .unwrap();
+        assert!(crate::secrets::secret_exists(root.path(), SCOPE, NAME).unwrap());
+
+        Ok(())
     })
-    .await
     .unwrap();
-    assert!(crate::secrets::secret_exists(root.path(), SCOPE, NAME).unwrap());
 }
 
 fn bundle() -> AuthBundle {
@@ -349,9 +401,10 @@ fn bundle() -> AuthBundle {
         token_endpoint: "https://auth.x.ai/token".into(),
     }
 }
-#[tokio::test]
-async fn accepted_subscription_routes_only_live_catalog_models() {
-    let root = tempfile::tempdir().unwrap();
+#[test]
+fn accepted_subscription_routes_only_live_catalog_models() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+    let root = owner_root;
     save_bundle(root.path(), &bundle()).unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let endpoint = format!("http://{}", listener.local_addr().unwrap());
@@ -395,6 +448,9 @@ async fn accepted_subscription_routes_only_live_catalog_models() {
         .unwrap()
         .contains("response-fixture"));
     server.await.unwrap();
+
+        Ok(())
+        }).unwrap();
 }
 #[tokio::test]
 async fn cancellation_and_drop_revoke_pending_login() {
@@ -429,37 +485,114 @@ async fn cancellation_and_drop_revoke_pending_login() {
     drop(controller);
     assert!(second.is_cancelled());
 }
-#[tokio::test]
-async fn accepted_credentials_are_encrypted_and_not_replaced_by_login() {
-    let root = tempfile::tempdir().unwrap();
-    save_bundle(root.path(), &bundle()).unwrap();
-    let bytes = std::fs::read(crate::secrets::secret_store_path(root.path())).unwrap();
-    assert!(!bytes
-        .windows(b"fixture-access".len())
-        .any(|v| v == b"fixture-access"));
-    let controller = CtoxXaiLogin::new(root.path()).unwrap();
-    assert!(controller.start().await.is_err());
-    let projection = serde_json::to_string(&XaiLoginProgress::Accepted).unwrap();
-    assert!(!projection.contains("fixture-access"));
+#[test]
+fn accepted_credentials_are_encrypted_and_not_replaced_by_login() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        save_bundle(root.path(), &bundle()).unwrap();
+        let bytes = std::fs::read(crate::secrets::secret_store_path(root.path())).unwrap();
+        assert!(!bytes
+            .windows(b"fixture-access".len())
+            .any(|v| v == b"fixture-access"));
+        let controller = CtoxXaiLogin::new(root.path()).unwrap();
+        assert!(controller.start().await.is_err());
+        let projection = serde_json::to_string(&XaiLoginProgress::Accepted).unwrap();
+        assert!(!projection.contains("fixture-access"));
+
+        Ok(())
+    })
+    .unwrap();
 }
 
-#[tokio::test]
-async fn catalog_diagnostics_oversized_http_response_is_bounded() {
-    let root = tempfile::tempdir().unwrap();
-    save_bundle(root.path(), &bundle()).unwrap();
-    let error = catalog_fixture(root.path(), 200, &" ".repeat(1024 * 1024 + 1))
-        .await
-        .unwrap_err();
-    assert_eq!(error.kind, GrokCatalogErrorKind::ResponseTooLarge);
-    assert_eq!(error.http_status, Some(200));
+#[test]
+fn catalog_diagnostics_oversized_http_response_is_bounded() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        save_bundle(root.path(), &bundle()).unwrap();
+        let error = catalog_fixture(root.path(), 200, &" ".repeat(1024 * 1024 + 1))
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, GrokCatalogErrorKind::ResponseTooLarge);
+        assert_eq!(error.http_status, Some(200));
+
+        Ok(())
+    })
+    .unwrap();
 }
 
-#[tokio::test]
-async fn catalog_diagnostics_empty_or_invalid_bearer_is_local() {
-    let root = tempfile::tempdir().unwrap();
-    for access in ["", " ", "fixture\r\nprivate-header"] {
+#[test]
+fn catalog_diagnostics_empty_or_invalid_bearer_is_local() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        for access in ["", " ", "fixture\r\nprivate-header"] {
+            let mut stored = stored_bundle(&bundle());
+            stored.access = access.into();
+            crate::secrets::write_secret_record(
+                root.path(),
+                SCOPE,
+                NAME,
+                &serde_json::to_string(&stored).unwrap(),
+                None,
+                serde_json::json!({}),
+            )
+            .unwrap();
+            let error = discover_models_detailed(root.path()).await.unwrap_err();
+            assert_eq!(error.kind, GrokCatalogErrorKind::InvalidCredential);
+            assert_eq!(error.phase, "credential");
+            assert_eq!(error.http_status, None);
+            assert!(!format!("{error:?} {error}").contains("private-header"));
+        }
+
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn catalog_diagnostics_missing_account_is_local_and_has_operator_action() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        let error = discover_models_detailed(root.path()).await.unwrap_err();
+        assert_eq!(error.kind, GrokCatalogErrorKind::AccountNotConfigured);
+        assert_eq!(error.phase, "credential");
+        assert_eq!(error.http_status, None);
+        assert!(error.to_string().contains("ctox runtime grok-login"));
+        assert!(!subscription_installed(root.path()));
+
+        Ok(())
+    })
+    .unwrap();
+}
+#[test]
+fn catalog_diagnostics_invalid_record_is_not_an_upstream_rejection() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        crate::secrets::write_secret_record(
+            root.path(),
+            SCOPE,
+            NAME,
+            "private-malformed-fixture",
+            None,
+            serde_json::json!({}),
+        )
+        .unwrap();
+        let error = discover_models_detailed(root.path()).await.unwrap_err();
+        assert_eq!(error.kind, GrokCatalogErrorKind::InvalidCredential);
+        assert_eq!(error.http_status, None);
+        assert!(!format!("{error:?} {error}").contains("private-malformed-fixture"));
+        assert!(!error.to_string().contains("grok-login"));
+
+        Ok(())
+    })
+    .unwrap();
+}
+#[test]
+fn catalog_diagnostics_expiry_without_refresh_never_claims_http_denial() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
         let mut stored = stored_bundle(&bundle());
-        stored.access = access.into();
+        stored.expires_at = Some(0);
+        stored.refresh = None;
         crate::secrets::write_secret_record(
             root.path(),
             SCOPE,
@@ -470,60 +603,13 @@ async fn catalog_diagnostics_empty_or_invalid_bearer_is_local() {
         )
         .unwrap();
         let error = discover_models_detailed(root.path()).await.unwrap_err();
-        assert_eq!(error.kind, GrokCatalogErrorKind::InvalidCredential);
-        assert_eq!(error.phase, "credential");
+        assert_eq!(error.kind, GrokCatalogErrorKind::RefreshUnavailable);
+        assert_eq!(error.phase, "token_refresh");
         assert_eq!(error.http_status, None);
-        assert!(!format!("{error:?} {error}").contains("private-header"));
-    }
-}
 
-#[tokio::test]
-async fn catalog_diagnostics_missing_account_is_local_and_has_operator_action() {
-    let root = tempfile::tempdir().unwrap();
-    let error = discover_models_detailed(root.path()).await.unwrap_err();
-    assert_eq!(error.kind, GrokCatalogErrorKind::AccountNotConfigured);
-    assert_eq!(error.phase, "credential");
-    assert_eq!(error.http_status, None);
-    assert!(error.to_string().contains("ctox runtime grok-login"));
-    assert!(!subscription_installed(root.path()));
-}
-#[tokio::test]
-async fn catalog_diagnostics_invalid_record_is_not_an_upstream_rejection() {
-    let root = tempfile::tempdir().unwrap();
-    crate::secrets::write_secret_record(
-        root.path(),
-        SCOPE,
-        NAME,
-        "private-malformed-fixture",
-        None,
-        serde_json::json!({}),
-    )
+        Ok(())
+    })
     .unwrap();
-    let error = discover_models_detailed(root.path()).await.unwrap_err();
-    assert_eq!(error.kind, GrokCatalogErrorKind::InvalidCredential);
-    assert_eq!(error.http_status, None);
-    assert!(!format!("{error:?} {error}").contains("private-malformed-fixture"));
-    assert!(!error.to_string().contains("grok-login"));
-}
-#[tokio::test]
-async fn catalog_diagnostics_expiry_without_refresh_never_claims_http_denial() {
-    let root = tempfile::tempdir().unwrap();
-    let mut stored = stored_bundle(&bundle());
-    stored.expires_at = Some(0);
-    stored.refresh = None;
-    crate::secrets::write_secret_record(
-        root.path(),
-        SCOPE,
-        NAME,
-        &serde_json::to_string(&stored).unwrap(),
-        None,
-        serde_json::json!({}),
-    )
-    .unwrap();
-    let error = discover_models_detailed(root.path()).await.unwrap_err();
-    assert_eq!(error.kind, GrokCatalogErrorKind::RefreshUnavailable);
-    assert_eq!(error.phase, "token_refresh");
-    assert_eq!(error.http_status, None);
 }
 async fn catalog_fixture(
     root: &Path,
@@ -556,67 +642,82 @@ async fn catalog_fixture(
     server.await.unwrap();
     result
 }
-#[tokio::test]
-async fn catalog_diagnostics_received_http_status_never_exposes_error_body() {
-    let root = tempfile::tempdir().unwrap();
-    save_bundle(root.path(), &bundle()).unwrap();
-    for status in [401, 403, 429, 503] {
-        let error = catalog_fixture(
-            root.path(),
-            status,
-            "fixture-access fixture-refresh private-upstream-detail",
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(error.kind, GrokCatalogErrorKind::UpstreamRejected);
-        assert_eq!(error.http_status, Some(status));
-        let public = format!(
-            "{} {error} {error:?}",
-            serde_json::to_string(&error).unwrap()
-        );
-        for private in [
-            "fixture-access",
-            "fixture-refresh",
-            "private-upstream-detail",
-        ] {
-            assert!(!public.contains(private));
+#[test]
+fn catalog_diagnostics_received_http_status_never_exposes_error_body() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        save_bundle(root.path(), &bundle()).unwrap();
+        for status in [401, 403, 429, 503] {
+            let error = catalog_fixture(
+                root.path(),
+                status,
+                "fixture-access fixture-refresh private-upstream-detail",
+            )
+            .await
+            .unwrap_err();
+            assert_eq!(error.kind, GrokCatalogErrorKind::UpstreamRejected);
+            assert_eq!(error.http_status, Some(status));
+            let public = format!(
+                "{} {error} {error:?}",
+                serde_json::to_string(&error).unwrap()
+            );
+            for private in [
+                "fixture-access",
+                "fixture-refresh",
+                "private-upstream-detail",
+            ] {
+                assert!(!public.contains(private));
+            }
         }
-    }
+
+        Ok(())
+    })
+    .unwrap();
 }
-#[tokio::test]
-async fn catalog_diagnostics_transport_before_response_has_no_http_witness() {
-    let root = tempfile::tempdir().unwrap();
-    save_bundle(root.path(), &bundle()).unwrap();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let endpoint = format!("http://{}", listener.local_addr().unwrap());
-    drop(listener);
-    test_endpoint(root.path(), Some(endpoint));
-    let error = discover_models_detailed(root.path()).await.unwrap_err();
-    test_endpoint(root.path(), None);
-    assert_eq!(error.kind, GrokCatalogErrorKind::Transport);
-    assert_eq!(error.http_status, None);
+#[test]
+fn catalog_diagnostics_transport_before_response_has_no_http_witness() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        save_bundle(root.path(), &bundle()).unwrap();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        drop(listener);
+        test_endpoint(root.path(), Some(endpoint));
+        let error = discover_models_detailed(root.path()).await.unwrap_err();
+        test_endpoint(root.path(), None);
+        assert_eq!(error.kind, GrokCatalogErrorKind::Transport);
+        assert_eq!(error.http_status, None);
+
+        Ok(())
+    })
+    .unwrap();
 }
-#[tokio::test]
-async fn catalog_diagnostics_valid_catalog_and_credential_echo_are_distinct() {
-    let root = tempfile::tempdir().unwrap();
-    save_bundle(root.path(), &bundle()).unwrap();
-    let result = catalog_fixture(root.path(), 200, r#"{"data":[{"id":"catalog-fixture"}]}"#)
-        .await
-        .unwrap();
-    assert_eq!(result, ["catalog-fixture"]);
-    for body in [
-        r#"{"data":[{"id":"fixture-access"}]}"#,
-        r#"{"data":[{"id":"catalog-fixture-access-suffix"}]}"#,
-        r#"{"data":[{"id":"fixture-refresh"}]}"#,
-        r#"{"data":[{"id":"catalog-fixture-refresh-suffix"}]}"#,
-        r#"{"data":[{"id":false}]}"#,
-        "private-invalid-json",
-    ] {
-        let error = catalog_fixture(root.path(), 200, body).await.unwrap_err();
-        assert_eq!(error.kind, GrokCatalogErrorKind::InvalidCatalog);
-        assert_eq!(error.http_status, Some(200));
-        assert!(!serde_json::to_string(&error)
-            .unwrap()
-            .contains("fixture-access"));
-    }
+#[test]
+fn catalog_diagnostics_valid_catalog_and_credential_echo_are_distinct() {
+    crate::persistence::test_support::run_async(move |owner_root| async move {
+        let root = owner_root;
+        save_bundle(root.path(), &bundle()).unwrap();
+        let result = catalog_fixture(root.path(), 200, r#"{"data":[{"id":"catalog-fixture"}]}"#)
+            .await
+            .unwrap();
+        assert_eq!(result, ["catalog-fixture"]);
+        for body in [
+            r#"{"data":[{"id":"fixture-access"}]}"#,
+            r#"{"data":[{"id":"catalog-fixture-access-suffix"}]}"#,
+            r#"{"data":[{"id":"fixture-refresh"}]}"#,
+            r#"{"data":[{"id":"catalog-fixture-refresh-suffix"}]}"#,
+            r#"{"data":[{"id":false}]}"#,
+            "private-invalid-json",
+        ] {
+            let error = catalog_fixture(root.path(), 200, body).await.unwrap_err();
+            assert_eq!(error.kind, GrokCatalogErrorKind::InvalidCatalog);
+            assert_eq!(error.http_status, Some(200));
+            assert!(!serde_json::to_string(&error)
+                .unwrap()
+                .contains("fixture-access"));
+        }
+
+        Ok(())
+    })
+    .unwrap();
 }

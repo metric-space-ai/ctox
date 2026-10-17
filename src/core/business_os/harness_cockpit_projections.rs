@@ -579,8 +579,31 @@ fn has_table(conn: &Connection, table: &str) -> Result<bool> {
 fn core(root: &Path) -> Result<Connection> {
     let conn = Connection::open(crate::paths::core_db(root))?;
     conn.busy_timeout(Duration::from_millis(100))?;
+    Ok(conn)
+}
+
+// A projection reader must not race the Core actor for a schema write lock.
+// TODO(P3-06): move additive indexes into the schema registry. Until then,
+// serialize this DDL on the injected owner, never on the projection connection.
+fn ensure_core_indexes(root: &Path) -> Result<()> {
+    let path = crate::paths::core_db(root);
+    crate::persistence::run_core_blocking_at(root, move || {
+        crate::lcm::owner_adapter::OwnerAdapter::for_path(&path)?
+            .write_blocking(|tx| install_core_indexes(tx))?;
+        Ok(())
+    })
+}
+
+fn install_core_indexes(conn: &Connection) -> std::result::Result<(), ctox_store::StoreError> {
+    let exists = |table: &str| {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+            [table],
+            |row| row.get::<_, bool>(0),
+        )
+    };
     // Indexes are additive. The flow ledger remains the authoritative evidence.
-    if has_table(&conn, "ctox_harness_flow_events")? {
+    if exists("ctox_harness_flow_events")? {
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_cockpit_flow_attempt
                 ON ctox_harness_flow_events(json_extract(metadata_json,'$.attempt_id'), created_at);
@@ -595,19 +618,19 @@ fn core(root: &Path) -> Result<Connection> {
                   AND COALESCE(json_extract(metadata_json,'$.repaired'),0)=0;",
         )?;
     }
-    if has_table(&conn, "worker_attempt_finalizations")? {
+    if exists("worker_attempt_finalizations")? {
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_cockpit_finalized_time
                 ON worker_attempt_finalizations(COALESCE(terminal_at,updated_at) DESC, attempt_id DESC)
                 WHERE status!='finalizing';",
         )?;
     }
-    if has_table(&conn, "api_model_cost_events")? {
+    if exists("api_model_cost_events")? {
         conn.execute_batch(
             "CREATE INDEX IF NOT EXISTS idx_cockpit_cost_turn ON api_model_cost_events(turn_id);",
         )?;
     }
-    Ok(conn)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -720,6 +743,7 @@ fn refresh_measured(
     flags: u8,
     timing: &mut ProjectionTiming<'_>,
 ) -> Result<()> {
+    timing.phase("core_indexes", || ensure_core_indexes(root))?;
     let (identity, conn) = timing.phase("core_open", || checkout_core(root))?;
     let result = refresh_measured_with(root, &conn, snapshot, writer, flags, timing);
     if result.is_ok() {
@@ -1858,6 +1882,56 @@ fn retain_selected(
 #[cfg(test)]
 mod pump_root_and_core_cache_tests {
     use super::*;
+
+    #[test]
+    fn projection_indexes_queue_behind_core_owner() -> Result<()> {
+        crate::persistence::test_support::run(|root| {
+            let owner = crate::lcm::owner_adapter::OwnerAdapter::for_path(&crate::paths::core_db(
+                root.path(),
+            ))?;
+            owner.write_blocking(|tx| {
+                tx.execute_batch("CREATE TABLE IF NOT EXISTS ctox_harness_flow_events(event_id TEXT, event_kind TEXT, message_key TEXT, metadata_json TEXT, created_at TEXT); DROP INDEX IF EXISTS idx_cockpit_flow_attempt;")?;
+                Ok(())
+            })?;
+            let (entered, held) = std::sync::mpsc::sync_channel(1);
+            let (release, released) = std::sync::mpsc::sync_channel(1);
+            let pending = owner.submit_sync(move |_tx| {
+                entered
+                    .send(())
+                    .map_err(|_| ctox_store::StoreError::Closed)?;
+                released
+                    .recv_timeout(Duration::from_secs(3))
+                    .map_err(|_| ctox_store::StoreError::DeadlineExceeded)?;
+                Ok(())
+            })?;
+            held.recv_timeout(Duration::from_secs(2))?;
+            let (started, start) = std::sync::mpsc::sync_channel(1);
+            let (reply, result) = std::sync::mpsc::sync_channel(1);
+            let work = root.clone();
+            let worker = std::thread::spawn(move || {
+                let _ = started.send(());
+                let _ = reply.send(ensure_core_indexes(work.path()));
+            });
+            start.recv_timeout(Duration::from_secs(2))?;
+            let early = result.recv_timeout(Duration::from_millis(250));
+            let queued = matches!(&early, Err(std::sync::mpsc::RecvTimeoutError::Timeout));
+            let _ = release.send(());
+            pending.blocking_wait()?;
+            let finished = match early {
+                Ok(value) => value,
+                Err(_) => result.recv_timeout(Duration::from_secs(2))?,
+            };
+            worker.join().expect("projection index worker");
+            assert!(queued, "index installation must queue on the existing writer, not contend through a second connection");
+            finished?;
+            owner.read_blocking(|conn| {
+                let count: i64 = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='index' AND name='idx_cockpit_flow_attempt'", [], |row| row.get(0))?;
+                assert_eq!(count, 1);
+                Ok(())
+            })?;
+            Ok(())
+        })
+    }
 
     fn temp_root(name: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(

@@ -145,11 +145,18 @@ pub fn publish_selected_auth_metadata(metadata: &mut ExecutionMetadata, auth: &m
 /// Provider-neutral persisted-state selection boundary used by CTOX's bounded
 /// execution loops. Provider wire execution remains owned by the injected
 /// `ProviderExecutorRegistry`, rather than being duplicated here.
+pub type AccountStateOperation = Box<dyn FnOnce() + Send + 'static>;
+pub type AccountStateFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), AccountRoutingError>> + Send>>;
+pub type AccountStateDispatcher =
+    Arc<dyn Fn(AccountStateOperation) -> AccountStateFuture + Send + Sync>;
+
 pub struct AccountRouter {
     scheduler: AuthScheduler,
     store: Arc<dyn CooldownStateStore>,
     sessions: Option<Arc<dyn super::AccountSessionStore>>,
     quotas: Option<Arc<dyn super::AccountQuotaStore>>,
+    state_dispatcher: Option<AccountStateDispatcher>,
 }
 
 impl AccountRouter {
@@ -159,6 +166,7 @@ impl AccountRouter {
             store,
             sessions: None,
             quotas: None,
+            state_dispatcher: None,
         }
     }
 
@@ -168,6 +176,7 @@ impl AccountRouter {
             store,
             sessions: None,
             quotas: None,
+            state_dispatcher: None,
         }
     }
 
@@ -183,6 +192,7 @@ impl AccountRouter {
             store,
             sessions: Some(sessions),
             quotas: None,
+            state_dispatcher: None,
         }
     }
 
@@ -194,6 +204,71 @@ impl AccountRouter {
         let mut router = Self::with_session_store(store, sessions);
         router.quotas = Some(quotas);
         router
+    }
+
+    /// Native file stores supply their bounded owner executor. Portable
+    /// in-memory users retain the existing synchronous behavior by default.
+    pub fn with_state_dispatcher(mut self, dispatcher: AccountStateDispatcher) -> Self {
+        self.state_dispatcher = Some(dispatcher);
+        self
+    }
+
+    async fn state_async<T: Send + 'static>(
+        self: &Arc<Self>,
+        operation: impl FnOnce(&Self) -> Result<T, AccountRoutingError> + Send + 'static,
+    ) -> Result<T, AccountRoutingError> {
+        let Some(dispatch) = &self.state_dispatcher else {
+            return operation(self);
+        };
+        let router = Arc::clone(self);
+        let (reply, result) = tokio::sync::oneshot::channel();
+        let operation = crate::internal::api::account_selection::owner_phase(move || {
+            let _ = reply.send(operation(&router));
+        });
+        dispatch(Box::new(operation)).await?;
+        result
+            .await
+            .map_err(|_| AccountRoutingError::Store(CooldownStoreError::Read))?
+    }
+
+    pub async fn select_async(
+        self: &Arc<Self>,
+        provider: &str,
+        model: Option<&str>,
+        now_ms: i64,
+        candidates: &[AccountCandidate],
+    ) -> Result<AccountCandidate, AccountRoutingError> {
+        let (provider, model, candidates) = (
+            provider.to_owned(),
+            model.map(str::to_owned),
+            candidates.to_vec(),
+        );
+        self.state_async(move |router| {
+            router.select(&provider, model.as_deref(), now_ms, &candidates)
+        })
+        .await
+    }
+
+    pub async fn begin_claude_quota_observation_async(
+        self: &Arc<Self>,
+        auth_id: &str,
+    ) -> Result<super::ClaudeQuotaObservation, AccountRoutingError> {
+        let auth_id = auth_id.to_owned();
+        self.state_async(move |router| router.begin_claude_quota_observation(&auth_id))
+            .await
+    }
+
+    pub async fn observe_claude_quota_async(
+        self: &Arc<Self>,
+        observation: super::ClaudeQuotaObservation,
+        headers: &crate::sdk::cliproxy::executor::Headers,
+        observed_at_ms: i64,
+    ) -> Result<(), AccountRoutingError> {
+        let headers = headers.clone();
+        self.state_async(move |router| {
+            router.observe_claude_quota(observation, &headers, observed_at_ms)
+        })
+        .await
     }
 
     fn quota_expiries(

@@ -243,6 +243,11 @@ async fn rejected_room_closes_transport_before_returning_error() {
         .err()
         .expect("room was rejected");
     assert!(error.to_string().contains("bring-up failed"), "{error}");
+    let cause = error
+        .get_ref()
+        .and_then(|error| error.source())
+        .expect("bring-up failure retains its typed cause");
+    assert!(cause.downcast_ref::<rxdb::rx_error::RxError>().is_some());
     signal.assert_closed().await;
     database.close().await.unwrap();
 }
