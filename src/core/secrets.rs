@@ -1781,8 +1781,8 @@ mod owner_seam_tests {
 
 // Legacy direct-open path. Secrets-owned callers in this file go through the
 // injected owner (`secret_owner`); tests use this as fixture bootstrap. The
-// remaining live caller is `secret_requests` (agent secret requests), which
-// still opens its request table directly and must migrate onto the owner.
+// request lifecycle also uses the injected owner; no live caller uses this opener.
+#[cfg(test)]
 pub(crate) fn open_secret_db(root: &Path) -> Result<Connection> {
     let db_path = resolve_db_path(root);
     if let Some(parent) = db_path.parent() {
@@ -1907,6 +1907,7 @@ pub(crate) fn initialize_owned_secret_schema(conn: &Connection) -> Result<()> {
         );
         "#,
     )?;
+    crate::secret_requests::initialize_owned_request_schema(conn)?;
     Ok(())
 }
 

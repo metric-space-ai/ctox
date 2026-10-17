@@ -19,8 +19,8 @@ use std::process::{Command, Stdio};
 use zeroize::Zeroizing;
 
 use crate::secrets::{
-    ensure_secret_schema, find_flag_value, get_secret_value, open_secret_db, print_json,
-    put_secret, resolve_secret_value_arg, secret_reference_text,
+    find_flag_value, get_secret_value, print_json, put_secret, resolve_secret_value_arg,
+    secret_reference_text,
 };
 
 const REQUEST_USAGE: &str = "usage: ctox secret request --scope <scope> --name <name> --label <text> [--reason <text>] [--thread <key>]";
@@ -76,7 +76,7 @@ pub fn handle(root: &Path, command: &str, args: &[String]) -> Result<()> {
         "request-status" => {
             let id = find_flag_value(args, "--request-id")
                 .context("usage: ctox secret request-status --request-id <id>")?;
-            let request = load_request(&open_db(root)?, id)?.context("secret request not found")?;
+            let request = request_by_id(root, id)?.context("secret request not found")?;
             print_json(&json!({"ok": true, "request": request}))
         }
         "fulfill" => {
@@ -104,9 +104,8 @@ pub fn handle(root: &Path, command: &str, args: &[String]) -> Result<()> {
     }
 }
 
-fn open_db(root: &Path) -> Result<Connection> {
-    let conn = open_secret_db(root)?;
-    ensure_secret_schema(&conn)?;
+// Installed once by the Secrets writer; reads never perform schema writes.
+pub(crate) fn initialize_owned_request_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS ctox_secret_requests (
@@ -124,7 +123,17 @@ fn open_db(root: &Path) -> Result<Connection> {
             ON ctox_secret_requests(status, created_at DESC);
         "#,
     )?;
-    Ok(conn)
+    Ok(())
+}
+fn owner(root: &Path) -> Result<crate::lcm::owner_adapter::OwnerAdapter> {
+    crate::persistence::require_sync_owner_context()?;
+    Ok(crate::lcm::owner_adapter::OwnerAdapter::for_path(
+        &crate::paths::secrets_db(root),
+    )?)
+}
+fn request_by_id(root: &Path, id: &str) -> Result<Option<SecretRequestView>> {
+    let id = id.to_owned();
+    Ok(owner(root)?.read_blocking(move |conn| Ok(load_request(conn, &id)?))?)
 }
 
 fn validate_handle_part(kind: &str, value: &str) -> Result<()> {
@@ -168,15 +177,24 @@ pub fn create_request(
         !label.trim().is_empty() && label.len() <= 200,
         "label must be 1-200 chars"
     );
-    let conn = open_db(root)?;
+    let owner = owner(root)?;
+    let (scope, name, label, reason, thread_key) = (
+        scope.to_owned(),
+        name.to_owned(),
+        label.trim().to_owned(),
+        reason.map(str::to_owned),
+        thread_key.map(str::to_owned),
+    );
     let id = new_request_id()?;
     let ts = now();
-    conn.execute(
-        "INSERT INTO ctox_secret_requests (request_id, scope, secret_name, label, reason, thread_key, status, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7)",
-        params![id, scope, name, label.trim(), reason, thread_key, ts],
-    )?;
-    load_request(&conn, &id)?.context("secret request vanished after insert")
+    owner.write_blocking(move |conn| {
+        conn.execute(
+            "INSERT INTO ctox_secret_requests (request_id, scope, secret_name, label, reason, thread_key, status, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', ?7, ?7)",
+            params![id, scope, name, label.trim(), reason, thread_key, ts],
+        )?;
+        Ok(load_request(conn, &id)?)
+    })?.context("secret request vanished after insert")
 }
 
 fn row_to_view(row: &rusqlite::Row<'_>) -> rusqlite::Result<SecretRequestView> {
@@ -198,7 +216,7 @@ fn row_to_view(row: &rusqlite::Row<'_>) -> rusqlite::Result<SecretRequestView> {
 
 const SELECT: &str = "SELECT request_id, scope, secret_name, label, reason, thread_key, status, created_at, updated_at FROM ctox_secret_requests";
 
-fn load_request(conn: &Connection, id: &str) -> Result<Option<SecretRequestView>> {
+fn load_request(conn: &Connection, id: &str) -> rusqlite::Result<Option<SecretRequestView>> {
     Ok(conn
         .query_row(
             &format!("{SELECT} WHERE request_id = ?1"),
@@ -213,18 +231,19 @@ pub fn list_requests(
     status: Option<&str>,
     thread_key: Option<&str>,
 ) -> Result<Vec<SecretRequestView>> {
-    let conn = open_db(root)?;
-    let mut stmt = conn.prepare(&format!(
-        "{SELECT} WHERE (?1 IS NULL OR status = ?1) AND (?2 IS NULL OR thread_key = ?2) ORDER BY created_at DESC LIMIT 200"
-    ))?;
-    let rows = stmt.query_map(params![status, thread_key], row_to_view)?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    let (status, thread_key) = (status.map(str::to_owned), thread_key.map(str::to_owned));
+    Ok(owner(root)?.read_blocking(move |conn| {
+        let mut stmt = conn.prepare(&format!(
+            "{SELECT} WHERE (?1 IS NULL OR status = ?1) AND (?2 IS NULL OR thread_key = ?2) ORDER BY created_at DESC LIMIT 200"
+        ))?;
+        let rows = stmt.query_map(params![status, thread_key], row_to_view)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    })?)
 }
 
 pub fn fulfill_request(root: &Path, id: &str, value: &str) -> Result<SecretRequestView> {
     anyhow::ensure!(!value.is_empty(), "secret value must not be empty");
-    let conn = open_db(root)?;
-    let request = load_request(&conn, id)?.context("secret request not found")?;
+    let request = request_by_id(root, id)?.context("secret request not found")?;
     anyhow::ensure!(request.status != "declined", "secret request was declined");
     put_secret(
         root,
@@ -238,8 +257,7 @@ pub fn fulfill_request(root: &Path, id: &str, value: &str) -> Result<SecretReque
 }
 
 pub fn decline_request(root: &Path, id: &str) -> Result<SecretRequestView> {
-    let conn = open_db(root)?;
-    let request = load_request(&conn, id)?.context("secret request not found")?;
+    let request = request_by_id(root, id)?.context("secret request not found")?;
     anyhow::ensure!(
         request.status == "pending",
         "secret request is already {}",
@@ -249,13 +267,12 @@ pub fn decline_request(root: &Path, id: &str) -> Result<SecretRequestView> {
 }
 
 fn set_status(root: &Path, id: &str, status: &str) -> Result<SecretRequestView> {
-    let conn = open_db(root)?;
-    let changed = conn.execute(
-        "UPDATE ctox_secret_requests SET status = ?2, updated_at = ?3 WHERE request_id = ?1",
-        params![id, status, now()],
-    )?;
-    anyhow::ensure!(changed == 1, "secret request not found");
-    load_request(&conn, id)?.context("secret request vanished after update")
+    let (id, status) = (id.to_owned(), status.to_owned());
+    owner(root)?.write_blocking(move |conn| {
+        let changed = conn.execute("UPDATE ctox_secret_requests SET status = ?2, updated_at = ?3 WHERE request_id = ?1", params![id, status, now()])?;
+        if changed != 1 { return Err(ctox_store::StoreError::Invalid("secret request not found".into())); }
+        Ok(load_request(conn, &id)?)
+    })?.context("secret request vanished after update")
 }
 
 /// Parses `--env VAR=scope/name` pairs and the command after `--`.
@@ -342,14 +359,13 @@ fn exec_with_secrets(root: &Path, args: &[String]) -> Result<i32> {
 mod tests {
     use super::*;
 
-    fn temp_root(label: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "ctox-secret-request-test-{label}-{}",
-            std::process::id()
-        ));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).unwrap();
-        path
+    fn temp_root(_label: &str) -> std::path::PathBuf {
+        // Keep the Unix owner socket below SUN_LEN even under lane TMPDIR.
+        tempfile::Builder::new()
+            .prefix("sr-")
+            .tempdir()
+            .unwrap()
+            .keep()
     }
 
     fn grep_tree(dir: &Path, needle: &[u8]) -> Vec<String> {
@@ -383,37 +399,83 @@ mod tests {
     fn request_fulfill_roundtrip_returns_only_reference_and_never_persists_plaintext() -> Result<()>
     {
         let root = temp_root("roundtrip");
-        let canary = "CANARY-pw-7f3a9c1e5b";
-        let request = create_request(
-            &root,
-            "mail",
-            "cto1_password",
-            "Passwort cto1",
-            Some("IMAP"),
-            Some("t1"),
-        )?;
-        assert_eq!(request.status, "pending");
-        assert_eq!(list_requests(&root, Some("pending"), Some("t1"))?.len(), 1);
-        let stored = fulfill_request(&root, &request.request_id, canary)?;
-        assert_eq!(stored.status, "stored");
-        assert_eq!(stored.secret_ref, "[secret-ref:mail/cto1_password]");
-        let serialized = serde_json::to_string(&stored)?;
-        assert!(!serialized.contains(canary));
-        assert_eq!(get_secret_value(&root, "mail", "cto1_password")?, canary);
-        // Grep canary: the value must not appear anywhere on disk in plaintext.
-        let hits = grep_tree(&root, canary.as_bytes());
-        assert!(hits.is_empty(), "plaintext secret found in {hits:?}");
+        let work = root.clone();
+        let result = crate::persistence::run_cli_owned(&root, move || {
+            let root = work;
+            let canary = "CANARY-pw-7f3a9c1e5b";
+            let request = create_request(
+                &root,
+                "mail",
+                "cto1_password",
+                "Passwort cto1",
+                Some("IMAP"),
+                Some("t1"),
+            )?;
+            assert_eq!(request.status, "pending");
+            assert_eq!(list_requests(&root, Some("pending"), Some("t1"))?.len(), 1);
+            let stored = fulfill_request(&root, &request.request_id, canary)?;
+            assert_eq!(stored.status, "stored");
+            assert_eq!(stored.secret_ref, "[secret-ref:mail/cto1_password]");
+            let serialized = serde_json::to_string(&stored)?;
+            assert!(!serialized.contains(canary));
+            assert_eq!(get_secret_value(&root, "mail", "cto1_password")?, canary);
+            // Grep canary: the value must not appear anywhere on disk in plaintext.
+            let hits = grep_tree(&root, canary.as_bytes());
+            assert!(hits.is_empty(), "plaintext secret found in {hits:?}");
+            Ok(())
+        });
         let _ = std::fs::remove_dir_all(&root);
-        Ok(())
+        result
     }
 
     #[test]
     fn declined_request_cannot_be_fulfilled() -> Result<()> {
         let root = temp_root("decline");
-        let request = create_request(&root, "s", "n", "Label", None, None)?;
-        set_status(&root, &request.request_id, "declined")?;
-        assert!(fulfill_request(&root, &request.request_id, "value-1234").is_err());
+        let work = root.clone();
+        let result = crate::persistence::run_cli_owned(&root, move || {
+            let root = work;
+            let request = create_request(&root, "s", "n", "Label", None, None)?;
+            set_status(&root, &request.request_id, "declined")?;
+            assert!(fulfill_request(&root, &request.request_id, "value-1234").is_err());
+            Ok(())
+        });
         let _ = std::fs::remove_dir_all(&root);
+        result
+    }
+
+    #[test]
+    fn requests_use_injected_owner_and_preserve_admission() -> Result<()> {
+        let root = tempfile::tempdir()?;
+        let path = root.path().to_owned();
+        let error = create_request(&path, "fixture", "owner", "Owner", None, None).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<crate::persistence::CoreSyncError>(),
+            Some(&crate::persistence::CoreSyncError::Required)
+        );
+        let work = path.clone();
+        crate::persistence::run_cli_owned(&path, move || {
+            let owner = owner(&work)?;
+            // TEMP objects exist only on the injected writer. A second opener
+            // can insert a row but cannot fire this connection's trigger.
+            owner.write_blocking(|conn| {
+                conn.execute_batch("CREATE TEMP TABLE request_owner_audit(value INTEGER); CREATE TEMP TRIGGER request_owner_insert AFTER INSERT ON main.ctox_secret_requests BEGIN INSERT INTO request_owner_audit VALUES(1); END;")?;
+                Ok(())
+            })?;
+            let request = create_request(&work, "fixture", "owner", "Owner", None, None)?;
+            let hits: i64 = owner.write_blocking(|conn| {
+                Ok(conn.query_row("SELECT COUNT(*) FROM request_owner_audit", [], |r| r.get(0))?)
+            })?;
+            assert_eq!(hits, 1, "request bypassed the injected Secrets writer");
+            let stored = fulfill_request(&work, &request.request_id, "synthetic-owner-canary")?;
+            assert_eq!(stored.status, "stored");
+            assert_eq!(list_requests(&work, Some("stored"), None)?, vec![stored]);
+            Ok(())
+        })?;
+        let error = create_request(&path, "fixture", "after", "After", None, None).unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<crate::persistence::CoreSyncError>(),
+            Some(&crate::persistence::CoreSyncError::Required)
+        );
         Ok(())
     }
 
