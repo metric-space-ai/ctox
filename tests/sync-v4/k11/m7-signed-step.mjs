@@ -9,6 +9,9 @@ export async function performDressSmoke({config,root,output,env,cli,quiesce,phas
  try{
   let expectedRoot=join(current,'src/apps/business-os/v4/index.html');
   if(config.version){
+   // Hand off the private foreground store owner before the official CLI writes.
+   // The previous live-owner activation failed with AlreadyOwned.
+   quiesce();
    const stage=config.verifiedActiveReceipt?{code:0,reused:true}:await cli(['business-os','shell-update','stage','--version',config.version],{allowFailure:true});
    result.signedSlot={status:stage.code===0?'staged':'fail',stageExit:stage.reused?null:stage.code,version:config.version,...(stage.reused?{activationReusedFrom:config.verifiedActiveReceipt}:{})};
    if(stage.code===0){

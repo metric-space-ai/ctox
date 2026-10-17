@@ -18,7 +18,7 @@ const digest=x=>createHash('sha256').update(x).digest('hex');
 const r={startedAtMs:Date.now(),terminal:false,pass:false,criteria:[],console:[],pageErrors:[],requestsFailed:[]};let browser;
 const pendingSignaling=process.env.M7_EXPECT_SIGNALING_DEPLOY==='1';
 const criterion=(id,pass,details)=>{
- const blocked=pendingSignaling&&!pass&&((id.startsWith('launch-context')&&(details.httpStatus===503||details.http503===20))||(['browser-boot','platform-command-roundtrip'].includes(id)&&r.launchSeries?.every(x=>x.samples.every(s=>s.httpStatus===503))));
+ const blocked=pendingSignaling&&!pass&&((id.startsWith('launch-context')&&(details.httpStatus===503||details.http503===20))||((id==='browser-boot'||(id==='platform-command-roundtrip'&&details.submitted===false))&&r.launchSeries?.every(x=>x.samples.every(s=>s.httpStatus===503))));
  r.criteria.push({id,status:blocked?'not_run':pass?'pass':'fail',...(blocked?{reason:'signaling-deploy',observed:'blocked by expected HTTP503; never a passing launch claim'}:{}),...details});
 };
 const save=()=>fs.writeFileSync(join(out,'smoke.json'),JSON.stringify(r,null,2),{mode:0o600});

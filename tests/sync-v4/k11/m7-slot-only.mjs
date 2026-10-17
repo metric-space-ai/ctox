@@ -26,7 +26,7 @@ const required=['entry','service-worker','kernel','entry-p99'];
 const criteria=r.signedSmoke?.smoke?.criteria||[];
 const staticPass=required.every(id=>criteria.some(x=>x.id===id&&x.status==='pass'));
 const allowedPending=criteria.every(x=>x.status==='pass'||(x.status==='not_run'&&x.reason==='signaling-deploy'));
-const result={scope:'Signed slot activation, static HTTP and preserved synthetic rows; no final M7 acceptance',staticPass,fullAcceptancePass:r.signedSmoke?.pass===true,schema:'ctox.m7.slot-continuation.v1',measuredAt:new Date().toISOString(),prior:base,controllerExit:child.status,signedSmoke:r.signedSmoke,dataReadback:r.dataReadback,pass:staticPass&&allowedPending&&child.status===0&&r.signedSmoke?.signedSlot?.status==='pass'&&r.dataReadback?.matchesBefore===true};
+const result={scope:'Signed slot activation, static HTTP and preserved synthetic rows; no final M7 acceptance',staticPass,fullAcceptancePass:r.signedSmoke?.pass===true,schema:'ctox.m7.slot-continuation.v1',measuredAt:new Date().toISOString(),prior:base,controllerExit:child.status,signedSmoke:r.signedSmoke,dataReadback:r.dataReadback,pass:staticPass&&allowedPending&&r.signedSmoke?.commandNativeReceipt?.status!=='fail'&&child.status===0&&r.signedSmoke?.signedSlot?.status==='pass'&&r.dataReadback?.matchesBefore===true};
 fs.writeFileSync(join(out,'result.json'),JSON.stringify(result,null,2),{mode:0o600});
 console.log(JSON.stringify({pass:result.pass,slot:result.signedSmoke?.signedSlot,controllerExit:child.status}));
 process.exitCode=result.pass?0:2;
