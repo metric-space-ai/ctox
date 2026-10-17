@@ -17,6 +17,7 @@ import {
   createDeterministicGzip,
   createTarArchive,
   isExcludedRuntimePath,
+  payloadImportClosure,
   sha256,
   stampShellDocument,
   validateRelativePath,
@@ -42,6 +43,15 @@ async function makeFixture() {
   // E38: v4 im Slot verlangt den Einstieg (v4/index.html + v4/boot.js).
   await writeFile(join(sourceRoot, 'v4', 'index.html'), '<!doctype html><html><head><title>CTOX</title></head><body></body></html>\n');
   await writeFile(join(sourceRoot, 'v4', 'boot.js'), 'export {};\n');
+  // M7: Boot-Import-Abschluss. kernel/cache.mjs heißt wie ein Cache-Artefakt, ist aber von kernel/boot.mjs importiert;
+  // kernel/release.mjs ist nicht erreichbar und fällt weiter unter die Namensregel.
+  await writeFile(join(sourceRoot, 'v4', 'index.html'), '<!doctype html><html><head><title>CTOX</title><script type="module" src="/business-os/v4/boot.js"></script></head><body></body></html>\n');
+  await mkdir(join(sourceRoot, 'v4', 'frame'), { recursive: true });
+  await writeFile(join(sourceRoot, 'v4', 'frame', 'index.js'), "import 'ctox:shared/contest.js';\nexport {};\n");
+  await mkdir(join(sourceRoot, 'kernel'), { recursive: true });
+  await writeFile(join(sourceRoot, 'kernel', 'boot.mjs'), "import { cache } from './cache.mjs';\nexport const boot = () => cache;\n");
+  await writeFile(join(sourceRoot, 'kernel', 'cache.mjs'), 'export const cache = new Map();\n');
+  await writeFile(join(sourceRoot, 'kernel', 'release.mjs'), '// Entwicklerwerkzeug, kein Laufzeitinhalt\n');
   await mkdir(join(sourceRoot, 'ui-contract', 'v1'), { recursive: true });
   await writeFile(join(sourceRoot, 'ui-contract', 'v1', 'workjet-ui-contract.css'), ':root {}\n');
   await writeFile(join(sourceRoot, 'ui-contract', 'v1', 'workjet-ui-contract.json'), '{"schema":"workjet.ui.contract.v1"}\n');
@@ -211,6 +221,8 @@ test('deterministic builds have byte-identical archives and complete sorted inve
     assert.ok(paths.includes(`${root}/vendor/library/third-party-test.LICENSE`));
     assert.ok(paths.includes(`${root}/vendor/library/provenance.json`));
     assert.ok(paths.includes(`${root}/shared/contest.js`));
+    assert.ok(paths.includes(`${root}/kernel/cache.mjs`), 'importiertes kernel/cache.mjs fehlt (Namensregel)');
+    assert.ok(!paths.includes(`${root}/kernel/release.mjs`), 'nicht erreichbares kernel/release.mjs im Slot');
     assert.ok(paths.includes(`${root}/ctox-shell-manifest.json`));
     assert.ok(!paths.includes(`${root}/public/calendar-booking/index.html`));
     for (const excluded of [
@@ -431,4 +443,35 @@ test('E38: Kern-Bootstrap im Slot ohne Tests, Testkit, Fake-Core und Doku; v4-Ei
   assert.equal(isExcludedRuntimePath('kernel/tests', { directory: true }), true);
   assert.deepEqual([...V4_ENTRY_FILES], ['v4/index.html', 'v4/boot.js']);
   for (const path of V4_ENTRY_FILES) assert.equal(isExcludedRuntimePath(path), false, path);
+});
+
+test('M7: Boot-Import-Abschluss – eine importierte Datei außerhalb der Nutzlast bricht den Bau ab', async () => {
+  const { fixtureRoot, sourceRoot } = await makeFixture();
+  try {
+    await mkdir(join(sourceRoot, 'kernel', 'tests'), { recursive: true });
+    await writeFile(join(sourceRoot, 'kernel', 'tests', 'probe.mjs'), 'export {};\n');
+    await writeFile(join(sourceRoot, 'kernel', 'boot.mjs'), "import './cache.mjs';\nimport './tests/probe.mjs';\n");
+    const outputDir = join(fixtureRoot, 'closure-output');
+    await assert.rejects(
+      buildShellArtifact({ sourceRoot, outputDir, version: '1.0.0', sourceCommit: SOURCE_COMMIT }),
+      /Shell import closure is incomplete in the runtime payload \(1\): kernel\/boot\.mjs → \.\/tests\/probe\.mjs/,
+    );
+    await assert.rejects(readdir(outputDir), { code: 'ENOENT' });
+  } finally {
+    await cleanup(fixtureRoot);
+  }
+});
+
+test('M7: Boot-Import-Abschluss des echten Baums liegt vollständig in der Nutzlast (kernel/cache.mjs eingeschlossen)', async () => {
+  const { collectRuntimePayload: collect } = await import('./build-shell-artifact.mjs');
+  const root = new URL('..', import.meta.url).pathname;
+  const { files } = await collect(root);
+  const { reachable, missing } = await payloadImportClosure(files);
+  assert.deepEqual(missing, []);
+  for (const path of ['v4/index.html', 'v4/boot.js', 'kernel/boot.mjs', 'kernel/kernel.mjs', 'kernel/cache.mjs', 'v4/frame/index.js']) {
+    assert.ok(reachable.has(path), `${path} nicht im Abschluss`);
+  }
+  // Gegenprobe: ohne kernel/cache.mjs (alte Namensregel) meldet der Abschluss genau diese Lücke.
+  const without = await payloadImportClosure(files.filter((f) => f.path !== 'kernel/cache.mjs'));
+  assert.deepEqual(without.missing.map((m) => m.path), ['kernel/cache.mjs']);
 });
