@@ -80,8 +80,15 @@ fn read(conn: &Connection, id: &str) -> anyhow::Result<Option<Effect>> {
         .transpose()
 }
 pub(crate) fn has_effect(root: &Path, id: &str) -> anyhow::Result<bool> {
+    // The effect journal serves Codex and API-key accounts alike; an
+    // API-key-only instance has no instance proxy table, so read the runtime
+    // config file directly instead of through with_instance_proxy_read.
+    let path = crate::inference::runtime_env::runtime_config_path(root);
+    if !path.exists() {
+        return Ok(false);
+    }
     let id = id.to_owned();
-    Ok(with_instance_proxy_read(root, move |conn| {
+    crate::lcm::with_lcm_read(&path, move |conn| {
         let exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type=\"table\" AND name=?1)",
             [TABLE],
@@ -91,8 +98,7 @@ pub(crate) fn has_effect(root: &Path, id: &str) -> anyhow::Result<bool> {
             return Ok(false);
         }
         Ok(read(conn, &id)?.is_some())
-    })?
-    .unwrap_or(false))
+    })
 }
 
 /// Compatibility helper for existing Claude control fixtures.
