@@ -14,8 +14,8 @@
              manual refresh: the module renders live queries (App-API 4.0).
              Reactive data needs no reload button. -->
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" data-action="create-note" aria-label="Neue Notiz anlegen" title="Neue Notiz anlegen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
-          <button type="button" class="ctox-pane-icon" data-action="export-threads" aria-label="Gefilterte Threads als JSON exportieren" title="Gefilterte Threads als JSON exportieren"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="create-note" aria-label="Neue Notiz anlegen" title="Neue Notiz anlegen" data-short-de="Notiz" data-short-en="Note"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+          <button type="button" class="ctox-pane-icon" data-action="export-threads" aria-label="Gefilterte Threads als JSON exportieren" title="Gefilterte Threads als JSON exportieren" data-short-de="Export" data-short-en="Export"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7"/></svg></button>
         </div>
       </div>
       <!-- Row 2: filter section — search + view toggle + filter tray toggle.
@@ -33,7 +33,7 @@
              label name the view the click switches TO. No aria-pressed — a
              button that performs a switch is not a state. -->
         <button type="button" class="ctox-pane-icon threads-view-toggle" data-pg-view="cards" data-threads-view-toggle aria-label="Als Liste anzeigen" title="Als Liste anzeigen"><svg data-view-glyph="list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg><svg data-view-glyph="cards" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
-        <button type="button" class="ctox-pane-icon threads-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+        <button type="button" class="ctox-pane-icon threads-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter" data-short-de="Filter" data-short-en="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
       </div>
       <div class="threads-filter-advanced" data-pg-tray hidden>
         <div class="threads-filter-row">
@@ -84,24 +84,24 @@
           <h2 class="ctox-pane-title" data-thread-title></h2>
         </div>
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" data-thread-claim title="Abstimmung übernehmen" aria-label="Abstimmung übernehmen">
+          <button type="button" class="ctox-pane-icon" data-thread-claim title="Abstimmung übernehmen" aria-label="Abstimmung übernehmen" data-short-de="Übernehmen" data-short-en="Claim">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l5 5L19 7"/></svg>
           </button>
           <!-- Timeline view: same one-button law as the left rail. -->
           <button type="button" class="ctox-pane-icon threads-view-toggle" data-pg-view="cards" data-threads-view-toggle aria-label="Als Liste anzeigen" title="Als Liste anzeigen"><svg data-view-glyph="list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg><svg data-view-glyph="cards" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
-          <button type="button" class="ctox-pane-icon" data-thread-delegate title="An Teammitglied übergeben" aria-label="An Teammitglied übergeben">
+          <button type="button" class="ctox-pane-icon" data-thread-delegate title="An Teammitglied übergeben" aria-label="An Teammitglied übergeben" data-short-de="Übergeben" data-short-en="Hand over">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7ZM3.5 19.5a5.5 5.5 0 0 1 11 0"/><path d="M16 8h5M18.5 5.5 21 8l-2.5 2.5"/></svg>
           </button>
-          <button type="button" class="ctox-pane-icon" data-thread-watch title="Watch" aria-label="Watch">
+          <button type="button" class="ctox-pane-icon" data-thread-watch title="Watch" aria-label="Watch" data-short-de="Beobachten" data-short-en="Watch">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6ZM12 9.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z"/></svg>
           </button>
-          <button type="button" class="ctox-pane-icon" data-thread-snooze title="Snooze" aria-label="Snooze">
+          <button type="button" class="ctox-pane-icon" data-thread-snooze title="Snooze" aria-label="Snooze" data-short-de="Zurückstellen" data-short-en="Snooze">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4.5a7.5 7.5 0 1 1 0 15 7.5 7.5 0 0 1 0-15ZM12 8v4.5l3 2"/></svg>
           </button>
-          <button type="button" class="ctox-pane-icon" data-thread-archive title="Abstimmung aus der Inbox entfernen; der Fachvorgang bleibt bestehen" aria-label="Abstimmung aus der Inbox entfernen">
+          <button type="button" class="ctox-pane-icon" data-thread-archive title="Abstimmung aus der Inbox entfernen; der Fachvorgang bleibt bestehen" aria-label="Abstimmung aus der Inbox entfernen" data-short-de="Entfernen" data-short-en="Remove">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16v4H4zM6 9v10h12V9M10 13h4"/></svg>
           </button>
-          <button type="button" class="ctox-pane-icon threads-toggle-actions" data-toggle-actions title="Aktionen & Aufmerksamkeit" aria-label="Aktionen & Aufmerksamkeit einblenden" aria-pressed="false">
+          <button type="button" class="ctox-pane-icon threads-toggle-actions" data-toggle-actions title="Aktionen & Aufmerksamkeit" aria-label="Aktionen & Aufmerksamkeit einblenden" aria-pressed="false" data-short-de="Aktionen" data-short-en="Actions">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
           </button>
         </div>

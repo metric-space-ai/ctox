@@ -1744,3 +1744,7 @@
   font-size: 12.5px;
   white-space: nowrap;
 }
+
+/* Wörter nur, wo Platz ist (shared/pane-icon-labels.js setzt data-icons-only an zu engen Zeilen). */
+[data-icons-only] .ctox-pane-icon.has-label { width: 30px; padding: 0; gap: 0; }
+[data-icons-only] .ctox-pane-icon.has-label > .ctox-pane-icon-label { display: none; }

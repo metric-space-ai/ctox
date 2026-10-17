@@ -19,7 +19,7 @@
 //   G3 keine sichtbaren Zustandstexte im Inhalt (v4/tools/guards/vocabulary.json; ausgenommen Elemente unter
 //      [data-v4-allow…] und Literale aus Quellzeilen mit `v4-allow: label`), Zustandszone ohne Einträge.
 //   G4 keine abgeschnittenen Texte (text-overflow: ellipsis bzw. line-clamp mit Überlauf), Ausnahme
-//      [data-v4-allow-ellipsis].
+//      [data-v4-allow-ellipsis]; sichtbare Kurzwörter (.ctox-pane-icon-label) ganz im eigenen Knopf, ohne Überdeckung.
 //   G5 App-CSS wirkt nicht außerhalb des App-Inhalts: berechnete Stile aller Elemente außerhalb von root mit und
 //      ohne die App-Stylesheets verglichen (entscheidend); Selektor-Treffer außerhalb als Beleg.
 //   G7 Geschwister-Pane-Köpfe gleich hoch: sichtbare .ctox-pane-header mit gleicher Oberkante (Spalten nebeneinander)

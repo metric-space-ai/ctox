@@ -1,5 +1,6 @@
 import { renderHtmlIfChanged } from 'ctox:shared/stable-dom.js';
 import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
+import { applyPaneIconLabels } from 'ctox:shared/pane-icon-labels.js';
 import {
   CATEGORIES,
   COMMUNITY_PRESET,
@@ -256,6 +257,8 @@ export async function mount(root, api, { restored } = {}) {
   bindElements(root);
   wireEvents();
   autoWirePaneGrammar(root);
+  // Icon + Wort (workjet#801): Kurzwörter der Kopfknöpfe; der Rahmen blendet sie aus, wo der Kopf zu eng ist.
+  disposers.push(applyPaneIconLabels(root, state.lang).dispose);
   api.shell.setTitle(t('title'));
   const pendingRestore = restored && typeof restored === 'object' && restored.v === 1 ? restored : null;
   applyRestoredView(pendingRestore);
@@ -273,6 +276,7 @@ export async function mount(root, api, { restored } = {}) {
     if (lang === state.lang) return;
     state.lang = lang;
     state.messages = messagesFor(api, lang);
+    applyPaneIconLabels(root, lang);
     scheduleRender();
   }));
   return {

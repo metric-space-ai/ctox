@@ -503,3 +503,8 @@ html[data-workjet-mobile-host="true"] :where(button, [role="button"]):has(> svg:
 .shell-window .ctox-pane-tab .view-count {
   display: none;
 }
+
+/* Icon + Wort (workjet#801): Wortknöpfe zeigen ihr Kurzwort nur, solange der Kopf Platz hat; sonst setzt
+   pane-heads.js data-v4-icons-only und der Knopf ist wieder das 30-px-Icon (Wort bleibt in aria-label/title). */
+.v4f .shell-window-content [data-v4-icons-only] .ctox-pane-icon.has-label { width: 30px; padding: 0; gap: 0; }
+.v4f .shell-window-content [data-v4-icons-only] .ctox-pane-icon.has-label > .ctox-pane-icon-label { display: none; }

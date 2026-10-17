@@ -22,6 +22,11 @@ export const HEIGHT_VAR = '--v4-pane-head-h';
 export const ICON_ATTR = 'data-v4-under-icon';
 export const KIT_ROWS = '.ctox-filterbar';
 export const CTRL_ATTR = 'data-v4-under-controls';
+// Icon + Wort (Owner-Regel workjet#801): ob Kurzwörter in eine Zeile passen, entscheidet shared/pane-icon-labels.js
+// (data-icons-only). Nur der Rahmen kennt die reservierten Zonen: ragt ein Wortknopf in die Zone unter dem App-Icon
+// oder dem Knopfcluster, setzt er am Kopf data-v4-icons-only (frame.css: nur Icons). Je Messung neu entschieden.
+export const ICONS_ONLY_ATTR = 'data-v4-icons-only';
+const LABELLED = '.ctox-pane-icon.has-label';
 const TOP_TOLERANCE = 2;
 const SIB_ROW_MAX = 64;
 const INTERACTIVE = 'button, a, input, select, textarea, [role="button"], [tabindex]';
@@ -38,9 +43,29 @@ export function createPaneHeadSync({ raf = (fn) => requestAnimationFrame(fn), ca
     el.style.removeProperty(HEIGHT_VAR);
   }
 
+  // Wortknöpfe nur, wenn sie passen (s. ICONS_ONLY_ATTR). Gemessen wird mit Wörtern (Markierung vorher entfernt); die
+  // Einrückungen aus markReserved der letzten Messung gelten dabei weiter. Kein Beobachter reagiert auf das Attribut.
+  function fitLabels() {
+    const rows = [...root.querySelectorAll(`${PANE_HEAD}, ${KIT_ROWS}`)].filter((el) => el.querySelector(LABELLED));
+    if (!rows.length) return;
+    for (const el of rows) el.removeAttribute(ICONS_ONLY_ATTR);
+    const win = root.closest?.('.shell-window');
+    const content = root.closest?.('.shell-window-content') || root;
+    const zones = win ? zoneRects(win, content) : [];
+    if (!zones.length) return;
+    for (const el of rows) {
+      const hit = [...el.querySelectorAll(LABELLED)].some((b) => {
+        const br = b.getBoundingClientRect();
+        return br.width > 0 && zones.some((z) => br.left < z.right && br.right > z.left && br.top < z.bottom && br.bottom > z.top);
+      });
+      if (hit) el.setAttribute(ICONS_ONLY_ATTR, '');
+    }
+  }
+
   function measure() {
     frame = 0;
     if (!root) return;
+    fitLabels();
     const heads = [...root.querySelectorAll(PANE_HEAD)];
     for (const el of observed) if (!heads.includes(el) || !root.contains(el)) { ro?.unobserve(el); observed.delete(el); }
     for (const el of heads) if (!observed.has(el)) { ro?.observe(el); observed.add(el); }
@@ -180,7 +205,7 @@ export function createPaneHeadSync({ raf = (fn) => requestAnimationFrame(fn), ca
       frame = 0;
       for (const el of observed) clear(el);
       observed.clear();
-      for (const k of root?.querySelectorAll?.(`[${ICON_ATTR}], [${CTRL_ATTR}]`) || []) { k.removeAttribute(ICON_ATTR); k.removeAttribute(CTRL_ATTR); }
+      for (const k of root?.querySelectorAll?.(`[${ICON_ATTR}], [${CTRL_ATTR}], [${ICONS_ONLY_ATTR}]`) || []) { k.removeAttribute(ICON_ATTR); k.removeAttribute(CTRL_ATTR); k.removeAttribute(ICONS_ONLY_ATTR); }
       root = null;
     },
     measure,
