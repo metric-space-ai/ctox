@@ -5,10 +5,15 @@ import { applyDeclarativeMigration } from '../../shared/declarative-migrations.j
 
 const packaged = JSON.parse(readFileSync(new URL('../../modules/ctox/collections.schema.json', import.meta.url)));
 const contract = JSON.parse(readFileSync(new URL('../../../../core/business_os/business_os_schema_contract.json', import.meta.url)));
+// E61: on the v4 line the native contract for business_commands is the canonical V4 command document
+// (platform-owned); the V2 ctox-module copy keeps packaged/browser parity and its V2 steps. V2 native parity
+// for business_commands is guarded on release/v2.
+const v4CommandDocument = JSON.parse(readFileSync(new URL('../../../../core/rxdb/tests/fixtures/business-command-document-v4.json', import.meta.url)));
+const nativeSource = (name, schema) => (name === 'business_commands' ? v4CommandDocument : schema);
 assert.equal(collections.workjet_projects.version, 5);
 for (const [name, schema] of Object.entries(collections).filter(([, schema]) => schema.version > 0)) {
   assert.deepEqual(packaged.collections[name], schema, `${name}: packaged/browser schema parity`);
-  assert.deepEqual(contract[name], schema, `${name}: native/browser schema parity`);
+  assert.deepEqual(contract[name], nativeSource(name, schema), `${name}: native/browser schema parity`);
   for (let version = 1; version <= schema.version; version += 1) {
     assert.equal(typeof migrationStrategies[name]?.[version], 'function', `${name}: browser step ${version}`);
     assert.ok(Array.isArray(packaged.migration_strategies[name]?.[String(version)]?.operations), `${name}: native step ${version}`);
