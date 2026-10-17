@@ -47,7 +47,10 @@ jobs:
             [[ "$INPUT_SOURCE" =~ ^[a-f0-9]{40}$ ]] || { echo "source_commit must be a full commit ID" >&2; exit 1; }
             [[ "$source_commit" == "$INPUT_SOURCE" ]] || { echo "Checked-out source differs from requested commit" >&2; exit 1; }
           fi
-          git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main
+          # Shell releases come from main (v4 line) or release/v2 (0.1.x V2
+          # line, E37 split 17.10.2026). Anything else is not releasable.
+          git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main \
+            || git merge-base --is-ancestor "$source_commit" refs/remotes/origin/release/v2
           printf 'commit=%s\n' "$source_commit" >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js 24
