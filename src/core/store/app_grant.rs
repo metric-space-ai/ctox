@@ -464,14 +464,28 @@ impl AppGrantSession {
     /// Physical publication uses the issued app grant's CURRENT version, not
     /// the version from the initial hello. Old queued grants fail immediately
     /// when the router starts a policy update, before any notification drains.
-    pub fn with_publication<T>(&self,token:&str,now:u64,epoch:&str,publish:impl FnOnce()->scope::Result<T>)->scope::Result<T> {
-        let version={
-            let state=self.state.lock().map_err(|_|"grant session unavailable")?;
-            let issued=state.issued.values().find(|g|g.token==token).ok_or("revoked")?;
-            issued.claims.rights_ver.parse().map_err(|_|"invalid rights version")?
+    pub fn with_publication<T>(
+        &self,
+        token: &str,
+        now: u64,
+        epoch: &str,
+        publish: impl FnOnce() -> scope::Result<T>,
+    ) -> scope::Result<T> {
+        let version = {
+            let state = self.state.lock().map_err(|_| "grant session unavailable")?;
+            let issued = state
+                .issued
+                .values()
+                .find(|g| g.token == token)
+                .ok_or("revoked")?;
+            issued
+                .claims
+                .rights_ver
+                .parse()
+                .map_err(|_| "invalid rights version")?
         };
         self.authority.router.with_snapshot(version, epoch, |_, _| {
-            self.with_token_current(token,now,publish)
+            self.with_token_current(token, now, publish)
         })
     }
     /// Used by P8's native reader in its own SQLite snapshot. Authorization,

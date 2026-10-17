@@ -586,7 +586,19 @@ async fn p6_shell_boot_preference_cursor_uses_real_p8_and_e55_reader() {
     };
     let reader =
         Arc::new(reader::AppGrantReader::new(f.session.clone(), key.clone(), || 1001).unwrap());
-    let mut cursor = Subscription::new(f.store.readers(), &f.store.writer(), key, None).unwrap();
+    // This proves projection/authority, not the production 20ms read SLA.
+    // Cold shared-lane scheduling must not turn an authorization assertion into
+    // a timing assertion. Keep the real reader/writer with an explicit budget.
+    let writer = f.store.writer();
+    let readers = ctox_store::ReadPool::for_database(
+        writer.db_id(), writer.generation(), Default::default(),
+        ctox_store::AdmissionBudget {
+            wait: std::time::Duration::from_secs(2),
+            execution: std::time::Duration::from_secs(2),
+            ..Default::default()
+        },
+    ).await.unwrap();
+    let mut cursor = Subscription::new(readers.clone(), &writer, key, None).unwrap();
     let page = cursor
         .next_page(100, reader, &*f.key, || 1_001_000)
         .await
@@ -599,40 +611,92 @@ async fn p6_shell_boot_preference_cursor_uses_real_p8_and_e55_reader() {
         "Shell lost own-app preferences or leaked foreign user"
     );
     assert!(!page.sig.is_empty(), "P8 cursor must use held E22 signer");
+    readers.close();
     f.close().await;
 }
 
 #[tokio::test]
 async fn p6_browser_publication_follows_the_fresh_app_grant_version() {
-    let f=Fixture::new().await;
-    let epoch=f.auth.hello_snapshot().await.unwrap().0.epoch;
-    let old=f.session.issue("a",1000).await.unwrap();
-    f.session.with_publication(&old,1001,&epoch,||Ok(())).expect("initial grant did not publish");
-    f.auth.replace(rules(),manifests()).await.unwrap();
-    assert!(f.session.with_publication(&old,1001,&epoch,||Ok(())).is_err(),"old version survived publication before revoke notification");
-    let fresh=f.session.issue("a",1001).await.unwrap();
-    f.session.with_publication(&fresh,1002,&epoch,||Ok(())).expect("fresh grant stuck on original hello version");
+    let f = Fixture::new().await;
+    let epoch = f.auth.hello_snapshot().await.unwrap().0.epoch;
+    let old = f.session.issue("a", 1000).await.unwrap();
+    f.session
+        .with_publication(&old, 1001, &epoch, || Ok(()))
+        .expect("initial grant did not publish");
+    f.auth.replace(rules(), manifests()).await.unwrap();
+    assert!(
+        f.session
+            .with_publication(&old, 1001, &epoch, || Ok(()))
+            .is_err(),
+        "old version survived publication before revoke notification"
+    );
+    let fresh = f.session.issue("a", 1001).await.unwrap();
+    f.session
+        .with_publication(&fresh, 1002, &epoch, || Ok(()))
+        .expect("fresh grant stuck on original hello version");
     f.session.revoke_app("a").unwrap();
-    assert!(f.session.with_publication(&fresh,1002,&epoch,||Ok(())).is_err(),"revoked publication retained");
+    assert!(
+        f.session
+            .with_publication(&fresh, 1002, &epoch, || Ok(()))
+            .is_err(),
+        "revoked publication retained"
+    );
     f.close().await;
 }
 
 #[tokio::test]
 async fn p6_revoked_preference_write_keeps_its_journaled_reason() {
-    use ctox_store::change_log::subscription::{WriteAuthority,WritePermission,protocol::{OrderedWrite,Write},write_contract::OrderedWriter};
+    use ctox_store::change_log::subscription::{
+        protocol::{OrderedWrite, Write},
+        write_contract::OrderedWriter,
+        WriteAuthority, WritePermission,
+    };
     struct Revoked;
     impl WriteAuthority for Revoked {
-        fn authorize(&self,_:&rusqlite::Transaction<'_>,_:&str,_:&Write)->rusqlite::Result<WritePermission>{Ok(WritePermission::Reject("revoked".into()))}
-        fn validate_document(&self,_:&rusqlite::Transaction<'_>,_:&str,_:&ctox_store::schema::Collection,_:&Value)->rusqlite::Result<WritePermission>{panic!("revoked write reached document validation")}
+        fn authorize(
+            &self,
+            _: &rusqlite::Transaction<'_>,
+            _: &str,
+            _: &Write,
+        ) -> rusqlite::Result<WritePermission> {
+            Ok(WritePermission::Reject("revoked".into()))
+        }
+        fn validate_document(
+            &self,
+            _: &rusqlite::Transaction<'_>,
+            _: &str,
+            _: &ctox_store::schema::Collection,
+            _: &Value,
+        ) -> rusqlite::Result<WritePermission> {
+            panic!("revoked write reached document validation")
+        }
     }
-    let f=Fixture::new().await;
-    let now=1_001_000u64;
-    let mut bytes=[0u8;16];bytes[..6].copy_from_slice(&now.to_be_bytes()[2..]);bytes[6]=0x70;bytes[8]=0x80;bytes[15]=1;
-    let hex=bytes.iter().map(|b|format!("{b:02x}")).collect::<String>();
-    let op=format!("{}-{}-{}-{}-{}",&hex[..8],&hex[8..12],&hex[12..16],&hex[16..20],&hex[20..]);
+    let f = Fixture::new().await;
+    let now = 1_001_000u64;
+    let mut bytes = [0u8; 16];
+    bytes[..6].copy_from_slice(&now.to_be_bytes()[2..]);
+    bytes[6] = 0x70;
+    bytes[8] = 0x80;
+    bytes[15] = 1;
+    let hex = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let op = format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    );
     let write:OrderedWrite=serde_json::from_value(json!({"client_seq":"1","op_id":op,"collection":"app_user_preferences","id":"shell/alice/layout","gen":1,"schema_ver":1,"app_ver":"1","op":"put","body":{"id":"shell/alice/layout","app_id":"shell","user_id":"alice","key":"layout","value":7}})).unwrap();
-    let batch=OrderedWriter::new(f.store.writer(),Arc::new(Revoked)).submit("device".into(),write,now).await.unwrap();
-    assert_eq!(batch.results[0].result.reason.as_deref(),Some("revoked"),"revoked preference rejection lost its reason");
+    let batch = OrderedWriter::new(f.store.writer(), Arc::new(Revoked))
+        .submit("device".into(), write, now)
+        .await
+        .unwrap();
+    assert_eq!(
+        batch.results[0].result.reason.as_deref(),
+        Some("revoked"),
+        "revoked preference rejection lost its reason"
+    );
     f.store.readers().read(|tx|{
         let stored:String=tx.query_row("SELECT result_json FROM _write_results WHERE participant='device' AND client_seq=1",[],|r|r.get(0))?;
         assert_eq!(serde_json::from_str::<Value>(&stored).unwrap()["reason"],"revoked","durable E14 journal lost revocation");
