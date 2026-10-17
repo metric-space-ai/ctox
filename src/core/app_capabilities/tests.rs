@@ -315,12 +315,28 @@ retired_route_test!(task_report_bug, "agent.task", "report_bug");
 retired_route_test!(task_request, "agent.task", "request");
 retired_route_test!(ticket_approve, "ctox.ticket", "approve");
 retired_route_test!(ticket_close, "ctox.ticket", "close");
-retired_route_test!(ticket_create_from_conversation, "ctox.ticket", "create_from_conversation");
+retired_route_test!(
+    ticket_create_from_conversation,
+    "ctox.ticket",
+    "create_from_conversation"
+);
 retired_route_test!(ticket_execute, "ctox.ticket", "execute");
 retired_route_test!(ticket_local_create, "ctox.ticket", "local.create");
-retired_route_test!(ticket_publish_clarification, "ctox.ticket", "publish_clarification");
-retired_route_test!(ticket_request_clarification, "ctox.ticket", "request_clarification");
-retired_route_test!(ticket_resolve_clarification, "ctox.ticket", "resolve_clarification");
+retired_route_test!(
+    ticket_publish_clarification,
+    "ctox.ticket",
+    "publish_clarification"
+);
+retired_route_test!(
+    ticket_request_clarification,
+    "ctox.ticket",
+    "request_clarification"
+);
+retired_route_test!(
+    ticket_resolve_clarification,
+    "ctox.ticket",
+    "resolve_clarification"
+);
 retired_route_test!(ticket_verify, "ctox.ticket", "verify");
 retired_route_test!(ticket_writeback_comment, "ctox.ticket", "writeback_comment");
 
@@ -328,10 +344,11 @@ retired_route_test!(ticket_writeback_comment, "ctox.ticket", "writeback_comment"
 fn app_capabilities_registry_is_exact_and_duplicate_registration_preserves_original() {
     let mut registry = CapabilityRegistry::cap1();
     let before = registry.descriptors();
-    assert!(before.as_array().unwrap().iter().all(|d| !matches!(
-        d["name"].as_str(),
-        Some("ctox.ticket" | "agent.crew")
-    )));
+    assert!(before
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|d| !matches!(d["name"].as_str(), Some("ctox.ticket" | "agent.crew"))));
     let route = *caps::all_routes().next().unwrap();
     assert_eq!(
         registry.register(route).unwrap_err().code,

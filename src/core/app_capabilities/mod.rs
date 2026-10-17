@@ -1,12 +1,5 @@
 //! App-independent native capability boundary (V4 CAP-1).
 //! The runtime supplies a Core-owned host; child-process context is never authority.
-#[cfg(test)]
-mod handler_calls;
-#[cfg(test)]
-mod handler_knowledge_tests;
-#[cfg(test)]
-#[path = "handler_registry_tests.rs"]
-mod handler_registry_tests;
 #[path = "caps/office.rs"]
 pub mod cap2;
 #[path = "caps/cap3.rs"]
@@ -14,6 +7,13 @@ pub mod cap3;
 #[path = "caps/cap4.rs"]
 pub mod cap4;
 pub mod caps;
+#[cfg(test)]
+mod handler_calls;
+#[cfg(test)]
+mod handler_knowledge_tests;
+#[cfg(test)]
+#[path = "handler_registry_tests.rs"]
+mod handler_registry_tests;
 pub mod native;
 pub mod policy;
 pub mod protocol;
