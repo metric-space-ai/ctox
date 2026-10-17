@@ -495,3 +495,11 @@ html[data-workjet-mobile-host="true"] :where(button, [role="button"]):has(> svg:
     linear-gradient(currentColor, currentColor) right bottom / 1.5px 5px no-repeat;
 }
 .shell-window-layout-glyph--fullscreen::after { display: none; }
+
+/* Keine Zahlen hinter Reitern/Überschriften (Owner-Regel, workjet#801 UX-Test 0.0.105) – v4-weit für jede App im Rahmen.
+   Die Zählknoten der Pane-Grammatik ([data-pg-count], .view-count) bleiben im DOM (Vertrag, Tests lesen textContent),
+   werden aber nicht gezeigt. Gleiche Regel wie main b325ef17c für news/threads, hier einmal für alle Apps. */
+.shell-window .ctox-pane-tab [data-pg-count],
+.shell-window .ctox-pane-tab .view-count {
+  display: none;
+}
