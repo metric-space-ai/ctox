@@ -6,6 +6,12 @@
 #
 #   bash src/apps/business-os/v4/debt/apply-s9.sh            # Trockenlauf: nur Bedingungen prüfen, nichts löschen
 #   bash src/apps/business-os/v4/debt/apply-s9.sh --apply    # Bedingungen prüfen, dann git rm
+#   bash src/apps/business-os/v4/debt/apply-s9.sh --stage 1 [--apply]   # nur Stufe 1 (Kern E37.3, 17.10.2026)
+#
+# Stufen (E37.3): Stufe 1 direkt nach dem v4→main-Merge, Stufe 2 (STAGE2 unten: die am 17.10. von V2-Gegenstellen
+# blockierten Dateien) erst nach dem V2-Ende, wenn THESEN auf v4 ist. In Stufe 1 gehören die Stufe-2-Dateien NICHT
+# zur Löschmenge: ein Verweis aus einer Stufe-2-Datei blockiert also auch eine Stufe-1-Datei (sonst bräche z. B.
+# shell-generation.test.mjs, wenn shell-generation.js vorher ginge). Die Regel je Datei bleibt unverändert hart.
 #
 # Bedingung je Datei (generisch): kein Verweis mehr AUSSERHALB der Löschmenge – gemessen mit git grep über das
 # ganze Repo (inkl. src/core, .github, tests, scripts), ohne *.md, vendor/, dist/, v4/debt/, v4/tools/guards/ (Löschlisten-Muster),
@@ -18,7 +24,16 @@ ROOT=$(git rev-parse --show-toplevel)
 cd "$ROOT"
 BOS=src/apps/business-os
 APPLY=0
-[[ "${1:-}" == "--apply" ]] && APPLY=1
+STAGE=all
+for a in "$@"; do
+  case "$a" in
+    --apply) APPLY=1 ;;
+    --stage) ;;
+    1|2) STAGE=$a ;;
+    --stage=1|--stage=2) STAGE=${a#--stage=} ;;
+    *) echo "unbekanntes Argument: $a" >&2; exit 64 ;;
+  esac
+done
 
 # Eintrag: "<Löschplan-Nr>|<Pfad relativ zu BOS>|<git-grep-ERE, das einen Verweis auf die Datei erkennt>"
 ENTRIES=(
@@ -92,19 +107,44 @@ ENTRIES=(
   "L-01t|shared/window-recovery.test.mjs|window-recovery\.test"
 )
 
+# Stufe 2 (E37.3): Trockenlauf 17.10.2026 08:4x auf c3135a252, 27 blockierte Einträge (V2-Gegenstellen), dazu 6 Dateien,
+# die nur aus Stufe-2-Dateien importiert werden, und ihre 3 Tests (Modul und Test gehen zusammen), dazu outbound/schema.js (Verweis aus conversations/schema.js) – Stufe 1 = 29.
+STAGE2=$'\n'"app.js mobile-host.js mobile-host.css mobile-apps.json system-apps.json modules/registry.json modules/ctox/schema.js
+shared/collection-freshness.js shared/shell-generation.test.mjs shared/shell-release-status.js shared/command-bus.js
+scripts/assert-shell-v2-contract.mjs scripts/shell-v2-geometry-lab.mjs scripts/generate-module-registry.mjs
+scripts/build-shell-artifact.mjs scripts/build-shell-artifact.test.mjs scripts/sign-shell-release.mjs
+scripts/sign-shell-release.test.mjs scripts/shell-generation-native.browser.mjs scripts/assert-shell-release-chrome.mjs
+modules/mail/tests/mail-browser-qa.mjs design-lab.html shared/business-chat.js shared/business-chat.test.mjs
+shared/permissions.js shared/permissions.test.mjs shared/audience-route-denial.test.mjs
+modules/conversations/schema.js shared/maintenance-state.js shared/maintenance-state.test.mjs shared/shell-generation.js
+shared/startup-deadlines.js shared/startup-deadlines.test.mjs scripts/assert-startup-deadlines-browser.mjs
+scripts/shell-generation-native-lab.mjs design-lab.js modules/outbound/schema.js"
+STAGE2=$'\n'$(printf '%s\n' $STAGE2)$'\n'
+in_stage() { # <rel> → 0, wenn die Datei zur gewählten Stufe gehört
+  local rel=$1
+  case "$STAGE" in
+    all) return 0 ;;
+    1) [[ "$STAGE2" != *$'\n'"$rel"$'\n'* ]] ;;
+    2) [[ "$STAGE2" == *$'\n'"$rel"$'\n'* ]] ;;
+  esac
+}
+
 EXCLUDES=(':!*.md' ':!**/vendor/**' ':!**/dist/**' ":!$BOS/v4/debt/**" ":!$BOS/v4/tools/guards/**"
   ":!$BOS/v4/manifests/**" ":!$BOS/v4/tools/manifest/out/**")
 
 DELSET=$'\n'   # Löschmenge als Zeilenliste (bash 3.2 auf macOS kennt keine assoziativen Arrays)
 for e in "${ENTRIES[@]}"; do
   rel=${e#*|}; rel=${rel%%|*}
-  DELSET+="$BOS/$rel"$'\n'
+  in_stage "$rel" && DELSET+="$BOS/$rel"$'\n'
 done
 
-missing=0; blocked=0
+missing=0; blocked=0; deferred=0
 for e in "${ENTRIES[@]}"; do
   id=${e%%|*}; rest=${e#*|}; rel=${rest%%|*}; pat=${rest#*|}
   path="$BOS/$rel"
+  if ! in_stage "$rel"; then
+    echo "STUFE$([[ $STAGE == 1 ]] && echo 2 || echo 1) $id $rel (nicht in dieser Stufe)"; deferred=$((deferred + 1)); continue
+  fi
   if [[ ! -e "$path" ]]; then
     echo "WEG     $id $rel (schon gelöscht)"; missing=$((missing + 1)); continue
   fi
@@ -132,7 +172,7 @@ for e in "${ENTRIES[@]}"; do
 done
 
 total=${#ENTRIES[@]}
-echo "Summe: ${total} Einträge, blockiert ${blocked}, schon weg ${missing}, frei $((total - blocked - missing))"
+echo "Summe (Stufe ${STAGE}): ${total} Einträge, andere Stufe ${deferred}, blockiert ${blocked}, schon weg ${missing}, frei $((total - deferred - blocked - missing))"
 if (( blocked > 0 )); then
   echo "Abbruch: erst die Verweise entfernen (Kern-Gegenstellen: LOESCHPAKET-S9.md §2). Nichts gelöscht."
   exit 1
@@ -144,6 +184,7 @@ fi
 
 for e in "${ENTRIES[@]}"; do
   rel=${e#*|}; rel=${rel%%|*}
+  in_stage "$rel" || continue
   [[ -e "$BOS/$rel" ]] && git rm -q -- "$BOS/$rel"
 done
 echo "gelöscht. Jetzt die Prüfkommandos aus LOESCHPAKET-S9.md §4 ausführen (Generator-Liste kürzen, Manifeste neu)."
