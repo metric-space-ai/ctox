@@ -565,6 +565,17 @@ mod owner_runtime_contract {
 }
 
 #[cfg(test)]
+async fn migrate_owned_fixture(root: &Path) -> Result<()> {
+    // Look up the existing adapter; never open another Runtime connection.
+    RuntimeStore {
+        owner: runtime_owner(root)?,
+        root: root.to_path_buf(),
+    }
+    .migrate_legacy_from_core()
+    .await
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -581,64 +592,84 @@ mod tests {
 
     #[test]
     fn auxiliary_backend_enabled_honors_global_disable() {
-        let root = make_temp_root();
-        let mut env_map = BTreeMap::new();
-        env_map.insert(
-            "CTOX_DISABLE_AUXILIARY_BACKENDS".to_string(),
-            "1".to_string(),
-        );
-        save_runtime_env_map(&root, &env_map).unwrap();
-        assert!(!auxiliary_backend_enabled(&root, "EMBEDDING"));
-        assert!(!auxiliary_backend_enabled(&root, "STT"));
-        assert!(!auxiliary_backend_enabled(&root, "TTS"));
-        std::fs::remove_dir_all(root).unwrap();
+        crate::persistence::test_support::run_runtime(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let mut env_map = BTreeMap::new();
+            env_map.insert(
+                "CTOX_DISABLE_AUXILIARY_BACKENDS".to_string(),
+                "1".to_string(),
+            );
+            save_runtime_env_map(&root, &env_map).unwrap();
+            assert!(!auxiliary_backend_enabled(&root, "EMBEDDING"));
+            assert!(!auxiliary_backend_enabled(&root, "STT"));
+            assert!(!auxiliary_backend_enabled(&root, "TTS"));
+            // Root cleanup follows owner shutdown.
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn auxiliary_backend_enabled_honors_disabled_model_selector() {
-        let root = make_temp_root();
-        let mut env_map = BTreeMap::new();
-        env_map.insert("CTOX_STT_MODEL".to_string(), "disabled".to_string());
-        save_runtime_env_map(&root, &env_map).unwrap();
-        assert!(!auxiliary_backend_enabled(&root, "STT"));
-        std::fs::remove_dir_all(root).unwrap();
+        crate::persistence::test_support::run_runtime(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let mut env_map = BTreeMap::new();
+            env_map.insert("CTOX_STT_MODEL".to_string(), "disabled".to_string());
+            save_runtime_env_map(&root, &env_map).unwrap();
+            assert!(!auxiliary_backend_enabled(&root, "STT"));
+            // Root cleanup follows owner shutdown.
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn effective_runtime_env_map_reads_persisted_values_only() {
-        let root = make_temp_root();
-        let mut env_map = BTreeMap::new();
-        env_map.insert("CTOX_ENGINE_FEATURES".to_string(), "persisted".to_string());
-        save_runtime_env_map(&root, &env_map).unwrap();
+        crate::persistence::test_support::run_runtime(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let mut env_map = BTreeMap::new();
+            env_map.insert("CTOX_ENGINE_FEATURES".to_string(), "persisted".to_string());
+            save_runtime_env_map(&root, &env_map).unwrap();
 
-        let effective = effective_runtime_env_map(&root).unwrap();
+            let effective = effective_runtime_env_map(&root).unwrap();
 
-        assert_eq!(
-            effective.get("CTOX_ENGINE_FEATURES").map(String::as_str),
-            Some("persisted")
-        );
-        std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(
+                effective.get("CTOX_ENGINE_FEATURES").map(String::as_str),
+                Some("persisted")
+            );
+            // Root cleanup follows owner shutdown.
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn effective_operator_env_map_excludes_runtime_projection_keys() {
-        let root = make_temp_root();
-        let mut env_map = BTreeMap::new();
-        env_map.insert("CTOX_DISABLE_MISSION_WATCHDOG".to_string(), "1".to_string());
-        env_map.insert("CTOX_CHAT_MODEL".to_string(), "gpt-5.4".to_string());
-        save_runtime_env_map(&root, &env_map).unwrap();
+        crate::persistence::test_support::run_runtime(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let mut env_map = BTreeMap::new();
+            env_map.insert("CTOX_DISABLE_MISSION_WATCHDOG".to_string(), "1".to_string());
+            env_map.insert("CTOX_CHAT_MODEL".to_string(), "gpt-5.4".to_string());
+            save_runtime_env_map(&root, &env_map).unwrap();
 
-        let effective = effective_operator_env_map(&root).unwrap();
+            let effective = effective_operator_env_map(&root).unwrap();
 
-        assert_eq!(
-            effective
-                .get("CTOX_DISABLE_MISSION_WATCHDOG")
-                .map(String::as_str),
-            Some("1")
-        );
-        assert!(!effective.contains_key("CTOX_CHAT_MODEL"));
-        assert!(!effective.contains_key("CTOX_ACTIVE_MODEL"));
-        std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(
+                effective
+                    .get("CTOX_DISABLE_MISSION_WATCHDOG")
+                    .map(String::as_str),
+                Some("1")
+            );
+            assert!(!effective.contains_key("CTOX_CHAT_MODEL"));
+            assert!(!effective.contains_key("CTOX_ACTIVE_MODEL"));
+            // Root cleanup follows owner shutdown.
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -658,36 +689,46 @@ mod tests {
 
     #[test]
     fn env_or_config_reads_persisted_non_secret_values() {
-        let root = make_temp_root();
-        let mut env_map = BTreeMap::new();
-        env_map.insert("CTOX_DISABLE_MISSION_WATCHDOG".to_string(), "0".to_string());
-        save_runtime_env_map(&root, &env_map).unwrap();
+        crate::persistence::test_support::run_runtime(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let mut env_map = BTreeMap::new();
+            env_map.insert("CTOX_DISABLE_MISSION_WATCHDOG".to_string(), "0".to_string());
+            save_runtime_env_map(&root, &env_map).unwrap();
 
-        assert_eq!(
-            env_or_config(&root, "CTOX_DISABLE_MISSION_WATCHDOG").as_deref(),
-            Some("0")
-        );
-        std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(
+                env_or_config(&root, "CTOX_DISABLE_MISSION_WATCHDOG").as_deref(),
+                Some("0")
+            );
+            // Root cleanup follows owner shutdown.
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn get_runtime_env_value_caches_non_secret_values_and_invalidates_on_write() {
-        let root = make_temp_root();
-        set_runtime_env_value(&root, "CTOX_AUTONOMY_LEVEL", "balanced").unwrap();
+        crate::persistence::test_support::run_runtime(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            set_runtime_env_value(&root, "CTOX_AUTONOMY_LEVEL", "balanced").unwrap();
 
-        assert_eq!(
-            get_runtime_env_value(&root, "CTOX_AUTONOMY_LEVEL").as_deref(),
-            Some("balanced")
-        );
+            assert_eq!(
+                get_runtime_env_value(&root, "CTOX_AUTONOMY_LEVEL").as_deref(),
+                Some("balanced")
+            );
 
-        set_runtime_env_value(&root, "CTOX_AUTONOMY_LEVEL", "progressive").unwrap();
+            set_runtime_env_value(&root, "CTOX_AUTONOMY_LEVEL", "progressive").unwrap();
 
-        assert_eq!(
-            get_runtime_env_value(&root, "CTOX_AUTONOMY_LEVEL").as_deref(),
-            Some("progressive")
-        );
-        assert!(!crate::secrets::secret_store_path(&root).exists());
-        std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(
+                get_runtime_env_value(&root, "CTOX_AUTONOMY_LEVEL").as_deref(),
+                Some("progressive")
+            );
+            assert!(!crate::secrets::secret_store_path(&root).exists());
+            // Root cleanup follows owner shutdown.
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -714,156 +755,178 @@ mod tests {
             assert!(result.success());
             return;
         }
-        let root = make_temp_root();
-        assert_eq!(env_or_config(&root, "OPENAI_API_KEY"), None);
-        assert_eq!(env_or_config(&root, "OPENROUTER_API_KEY"), None);
 
-        secrets::set_credential(&root, "OPENAI_API_KEY", "sk-store").unwrap();
-        secrets::set_credential(&root, "OPENROUTER_API_KEY", "or-store").unwrap();
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            assert_eq!(env_or_config(&root, "OPENAI_API_KEY"), None);
+            assert_eq!(env_or_config(&root, "OPENROUTER_API_KEY"), None);
 
-        assert_eq!(
-            env_or_config(&root, "OPENAI_API_KEY").as_deref(),
-            Some("sk-store")
-        );
-        assert_eq!(
-            env_or_config(&root, "OPENROUTER_API_KEY").as_deref(),
-            Some("or-store")
-        );
-        assert_eq!(env_or_config(&root, "CTOX_CUDA_HOME").as_deref(), None);
-        assert_eq!(env_or_config(&root, "CTOX_ENGINE_LOG").as_deref(), None);
+            secrets::set_credential(&root, "OPENAI_API_KEY", "sk-store").unwrap();
+            secrets::set_credential(&root, "OPENROUTER_API_KEY", "or-store").unwrap();
 
-        let effective = effective_runtime_env_map(&root).unwrap();
-        assert_eq!(
-            effective.get("OPENAI_API_KEY").map(String::as_str),
-            Some("sk-store")
-        );
-        assert_eq!(
-            effective.get("OPENROUTER_API_KEY").map(String::as_str),
-            Some("or-store")
-        );
-        assert_eq!(effective.get("CTOX_CUDA_HOME").map(String::as_str), None);
-        assert_eq!(effective.get("CTOX_ENGINE_LOG").map(String::as_str), None);
+            assert_eq!(
+                env_or_config(&root, "OPENAI_API_KEY").as_deref(),
+                Some("sk-store")
+            );
+            assert_eq!(
+                env_or_config(&root, "OPENROUTER_API_KEY").as_deref(),
+                Some("or-store")
+            );
+            assert_eq!(env_or_config(&root, "CTOX_CUDA_HOME").as_deref(), None);
+            assert_eq!(env_or_config(&root, "CTOX_ENGINE_LOG").as_deref(), None);
 
-        set_runtime_env_value(&root, "CTOX_CUDA_HOME", "/store/cuda").unwrap();
-        set_runtime_env_value(&root, "CTOX_ENGINE_LOG", "/store/engine.log").unwrap();
-        let effective = effective_runtime_env_map(&root).unwrap();
-        assert_eq!(
-            env_or_config(&root, "CTOX_CUDA_HOME").as_deref(),
-            Some("/store/cuda")
-        );
-        assert_eq!(
-            effective.get("CTOX_CUDA_HOME").map(String::as_str),
-            Some("/store/cuda")
-        );
-        assert_eq!(
-            effective.get("CTOX_ENGINE_LOG").map(String::as_str),
-            Some("/store/engine.log")
-        );
-        assert_eq!(
-            effective.get("OPENAI_API_KEY").map(String::as_str),
-            Some("sk-store")
-        );
-        assert_eq!(
-            effective.get("OPENROUTER_API_KEY").map(String::as_str),
-            Some("or-store")
-        );
-        assert!(!load_persisted_runtime_env_map(&root)
-            .unwrap()
-            .contains_key("OPENAI_API_KEY"));
+            let effective = effective_runtime_env_map(&root).unwrap();
+            assert_eq!(
+                effective.get("OPENAI_API_KEY").map(String::as_str),
+                Some("sk-store")
+            );
+            assert_eq!(
+                effective.get("OPENROUTER_API_KEY").map(String::as_str),
+                Some("or-store")
+            );
+            assert_eq!(effective.get("CTOX_CUDA_HOME").map(String::as_str), None);
+            assert_eq!(effective.get("CTOX_ENGINE_LOG").map(String::as_str), None);
 
-        std::fs::remove_dir_all(root).unwrap();
+            set_runtime_env_value(&root, "CTOX_CUDA_HOME", "/store/cuda").unwrap();
+            set_runtime_env_value(&root, "CTOX_ENGINE_LOG", "/store/engine.log").unwrap();
+            let effective = effective_runtime_env_map(&root).unwrap();
+            assert_eq!(
+                env_or_config(&root, "CTOX_CUDA_HOME").as_deref(),
+                Some("/store/cuda")
+            );
+            assert_eq!(
+                effective.get("CTOX_CUDA_HOME").map(String::as_str),
+                Some("/store/cuda")
+            );
+            assert_eq!(
+                effective.get("CTOX_ENGINE_LOG").map(String::as_str),
+                Some("/store/engine.log")
+            );
+            assert_eq!(
+                effective.get("OPENAI_API_KEY").map(String::as_str),
+                Some("sk-store")
+            );
+            assert_eq!(
+                effective.get("OPENROUTER_API_KEY").map(String::as_str),
+                Some("or-store")
+            );
+            assert!(!load_persisted_runtime_env_map(&root)
+                .unwrap()
+                .contains_key("OPENAI_API_KEY"));
+
+            // Shared fixture removes the root after the owner shutdown.
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
     fn legacy_runtime_env_secret_migrates_even_when_new_store_has_rows() {
-        let root = make_temp_root();
-        let legacy_path = crate::persistence::sqlite_path(&root);
-        let legacy = rusqlite::Connection::open(&legacy_path).unwrap();
-        legacy
-            .execute_batch(
-                "CREATE TABLE runtime_env_kv (
+        crate::persistence::test_support::run_prepared(
+            |root| {
+                let legacy_path = crate::persistence::sqlite_path(&root);
+                let legacy = rusqlite::Connection::open(&legacy_path).unwrap();
+                legacy
+                    .execute_batch(
+                        "CREATE TABLE runtime_env_kv (
                     env_key TEXT PRIMARY KEY,
                     env_value TEXT NOT NULL
                 );",
-            )
-            .unwrap();
-        legacy
-            .execute(
-                "INSERT INTO runtime_env_kv (env_key, env_value) VALUES (?1, ?2)",
-                rusqlite::params!["CTOX_LLM_PROXY_API_KEY", "proxy-secret"],
-            )
-            .unwrap();
+                    )
+                    .unwrap();
+                legacy
+                    .execute(
+                        "INSERT INTO runtime_env_kv (env_key, env_value) VALUES (?1, ?2)",
+                        rusqlite::params!["CTOX_LLM_PROXY_API_KEY", "proxy-secret"],
+                    )
+                    .unwrap();
 
-        let target_path = runtime_config_path(&root);
-        let target = rusqlite::Connection::open(&target_path).unwrap();
-        target
-            .execute_batch(
-                "CREATE TABLE runtime_env_kv (
+                let target_path = runtime_config_path(&root);
+                let target = rusqlite::Connection::open(&target_path).unwrap();
+                target
+                    .execute_batch(
+                        "CREATE TABLE runtime_env_kv (
                     env_key TEXT PRIMARY KEY,
                     env_value TEXT NOT NULL
                 );
                 INSERT INTO runtime_env_kv (env_key, env_value)
                 VALUES ('CTOX_API_PROVIDER', 'minimax');",
-            )
-            .unwrap();
+                    )
+                    .unwrap();
 
-        let effective = effective_operator_env_map(&root).unwrap();
+                Ok(())
+            },
+            move |owner_root| {
+                let root = owner_root.path().to_path_buf();
+                tokio::runtime::Handle::current().block_on(migrate_owned_fixture(&root))?;
+                let effective = effective_operator_env_map(&root).unwrap();
 
-        assert_eq!(
-            effective.get("CTOX_LLM_PROXY_API_KEY").map(String::as_str),
-            Some("proxy-secret")
-        );
-        let persisted = load_persisted_runtime_env_map(&root).unwrap();
-        assert!(!persisted.contains_key("CTOX_LLM_PROXY_API_KEY"));
-        assert_eq!(
-            secrets::get_credential(&root, "CTOX_LLM_PROXY_API_KEY").as_deref(),
-            Some("proxy-secret")
-        );
-        std::fs::remove_dir_all(root).unwrap();
+                assert_eq!(
+                    effective.get("CTOX_LLM_PROXY_API_KEY").map(String::as_str),
+                    Some("proxy-secret")
+                );
+                let persisted = load_persisted_runtime_env_map(&root).unwrap();
+                assert!(!persisted.contains_key("CTOX_LLM_PROXY_API_KEY"));
+                assert_eq!(
+                    secrets::get_credential(&root, "CTOX_LLM_PROXY_API_KEY").as_deref(),
+                    Some("proxy-secret")
+                );
+                // Root cleanup follows owner shutdown.
+
+                Ok(())
+            },
+        )
+        .unwrap();
     }
 
     #[test]
     fn save_runtime_state_projection_preserves_non_runtime_keys() {
-        let root = make_temp_root();
-        let mut env_map = BTreeMap::new();
-        env_map.insert("CTOX_DISABLE_MISSION_WATCHDOG".to_string(), "1".to_string());
-        env_map.insert("CTOX_ENGINE_MODEL".to_string(), "stale".to_string());
+        crate::persistence::test_support::run_runtime(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let mut env_map = BTreeMap::new();
+            env_map.insert("CTOX_DISABLE_MISSION_WATCHDOG".to_string(), "1".to_string());
+            env_map.insert("CTOX_ENGINE_MODEL".to_string(), "stale".to_string());
 
-        let state = runtime_state::InferenceRuntimeState {
-            version: 4,
-            source: runtime_state::InferenceSource::Api,
-            local_runtime: runtime_state::LocalRuntimeKind::Candle,
-            base_model: Some("gpt-5.4".to_string()),
-            requested_model: Some("gpt-5.4".to_string()),
-            active_model: Some("gpt-5.4".to_string()),
-            engine_model: None,
-            engine_port: None,
-            configured_context_tokens: None,
-            realized_context_tokens: None,
-            upstream_base_url: runtime_state::default_api_upstream_base_url().to_string(),
-            local_preset: None,
-            boost: runtime_state::BoostRuntimeState::default(),
-            adapter_tuning: runtime_state::AdapterRuntimeTuning::default(),
-            embedding: runtime_state::AuxiliaryRuntimeState::default(),
-            transcription: runtime_state::AuxiliaryRuntimeState::default(),
-            speech: runtime_state::AuxiliaryRuntimeState::default(),
-            vision: runtime_state::AuxiliaryRuntimeState::default(),
-        };
+            let state = runtime_state::InferenceRuntimeState {
+                version: 4,
+                source: runtime_state::InferenceSource::Api,
+                local_runtime: runtime_state::LocalRuntimeKind::Candle,
+                base_model: Some("gpt-5.4".to_string()),
+                requested_model: Some("gpt-5.4".to_string()),
+                active_model: Some("gpt-5.4".to_string()),
+                engine_model: None,
+                engine_port: None,
+                configured_context_tokens: None,
+                realized_context_tokens: None,
+                upstream_base_url: runtime_state::default_api_upstream_base_url().to_string(),
+                local_preset: None,
+                boost: runtime_state::BoostRuntimeState::default(),
+                adapter_tuning: runtime_state::AdapterRuntimeTuning::default(),
+                embedding: runtime_state::AuxiliaryRuntimeState::default(),
+                transcription: runtime_state::AuxiliaryRuntimeState::default(),
+                speech: runtime_state::AuxiliaryRuntimeState::default(),
+                vision: runtime_state::AuxiliaryRuntimeState::default(),
+            };
 
-        save_runtime_state_projection(&root, &state, &env_map).unwrap();
-        let persisted = load_runtime_env_map(&root).unwrap();
+            save_runtime_state_projection(&root, &state, &env_map).unwrap();
+            let persisted = load_runtime_env_map(&root).unwrap();
 
-        assert_eq!(
-            persisted
-                .get("CTOX_DISABLE_MISSION_WATCHDOG")
-                .map(String::as_str),
-            Some("1")
-        );
-        assert_eq!(
-            persisted.get("CTOX_ACTIVE_MODEL").map(String::as_str),
-            Some("gpt-5.4")
-        );
-        assert!(!persisted.contains_key("CTOX_ENGINE_MODEL"));
-        std::fs::remove_dir_all(root).unwrap();
+            assert_eq!(
+                persisted
+                    .get("CTOX_DISABLE_MISSION_WATCHDOG")
+                    .map(String::as_str),
+                Some("1")
+            );
+            assert_eq!(
+                persisted.get("CTOX_ACTIVE_MODEL").map(String::as_str),
+                Some("gpt-5.4")
+            );
+            assert!(!persisted.contains_key("CTOX_ENGINE_MODEL"));
+            // Root cleanup follows owner shutdown.
+
+            Ok(())
+        })
+        .unwrap();
     }
 }

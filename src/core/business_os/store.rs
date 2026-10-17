@@ -33127,92 +33127,96 @@ pub(super) mod tests {
     // remains in this test.
     #[test]
     fn replicated_peer_without_token_cannot_manage_secrets() -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
-        seed_business_user(root.path(), "chef1", "chef")?;
+        crate::persistence::test_support::run_policy(move |owner_root| {
+            let root = owner_root;
+            seed_business_user(root.path(), "chef1", "chef")?;
 
-        let secret_list = |cid: &str, ctx: Value| {
-            serde_json::json!({
-                "id": cid,
-                "command_id": cid,
-                "module": "credentials",
-                "type": "ctox.secret.list",
-                "payload": {},
-                "client_context": ctx,
-            })
-        };
+            let secret_list = |cid: &str, ctx: Value| {
+                serde_json::json!({
+                    "id": cid,
+                    "command_id": cid,
+                    "module": "credentials",
+                    "type": "ctox.secret.list",
+                    "payload": {},
+                    "client_context": ctx,
+                })
+            };
 
-        let denied = accept_rxdb_business_command_with_origin(
-            root.path(),
-            secret_list("s1", serde_json::json!({ "actor": { "id": "chef1" } })),
-            CommandOrigin::ReplicatedPeer,
-        )
-        .expect_err("tokenless secret.list must fail authentication");
-        assert!(denied.to_string().contains("valid capability token"));
-        let conn = open_store(root.path())?;
-        let stored_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM business_commands WHERE command_id = 's1'",
-            [],
-            |row| row.get(0),
-        )?;
-        assert_eq!(stored_count, 0, "unauthenticated command must not persist");
-        drop(conn);
-        assert!(channels::list_queue_tasks(root.path(), &[], 32)?.is_empty());
+            let denied = accept_rxdb_business_command_with_origin(
+                root.path(),
+                secret_list("s1", serde_json::json!({ "actor": { "id": "chef1" } })),
+                CommandOrigin::ReplicatedPeer,
+            )
+            .expect_err("tokenless secret.list must fail authentication");
+            assert!(denied.to_string().contains("valid capability token"));
+            let conn = open_store(root.path())?;
+            let stored_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM business_commands WHERE command_id = 's1'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(stored_count, 0, "unauthenticated command must not persist");
+            drop(conn);
+            assert!(channels::list_queue_tasks(root.path(), &[], 32)?.is_empty());
 
-        // Same command with a valid chef token → allowed.
-        let now = now_ms() as i64;
-        let (chef_token, _) = issue_business_os_capability_token(root.path(), "chef1", now)?;
-        let allowed = accept_rxdb_business_command_with_origin(
-            root.path(),
-            secret_list("s2", serde_json::json!({ "capability_token": chef_token })),
-            CommandOrigin::ReplicatedPeer,
-        )?;
-        assert_eq!(
-            allowed.get("status").and_then(Value::as_str),
-            Some("completed"),
-            "valid chef token must pass SecretsManage: {allowed:?}"
-        );
-        Ok(())
+            // Same command with a valid chef token → allowed.
+            let now = now_ms() as i64;
+            let (chef_token, _) = issue_business_os_capability_token(root.path(), "chef1", now)?;
+            let allowed = accept_rxdb_business_command_with_origin(
+                root.path(),
+                secret_list("s2", serde_json::json!({ "capability_token": chef_token })),
+                CommandOrigin::ReplicatedPeer,
+            )?;
+            assert_eq!(
+                allowed.get("status").and_then(Value::as_str),
+                Some("completed"),
+                "valid chef token must pass SecretsManage: {allowed:?}"
+            );
+            Ok(())
+        })
     }
 
     #[test]
     fn authenticated_replicated_peer_without_secret_permission_cannot_manage_secrets(
     ) -> anyhow::Result<()> {
-        let root = tempfile::tempdir()?;
-        seed_business_user(root.path(), "chef1", "chef")?;
-        seed_business_user(root.path(), "viewer", "user")?;
-        let (token, _) =
-            issue_business_os_capability_token(root.path(), "viewer", now_ms() as i64)?;
-        let denied = accept_rxdb_business_command_with_origin(
-            root.path(),
-            serde_json::json!({
-                "id": "secret_policy_denied",
-                "command_id": "secret_policy_denied",
-                "module": "credentials",
-                "type": "ctox.secret.list",
-                "payload": {},
-                "client_context": {
-                    "capability_token": token,
-                    "actor": { "id": "viewer", "role": "chef" }
-                }
-            }),
-            CommandOrigin::ReplicatedPeer,
-        )?;
-        assert_ne!(denied["status"], "completed");
-        assert_eq!(denied["status"], "failed");
-        assert_eq!(
-            denied
-                .pointer("/result/policy_decision/permission")
-                .and_then(Value::as_str),
-            Some(BusinessOsPermission::SecretsManage.as_str())
-        );
-        assert_eq!(
-            denied
-                .pointer("/result/policy_decision/allowed")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(channels::list_queue_tasks(root.path(), &[], 32)?.is_empty());
-        Ok(())
+        crate::persistence::test_support::run_policy(move |owner_root| {
+            let root = owner_root;
+            seed_business_user(root.path(), "chef1", "chef")?;
+            seed_business_user(root.path(), "viewer", "user")?;
+            let (token, _) =
+                issue_business_os_capability_token(root.path(), "viewer", now_ms() as i64)?;
+            let denied = accept_rxdb_business_command_with_origin(
+                root.path(),
+                serde_json::json!({
+                    "id": "secret_policy_denied",
+                    "command_id": "secret_policy_denied",
+                    "module": "credentials",
+                    "type": "ctox.secret.list",
+                    "payload": {},
+                    "client_context": {
+                        "capability_token": token,
+                        "actor": { "id": "viewer", "role": "chef" }
+                    }
+                }),
+                CommandOrigin::ReplicatedPeer,
+            )?;
+            assert_ne!(denied["status"], "completed");
+            assert_eq!(denied["status"], "failed");
+            assert_eq!(
+                denied
+                    .pointer("/result/policy_decision/permission")
+                    .and_then(Value::as_str),
+                Some(BusinessOsPermission::SecretsManage.as_str())
+            );
+            assert_eq!(
+                denied
+                    .pointer("/result/policy_decision/allowed")
+                    .and_then(Value::as_bool),
+                Some(false)
+            );
+            assert!(channels::list_queue_tasks(root.path(), &[], 32)?.is_empty());
+            Ok(())
+        })
     }
 
     // With the strict opt-in flag set, a replicated peer command without a valid
@@ -48829,114 +48833,120 @@ pub(super) mod tests {
     #[test]
     fn mailserver_commands_require_secrets_manage_and_redact_payload_secrets() -> anyhow::Result<()>
     {
-        let temp = tempdir()?;
-        let root = temp.path();
-        seed_test_business_os_app_root(root)?;
-        fs::create_dir_all(root.join("runtime"))?;
-        let db_path = root
-            .join("runtime/ctox.sqlite3")
-            .to_string_lossy()
-            .into_owned();
-        ctox_mailserver::store::sqlite::SqliteStore::new(&db_path).init()?;
-        seed_business_user(root, "global_admin", "admin")?;
-        seed_business_user(root, "qa", "user")?;
+        crate::persistence::test_support::run_prepared(
+            |root| {
+                seed_test_business_os_app_root(root)?;
+                fs::create_dir_all(root.join("runtime"))?;
+                let db_path = root
+                    .join("runtime/ctox.sqlite3")
+                    .to_string_lossy()
+                    .into_owned();
+                ctox_mailserver::store::sqlite::SqliteStore::new(&db_path).init()?;
+                Ok(())
+            },
+            move |owner_root| {
+                let temp = owner_root;
+                let root = temp.path();
+                crate::persistence::test_support::with_policy(root, || {
+                    seed_business_user(root, "global_admin", "admin")?;
+                    seed_business_user(root, "qa", "user")?;
 
-        let denied_password = "DO_NOT_LEAK_MAIL_PASSWORD_DENIED";
-        let denied_user = accept_rxdb_business_command(
-            root,
-            serde_json::json!({
-                "id": "cmd_mailserver_user_denied",
-                "module": "mailserver",
-                "type": "ctox.mailserver.save_user",
-                "payload": {
-                    "username": "denied@example.test",
-                    "password": denied_password
-                },
-                "client_context": {
-                    "actor": { "id": "qa", "display_name": "QA" }
-                }
-            }),
-        )?;
-        assert_policy_denied(&denied_user, "secrets.manage", "workspace", None);
-        assert!(
-            !serde_json::to_string(&denied_user)?.contains(denied_password),
-            "denied mailserver user command leaked the password into the outcome"
-        );
-        let conn = open_store(root)?;
-        let denied_stored = outbound_load_required(
-            &conn,
-            "business_commands",
-            "cmd_mailserver_user_denied",
-            "command",
-        )?;
-        drop(conn);
-        assert!(
-            !serde_json::to_string(&denied_stored)?.contains(denied_password),
-            "denied mailserver user command leaked the password into business_commands"
-        );
+                    let denied_password = "DO_NOT_LEAK_MAIL_PASSWORD_DENIED";
+                    let denied_user = accept_rxdb_business_command(
+                        root,
+                        serde_json::json!({
+                            "id": "cmd_mailserver_user_denied",
+                            "module": "mailserver",
+                            "type": "ctox.mailserver.save_user",
+                            "payload": {
+                                "username": "denied@example.test",
+                                "password": denied_password
+                            },
+                            "client_context": {
+                                "actor": { "id": "qa", "display_name": "QA" }
+                            }
+                        }),
+                    )?;
+                    assert_policy_denied(&denied_user, "secrets.manage", "workspace", None);
+                    assert!(
+                        !serde_json::to_string(&denied_user)?.contains(denied_password),
+                        "denied mailserver user command leaked the password into the outcome"
+                    );
+                    let conn = open_store(root)?;
+                    let denied_stored = outbound_load_required(
+                        &conn,
+                        "business_commands",
+                        "cmd_mailserver_user_denied",
+                        "command",
+                    )?;
+                    drop(conn);
+                    assert!(
+                        !serde_json::to_string(&denied_stored)?.contains(denied_password),
+                        "denied mailserver user command leaked the password into business_commands"
+                    );
 
-        let admin_password = "DO_NOT_LEAK_MAIL_PASSWORD_ADMIN";
-        let saved_user = accept_rxdb_business_command(
-            root,
-            serde_json::json!({
-                "id": "cmd_mailserver_user_admin",
-                "module": "mailserver",
-                "type": "ctox.mailserver.save_user",
-                "payload": {
-                    "username": "admin@example.test",
-                    "password": admin_password
-                },
-                "client_context": {
-                    "actor": { "id": "global_admin", "display_name": "Global Admin" }
-                }
-            }),
-        )?;
-        assert_eq!(
-            saved_user.get("status").and_then(Value::as_str),
-            Some("completed")
-        );
-        assert!(
-            !serde_json::to_string(&saved_user)?.contains(admin_password),
-            "completed mailserver user command leaked the password into the outcome"
-        );
-        let conn = open_store(root)?;
-        let stored_user = outbound_load_required(
-            &conn,
-            "business_commands",
-            "cmd_mailserver_user_admin",
-            "command",
-        )?;
-        drop(conn);
-        assert!(
+                    let admin_password = "DO_NOT_LEAK_MAIL_PASSWORD_ADMIN";
+                    let saved_user = accept_rxdb_business_command(
+                        root,
+                        serde_json::json!({
+                            "id": "cmd_mailserver_user_admin",
+                            "module": "mailserver",
+                            "type": "ctox.mailserver.save_user",
+                            "payload": {
+                                "username": "admin@example.test",
+                                "password": admin_password
+                            },
+                            "client_context": {
+                                "actor": { "id": "global_admin", "display_name": "Global Admin" }
+                            }
+                        }),
+                    )?;
+                    assert_eq!(
+                        saved_user.get("status").and_then(Value::as_str),
+                        Some("completed")
+                    );
+                    assert!(
+                        !serde_json::to_string(&saved_user)?.contains(admin_password),
+                        "completed mailserver user command leaked the password into the outcome"
+                    );
+                    let conn = open_store(root)?;
+                    let stored_user = outbound_load_required(
+                        &conn,
+                        "business_commands",
+                        "cmd_mailserver_user_admin",
+                        "command",
+                    )?;
+                    drop(conn);
+                    assert!(
             !serde_json::to_string(&stored_user)?.contains(admin_password),
             "completed mailserver user command leaked the password into business_commands"
         );
-        let accounts = channels::list_communication_accounts_for_business_os(root)?;
-        let mailbox_account = accounts
-            .get("accounts")
-            .and_then(Value::as_array)
-            .and_then(|rows| {
-                rows.iter().find(|row| {
-                    row.get("account_key").and_then(Value::as_str)
-                        == Some("email:admin@example.test")
-                })
-            })
-            .context("mailserver user was not projected as a communication account")?;
-        assert_eq!(
-            mailbox_account.get("provider").and_then(Value::as_str),
-            Some("ctox-mailserver")
-        );
-        assert_eq!(
-            mailbox_account
-                .pointer("/profile_json/owner_user_id")
-                .and_then(Value::as_str),
-            Some("admin@example.test")
-        );
+                    let accounts = channels::list_communication_accounts_for_business_os(root)?;
+                    let mailbox_account = accounts
+                        .get("accounts")
+                        .and_then(Value::as_array)
+                        .and_then(|rows| {
+                            rows.iter().find(|row| {
+                                row.get("account_key").and_then(Value::as_str)
+                                    == Some("email:admin@example.test")
+                            })
+                        })
+                        .context("mailserver user was not projected as a communication account")?;
+                    assert_eq!(
+                        mailbox_account.get("provider").and_then(Value::as_str),
+                        Some("ctox-mailserver")
+                    );
+                    assert_eq!(
+                        mailbox_account
+                            .pointer("/profile_json/owner_user_id")
+                            .and_then(Value::as_str),
+                        Some("admin@example.test")
+                    );
 
-        // Valid, non-production PKCS#8 fixture. The previous marker-only string
-        // was non-empty but could not be parsed by `openssl pkey -pubout`, so the
-        // test never reached its permission and redaction assertions.
-        let private_key = r#"-----BEGIN PRIVATE KEY-----
+                    // Valid, non-production PKCS#8 fixture. The previous marker-only string
+                    // was non-empty but could not be parsed by `openssl pkey -pubout`, so the
+                    // test never reached its permission and redaction assertions.
+                    let private_key = r#"-----BEGIN PRIVATE KEY-----
 MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC42CQ6n+NaqfXX
 WhkHUkx17eCy+NCs6f6LJrLUN9rvHXkehQxew1GAHdRT2xyPzz3XggHhG86NGqDI
 L7iQJn2SYN0qb0AdWu86pDdCvHVoKA3moRHHRKlaXhhqZksGUQ7XOybkq0p7no/5
@@ -48964,107 +48974,110 @@ SQvfTaz3JcuFIZqzbvYEBmK45JQlkRr/yRXz3SD9AoGBAJZAWdh0DLOqtnMgg1d1
 A7j29+7WIS5FCpoqwnVXSwINhNFRHkALZMCutCOUcGcu0XoS01Vd8QnxA3jUynLk
 BRbBv2mhaOAuKib7tmks74He
 -----END PRIVATE KEY-----"#;
-        let saved_domain = accept_rxdb_business_command(
-            root,
-            serde_json::json!({
-                "id": "cmd_mailserver_domain_admin",
-                "module": "mailserver",
-                "type": "ctox.mailserver.save_domain",
-                "payload": {
-                    "domain_name": "example.test",
-                    "dkim_selector": "default",
-                    "dkim_private_key": private_key
-                },
-                "client_context": {
-                    "actor": { "id": "global_admin", "display_name": "Global Admin" }
-                }
-            }),
-        )?;
-        assert_eq!(
-            saved_domain.get("status").and_then(Value::as_str),
-            Some("completed")
-        );
-        assert_eq!(
-            saved_domain
-                .pointer("/result/dkim_private_key_set")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            saved_domain
-                .pointer("/result/secret_value_revealed")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(saved_domain.pointer("/result/dkim_private_key").is_none());
-        assert!(
+                    let saved_domain = accept_rxdb_business_command(
+                        root,
+                        serde_json::json!({
+                            "id": "cmd_mailserver_domain_admin",
+                            "module": "mailserver",
+                            "type": "ctox.mailserver.save_domain",
+                            "payload": {
+                                "domain_name": "example.test",
+                                "dkim_selector": "default",
+                                "dkim_private_key": private_key
+                            },
+                            "client_context": {
+                                "actor": { "id": "global_admin", "display_name": "Global Admin" }
+                            }
+                        }),
+                    )?;
+                    assert_eq!(
+                        saved_domain.get("status").and_then(Value::as_str),
+                        Some("completed")
+                    );
+                    assert_eq!(
+                        saved_domain
+                            .pointer("/result/dkim_private_key_set")
+                            .and_then(Value::as_bool),
+                        Some(true)
+                    );
+                    assert_eq!(
+                        saved_domain
+                            .pointer("/result/secret_value_revealed")
+                            .and_then(Value::as_bool),
+                        Some(false)
+                    );
+                    assert!(saved_domain.pointer("/result/dkim_private_key").is_none());
+                    assert!(
             !serde_json::to_string(&saved_domain)?.contains(private_key),
             "completed mailserver domain command leaked the DKIM private key into the outcome"
         );
-        let conn = open_store(root)?;
-        let stored_domain = outbound_load_required(
-            &conn,
-            "business_commands",
-            "cmd_mailserver_domain_admin",
-            "command",
-        )?;
-        drop(conn);
-        assert!(
+                    let conn = open_store(root)?;
+                    let stored_domain = outbound_load_required(
+                        &conn,
+                        "business_commands",
+                        "cmd_mailserver_domain_admin",
+                        "command",
+                    )?;
+                    drop(conn);
+                    assert!(
             !serde_json::to_string(&stored_domain)?.contains(private_key),
             "completed mailserver domain command leaked the DKIM private key into business_commands"
         );
 
-        let config = accept_rxdb_business_command(
-            root,
-            serde_json::json!({
-                "id": "cmd_mailserver_get_config_admin",
-                "module": "mailserver",
-                "type": "ctox.mailserver.get_config",
-                "payload": {},
-                "client_context": {
-                    "actor": { "id": "global_admin", "display_name": "Global Admin" }
-                }
-            }),
-        )?;
-        assert_eq!(
-            config.get("status").and_then(Value::as_str),
-            Some("completed")
-        );
-        let config_text = serde_json::to_string(&config)?;
-        assert!(
-            !config_text.contains(private_key) && !config_text.contains(admin_password),
-            "mailserver config leaked persisted secrets"
-        );
-        assert_eq!(
-            config
-                .pointer("/result/domains/0/dkim_private_key_set")
-                .and_then(Value::as_bool),
-            Some(true)
-        );
-        assert_eq!(
-            config
-                .pointer("/result/domains/0/secret_value_revealed")
-                .and_then(Value::as_bool),
-            Some(false)
-        );
-        assert!(config
-            .pointer("/result/domains/0/dkim_private_key")
-            .is_none());
+                    let config = accept_rxdb_business_command(
+                        root,
+                        serde_json::json!({
+                            "id": "cmd_mailserver_get_config_admin",
+                            "module": "mailserver",
+                            "type": "ctox.mailserver.get_config",
+                            "payload": {},
+                            "client_context": {
+                                "actor": { "id": "global_admin", "display_name": "Global Admin" }
+                            }
+                        }),
+                    )?;
+                    assert_eq!(
+                        config.get("status").and_then(Value::as_str),
+                        Some("completed")
+                    );
+                    let config_text = serde_json::to_string(&config)?;
+                    assert!(
+                        !config_text.contains(private_key) && !config_text.contains(admin_password),
+                        "mailserver config leaked persisted secrets"
+                    );
+                    assert_eq!(
+                        config
+                            .pointer("/result/domains/0/dkim_private_key_set")
+                            .and_then(Value::as_bool),
+                        Some(true)
+                    );
+                    assert_eq!(
+                        config
+                            .pointer("/result/domains/0/secret_value_revealed")
+                            .and_then(Value::as_bool),
+                        Some(false)
+                    );
+                    assert!(config
+                        .pointer("/result/domains/0/dkim_private_key")
+                        .is_none());
 
-        let denied_config = accept_rxdb_business_command(
-            root,
-            serde_json::json!({
-                "id": "cmd_mailserver_get_config_denied",
-                "module": "mailserver",
-                "type": "ctox.mailserver.get_config",
-                "payload": {},
-                "client_context": {
-                    "actor": { "id": "qa", "display_name": "QA" }
-                }
-            }),
-        )?;
-        assert_policy_denied(&denied_config, "secrets.manage", "workspace", None);
-        Ok(())
+                    let denied_config = accept_rxdb_business_command(
+                        root,
+                        serde_json::json!({
+                            "id": "cmd_mailserver_get_config_denied",
+                            "module": "mailserver",
+                            "type": "ctox.mailserver.get_config",
+                            "payload": {},
+                            "client_context": {
+                                "actor": { "id": "qa", "display_name": "QA" }
+                            }
+                        }),
+                    )?;
+                    assert_policy_denied(&denied_config, "secrets.manage", "workspace", None);
+                    Ok(())
+                })
+            },
+        )
     }
 
     #[test]

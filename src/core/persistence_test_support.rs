@@ -149,3 +149,54 @@ fn shared_fixture_keeps_admission_scoped_and_drives_async_io() -> Result<()> {
     );
     Ok(())
 }
+
+/// Use the real Store rights authority for policy-gated native commands. Grants
+/// are the base release's durable rows; no role fallback or fixture allow-list.
+pub(crate) fn with_policy<T>(root: &Path, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    require_sync_owner_context()?;
+    injected_core(root)?;
+    use crate::business_os::policy::{self, sync_rights::StoreRightsAuthority};
+    let writer = ctox_store::registry::Registry.open(
+        ctox_store::DbId::new(root.join("owner-test-rights.sqlite3"))?,
+        ctox_store::writer::WriterOptions {
+            configure: Some(Arc::new(|db| {
+                ctox_store::config::ConnectionConfig::default().apply_writer(db)?;
+                Ok(())
+            })),
+            head_seq: Some(Arc::new(|db| {
+                db.query_row("SELECT v FROM _seq WHERE singleton=1", [], |r| r.get(0))
+                    .map_err(Into::into)
+            })),
+        },
+    )?;
+    let runtime = tokio::runtime::Handle::current();
+    let registration = runtime.block_on(async {
+        let authority = StoreRightsAuthority::attach(writer.clone(), "owner-test-fixture".into())
+            .await
+            .map_err(anyhow::Error::msg)?;
+        authority
+            .replace(policy::base_release_rights(&[]), vec![])
+            .await
+            .map_err(anyhow::Error::msg)?;
+        policy::bind_policy_authority(authority).map_err(anyhow::Error::msg)
+    });
+    let result = match registration {
+        Ok(registration) => {
+            let result = operation();
+            drop(registration);
+            result
+        }
+        Err(error) => Err(error),
+    };
+    runtime.block_on(writer.shutdown())?;
+    result
+}
+
+pub(crate) fn run_policy<T: Send + 'static>(
+    operation: impl FnOnce(Arc<tempfile::TempDir>) -> Result<T> + Send + 'static,
+) -> Result<T> {
+    run(move |root| {
+        let work = root.clone();
+        with_policy(root.path(), move || operation(work))
+    })
+}
