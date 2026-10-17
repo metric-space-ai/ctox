@@ -438,8 +438,12 @@ mailQa: try {
     const fail = (what) => { throw new Error(`${what} – Verlauf ${log.join(' | ')}`); };
     await page.locator('[data-mail-content-title]').click();
     await page.waitForTimeout(500);
+    // EasyEmail übernimmt Text-Eingaben per lodash.debounce(…, 200) ins Dokument und rendert den Block daraus neu; auf dem
+    // langsamen Runner zeigt der Block kurz einen Zwischenstand („…Echter visuel“, CI 17.10.). Erst der endgültige
+    // Stand zählt: bleibt der Text dauerhaft unvollständig, ist das Datenverlust und der Schritt bleibt rot.
+    const settled = await expectEventually(full, 'Text übernommen', 5000).then(() => true, () => false);
     await note('vorher');
-    if (!(await full())) fail('getippter Text fehlt schon vor undo');
+    if (!settled) fail('getippter Text nach 5 s nicht im Dokument (Datenverlust)');
     let undone = false;
     for (let attempt = 1; attempt <= 5 && !undone; attempt++) {
       await page.locator('[data-mail-editor-history="undo"]').click();
