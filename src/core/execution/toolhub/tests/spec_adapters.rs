@@ -877,3 +877,19 @@ fn status_mode_maps_empty_2xx_answers() {
     rejects(|v| v["actions"][0]["response"] = json!({"mode": "status", "values": {"404": false}}), "2xx");
     rejects(|v| v["actions"][0]["response"] = json!({"mode": "status"}), "values");
 }
+
+// ------------------------------------------------------------------ OpenAPI dogfood (2026-10-17)
+
+#[test]
+fn openapi_generated_dogfood_specs_load_and_build_requests() {
+    let ab = SpecAdapter::from_json(include_str!("../specs/autobahn.json")).unwrap();
+    assert_eq!(ab.spec().tools.len(), 12);
+    assert_eq!(ab.build_request("AUTOBAHN_LIST_WARNINGS", &json!({"roadId": "A7"})).unwrap().url, "https://verkehr.autobahn.de/o/autobahn/A7/services/warning");
+    assert!(ab.risk("AUTOBAHN_GET_WEBCAM").is_none(), "dropped: no webcam data live");
+    let pg = SpecAdapter::from_json(include_str!("../specs/pegel_online.json")).unwrap();
+    assert_eq!(pg.spec().tools.len(), 5);
+    assert!(pg.build_request("PEGEL_ONLINE_GET_STATIONS_BY_ID", &json!({"station": "BONN"})).unwrap().url.starts_with("https://www.pegelonline.wsv.de/webservices/rest-api/v2/stations/BONN.json"));
+    let sf = SpecAdapter::from_json(include_str!("../specs/spaceflight_news.json")).unwrap();
+    assert_eq!(sf.spec().tools.len(), 7);
+    assert_eq!(sf.build_request("SPACEFLIGHT_NEWS_ARTICLES_RETRIEVE", &json!({"id": 40423})).unwrap().url, "https://api.spaceflightnewsapi.net/v4/articles/40423/");
+}

@@ -121,3 +121,19 @@ fn not_openapi_is_refused() {
     assert!(parse_document("<html></html>").is_err());
     assert!(parse_document("{\"hello\": 1}").is_err());
 }
+
+#[test]
+fn relative_server_in_a_local_file_needs_and_takes_base_url() {
+    let doc = json!({"openapi": "3.0.3", "info": {"title": "News"}, "servers": [{"url": "/"}],
+        "paths": {"/v4/articles/": {"get": {"operationId": "articles_list", "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"type": "object", "properties": {"results": {"type": "array", "items": {"$ref": "#/components/schemas/Article"}}}}}}}}}},
+                  "/v4/articles/{id}/": {"get": {"operationId": "articles_retrieve", "parameters": [{"in": "path", "name": "id", "required": true, "schema": {"type": "integer"}}], "responses": {"200": {"description": "ok", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/Article"}}}}}}}},
+        "components": {"schemas": {"Article": {"type": "object", "required": ["id"], "properties": {"id": {"type": "integer"}, "title": {"type": "string"}}}}}});
+    let err = draft_from_openapi(&doc, &Options { source: "/tmp/news.json".into(), ..Options::default() }).unwrap_err();
+    assert!(format!("{err:#}").contains("--base-url"));
+    let d = draft_from_openapi(&doc, &Options { source: "/tmp/news.json".into(), base_url: Some("https://api.news.example.org".into()), slug: Some("space-news".into()), ..Options::default() }).unwrap();
+    assert_eq!(d.spec["slug"], json!("space_news"));
+    assert_eq!(d.spec["allowed_hosts"], json!(["api.news.example.org"]));
+    assert!(d.probes_missing.is_empty(), "{:?}", d.probes_missing);
+    assert_eq!(d.probes[1]["from"], json!({"id": "SPACE_NEWS_ARTICLES_LIST#/results/0/id"}));
+    assert_eq!(d.probes[1]["expect"]["pointers"], json!(["/id"]));
+}

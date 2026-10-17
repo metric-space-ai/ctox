@@ -1,0 +1,412 @@
+{
+  "schema": "ctox.adapter-spec/v1",
+  "slug": "pegel_online",
+  "version": "1.0.0",
+  "name": "Pegel-Online API",
+  "description": {
+    "de": "API für das bundesweite Messstellennetz der Wasserstraßen- und Schifffahrtsverwaltung des Bundes. Die API stellt drei verschiedene Ressourcen zur Verfügung: __Station__, __Measurement__, __Water__. ### Authentifizierung / Autorisierung / A…",
+    "en": "API für das bundesweite Messstellennetz der Wasserstraßen- und Schifffahrtsverwaltung des Bundes. Die API stellt drei verschiedene Ressourcen zur Verfügung: __Station__, __Measurement__, __Water__. ### Authentifizierung / Autorisierung / A…"
+  },
+  "docs": [
+    "https://raw.githubusercontent.com/bundesAPI/pegel-online-api/main/openapi.yaml"
+  ],
+  "notes": "Drafted by `ctox toolhub draft-spec --from-openapi` from https://raw.githubusercontent.com/bundesAPI/pegel-online-api/main/openapi.yaml (OpenAPI 3.0.0).",
+  "api_base": "https://www.pegelonline.wsv.de/webservices/rest-api/v2",
+  "allowed_hosts": [
+    "www.pegelonline.wsv.de"
+  ],
+  "auth_schemes": [
+    {
+      "type": "none"
+    }
+  ],
+  "actions": [
+    {
+      "slug": "PEGEL_ONLINE_GET_STATIONS",
+      "title": {
+        "de": "Übersicht über alle Stationen (Pegel)",
+        "en": "Übersicht über alle Stationen (Pegel)"
+      },
+      "description": {
+        "de": "Stationen (Pegel) sortiert nach Gewässername und Messstellenname.",
+        "en": "Stationen (Pegel) sortiert nach Gewässername und Messstellenname."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "includeTimeseries": {
+            "type": "boolean",
+            "description": "Informationen zu den Zeitreihen"
+          },
+          "includeCurrentMeasurement": {
+            "type": "boolean",
+            "description": "Aktuell gemessener Wert"
+          },
+          "includeCharacteristicValues": {
+            "type": "boolean",
+            "description": "kennzeichnende Wasserstände"
+          },
+          "waters": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Gewässer, filtert Stationen für bestimmte Gewässer"
+          },
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Filter nach Stationen, möglich sind der Pegelname, Pegelnummer oder die UUID"
+          },
+          "timeseries": {
+            "type": "string",
+            "description": "Filter nach ausgewählten Zeitreihen"
+          },
+          "fuzzyId": {
+            "type": "string"
+          },
+          "latitude": {
+            "type": "number",
+            "description": "Breitengrad einer geografischen Position (WGS84 in Dezimalnotation)"
+          },
+          "longitude": {
+            "type": "number",
+            "description": "Längengrad einer geografischen Position (WGS84 in Dezimalnotation)"
+          },
+          "km": {
+            "type": "number",
+            "description": "Flusskilometer, die Angabe eines Gewässers (waters) ist notwendig"
+          },
+          "radius": {
+            "type": "number",
+            "description": "Suchradius für Stationen um die geografische Position oder den angegebenen Flusskilometer. Longitude und / oder Latitude oder km sind notwendig."
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/stations.json",
+        "query": {
+          "includeTimeseries": {
+            "arg": "includeTimeseries",
+            "type": "boolean"
+          },
+          "includeCurrentMeasurement": {
+            "arg": "includeCurrentMeasurement",
+            "type": "boolean"
+          },
+          "includeCharacteristicValues": {
+            "arg": "includeCharacteristicValues",
+            "type": "boolean"
+          },
+          "waters": {
+            "arg": "waters",
+            "type": "string_list",
+            "join": ","
+          },
+          "ids": {
+            "arg": "ids",
+            "type": "string_list",
+            "join": ","
+          },
+          "timeseries": {
+            "arg": "timeseries",
+            "type": "string"
+          },
+          "fuzzyId": {
+            "arg": "fuzzyId",
+            "type": "string"
+          },
+          "latitude": {
+            "arg": "latitude",
+            "type": "number"
+          },
+          "longitude": {
+            "arg": "longitude",
+            "type": "number"
+          },
+          "km": {
+            "arg": "km",
+            "type": "number"
+          },
+          "radius": {
+            "arg": "radius",
+            "type": "number"
+          }
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "PEGEL_ONLINE_GET_STATIONS_BY_ID",
+      "title": {
+        "de": "Zugriff auf eine bestimmte Station (Pegel)",
+        "en": "Zugriff auf eine bestimmte Station (Pegel)"
+      },
+      "description": {
+        "de": "Zugriff auf eine Station (Pegel) ist mittels des Namens, der Pegelnummer sowie der UUID möglich. Es wird die Verwendung der UUID empfohlen.",
+        "en": "Zugriff auf eine Station (Pegel) ist mittels des Namens, der Pegelnummer sowie der UUID möglich. Es wird die Verwendung der UUID empfohlen."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "station": {
+            "type": "string",
+            "description": "UUID / Name / Pegelnummer der Station."
+          },
+          "includeTimeseries": {
+            "type": "boolean",
+            "description": "Informationen zu den Zeitreihen"
+          },
+          "includeCurrentMeasurement": {
+            "type": "boolean",
+            "description": "Aktuell gemessener Wert"
+          },
+          "includeCharacteristicValues": {
+            "type": "boolean",
+            "description": "kennzeichnende Wasserstände"
+          }
+        },
+        "required": [
+          "station"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/stations/{station}.json",
+        "query": {
+          "includeTimeseries": {
+            "arg": "includeTimeseries",
+            "type": "boolean"
+          },
+          "includeCurrentMeasurement": {
+            "arg": "includeCurrentMeasurement",
+            "type": "boolean"
+          },
+          "includeCharacteristicValues": {
+            "arg": "includeCharacteristicValues",
+            "type": "boolean"
+          }
+        },
+        "path_encoding": {
+          "station": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "PEGEL_ONLINE_GET_MEASUREMENT_BY_STATION",
+      "title": {
+        "de": "Zugriff auf die Ressource Measurement",
+        "en": "Zugriff auf die Ressource Measurement"
+      },
+      "description": {
+        "de": "Es handeln sich dabei um die gemessenen Rohwerte. Es können maximal Werte der letzten 31 Tage bezogen werden.",
+        "en": "Es handeln sich dabei um die gemessenen Rohwerte. Es können maximal Werte der letzten 31 Tage bezogen werden."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "station": {
+            "type": "string",
+            "description": "UUID / Name / Pegelnummer der Station."
+          },
+          "timeseries": {
+            "type": "string",
+            "description": "timeseries shortname"
+          },
+          "start": {
+            "type": "string",
+            "description": "Zeitpunkt codiert im [ISO_8601](https://de.wikipedia.org/wiki/ISO_8601) Format. Angabe eines Datums oder einer Period (_P_, z.B. 'P8D' für die Messwerte der letzten 8 Tage) sind möglich."
+          },
+          "end": {
+            "type": "string",
+            "description": "Endzeitpunkt codiert im [ISO_8601](https://de.wikipedia.org/wiki/ISO_8601) Format. Kann auch leer gelassen werden, dann wird automatisch der aktuelle Zeitstempel verwendet."
+          }
+        },
+        "required": [
+          "station",
+          "timeseries"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/stations/{station}/{timeseries}/measurements.json",
+        "query": {
+          "start": {
+            "arg": "start",
+            "type": "string"
+          },
+          "end": {
+            "arg": "end",
+            "type": "string"
+          }
+        },
+        "path_encoding": {
+          "station": "component",
+          "timeseries": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "PEGEL_ONLINE_GET_WATERS",
+      "title": {
+        "de": "Zugriff auf die Ressource Water",
+        "en": "Zugriff auf die Ressource Water"
+      },
+      "description": {
+        "de": "Alle Gewässer",
+        "en": "Alle Gewässer"
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Beschränkung auf ausgewählte Gewässer IDs"
+          },
+          "stations": {
+            "type": "string",
+            "description": "Beschränkung auf ausgewählte Stationen (Pegel)"
+          },
+          "includeStations": {
+            "type": "boolean",
+            "description": "Stationen mit zurückgeben"
+          },
+          "includeTimeseries": {
+            "type": "boolean",
+            "description": "Informationen zu den Zeitreihen"
+          },
+          "includeCurrentMeasurement": {
+            "type": "boolean",
+            "description": "Aktuell gemessener Wert"
+          },
+          "includeCharacteristicValues": {
+            "type": "boolean",
+            "description": "kennzeichnende Wasserstände"
+          }
+        },
+        "required": []
+      },
+      "request": {
+        "method": "GET",
+        "path": "/waters.json",
+        "query": {
+          "ids": {
+            "arg": "ids",
+            "type": "string_list",
+            "join": ","
+          },
+          "stations": {
+            "arg": "stations",
+            "type": "string"
+          },
+          "includeStations": {
+            "arg": "includeStations",
+            "type": "boolean"
+          },
+          "includeTimeseries": {
+            "arg": "includeTimeseries",
+            "type": "boolean"
+          },
+          "includeCurrentMeasurement": {
+            "arg": "includeCurrentMeasurement",
+            "type": "boolean"
+          },
+          "includeCharacteristicValues": {
+            "arg": "includeCharacteristicValues",
+            "type": "boolean"
+          }
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    },
+    {
+      "slug": "PEGEL_ONLINE_GET_CURRENT_MEASURMENT_BY_STATION",
+      "title": {
+        "de": "Zugriff auf eine Timeseries",
+        "en": "Zugriff auf eine Timeseries"
+      },
+      "description": {
+        "de": "Liefert den aktuellen Wert der Station (Pegel). Kann auch als Unterressource von Timeseries angefordert werden.",
+        "en": "Liefert den aktuellen Wert der Station (Pegel). Kann auch als Unterressource von Timeseries angefordert werden."
+      },
+      "risk": "read",
+      "scopes": [],
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "station": {
+            "type": "string",
+            "description": "UUID / Name / Pegelnummer der Station."
+          },
+          "timeseries": {
+            "type": "string",
+            "description": "timeseries shortname"
+          },
+          "includeCurrentMeasurement": {
+            "type": "boolean",
+            "description": "Aktuell gemessener Wert"
+          },
+          "includeCharacteristicValues": {
+            "type": "boolean",
+            "description": "kennzeichnende Wasserstände"
+          }
+        },
+        "required": [
+          "station",
+          "timeseries"
+        ]
+      },
+      "request": {
+        "method": "GET",
+        "path": "/stations/{station}/{timeseries}.json",
+        "query": {
+          "includeCurrentMeasurement": {
+            "arg": "includeCurrentMeasurement",
+            "type": "boolean"
+          },
+          "includeCharacteristicValues": {
+            "arg": "includeCharacteristicValues",
+            "type": "boolean"
+          }
+        },
+        "path_encoding": {
+          "station": "component",
+          "timeseries": "component"
+        }
+      },
+      "response": {
+        "mode": "body"
+      }
+    }
+  ]
+}

@@ -25,11 +25,14 @@ pub struct Options {
     pub operations: Vec<String>,
     /// Where the document came from (URL or file), for `docs` and relative servers.
     pub source: String,
+    /// Overrides the document's server (relative servers in local files,
+    /// wrong or several servers).
+    pub base_url: Option<String>,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { slug: None, version: "1.0.0".into(), max_actions: 40, operations: vec![], source: String::new() }
+        Self { slug: None, version: "1.0.0".into(), max_actions: 40, operations: vec![], source: String::new(), base_url: None }
     }
 }
 
@@ -128,8 +131,11 @@ fn arg_name(raw: &str, taken: &BTreeSet<String>) -> String {
 }
 
 /// `(api_base, host)` from `servers` (OAS 3) or `host`/`basePath` (Swagger 2).
-fn server(doc: &Value, source: &str, notes: &mut Vec<String>) -> Result<(String, String)> {
-    let raw = if let Some(s) = doc.pointer("/servers/0") {
+fn server(doc: &Value, source: &str, base_url: Option<&str>, notes: &mut Vec<String>) -> Result<(String, String)> {
+    let raw = if let Some(b) = base_url {
+        notes.push(format!("server set by --base-url ({b})"));
+        b.to_string()
+    } else if let Some(s) = doc.pointer("/servers/0") {
         let mut u = s.get("url").and_then(Value::as_str).unwrap_or("/").to_string();
         if let Some(vars) = s.get("variables").and_then(Value::as_object) {
             for (k, v) in vars {
@@ -358,7 +364,7 @@ pub fn draft_from_openapi(doc: &Value, opts: &Options) -> Result<Draft> {
         bail!("`{slug}` is no valid toolkit slug (from `{title}`; lowercase a-z, 0-9, _; max 40); pass --slug");
     }
     let prefix = format!("{}_", slug.to_ascii_uppercase());
-    let (api_base, host) = server(doc, &opts.source, &mut notes)?;
+    let (api_base, host) = server(doc, &opts.source, opts.base_url.as_deref(), &mut notes)?;
     let auth = auth(doc, &mut notes);
     let paths = doc.get("paths").and_then(Value::as_object).ok_or_else(|| anyhow!("document has no `paths`"))?;
 

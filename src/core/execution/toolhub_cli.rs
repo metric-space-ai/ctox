@@ -196,7 +196,7 @@ pub(crate) fn handle_toolhub_command(root: &Path, args: &[String]) -> Result<()>
     Ok(())
 }
 
-pub(crate) const USAGE: &str = "usage: ctox toolhub [--as supervisor|worker|oneshot|mcp] <search|get-schema|list|execute|draft-spec|validate|live-test|approve|activate|deactivate|rollback|request-adapter|rules|config> ...\n  draft-spec --from-openapi <https-url|file> [--slug s] [--version v] [--max-actions n] [--operations a,b]\n  live-test <slug> <version> [--probes-json|--probes-file] [--mission <work_id>]   (no probes: the drafted ones)\n  config show | config set fake-ip-egress on|off   (supervisor)";
+pub(crate) const USAGE: &str = "usage: ctox toolhub [--as supervisor|worker|oneshot|mcp] <search|get-schema|list|execute|draft-spec|validate|live-test|approve|activate|deactivate|rollback|request-adapter|rules|config> ...\n  draft-spec --from-openapi <https-url|file> [--slug s] [--version v] [--max-actions n] [--operations a,b] [--base-url https://host/base]\n  live-test <slug> <version> [--probes-json|--probes-file] [--mission <work_id>]   (no probes: the drafted ones)\n  config show | config set fake-ip-egress on|off   (supervisor)";
 
 /// Instance config key for the fake-IP egress transport option.
 const FAKE_IP_KEY: &str = "CTOX_TOOLHUB_FAKE_IP_EGRESS";
@@ -277,6 +277,7 @@ pub(crate) fn run(
                     max_actions: flag(args, "--max-actions").and_then(|n| n.parse().ok()).unwrap_or(40),
                     operations: flag(args, "--operations").map(|o| o.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect()).unwrap_or_default(),
                     source: src.to_string(),
+                    base_url: flag(args, "--base-url").map(String::from),
                 };
                 b.draft_from_openapi(&text, &opts)
             } else {

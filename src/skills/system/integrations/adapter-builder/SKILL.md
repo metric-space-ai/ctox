@@ -51,10 +51,12 @@ flow, tooling or rules change. Lifecycle of this skill: see `skill_meta/skill-li
    start with `ctox toolhub draft-spec --from-openapi <https-url|file>` (tool
    `ctox_toolhub_draft_spec from_openapi=...`): it maps operations to actions,
    sets risk by method, suggests auth, sets `allowed_hosts` to the server host,
-   validates, and drafts read probes from the doc's examples (`probes_file`).
-   Read its `skipped`, `probes_missing` and `notes`, then fix the draft (DE/EN
-   texts, missing examples) and re-draft with `--spec-json` and a new version
-   if needed. Otherwise write it by hand
+   validates, and drafts read probes (`probes_file`): detail probes take
+   their id from a list probe (`"from": {"id": "TOOL#/results/0/id"}`), others
+   use the doc's examples. Read its `skipped`, `probes_missing` and `notes`,
+   then fix the draft (DE/EN texts, missing examples) and re-draft with a new
+   `--version` (`--operations a,b` keeps only some operations; `--base-url`
+   for relative or wrong servers) or with `--spec-json`. Otherwise write it by hand
    (`src/core/execution/toolhub/schema/adapter-spec.v1.schema.json`,
    examples `src/core/execution/toolhub/specs/todoist.json`, `asana.json`):
    - `allowed_hosts` as narrow as possible; `*.domain` only for per-tenant hosts.
@@ -107,7 +109,7 @@ session, never by you. Rules per role: `ctox toolhub --as <role> rules`.
 | Queue a builder mission | `ctox_toolhub_request_adapter` / `request-adapter <service>` | supervisor, worker |
 | Draft | `ctox_toolhub_draft_spec` (`spec_json`, `from_catalog`, or `from_openapi` URL/file) | all except MCP (URLs: supervisor, worker) |
 | Validate | `ctox_toolhub_validate <slug> <version>` | all except MCP |
-| Live test + review proof | `ctox_toolhub_live_test` with `probes_json` `[{tool,args,cleanup[],expect}]` (or the drafted probes) and `mission` | reads: all; write probes: supervisor; destructive: never |
+| Live test + review proof | `ctox_toolhub_live_test` with `probes_json` `[{tool,args,cleanup[],expect,from}]` (or the drafted probes) and `mission` | reads: all; write probes: supervisor; destructive: never |
 | Activate (no user approval) | `ctox_toolhub_activate <slug> <version> [mission]` | supervisor; worker only with its builder mission |
 | Deactivate / rollback | `ctox_toolhub_deactivate`, `ctox_toolhub_rollback` | supervisor (plus automatic rollback on repeated failures) |
 | Per-call approval (destructive only) | `ctox_toolhub_approve gate decision=approve|reject user_quote="<user's words>"` | supervisor only, after asking the user |
@@ -202,13 +204,40 @@ always applies. Destructive calls still need a single-use per-call gate. Every s
   `activate --mission <work_id>` -> `execute`. 11/11 actions live PASS; no
   approval gate was created. It needed three format fixes, one builder fix and
   one instance-config step (see Lessons "Dogfood").
+- **OpenAPI dogfood (2026-10-17): generator end to end** with only the built
+  CLI as worker: `request-adapter` -> `draft-spec --from-openapi <url>` ->
+  `live-test --mission` (drafted probes) -> `activate --mission` (mission closes
+  itself) -> `execute`. Spaceflight News (`specs/spaceflight_news.json`, 7 reads,
+  4 probes PASS, 3 detail reads checked by `execute`; built before probe
+  chaining), Autobahn (`specs/autobahn.json`, 12 reads, 12/12 PASS),
+  PEGELONLINE (`specs/pegel_online.json`, 5 reads, 5/5 PASS). Not in the vetted
+  catalog yet: texts are copied 1:1 (German or English in both languages).
 
 ## Lessons
 
+### OpenAPI dogfood 2026-10-17 (Spaceflight News, Autobahn, PEGELONLINE)
+
+- **Document examples go stale.** Autobahn's example ids answered `{}` (5 of 13
+  probes); the shape check caught it. The generator now chains detail probes to
+  list probes (`from`), when the list items have the detail response's schema.
+- **Live data can be empty everywhere.** Autobahn webcams return `[]` on every
+  road, so GET_WEBCAM cannot pass; re-draft with `--operations` without it.
+- **Docs can be wrong about shapes.** PEGELONLINE `waters.json` is documented as
+  an object but returns an array: fix the probe `expect`, keep the action.
+- **Doc hosts can be down.** pegelonline.api.bund.dev failed TLS (curl too); the
+  same document on raw.githubusercontent.com (bundesAPI) worked.
+- **Relative servers** (`/`) resolve against the document URL; for a local file
+  pass `--base-url`.
+- **Redirect check works live:** `validate` on api.frankfurter.app reports
+  `301 -> api.frankfurter.dev` with the suggested `api_base` (path not known:
+  the root redirect says nothing about `/v1`).
+- `execute` has no retry; one TLS EOF and a 429 after quick repeated calls on
+  Spaceflight News. Retry is only in `live-test`.
+
 ### Dogfood 2026-10-17 (Open-Meteo, Frankfurter, Nager.Date)
 
-- **There is no docs -> spec generator.** `spec_from_builtin.rs` only converts
-  Rust adapters. For a new service you write the JSON yourself from the docs;
+- **No docs -> spec generator then** (since 2026-10-17: `--from-openapi` for
+  OpenAPI/Swagger). Without OpenAPI you write the JSON yourself from the docs;
   check every endpoint with one real request first (curl or a read probe) and
   copy the shapes, not the docs prose.
 - **`number` means decimals.** Coordinates, amounts: use `"type": "number"`
@@ -234,12 +263,12 @@ always applies. Destructive calls still need a single-use per-call gate. Every s
   use `nager_date`. Activation treats `-` and `_` the same (since 2026-10-17).
 - **Fake-IP boxes:** on a box whose DNS answers 198.18.0.0/15, every probe fails
   with "resolves only to private or reserved addresses" until the instance config
-  key `CTOX_TOOLHUB_FAKE_IP_EGRESS=1` is set in `runtime/ctox-runtime.sqlite3`.
-  There is no CLI command for it; that is an operator step, not a builder step.
-- **Transient TLS errors** (box proxy) fail a probe; the live test has no retry.
-  Run the live test again; a fresh passing run replaces the proof.
-- **Close the mission yourself.** Activation does not close the builder mission;
-  the work item stays `open` until the worker closes it with its report.
+  key is set. Since 2026-10-17: `ctox toolhub --as supervisor config set
+  fake-ip-egress on` (operator step, not a builder step).
+- **Transient TLS errors** (box proxy) failed probes; since 2026-10-17 the live
+  test retries once on network/TLS errors.
+- **Mission close:** since 2026-10-17 `activate --mission` closes the builder
+  mission itself; a later `request-adapter` opens a new mission generation.
 
 ### Earlier
 
