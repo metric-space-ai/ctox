@@ -3,6 +3,7 @@ use super::schema::{FunctionSchema, PayloadShape};
 use super::CtoxError;
 use serde_json::Value;
 mod coding;
+mod knowledge;
 pub mod queue;
 pub mod schedule;
 pub mod task;
@@ -79,6 +80,7 @@ pub fn all_routes() -> impl Iterator<Item = &'static NativeRoute> {
         turn::ROUTES,
         coding::ROUTES,
         schedule::ROUTES,
+        knowledge::ROUTES,
     ]
     .into_iter()
     .flatten()

@@ -17,5 +17,11 @@ pub mod app_capabilities {
     pub use crate::*;
 }
 #[cfg(test)]
+#[path = "../handler_calls.rs"]
+mod handler_calls;
+#[cfg(test)]
+#[path = "../handler_knowledge_tests.rs"]
+mod handler_knowledge_tests;
+#[cfg(test)]
 #[path = "../tests.rs"]
 mod tests;
