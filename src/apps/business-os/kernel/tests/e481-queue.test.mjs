@@ -4,7 +4,7 @@ import {WebRTCKernelTransport,NativeWire} from '../transport-webrtc.mjs';
 import {SendScheduler} from '../scheduler.mjs';
 import {decodeFrame} from '../framing.mjs';
 const flush=async()=>{for(let i=0;i<30;i++)await Promise.resolve();};
-test('THESEN timers start at SCTP handoff; local queue time never replaces a connection',async t=>{
+test('Production timers start at SCTP handoff; local queue time never replaces a connection',async t=>{
  const timers=[];t.mock.method(globalThis,'setTimeout',(fn,ms)=>{const timer={fn,ms};timers.push(timer);return timer;});t.mock.method(globalThis,'clearTimeout',()=>{});
  for(const kind of ['transfer','grant']){
   const transport=new WebRTCKernelTransport({transferTimeoutMs:10,grantTimeoutMs:10,authSession:{acceptAppGrant:async()=>{},tokens:()=>[],close(){}}});transport.readyState.resolve();
@@ -15,7 +15,7 @@ test('THESEN timers start at SCTP handoff; local queue time never replaces a con
  }
 });
 class Channel extends EventTarget{readyState='open';bufferedAmount=65536;frames=[];send(frame){this.frames.push(frame);}}
-test('THESEN commands preempt an already queued bulk frame in both schedulers',async()=>{
+test('Production commands preempt an already queued bulk frame in both schedulers',async()=>{
  for(const native of [false,true]){
   const channel=new Channel(),errors=[];
   const scheduler=native?new NativeWire({0:channel},{apply:async()=>{},onError:e=>errors.push(e)}):new SendScheduler({0:channel},{codec:'identity'});
