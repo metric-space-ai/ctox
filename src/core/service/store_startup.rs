@@ -76,6 +76,8 @@ pub(crate) struct Foreground {
     pub inputs: Arc<StoreInputs>,
     engines: Vec<Box<dyn RunningEngine>>,
     native_owners: Option<NativeOwners>,
+    #[cfg(unix)]
+    status: Option<Arc<super::service_loop::owner_status::StatusIngress>>,
 }
 /// Lifetimes for the real weak-routed legacy adapters. They reuse only the
 /// registered file's writer/readers, never an additional connection or pool.
@@ -281,6 +283,8 @@ impl Foreground {
             inputs,
             engines: Vec::new(),
             native_owners: None,
+            #[cfg(unix)]
+            status: None,
         };
         match NativeOwners::attach(&owner.inputs).await {
             Ok(native) => owner.native_owners = Some(native),
@@ -352,11 +356,29 @@ impl Foreground {
             owner.shutdown().await?;
             return Err(error);
         }
+        #[cfg(unix)]
+        match super::service_loop::owner_status::StatusIngress::start(&owner.inputs).await {
+            Ok(status) => owner.status = Some(status),
+            Err(error) => {
+                eprintln!("[ctox v4] lifecycle status startup failed: {error:#}");
+                owner.shutdown().await?;
+                return Err(StoreError::Invalid(
+                    "lifecycle status endpoint unavailable".into(),
+                ));
+            }
+        }
         Ok(owner)
     }
     /// Stop app/command ingress and owned effects before closing writer admission.
     /// A failed engine drain retains stores, their file locks and IPC custody.
     pub async fn shutdown(&mut self) -> Result<(), StoreError> {
+        #[cfg(unix)]
+        if let Some(status) = self.status.take() {
+            status
+                .shutdown()
+                .await
+                .map_err(|_| StoreError::Invalid("lifecycle status drain failed".into()))?;
+        }
         self.stores.retire_inputs();
         while let Some(engine) = self.engines.last_mut() {
             engine.shutdown().await?;
@@ -491,9 +513,12 @@ pub(crate) async fn run(root: PathBuf) -> anyhow::Result<()> {
         .ok_or(StoreError::Closed)?
         .clone();
     #[cfg(unix)]
+    let lifecycle = owner.status.as_ref().ok_or(StoreError::Closed)?.clone();
+    #[cfg(unix)]
     let signal_result = tokio::select! {
         result=tokio::signal::ctrl_c()=>result,
         _=terminate.recv()=>Ok(()),
+        _=lifecycle.wait_stop()=>Ok(()),
         result=owner.wait_native_stopped()=>result,
         result=browser.wait_failed()=>result,
     };

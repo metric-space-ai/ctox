@@ -5,6 +5,9 @@ use anyhow::Result;
 mod auth_assist_recovery_tests;
 #[path = "service_cv_print_recovery.rs"]
 mod cv_print_recovery;
+#[cfg(unix)]
+#[path = "store_status.rs"]
+pub(super) mod owner_status;
 #[path = "service_runtime_support.rs"]
 mod runtime_support;
 #[cfg(test)]
@@ -2535,6 +2538,38 @@ fn normalize_state_token(value: &str) -> String {
 }
 
 pub fn start_background(root: &Path) -> Result<String> {
+    let deadline = Instant::now() + SERVICE_LIFECYCLE_TIMEOUTS.startup;
+    let message = request_background_start(root)?;
+    #[cfg(unix)]
+    wait_for_running_status_socket(root, deadline)?;
+    #[cfg(not(unix))]
+    let _ = deadline;
+    Ok(message)
+}
+
+/// Manager-active/PID existence is not a completed Core startup. Keep the
+/// existing lifecycle budget and require the actual status protocol response.
+#[cfg(unix)]
+fn wait_for_running_status_socket(root: &Path, deadline: Instant) -> Result<()> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        anyhow::ensure!(
+            !remaining.is_zero(),
+            "service did not report a running Core owner on {} within the startup budget",
+            service_listen_addr(root)
+        );
+        if let LiveStatusProbe::Status(status) =
+            live_service_status_snapshot(root, Some(remaining.min(Duration::from_millis(500))))
+        {
+            if status.running {
+                return Ok(());
+            }
+        }
+        thread::sleep(remaining.min(Duration::from_millis(100)));
+    }
+}
+
+fn request_background_start(root: &Path) -> Result<String> {
     #[cfg(windows)]
     {
         let windows_status = crate::service::windows_service::status()?;
@@ -3649,6 +3684,13 @@ pub fn service_status_snapshot_with(
     };
     let live = live_service_status_snapshot(root, probe.status_ipc_timeout);
     if let LiveStatusProbe::Status(mut status) = live {
+        // A V4 lifecycle reply freshly observes Core custody, not the queue.
+        // Keep the existing local-only degraded flag; no wire-field change.
+        status.degraded_probe |= status
+            .performance
+            .get("status_only")
+            .and_then(Value::as_bool)
+            == Some(true);
         if probe.include_business_os {
             status.business_os = Some(business_os_health_snapshot(root));
         } else {
