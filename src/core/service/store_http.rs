@@ -7,6 +7,7 @@ use ctox_store::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
+    io::Write,
     net::SocketAddr,
     path::{Component, Path},
     sync::{
@@ -107,7 +108,29 @@ impl HttpSurface {
                                         .unwrap(),
                                 );
                                 response.add_header(Header::from_bytes("Content-Security-Policy", "default-src 'self'; script-src 'self' blob:; connect-src 'self' wss:; object-src 'none'; base-uri 'self'").unwrap());
-                                let _ = request.respond(response);
+                                if request.url().split('?').next() == Some("/api/business-os/launch-context") {
+                                    // tiny_http buffers only 1 KiB: writing headers and a
+                                    // larger bootstrap body separately can incur delayed
+                                    // ACK/Nagle latency on a reused connection. Keep its
+                                    // canonical HTTP encoder, but emit this bounded control
+                                    // response as one write. Static files still stream normally.
+                                    let mut encoded = Vec::new();
+                                    if response
+                                        .raw_print(
+                                            &mut encoded,
+                                            request.http_version().clone(),
+                                            request.headers(),
+                                            request.method() == &Method::Head,
+                                            None,
+                                        )
+                                        .is_ok()
+                                    {
+                                        let mut writer = request.into_writer();
+                                        let _ = writer.write_all(&encoded).and_then(|()| writer.flush());
+                                    }
+                                } else {
+                                    let _ = request.respond(response);
+                                }
                             }
                             Err(_) => break,
                         }
@@ -214,9 +237,9 @@ fn answer(
     };
     // E38.2 excludes test-only kernel fixtures even through the slot alias.
     if relative.starts_with("kernel/")
-        && relative
-            .split('/')
-            .any(|part| matches!(part, "tests" | "testkit") || part.starts_with("fake-core"))
+        && relative.split('/').any(|part| {
+            matches!(part, "tests" | "testkit" | "testkit.mjs") || part.starts_with("fake-core")
+        })
     {
         return Ok((404, "text/plain", Vec::new()));
     }
@@ -314,6 +337,8 @@ mod tests {
             ("kernel/boot.mjs", "// kernel boot"),
             ("kernel/vendor/hello.mjs", "// kernel vendor"),
             ("kernel/tests/private.mjs", "// forbidden fixture"),
+            ("kernel/testkit.mjs", "// forbidden testkit"),
+            ("kernel/fake-core.mjs", "// forbidden core fixture"),
             ("assets/ctox-app-icon.png", "icon fixture"),
         ] {
             std::fs::write(app.join(path), body)?;
@@ -323,6 +348,10 @@ mod tests {
             tokio::runtime::Handle::current(),
         )
         .await?;
+        assert!(
+            owner.inputs.browser_ingress.get().unwrap().owner_started(),
+            "HTTP was published before owner signaling start"
+        );
         assert!(matches!(
             ctox_store::registry::Registry
                 .open(owner.inputs.sync.writer.db_id().clone(), Default::default()),
@@ -417,11 +446,30 @@ mod tests {
             ] {
                 assert_eq!(get(url)?.status(), 404, "bootstrap path escape: {url}");
             }
+            for url in [
+                "/kernel/testkit.mjs",
+                "/business-os/kernel/testkit.mjs",
+                "/kernel/fake-core.mjs",
+                "/business-os/kernel/fake-core.mjs",
+            ] {
+                assert_eq!(
+                    get(url)?.status(),
+                    404,
+                    "test-only kernel module served: {url}"
+                );
+            }
             let bootstrap: serde_json::Value = get("/api/business-os/bootstrap")?.into_json()?;
             assert_eq!(bootstrap["instance_id"], expected.0);
             assert_eq!(bootstrap["instance_public_key"], expected.1);
             assert!(bootstrap.get("session").is_none());
             assert_eq!(get("/api/business-os/records")?.status(), 404);
+            // Readiness only: the first launch must never start/retry signaling.
+            let _ = client
+                .get(&format!(
+                    "http://{}/api/business-os/launch-context",
+                    listen.addr
+                ))
+                .call();
             let public = client
                 .get(&format!(
                     "http://{}/api/business-os/launch-context",
