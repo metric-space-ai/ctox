@@ -382,7 +382,7 @@ async fn nonvoting_worker_uses_local_ipc_and_survives_authority_leader_loss() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn minority_cannot_confirm_worker_admission() {
-    use ctox_sync::authority::{store::SqliteStore, WorkerMembership};
+    use ctox_sync::authority::WorkerMembership;
     let c = Cluster::new().await;
     let leader = c.nodes[&1].leader().unwrap();
     c.bus
@@ -1662,7 +1662,7 @@ async fn additional_worker_requires_committed_membership_but_never_gets_a_vote()
         contracts::{SyncIpcOperation, SyncIpcRequest, SyncIpcResult},
         ipc::{AuthorityIpc, IPC_PROTOCOL_VERSION},
     };
-    use openraft::{storage::RaftStateMachine, RaftSnapshotBuilder};
+    use openraft::storage::RaftStateMachine;
     let mut c = Cluster::new().await;
     let key =
         Arc::new(SigningIdentity::from_pkcs8(&SigningIdentity::generate_pkcs8().unwrap()).unwrap());

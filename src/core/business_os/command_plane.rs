@@ -2902,11 +2902,11 @@ mod tests {
     use super::super::store_workjet_projects::tests::create_workjet_rxdb_projection_tables;
     use super::super::store_workjet_sessions::tests::create_workjet_session_rxdb_projection_tables;
     use super::*;
+    use crate::persistence::test_support::scoped_tempdir as tempdir;
     use rusqlite::Connection;
     use serde_json::json;
     use std::collections::BTreeSet;
     use std::time::{Duration, Instant};
-    use crate::persistence::test_support::scoped_tempdir as tempdir;
 
     #[test]
     fn intake_stamps_verified_identity_and_preserves_claimed_actor_evidence() -> anyhow::Result<()>
@@ -3089,7 +3089,9 @@ mod tests {
 
         for line in lines {
             let trimmed = line.trim();
-            if brace_depth == 1 && trimmed.starts_with("_ =>") { break; }
+            if brace_depth == 1 && trimmed.starts_with("_ =>") {
+                break;
+            }
             if brace_depth == 1 && (trimmed.starts_with('"') || !arm_pattern.is_empty()) {
                 if !arm_pattern.is_empty() {
                     arm_pattern.push(' ');
