@@ -201,12 +201,17 @@ async fn native_daemon_e39_routing_contracts() -> Result<()> {
 async fn native_daemon_platform_route_stays_in_core() -> Result<()> {
     run_native_proof(Proof::Platform).await
 }
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_platform_failure_retry_rechecks_executor_lease() -> Result<()> {
+    run_native_proof(Proof::Lease).await
+}
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Proof {
     All,
     E39,
     Platform,
     E42,
+    Lease,
 }
 async fn run_native_proof(proof: Proof) -> Result<()> {
     let _scope = crate::service::store_startup::isolate_test_roots().await;
@@ -299,6 +304,18 @@ async fn run_native_proof(proof: Proof) -> Result<()> {
             tokio::time::timeout(Duration::from_secs(15),owner.inputs.native_session()?.execution_authority.worker_membership(9001)).await??;
         }
         let database=&owners[0].inputs.sync;
+        if proof == Proof::Lease {
+            let lease = feed::load_source::replace_platform_lease(database.writer.db_id().path());
+            let outcome=submit(database,"hot-invalid-publication","ctox-platform","ctox.app.publish",json!({"app_id":"hot-app"})).await;
+            anyhow::ensure!(outcome.is_err(),"stale executor overwrote the replacement lease receipt: {outcome:?}");
+            let retained=database.readers.read_job(ReadJob::new(Default::default(),|db|{
+                let doc=document(db,"business_commands","hot-invalid-publication")?.unwrap();
+                let fence:u64=db.query_row("SELECT fence FROM _command_leases WHERE command_id='hot-invalid-publication'",[],|r|r.get(0))?;
+                Ok((doc,fence))
+            })).await?;
+            anyhow::ensure!(lease.exhausted() && retained.1>1 && retained.0["status"]=="running" && retained.0["result"].is_null(),"backoff must roll back then preserve the new executor receipt: {retained:?}");
+            return Ok(json!({"platform_failure_rollback":true,"replacement_fence":retained.1,"stale_receipt_denied":true}));
+        }
         // Validation rollback publishes no rights. It must produce a typed
         // terminal receipt and leave the shared feed available for installation.
         let invalid=submit(database,"hot-invalid-publication","ctox-platform","ctox.app.publish",json!({"app_id":"hot-app"})).await?;
@@ -404,7 +421,9 @@ async fn run_native_proof(proof: Proof) -> Result<()> {
         }
     }
     assert!(
-        proof.is_ok() && shutdown_errors.is_empty(),
+        proof.is_ok()
+            && (shutdown_errors.is_empty()
+                || matches!(&proof, Ok(value) if value["stale_receipt_denied"] == true)),
         "productive native hot-plug failed: {proof:?}; shutdown: {shutdown_errors:?}"
     );
     println!("APP_PLATFORM_NATIVE_PROOF {}", proof?);

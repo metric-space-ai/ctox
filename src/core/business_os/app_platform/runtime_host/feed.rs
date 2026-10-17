@@ -119,9 +119,22 @@ pub(super) async fn retry_write<T: Send + 'static>(
         #[cfg(test)]
         let path = writer.db_id().path().to_owned();
         async move {
+            #[cfg(test)]
+            let lease_probe = if stage == "platform.result" {
+                load_source::platform_attempt(&path)
+            } else {
+                None
+            };
+            #[cfg(test)]
+            if lease_probe == Some(1) {
+                writer.submit(WriteJob::new(Default::default(), |tx| {
+                    tx.execute("UPDATE _command_leases SET fence=fence+1 WHERE command_id='hot-invalid-publication'", [])?;
+                    Ok(())
+                }))?.await?;
+            }
             let options = JobOptions::default();
             #[cfg(test)]
-            let options = if stage == "cursor.ack" && load_source::cursor_pending(&path) {
+            let options = if lease_probe == Some(2) || stage == "cursor.ack" && load_source::cursor_pending(&path) {
                 JobOptions {
                     deadline: Some(std::time::Instant::now() + Duration::from_millis(25)),
                     ..options
@@ -131,6 +144,10 @@ pub(super) async fn retry_write<T: Send + 'static>(
             };
             Ok(writer
                 .submit(WriteJob::new(options, move |tx| {
+                    #[cfg(test)]
+                    if lease_probe == Some(2) {
+                        std::thread::sleep(Duration::from_millis(80));
+                    }
                     #[cfg(test)]
                     if stage == "cursor.ack" {
                         load_source::before_cursor(tx);
@@ -226,6 +243,16 @@ pub(super) mod load_source {
     }
     pub(crate) fn delay_cursor(path: &Path, pages: u32) -> Delay {
         delay_pages(&path.with_extension("cursor"), pages)
+    }
+    pub(crate) fn replace_platform_lease(path: &Path) -> Delay {
+        delay_pages(&path.with_extension("platform-lease"), 2)
+    }
+    pub(super) fn platform_attempt(path: &Path) -> Option<u32> {
+        let mut delays = DELAYS.get()?.lock().ok()?;
+        let left = delays.get_mut(&path.with_extension("platform-lease"))?;
+        let attempt = *left;
+        *left = left.saturating_sub(1);
+        (attempt > 0).then_some(attempt)
     }
     pub(super) fn cursor_pending(path: &Path) -> bool {
         DELAYS
@@ -1092,16 +1119,16 @@ async fn dispatch_platform(
                 let mut doc = document(tx, "business_commands", &id)?
                     .ok_or_else(|| invalid("not_found: platform failure"))?;
                 if doc["status"] == "running" {
-                // Backoff may outlast this lease; only its current P9 owner
-                // may change the nonterminal receipt.
-                write_contract::check_executor_fence(
-                    tx,
-                    &participant,
-                    &id,
-                    ctox_store::change_log::subscription::protocol::Seq(fence),
-                    now(),
-                )?
-                .map_err(|_| invalid("revoked: platform result executor fence lost"))?;
+                    // Backoff may outlast this lease; only its current P9 owner
+                    // may change the nonterminal receipt.
+                    write_contract::check_executor_fence(
+                        tx,
+                        &participant,
+                        &id,
+                        ctox_store::change_log::subscription::protocol::Seq(fence),
+                        now(),
+                    )?
+                    .map_err(|_| invalid("revoked: platform result executor fence lost"))?;
                     let code = outcome["code"].as_str().unwrap_or("unavailable");
                     origin::audit_rejection(tx, &doc, code)?;
                     doc["status"] = json!("failed");
