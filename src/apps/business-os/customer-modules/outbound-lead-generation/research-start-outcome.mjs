@@ -41,3 +41,56 @@ export function researchStartFailureOutcome(error) {
   if (isTransientResearchWaitError(error)) return 'running';
   return 'other';
 }
+
+// A browser start patch ("running" / "queued") must never overwrite a final
+// research status the native side wrote AFTER this start began. Field
+// observation 17.10.2026: 11 leads showed "running" although their queue task
+// was handled, 6 "running" with a failed task, 2 "queued" with a cancelled
+// task — a late start patch (or a pending overlay of it) had replaced the
+// native final status.
+export const TERMINAL_RESEARCH_STATUSES = Object.freeze(['needs_review', 'completed', 'failed']);
+const START_CLAIM_STATUSES = new Set(['running', 'queued']);
+
+// Fingerprint of everything only the native writeback may stamp: the research
+// status plus every stamped (revision/review) field status. A change between
+// the start and the patch proves a native write in between.
+export function nativeResearchFingerprint(lead) {
+  if (!lead || typeof lead !== 'object') return '';
+  const stamps = [];
+  const collect = (prefix, statuses) => {
+    if (!statuses || typeof statuses !== 'object' || Array.isArray(statuses)) return;
+    for (const [field, status] of Object.entries(statuses)) {
+      if (!status || typeof status !== 'object') continue;
+      if (status.revision == null && status.review == null) continue;
+      stamps.push(`${prefix}${field}=${JSON.stringify(status.revision ?? null)}/${JSON.stringify(status.review ?? null)}`);
+    }
+  };
+  collect('', lead.field_status);
+  for (const [person, statuses] of Object.entries(lead.person_field_status || {})) collect(`${person}:`, statuses);
+  stamps.sort();
+  return `${String(lead.research_status || '')}|${stamps.join(',')}`;
+}
+
+function researchWrittenAtMs(lead) {
+  return Math.max(
+    Number(lead?.research_updated_at_ms || 0),
+    Number(lead?.payload?.research_finished_at_ms || 0),
+  ) || 0;
+}
+
+// `current`: the lead as stored right now. `start`: { sinceMs, commandId,
+// baseFingerprint } captured when this start began.
+export function terminalResearchStatusWins(current, start = {}) {
+  const status = String(current?.research_status || '');
+  if (!TERMINAL_RESEARCH_STATUSES.includes(status)) return false;
+  const commandId = String(start.commandId || '').trim();
+  if (commandId && String(current?.command_id || '').trim() === commandId) return true;
+  if (start.baseFingerprint != null && start.baseFingerprint !== ''
+    && nativeResearchFingerprint(current) !== start.baseFingerprint) return true;
+  const sinceMs = Number(start.sinceMs || 0);
+  return sinceMs > 0 && researchWrittenAtMs(current) >= sinceMs;
+}
+
+export function patchClaimsResearchStart(patch) {
+  return START_CLAIM_STATUSES.has(String(patch?.research_status || ''));
+}
