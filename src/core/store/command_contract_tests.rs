@@ -62,38 +62,66 @@ async fn command_repository_catalog_upgrade_preserves_existing_v4_rows_without_m
     let (_dir, writer, readers) = runtime().await;
     let mut plan = command_release_fixture();
     crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
-        .await.unwrap();
-    let original = readers.read(|tx| crate::schema::active_collection(tx, "business_commands"))
-        .await.unwrap().unwrap();
+        .await
+        .unwrap();
+    let original = readers
+        .read(|tx| crate::schema::active_collection(tx, "business_commands"))
+        .await
+        .unwrap()
+        .unwrap();
     assert_eq!(original.definition.schema_json, command_document_schema());
     let body = json!({"id":"retained-v4","type":"fixture.task","app_id":"fixture",
         "actor_id":"retained-user","created_at":"2026-10-15T20:00:00Z",
         "status":"queued","payload":{"retained":true}});
     let expected = body.clone();
-    writer.submit(WriteJob::new(JobOptions::default(), move |tx| {
-        crate::import::insert_document(tx, &crate::import::Document {
-            collection:"business_commands".into(),id:"retained-v4".into(),body,revision:None,
-        })?; Ok(())
-    })).unwrap().await.unwrap();
+    writer
+        .submit(WriteJob::new(JobOptions::default(), move |tx| {
+            crate::import::insert_document(
+                tx,
+                &crate::import::Document {
+                    collection: "business_commands".into(),
+                    id: "retained-v4".into(),
+                    body,
+                    revision: None,
+                },
+            )?;
+            Ok(())
+        }))
+        .unwrap()
+        .await
+        .unwrap();
     plan.version = "platform-8".into();
     for defs in plan.collections.values_mut() {
-        for definition in defs { definition.app_ver = plan.version.clone(); }
+        for definition in defs {
+            definition.app_ver = plan.version.clone();
+        }
     }
     // The real loader already canonicalizes the running V4 generation. An E61
     // artifact/catalog update therefore needs no identity/actor invention.
     crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64 + 1)
-        .await.unwrap();
-    readers.read(move |tx| {
-        let current = crate::schema::active_collection(tx, "business_commands")?.unwrap();
-        assert_eq!(current.gen, original.gen);
-        assert_eq!(current.table, original.table);
-        assert_eq!(current.definition.schema_ver, 3);
-        let raw:String=tx.query_row(&format!("SELECT data FROM {} WHERE id='retained-v4'",
-            change_log::identifier(&current.table)?),[],|r|r.get(0))?;
-        assert_eq!(serde_json::from_str::<Value>(&raw).unwrap(),expected);
-        Ok(())
-    }).await.unwrap();
-    readers.shutdown().await.unwrap();writer.shutdown().await.unwrap();
+        .await
+        .unwrap();
+    readers
+        .read(move |tx| {
+            let current = crate::schema::active_collection(tx, "business_commands")?.unwrap();
+            assert_eq!(current.gen, original.gen);
+            assert_eq!(current.table, original.table);
+            assert_eq!(current.definition.schema_ver, 3);
+            let raw: String = tx.query_row(
+                &format!(
+                    "SELECT data FROM {} WHERE id='retained-v4'",
+                    change_log::identifier(&current.table)?
+                ),
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(serde_json::from_str::<Value>(&raw).unwrap(), expected);
+            Ok(())
+        })
+        .await
+        .unwrap();
+    readers.shutdown().await.unwrap();
+    writer.shutdown().await.unwrap();
 }
 
 #[tokio::test]
@@ -412,12 +440,16 @@ async fn kernel_component(e25: bool) {
     let manifest_schema = platform["collections"]["business_commands"]["schema"].clone();
     assert_eq!(manifest_schema, command_document_schema());
     let schema_ver = manifest_schema["version"].as_u64().unwrap() as u32;
-    let published_schema = &plan.manifests.iter()
-        .find(|m| m["app_id"] == "ctox-platform").unwrap()
-        ["collections"]["business_commands"]["schema"];
+    let published_schema = &plan
+        .manifests
+        .iter()
+        .find(|m| m["app_id"] == "ctox-platform")
+        .unwrap()["collections"]["business_commands"]["schema"];
     assert_eq!(published_schema, &manifest_schema);
-    let definition = plan.collections["ctox-platform"].iter()
-        .find(|d| d.name == "business_commands").unwrap();
+    let definition = plan.collections["ctox-platform"]
+        .iter()
+        .find(|d| d.name == "business_commands")
+        .unwrap();
     assert_eq!(definition.schema_ver, schema_ver);
     assert_eq!(definition.schema_json, manifest_schema);
     crate::import::base_release::publish(&writer, &plan, &NoLegacyCommandMigration, NOW as i64)
