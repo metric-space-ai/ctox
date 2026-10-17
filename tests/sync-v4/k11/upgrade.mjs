@@ -192,6 +192,25 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
    record.forward.verifiedDurationMs=Date.now()-forwardAt;
    if(dressSmoke)record.forward.signedSmoke=await performDressSmoke({config:dressSmoke,root,output,env,cli,quiesce,phase:'after-forward'});
    record.roundtripExecuted=true;record.finalUpdateState=final;
+   if(dressSmoke?.extraRecoveryRoundtrip){
+    const second={startedAtMs:Date.now()};record.secondRecovery=second;
+    quiesce();second.beforeReadback=readback('before-second-rollback');
+    second.rollbackCallIndex=calls.length;await cli(['update','rollback']);
+    const rolledAgain=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json'))),backAgain=fs.realpathSync(join(installRoot,'current'));
+    if(rolledAgain.phase!=='rolled_back'||backAgain!==initial||hash(fs.readFileSync(join(backAgain,'bin/ctox')))!==before.binarySha256)throw Error('Second rollback did not activate the verified old binary');
+    quiesce();second.rollback={phase:rolledAgain.phase,binarySha256:before.binarySha256,dataReadback:readback('rollback-again')};
+    second.forwardCallIndex=calls.length;await cli(['update','apply','--version',release,'--force'],{targetUpdater:true});
+    const forwardedAgain=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json'))),currentAgain=fs.realpathSync(join(installRoot,'current'));
+    if(forwardedAgain.phase!=='completed'||currentAgain!==join(releases,release)||hash(fs.readFileSync(join(currentAgain,'bin/ctox')))!==after.binarySha256)throw Error('Second forward did not activate the verified candidate');
+    second.statusCallIndex=calls.length;const statusCall=await cli(['status'],{allowFailure:true});
+    const text=fs.readFileSync(statusCall.log,'utf8');let status;try{status=JSON.parse(text.slice(text.indexOf('{'),text.lastIndexOf('}')+1));}catch{}
+    if(statusCall.code!==0||status?.running!==true)throw Error('Second forward service is not running');
+    quiesce();second.forward={phase:forwardedAgain.phase,binarySha256:after.binarySha256,serviceStatus:{exit:statusCall.code,running:true,evidence:statusCall.log},dataReadback:readback('forward-again')};
+    second.forward.signedSmoke=await performDressSmoke({config:dressSmoke,root,output,env,cli,quiesce,phase:'after-extra-forward'});
+    const runtimeHelp=await cli(['runtime','--help'],{allowFailure:true});
+    record.providerGatewaySmoke={status:'not_run',reason:'No authorized provider account or gateway route is provisioned in this synthetic fixture; no credentials are imported or invented',probe:{args:runtimeHelp.args,exit:runtimeHelp.code,evidence:runtimeHelp.log},scope:'Installed runtime help availability only, not a provider request or account-selection success'};
+    second.durationMs=Date.now()-second.startedAtMs;second.terminal=true;record.finalUpdateState=forwardedAgain;
+   }
   }
   return record;
  }finally{await new Promise(r=>server.close(r));fs.writeFileSync(join(output,'installer.json'),JSON.stringify(record,null,2));}

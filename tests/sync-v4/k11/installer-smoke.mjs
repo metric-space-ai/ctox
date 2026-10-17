@@ -33,7 +33,7 @@ try{
  record.fixture={rows:truth.rows.length,documentsCovered:bodies.rows.length,fullDocumentSha256:digest(bodies.rows),metadataSha256:digest(truth.rows)};save();
  record.root=root;record.beforeSnapshot=snapshot('before');save();
  const controller=join(dirname(new URL(import.meta.url).pathname),'upgrade-controller.mjs'),log=fs.openSync(join(output,'controller.log'),'w',0o600);
- const run=spawnSync(process.execPath,[controller,oldReceipt,newReceipt,root,join(output,'upgrade'),roundtrip==='yes'?'yes':'no','',dressConfig||''],{stdio:['ignore',log,log],timeout:11*60*1000});fs.closeSync(log);
+ const run=spawnSync(process.execPath,[controller,oldReceipt,newReceipt,root,join(output,'upgrade'),roundtrip==='yes'?'yes':'no','',dressConfig||''],{stdio:['ignore',log,log],timeout:(dressConfig&&JSON.parse(fs.readFileSync(dressConfig)).extraRecoveryRoundtrip?15:11)*60*1000});fs.closeSync(log);
  record.controllerExit=run.status;record.controllerError=run.error?.message;
  for(const [name,file]of [['installer','installer.json'],['failure','failure.json'],['controller','controller.json']]){
   const p=join(output,'upgrade',file);if(fs.existsSync(p))record[name]=JSON.parse(fs.readFileSync(p));

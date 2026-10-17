@@ -17,10 +17,11 @@ const file=join(output,'sandbox.json');fs.writeFileSync(file,JSON.stringify(conf
 const ns=['--kill-child=SIGKILL','--net','--mount','--pid','--fork','--mount-proc',process.execPath,join(here,'sandbox.mjs'),file];
 if(config.dressSmoke)execFileSync('mkfifo',[join(output,'network-ack')]);
 const child=privileged?spawn('sudo',['-n','unshare',...ns],{stdio:'inherit',detached:true}):spawn('unshare',['--user','--map-root-user',...ns],{stdio:'inherit',detached:true});
-const row={owner:'01a087a0-169a',pid:child.pid,pgid:child.pid,purpose:'supported installer in private PID/mount/network namespaces',stop:'terminal or 10 min',startedAt:new Date().toISOString()};
+const budgetMinutes=config.dressSmoke?.extraRecoveryRoundtrip?14:10;
+const row={owner:'01a087a0-169a',pid:child.pid,pgid:child.pid,purpose:'supported installer in private PID/mount/network namespaces',stop:'terminal or '+budgetMinutes+' min',startedAt:new Date().toISOString()};
 const save=()=>fs.writeFileSync(join(output,'controller.json'),JSON.stringify(row,null,2));save();
 const kill=s=>{try{process.kill(-child.pid,s);}catch(e){if(e.code!=='ESRCH')throw e;}};
-const timer=setTimeout(()=>kill('SIGKILL'),10*60*1000);process.once('SIGTERM',()=>kill('SIGKILL'));
+const timer=setTimeout(()=>kill('SIGKILL'),budgetMinutes*60*1000);process.once('SIGTERM',()=>kill('SIGKILL'));
 let network;
 try {
  if(config.dressSmoke){
@@ -33,7 +34,7 @@ try {
   const log=fs.openSync(join(output,'slirp.log'),'w',0o600);
   if(privileged&&!process.env.M7_SLIRP_DIR)throw Error('Private slirp package path required for privileged namespace setup');
   network=privileged?spawn('sudo',['-n','python3',join(here,'m7-network-helper.py'),file,String(child.pid),process.env.M7_SLIRP_DIR],{stdio:['ignore','pipe',log],detached:true}):spawn('slirp4netns',['--configure','--disable-host-loopback','--userns-path=/proc/'+child.pid+'/ns/user','--ready-fd=3',String(child.pid),'tap0'],{stdio:['ignore',log,log,'pipe'],detached:true});fs.closeSync(log);
-  row.network={pid:network.pid,pgid:network.pid,purpose:'rootless private namespace HTTPS for official signed release stage',hostLoopbackDisabled:true,stop:'namespace exit or controller10min deadline'};save();
+  row.network={pid:network.pid,pgid:network.pid,purpose:'rootless private namespace HTTPS for official signed release stage',hostLoopbackDisabled:true,stop:'namespace exit or controller deadline'};save();
   await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('slirp readiness deadline')),15000);(privileged?network.stdout:network.stdio[3]).once('data',()=>{clearTimeout(timer);resolve();});network.once('error',reject);network.once('exit',code=>{clearTimeout(timer);reject(Error('slirp exited '+code));});});
   const ack=fs.openSync(join(output,'network-ack'),fs.constants.O_WRONLY|fs.constants.O_NONBLOCK);try{fs.writeSync(ack,'1');}finally{fs.closeSync(ack);}
  }
