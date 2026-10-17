@@ -363,3 +363,157 @@ fn startup_failure_retains_typed_cause_without_logging_parameters() {
         );
     }
 }
+
+/// Real foreground owners, the production responder and HTTP route. The local
+/// server relays only signaling; it never supplies Core data or admission.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn owner_signaling_precedes_http_and_launch_context_meets_budget() -> anyhow::Result<()> {
+    use futures_util::SinkExt;
+    use tokio_tungstenite::tungstenite::{
+        handshake::server::{Request, Response},
+        Message,
+    };
+    let _scope = isolate_test_roots().await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let server = tokio::spawn(async move {
+        let mut connections = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                accepted = listener.accept() => {
+                    let Ok((tcp, _)) = accepted else { break; };
+                    connections.spawn(async move {
+                        let id = Arc::new(std::sync::Mutex::new(None::<String>));
+                        let capture = id.clone();
+                        let ws = tokio_tungstenite::accept_hdr_async(tcp, move |request: &Request, response: Response| {
+                            if let Ok(url) = url::Url::parse(&format!("ws://127.0.0.1{}", request.uri())) {
+                                *capture.lock().unwrap() = url.query_pairs().find(|(k,_)| k == "client").map(|(_,v)| v.into_owned());
+                            }
+                            Ok(response)
+                        }).await;
+                        let Ok(mut ws) = ws else { return; };
+                        let Some(id) = id.lock().unwrap().clone() else { return; };
+                        if ws.send(Message::text(serde_json::json!({"type":"init","yourPeerId":id}).to_string())).await.is_err() { return; }
+                        while let Some(Ok(frame)) = ws.next().await {
+                            match frame {
+                                Message::Text(text) => {
+                                    let Ok(packet) = serde_json::from_str::<Value>(&text) else { continue; };
+                                    if packet["type"] == "join" && ws.send(Message::text(serde_json::json!({"type":"joined","room":packet["room"],"otherPeerIds":[id],"peers":[{"peerId":id,"role":"ctox_instance"}]}).to_string())).await.is_err() { break; }
+                                }
+                                Message::Ping(bytes) => { if ws.send(Message::Pong(bytes)).await.is_err() { break; } }
+                                Message::Close(_) => break,
+                                _ => (),
+                            }
+                        }
+                    });
+                }
+                _ = connections.join_next(), if !connections.is_empty() => (),
+            }
+        }
+    });
+    // Abort-on-drop also owns all accepted connections through the JoinSet.
+    struct Server(tokio::task::JoinHandle<()>);
+    impl Drop for Server {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let _server = Server(server);
+    let (root, mut initial, _, _) = write_fixture().await?;
+    let config_root = root.path().to_owned();
+    crate::persistence::run_core_sync(move || {
+        crate::inference::runtime_env::set_runtime_env_value(
+            &config_root,
+            "CTOX_BUSINESS_OS_ICE_SERVERS",
+            r#"[{"urls":"stun:127.0.0.1:9"}]"#,
+        )?;
+        crate::inference::runtime_env::set_runtime_env_value(
+            &config_root,
+            "CTOX_BUSINESS_OS_WEB_AUTOSTART",
+            "0",
+        )
+    })
+    .await?;
+    std::fs::write(
+        root.path().join("runtime/business-os-signaling-urls.json"),
+        serde_json::to_vec(&vec![format!("ws://{address}/signal")])?,
+    )?;
+    std::os::unix::fs::symlink(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/apps/business-os"),
+        root.path().join("business-os"),
+    )?;
+    initial.shutdown().await?;
+    let mut owner = crate::service::store_startup::Foreground::start(
+        root.path().to_owned(),
+        tokio::runtime::Handle::current(),
+    )
+    .await?;
+    let ingress = owner.inputs.browser_ingress.get().unwrap();
+    assert!(
+        ingress.owner_started(),
+        "HTTP was published before owner signaling start"
+    );
+    let ready = tokio::time::timeout(Duration::from_secs(55), async {
+        loop {
+            let changed = ingress.changed.notified();
+            if ingress.ready().is_ok() {
+                return Ok::<_, std::io::Error>(());
+            }
+            if ingress.state.load(std::sync::atomic::Ordering::Acquire) == 3 {
+                return ingress.wait_failed().await;
+            }
+            changed.await;
+        }
+    })
+    .await?;
+    if let Err(error) = ready {
+        owner.shutdown().await?;
+        return Err(error.into());
+    }
+    let request = ctox_store::ipc::Request {
+        request_id: 19,
+        kind: ctox_store::ipc::JobKind::Read,
+        method: "http.listen".into(),
+        payload: serde_json::to_vec(&serde_json::json!({"addr":"127.0.0.1:0"}))?,
+    };
+    let bytes = ctox_store::ipc::request(
+        crate::service::queue_store::endpoint(root.path()),
+        request,
+        Default::default(),
+    )?
+    .await?;
+    let address = serde_json::from_slice::<Value>(&bytes)?["addr"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let measured = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<f64>> {
+        let agent = ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(3))
+            .build();
+        let mut samples = Vec::new();
+        for _ in 0..20 {
+            let at = Instant::now();
+            let response = agent
+                .get(&format!("http://{address}/api/business-os/launch-context"))
+                .call()?;
+            anyhow::ensure!(
+                response.status() == 200,
+                "launch-context not ready after owner startup"
+            );
+            // The credential-bearing body is consumed only in memory, never logged.
+            let _ = response.into_string()?;
+            samples.push(at.elapsed().as_secs_f64() * 1000.0);
+        }
+        Ok(samples)
+    })
+    .await?;
+    owner.shutdown().await?;
+    let samples = measured?;
+    let p99 = samples.iter().copied().fold(0.0, f64::max);
+    eprintln!(
+        "C11_LAUNCH_METRICS {}",
+        serde_json::json!({"samples_ms":samples,"p99_ms":p99,"http":200})
+    );
+    assert!(p99 < 50.0, "launch-context p99 {p99:.3}ms exceeds 50ms");
+    Ok(())
+}
