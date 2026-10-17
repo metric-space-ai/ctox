@@ -95,86 +95,92 @@ async fn call(registry: &Arc<Registry<u64>>, s: &Session, r: Request) -> anyhow:
     .await?
     .result)
 }
-#[tokio::test]
-async fn real_final_has_private_handle_only_after_domain_commit() -> anyhow::Result<()> {
-    let (root, registry, s, id, server) = fixture().await?;
-    let mut w = req(&s, &id, "write");
-    w.sequence = Some(1);
-    w.pcm_base64 = Some(STANDARD.encode([0; 640]));
-    call(&registry, &s, w).await?;
-    call(&registry, &s, req(&s, &id, "finish")).await?;
-    let receipt = tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            let mut r = req(&s, &id, "read");
-            r.after_sequence = Some(0);
-            let v = call(&registry, &s, r).await?;
-            if v["state"] == "committed" {
-                break Ok::<_, anyhow::Error>(v);
+#[test]
+fn real_final_has_private_handle_only_after_domain_commit() -> anyhow::Result<()> {
+    crate::persistence::test_support::run_scoped_async(move || async move {
+        let (root, registry, s, id, server) = fixture().await?;
+        let mut w = req(&s, &id, "write");
+        w.sequence = Some(1);
+        w.pcm_base64 = Some(STANDARD.encode([0; 640]));
+        call(&registry, &s, w).await?;
+        call(&registry, &s, req(&s, &id, "finish")).await?;
+        let receipt = tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let mut r = req(&s, &id, "read");
+                r.after_sequence = Some(0);
+                let v = call(&registry, &s, r).await?;
+                if v["state"] == "committed" {
+                    break Ok::<_, anyhow::Error>(v);
+                }
+                ensure!(v["state"] != "failed", "{v}");
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            ensure!(v["state"] != "failed", "{v}");
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        })
+        .await??;
+        assert!(receipt["receipt"]["handle"]
+            .as_str()
+            .is_some_and(|h| Uuid::parse_str(h).is_ok()));
+        assert_eq!(receipt["receipt"]["meetingRevision"], 1);
+        assert!(receipt.get("text").is_none());
+        assert_eq!(
+            jour_fixe_speech::committed_revision(
+                root.path(),
+                &s.authority.token,
+                &s.authority.binding,
+                &id
+            )?,
+            1
+        );
+        drop(registry);
+        drop(s);
+        server.abort();
+        Ok(())
     })
-    .await??;
-    assert!(receipt["receipt"]["handle"]
-        .as_str()
-        .is_some_and(|h| Uuid::parse_str(h).is_ok()));
-    assert_eq!(receipt["receipt"]["meetingRevision"], 1);
-    assert!(receipt.get("text").is_none());
-    assert_eq!(
-        jour_fixe_speech::committed_revision(
-            root.path(),
-            &s.authority.token,
-            &s.authority.binding,
-            &id
-        )?,
-        1
-    );
-    drop(registry);
-    drop(s);
-    server.abort();
-    Ok(())
 }
-#[tokio::test]
-async fn cancel_before_finish_does_not_persist_partial() -> anyhow::Result<()> {
-    let (root, registry, s, id, server) = fixture().await?;
-    let mut w = req(&s, &id, "write");
-    w.sequence = Some(1);
-    w.pcm_base64 = Some(STANDARD.encode([0; 640]));
-    call(&registry, &s, w).await?;
-    assert_eq!(
-        call(&registry, &s, req(&s, &id, "cancel")).await?["state"],
-        "canceled"
-    );
-    assert!(call(&registry, &s, req(&s, &id, "finish")).await.is_err());
-    let conn = rusqlite::Connection::open(store::business_os_store_path(root.path()))?;
-    let n:i64=conn.query_row("SELECT count(*) FROM workjet_jour_fixe_speech_receipts WHERE final_json IS NOT NULL OR consumed_command IS NOT NULL",[],|r|r.get(0))?;
-    assert_eq!(n, 0);
-    drop(registry);
-    drop(s);
-    server.abort();
-    Ok(())
+#[test]
+fn cancel_before_finish_does_not_persist_partial() -> anyhow::Result<()> {
+    crate::persistence::test_support::run_scoped_async(move || async move {
+        let (root, registry, s, id, server) = fixture().await?;
+        let mut w = req(&s, &id, "write");
+        w.sequence = Some(1);
+        w.pcm_base64 = Some(STANDARD.encode([0; 640]));
+        call(&registry, &s, w).await?;
+        assert_eq!(
+            call(&registry, &s, req(&s, &id, "cancel")).await?["state"],
+            "canceled"
+        );
+        assert!(call(&registry, &s, req(&s, &id, "finish")).await.is_err());
+        let conn = rusqlite::Connection::open(store::business_os_store_path(root.path()))?;
+        let n:i64=conn.query_row("SELECT count(*) FROM workjet_jour_fixe_speech_receipts WHERE final_json IS NOT NULL OR consumed_command IS NOT NULL",[],|r|r.get(0))?;
+        assert_eq!(n, 0);
+        drop(registry);
+        drop(s);
+        server.abort();
+        Ok(())
+    })
 }
-#[tokio::test]
-async fn wrong_peer_scope_and_revoked_actor_cannot_reuse_stream() -> anyhow::Result<()> {
-    let (root, registry, s, id, server) = fixture().await?;
-    let r = req(&s, &id, "finish");
-    assert!(registry.lookup(&8, &s.authority.token, &r).is_err());
-    let mut changed = req(&s, &id, "finish");
-    changed.scope.deck_revision = 2;
-    assert!(registry.lookup(&7, &s.authority.token, &changed).is_err());
-    assert!(registry.lookup(&7, "other-token", &r).is_err());
-    let conn = rusqlite::Connection::open(store::business_os_store_path(root.path()))?;
-    conn.execute(
-        "UPDATE business_users SET active=0 WHERE user_id='owner'",
-        [],
-    )?;
-    assert!(call(&registry, &s, r).await.is_err());
-    assert!(s.authority.with_current(&mut || Ok(())).is_err());
-    drop(registry);
-    drop(s);
-    server.abort();
-    Ok(())
+#[test]
+fn wrong_peer_scope_and_revoked_actor_cannot_reuse_stream() -> anyhow::Result<()> {
+    crate::persistence::test_support::run_scoped_async(move || async move {
+        let (root, registry, s, id, server) = fixture().await?;
+        let r = req(&s, &id, "finish");
+        assert!(registry.lookup(&8, &s.authority.token, &r).is_err());
+        let mut changed = req(&s, &id, "finish");
+        changed.scope.deck_revision = 2;
+        assert!(registry.lookup(&7, &s.authority.token, &changed).is_err());
+        assert!(registry.lookup(&7, "other-token", &r).is_err());
+        let conn = rusqlite::Connection::open(store::business_os_store_path(root.path()))?;
+        conn.execute(
+            "UPDATE business_users SET active=0 WHERE user_id='owner'",
+            [],
+        )?;
+        assert!(call(&registry, &s, r).await.is_err());
+        assert!(s.authority.with_current(&mut || Ok(())).is_err());
+        drop(registry);
+        drop(s);
+        server.abort();
+        Ok(())
+    })
 }
 #[tokio::test]
 async fn duplicate_pcm_is_idempotent_and_conflicting_sequence_is_terminal() -> anyhow::Result<()> {

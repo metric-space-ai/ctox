@@ -203,232 +203,243 @@ fn exit_autostart_researched_plan_without_prior_resources_can_be_adopted_once() 
 }
 #[test]
 fn exit_refresh_uses_one_durable_project_turn_and_typed_result() -> anyhow::Result<()> {
-    let root = super::weekly_reports::fixture()?;
-    let exit = |id: &str, kind: &str, payload: Value| {
-        crate::business_os::command_plane::accept_rxdb_business_command(
+    crate::persistence::test_support::run_scoped(move || {
+        let root = super::weekly_reports::fixture()?;
+        let exit = |id: &str, kind: &str, payload: Value| {
+            crate::business_os::command_plane::accept_rxdb_business_command(
+                root.path(),
+                json!({
+                    "id":id,"module":"ctox","command_type":format!("ctox.workjet.exit_model.{kind}"),
+                    "record_id":"project","payload":payload,"client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}
+                }),
+            )
+        };
+        let request = json!({"project_id":"project","as_of":"2026-10-08","resources":{"hours_per_week":20,"monthly_budget_eur":300,"comparison_mode":"equal_resources"}});
+        let first = exit("exit-refresh-1", "refresh", request.clone())?;
+        ensure!(
+            first["status"] == "completed",
+            "refresh was not accepted: {first}"
+        );
+        let initial = &first["result"]["assessment"];
+        assert_eq!(initial["status"], "researching");
+        assert!(initial["result"].is_null());
+        let second = exit("exit-refresh-2", "refresh", request)?;
+        assert_eq!(second["result"]["assessment"]["run_id"], initial["run_id"]);
+        let conn = open_store(root.path())?;
+        let research: String = conn.query_row(
+            "SELECT research_command_id FROM workjet_exit_model_runs WHERE run_id=?1",
+            [initial["run_id"].as_str().unwrap()],
+            |r| r.get(0),
+        )?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM workjet_exit_model_runs WHERE project_id='project'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(count, 1);
+        drop(conn);
+        // Component writeback test. The store's production call sits after the
+        // existing native terminal review gate, not after an arbitrary message.
+        let input = crate::business_os::workjet_exit_model_engine::fixture();
+        crate::business_os::workjet_exit_model::complete_research(
             root.path(),
-            json!({
-                "id":id,"module":"ctox","command_type":format!("ctox.workjet.exit_model.{kind}"),
-                "record_id":"project","payload":payload,"client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}
-            }),
-        )
-    };
-    let request = json!({"project_id":"project","as_of":"2026-10-08","resources":{"hours_per_week":20,"monthly_budget_eur":300,"comparison_mode":"equal_resources"}});
-    let first = exit("exit-refresh-1", "refresh", request.clone())?;
-    ensure!(
-        first["status"] == "completed",
-        "refresh was not accepted: {first}"
-    );
-    let initial = &first["result"]["assessment"];
-    assert_eq!(initial["status"], "researching");
-    assert!(initial["result"].is_null());
-    let second = exit("exit-refresh-2", "refresh", request)?;
-    assert_eq!(second["result"]["assessment"]["run_id"], initial["run_id"]);
-    let conn = open_store(root.path())?;
-    let research: String = conn.query_row(
-        "SELECT research_command_id FROM workjet_exit_model_runs WHERE run_id=?1",
-        [initial["run_id"].as_str().unwrap()],
-        |r| r.get(0),
-    )?;
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM workjet_exit_model_runs WHERE project_id='project'",
-        [],
-        |r| r.get(0),
-    )?;
-    assert_eq!(count, 1);
-    drop(conn);
-    // Component writeback test. The store's production call sits after the
-    // existing native terminal review gate, not after an arbitrary message.
-    let input = crate::business_os::workjet_exit_model_engine::fixture();
-    crate::business_os::workjet_exit_model::complete_research(
-        root.path(),
-        &research,
-        &json!({"exit_model_inputs":input}).to_string(),
-    )?;
-    let state = exit("exit-read", "read", json!({"project_id":"project"}))?;
-    ensure!(state["status"] == "completed", "read failed: {state}");
-    assert_eq!(state["result"]["assessment"]["status"], "blocked");
-    assert_eq!(
-        state["result"]["assessment"]["plan_summary"]["confirmed"],
-        false
-    );
-    assert!(state["result"]["assessment"]["result"].is_null());
-    let confirmation =
-        json!({"project_id":"project","confirm_run_id":state["result"]["assessment"]["run_id"]});
-    let confirmed = exit("exit-confirm", "submit", confirmation.clone())?;
-    assert_eq!(confirmed["status"], "completed", "{confirmed}");
-    assert_eq!(confirmed["result"]["assessment"]["status"], "provisional");
-    assert_eq!(
-        exit("exit-confirm", "submit", confirmation)?["result"],
-        confirmed["result"]
-    );
-    let state = exit(
-        "exit-confirmed-read",
-        "read",
-        json!({"project_id":"project"}),
-    )?;
-    assert_eq!(
-        state["result"]["assessment"]["result"]["expected_exit_equity_eur"],
-        8050.0
-    );
-    let fixture_path = std::env::temp_dir().join("ctox-exit-model-assessment-fixture.json");
-    std::fs::write(
-        &fixture_path,
-        serde_json::to_vec_pretty(&state["result"]["assessment"])?,
-    )?;
-    eprintln!("EXIT_MODEL_ASSESSMENT_FIXTURE {}", fixture_path.display());
-    let before = state["result"]["assessment"]["history"].clone();
-    crate::business_os::workjet_exit_model::complete_research(
-        root.path(),
-        &research,
-        &json!({"exit_model_inputs":crate::business_os::workjet_exit_model_engine::fixture()})
-            .to_string(),
-    )?;
-    assert_eq!(
-        exit("exit-read-2", "read", json!({"project_id":"project"}))?["result"]["assessment"]
-            ["history"],
-        before
-    );
-    Ok(())
+            &research,
+            &json!({"exit_model_inputs":input}).to_string(),
+        )?;
+        let state = exit("exit-read", "read", json!({"project_id":"project"}))?;
+        ensure!(state["status"] == "completed", "read failed: {state}");
+        assert_eq!(state["result"]["assessment"]["status"], "blocked");
+        assert_eq!(
+            state["result"]["assessment"]["plan_summary"]["confirmed"],
+            false
+        );
+        assert!(state["result"]["assessment"]["result"].is_null());
+        let confirmation = json!({"project_id":"project","confirm_run_id":state["result"]["assessment"]["run_id"]});
+        let confirmed = exit("exit-confirm", "submit", confirmation.clone())?;
+        assert_eq!(confirmed["status"], "completed", "{confirmed}");
+        assert_eq!(confirmed["result"]["assessment"]["status"], "provisional");
+        assert_eq!(
+            exit("exit-confirm", "submit", confirmation)?["result"],
+            confirmed["result"]
+        );
+        let state = exit(
+            "exit-confirmed-read",
+            "read",
+            json!({"project_id":"project"}),
+        )?;
+        assert_eq!(
+            state["result"]["assessment"]["result"]["expected_exit_equity_eur"],
+            8050.0
+        );
+        let fixture_path = std::env::temp_dir().join("ctox-exit-model-assessment-fixture.json");
+        std::fs::write(
+            &fixture_path,
+            serde_json::to_vec_pretty(&state["result"]["assessment"])?,
+        )?;
+        eprintln!("EXIT_MODEL_ASSESSMENT_FIXTURE {}", fixture_path.display());
+        let before = state["result"]["assessment"]["history"].clone();
+        crate::business_os::workjet_exit_model::complete_research(
+            root.path(),
+            &research,
+            &json!({"exit_model_inputs":crate::business_os::workjet_exit_model_engine::fixture()})
+                .to_string(),
+        )?;
+        assert_eq!(
+            exit("exit-read-2", "read", json!({"project_id":"project"}))?["result"]["assessment"]
+                ["history"],
+            before
+        );
+        Ok(())
+    })
 }
 
 #[test]
 fn exit_research_missing_evidence_is_blocked_and_keeps_admission_history() -> anyhow::Result<()> {
-    let root = super::weekly_reports::fixture()?;
-    let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
-        root.path(),
-        json!({
-            "id":"exit-blocked-research","module":"ctox","command_type":"ctox.workjet.exit_model.refresh","record_id":"project",
-            "payload":{"project_id":"project","as_of":"2026-10-08","resources":{"hours_per_week":20,"monthly_budget_eur":300,"comparison_mode":"equal_resources"}},
-            "client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}
-        }),
-    )?;
-    ensure!(
-        accepted["status"] == "completed",
-        "refresh failed: {accepted}"
-    );
-    let conn = open_store(root.path())?;
-    let research: String = conn.query_row(
-        "SELECT research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
-        [],
-        |r| r.get(0),
-    )?;
-    drop(conn);
-    crate::business_os::workjet_exit_model::complete_research(
-        root.path(),
-        &research,
-        r#"{"exit_model_blocked":{"missing_inputs":["rights_source","confirmed_plan"]}}"#,
-    )?;
-    let conn = open_store(root.path())?;
-    let state = crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?;
-    assert_eq!(state["status"], "blocked");
-    assert!(state["result"].is_null());
-    assert_eq!(state["history"].as_array().unwrap().len(), 2);
-    assert_eq!(state["history"][1]["status"], "researching");
-    assert_eq!(
-        state["missing_inputs"],
-        json!(["rights_source", "confirmed_plan"])
-    );
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let root = super::weekly_reports::fixture()?;
+        let accepted = crate::business_os::command_plane::accept_rxdb_business_command(
+            root.path(),
+            json!({
+                "id":"exit-blocked-research","module":"ctox","command_type":"ctox.workjet.exit_model.refresh","record_id":"project",
+                "payload":{"project_id":"project","as_of":"2026-10-08","resources":{"hours_per_week":20,"monthly_budget_eur":300,"comparison_mode":"equal_resources"}},
+                "client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}
+            }),
+        )?;
+        ensure!(
+            accepted["status"] == "completed",
+            "refresh failed: {accepted}"
+        );
+        let conn = open_store(root.path())?;
+        let research: String = conn.query_row(
+            "SELECT research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
+            [],
+            |r| r.get(0),
+        )?;
+        drop(conn);
+        crate::business_os::workjet_exit_model::complete_research(
+            root.path(),
+            &research,
+            r#"{"exit_model_blocked":{"missing_inputs":["rights_source","confirmed_plan"]}}"#,
+        )?;
+        let conn = open_store(root.path())?;
+        let state = crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?;
+        assert_eq!(state["status"], "blocked");
+        assert!(state["result"].is_null());
+        assert_eq!(state["history"].as_array().unwrap().len(), 2);
+        assert_eq!(state["history"][1]["status"], "researching");
+        assert_eq!(
+            state["missing_inputs"],
+            json!(["rights_source", "confirmed_plan"])
+        );
+        Ok(())
+    })
 }
 
 #[test]
 fn exit_refresh_reconciles_terminal_before_mapping_commit() -> anyhow::Result<()> {
-    let root = super::weekly_reports::fixture()?;
-    let refresh = |id: &str| {
-        crate::business_os::command_plane::accept_rxdb_business_command(
-            root.path(),
-            json!({"id":id,"module":"ctox","command_type":"ctox.workjet.exit_model.refresh","record_id":"project",
+    crate::persistence::test_support::run_scoped(move || {
+        let root = super::weekly_reports::fixture()?;
+        let refresh = |id: &str| {
+            crate::business_os::command_plane::accept_rxdb_business_command(
+                root.path(),
+                json!({"id":id,"module":"ctox","command_type":"ctox.workjet.exit_model.refresh","record_id":"project",
         "payload":{"project_id":"project","as_of":"2026-10-08","resources":{"hours_per_week":20,"monthly_budget_eur":300,"comparison_mode":"equal_resources"}},
         "client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}}),
-        )
-    };
-    let first = refresh("exit-race-admit")?;
-    ensure!(first["status"] == "completed", "{first}");
-    let conn = open_store(root.path())?;
-    let (run, raw, research): (String,String,String) = conn.query_row(
+            )
+        };
+        let first = refresh("exit-race-admit")?;
+        ensure!(first["status"] == "completed", "{first}");
+        let conn = open_store(root.path())?;
+        let (run, raw, research): (String,String,String) = conn.query_row(
         "SELECT run_id,assessment_json,research_command_id FROM workjet_exit_model_runs WHERE project_id='project'", [],
         |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?)))?;
-    // Reproduce the admission window in an isolated fixture: the queue exists,
-    // but its exit-run mapping has not committed when the terminal hook fires.
-    conn.execute(
-        "DELETE FROM workjet_exit_model_runs WHERE run_id=?1",
-        [&run],
-    )?;
-    let task =
-        crate::mission::channels::load_queue_task_for_business_os_command(root.path(), &research)?
-            .context("research queue")?;
-    crate::business_os::store::fail_business_command_from_queue_error(
-        root.path(),
-        &task.message_key,
-        "fixture research failure",
-    )?;
-    conn.execute("INSERT INTO workjet_exit_model_runs(run_id,project_id,owner_user_id,assessment_json,research_command_id) VALUES(?1,'project','owner',?2,?3)", rusqlite::params![run,raw,research])?;
-    drop(conn);
-    crate::business_os::workjet_exit_model::reconcile_research(root.path(), &research)?;
-    let conn = open_store(root.path())?;
-    let state = crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?;
-    assert_eq!(state["status"], "blocked");
-    assert!(state["result"].is_null());
-    assert_eq!(state["history"].as_array().unwrap().len(), 2);
-    assert_eq!(
-        {
-            crate::business_os::workjet_exit_model::reconcile_research(root.path(), &research)?;
-            crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?
-                ["history"]
-                .clone()
-        },
-        state["history"]
-    );
-    Ok(())
+        // Reproduce the admission window in an isolated fixture: the queue exists,
+        // but its exit-run mapping has not committed when the terminal hook fires.
+        conn.execute(
+            "DELETE FROM workjet_exit_model_runs WHERE run_id=?1",
+            [&run],
+        )?;
+        let task = crate::mission::channels::load_queue_task_for_business_os_command(
+            root.path(),
+            &research,
+        )?
+        .context("research queue")?;
+        crate::business_os::store::fail_business_command_from_queue_error(
+            root.path(),
+            &task.message_key,
+            "fixture research failure",
+        )?;
+        conn.execute("INSERT INTO workjet_exit_model_runs(run_id,project_id,owner_user_id,assessment_json,research_command_id) VALUES(?1,'project','owner',?2,?3)", rusqlite::params![run,raw,research])?;
+        drop(conn);
+        crate::business_os::workjet_exit_model::reconcile_research(root.path(), &research)?;
+        let conn = open_store(root.path())?;
+        let state = crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?;
+        assert_eq!(state["status"], "blocked");
+        assert!(state["result"].is_null());
+        assert_eq!(state["history"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            {
+                crate::business_os::workjet_exit_model::reconcile_research(root.path(), &research)?;
+                crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?
+                    ["history"]
+                    .clone()
+            },
+            state["history"]
+        );
+        Ok(())
+    })
 }
 
 #[test]
 fn exit_manual_refresh_after_blocked_terminal_admits_corrected_same_month_plan(
 ) -> anyhow::Result<()> {
-    let root = super::weekly_reports::fixture()?;
-    let refresh = |id: &str, budget: f64| {
-        crate::business_os::command_plane::accept_rxdb_business_command(
-            root.path(),
-            json!({"id":id,"module":"ctox","command_type":"ctox.workjet.exit_model.refresh","record_id":"project",
+    crate::persistence::test_support::run_scoped(move || {
+        let root = super::weekly_reports::fixture()?;
+        let refresh = |id: &str, budget: f64| {
+            crate::business_os::command_plane::accept_rxdb_business_command(
+                root.path(),
+                json!({"id":id,"module":"ctox","command_type":"ctox.workjet.exit_model.refresh","record_id":"project",
         "payload":{"project_id":"project","as_of":"2026-10-08","resources":{"hours_per_week":20,"monthly_budget_eur":budget,"comparison_mode":"equal_resources"}},
         "client_context":{"actor":{"id":"owner","role":"admin","is_admin":true}}}),
-        )
-    };
-    let first = refresh("exit-manual-first", 300.0)?;
-    ensure!(first["status"] == "completed", "{first}");
-    let conn = open_store(root.path())?;
-    let research: String = conn.query_row(
-        "SELECT research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
-        [],
-        |r| r.get(0),
-    )?;
-    let task =
-        crate::mission::channels::load_queue_task_for_business_os_command(root.path(), &research)?
-            .context("research queue")?;
-    crate::business_os::store::fail_business_command_from_queue_error(
-        root.path(),
-        &task.message_key,
-        "missing evidence",
-    )?;
-    assert_eq!(
-        crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?["status"],
-        "blocked"
-    );
-    let second = refresh("exit-manual-corrected", 400.0)?;
-    ensure!(second["status"] == "completed", "{second}");
-    assert_eq!(second["result"]["assessment"]["status"], "researching");
-    assert_ne!(
-        second["result"]["assessment"]["run_id"],
-        first["result"]["assessment"]["run_id"]
-    );
-    assert_eq!(
-        second["result"]["assessment"]["resource_proposal"]["monthly_budget_eur"],
-        400.0
-    );
-    let replay = refresh("exit-manual-corrected", 400.0)?;
-    assert_eq!(replay["result"], second["result"]);
-    assert_eq!(
+            )
+        };
+        let first = refresh("exit-manual-first", 300.0)?;
+        ensure!(first["status"] == "completed", "{first}");
+        let conn = open_store(root.path())?;
+        let research: String = conn.query_row(
+            "SELECT research_command_id FROM workjet_exit_model_runs WHERE project_id='project'",
+            [],
+            |r| r.get(0),
+        )?;
+        let task = crate::mission::channels::load_queue_task_for_business_os_command(
+            root.path(),
+            &research,
+        )?
+        .context("research queue")?;
+        crate::business_os::store::fail_business_command_from_queue_error(
+            root.path(),
+            &task.message_key,
+            "missing evidence",
+        )?;
+        assert_eq!(
+            crate::business_os::workjet_exit_model::read_state(&conn, "project", "owner")?
+                ["status"],
+            "blocked"
+        );
+        let second = refresh("exit-manual-corrected", 400.0)?;
+        ensure!(second["status"] == "completed", "{second}");
+        assert_eq!(second["result"]["assessment"]["status"], "researching");
+        assert_ne!(
+            second["result"]["assessment"]["run_id"],
+            first["result"]["assessment"]["run_id"]
+        );
+        assert_eq!(
+            second["result"]["assessment"]["resource_proposal"]["monthly_budget_eur"],
+            400.0
+        );
+        let replay = refresh("exit-manual-corrected", 400.0)?;
+        assert_eq!(replay["result"], second["result"]);
+        assert_eq!(
         conn.query_row(
             "SELECT COUNT(*) FROM workjet_exit_model_runs WHERE research_command_id IS NOT NULL",
             [],
@@ -436,12 +447,13 @@ fn exit_manual_refresh_after_blocked_terminal_admits_corrected_same_month_plan(
         )?,
         2
     );
-    let active_reuse = refresh("exit-manual-active", 400.0)?;
-    assert_eq!(
-        active_reuse["result"]["assessment"]["run_id"],
-        second["result"]["assessment"]["run_id"]
-    );
-    Ok(())
+        let active_reuse = refresh("exit-manual-active", 400.0)?;
+        assert_eq!(
+            active_reuse["result"]["assessment"]["run_id"],
+            second["result"]["assessment"]["run_id"]
+        );
+        Ok(())
+    })
 }
 
 const THREAD: &str = "cc6cfe73-2824-4360-9daf-3b3efb079931";
@@ -528,306 +540,328 @@ fn rejected(value: anyhow::Result<Value>) -> bool {
 #[test]
 fn supervisor_submit_replays_one_native_turn_and_one_message_in_the_existing_uuid(
 ) -> anyhow::Result<()> {
-    let root = fixture()?;
-    let first = submit(root.path())?;
-    let turn = &first["result"]["turn"];
-    assert_eq!(first["status"], "completed");
-    assert_eq!(
-        first["result"]["contract"],
-        "ctox.workjet.supervisor_turn.v1"
-    );
-    assert_eq!(turn["thread_id"], THREAD);
-    assert_eq!(turn["thread_key"], format!("business-os/threads/{THREAD}"));
-    let target = turn["command_id"].as_str().context("native turn id")?;
-    let queued =
-        crate::mission::channels::load_queue_task_for_business_os_command(root.path(), target)?
-            .context("native queue")?;
-    assert_eq!(queued.thread_key, format!("business-os/threads/{THREAD}"));
-    assert!(queued.prompt.contains("Prepare the project report"));
-    let replay = submit(root.path())?;
-    assert_eq!(replay["result"], first["result"]);
-    assert_eq!(count(root.path(), THREADS)?, 1);
-    assert_eq!(count(root.path(), "user_thread_messages")?, 1);
-    let changed = control(
-        root.path(),
-        "submit",
-        "owner",
-        "submit",
-        json!({"project_id":"project","thread_id":THREAD,"goal":"Different intent"}),
-    );
-    assert!(rejected(changed));
-    assert_eq!(count(root.path(), "user_thread_messages")?, 1);
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let root = fixture()?;
+        let first = submit(root.path())?;
+        let turn = &first["result"]["turn"];
+        assert_eq!(first["status"], "completed");
+        assert_eq!(
+            first["result"]["contract"],
+            "ctox.workjet.supervisor_turn.v1"
+        );
+        assert_eq!(turn["thread_id"], THREAD);
+        assert_eq!(turn["thread_key"], format!("business-os/threads/{THREAD}"));
+        let target = turn["command_id"].as_str().context("native turn id")?;
+        let queued =
+            crate::mission::channels::load_queue_task_for_business_os_command(root.path(), target)?
+                .context("native queue")?;
+        assert_eq!(queued.thread_key, format!("business-os/threads/{THREAD}"));
+        assert!(queued.prompt.contains("Prepare the project report"));
+        let replay = submit(root.path())?;
+        assert_eq!(replay["result"], first["result"]);
+        assert_eq!(count(root.path(), THREADS)?, 1);
+        assert_eq!(count(root.path(), "user_thread_messages")?, 1);
+        let changed = control(
+            root.path(),
+            "submit",
+            "owner",
+            "submit",
+            json!({"project_id":"project","thread_id":THREAD,"goal":"Different intent"}),
+        );
+        assert!(rejected(changed));
+        assert_eq!(count(root.path(), "user_thread_messages")?, 1);
+        Ok(())
+    })
 }
 
 #[test]
 fn supervisor_watch_uses_the_native_owner_and_queue_link_without_foreign_disclosure(
 ) -> anyhow::Result<()> {
-    let root = fixture()?;
-    let submitted = submit(root.path())?;
-    let target = submitted["result"]["turn"]["command_id"]
-        .as_str()
-        .context("native turn id")?;
-    let watched = control(root.path(), "watch", "owner", "watch", observe(target))?;
-    assert_eq!(watched["result"]["turn"]["command_id"], target);
-    assert_eq!(
-        watched["result"]["turn"]["task_id"],
-        submitted["result"]["turn"]["task_id"]
-    );
-    assert_eq!(watched["result"]["turn"]["terminal"], false);
-    assert!(rejected(control(
-        root.path(),
-        "foreign-watch",
-        "foreign",
-        "watch",
-        observe(target)
-    )));
-    assert!(rejected(control(
-        root.path(),
-        "unknown-watch",
-        "owner",
-        "watch",
-        observe("missing")
-    )));
-    let mut foreign_thread = observe(target);
-    foreign_thread["thread_id"] = json!("b8958e94-4c45-4b47-b44b-03b9d8c47123");
-    assert!(rejected(control(
-        root.path(),
-        "wrong-thread",
-        "owner",
-        "watch",
-        foreign_thread
-    )));
-    assert_eq!(count(root.path(), "user_thread_messages")?, 1);
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let root = fixture()?;
+        let submitted = submit(root.path())?;
+        let target = submitted["result"]["turn"]["command_id"]
+            .as_str()
+            .context("native turn id")?;
+        let watched = control(root.path(), "watch", "owner", "watch", observe(target))?;
+        assert_eq!(watched["result"]["turn"]["command_id"], target);
+        assert_eq!(
+            watched["result"]["turn"]["task_id"],
+            submitted["result"]["turn"]["task_id"]
+        );
+        assert_eq!(watched["result"]["turn"]["terminal"], false);
+        assert!(rejected(control(
+            root.path(),
+            "foreign-watch",
+            "foreign",
+            "watch",
+            observe(target)
+        )));
+        assert!(rejected(control(
+            root.path(),
+            "unknown-watch",
+            "owner",
+            "watch",
+            observe("missing")
+        )));
+        let mut foreign_thread = observe(target);
+        foreign_thread["thread_id"] = json!("b8958e94-4c45-4b47-b44b-03b9d8c47123");
+        assert!(rejected(control(
+            root.path(),
+            "wrong-thread",
+            "owner",
+            "watch",
+            foreign_thread
+        )));
+        assert_eq!(count(root.path(), "user_thread_messages")?, 1);
+        Ok(())
+    })
 }
 
 #[test]
 fn supervisor_cancel_uses_the_existing_native_receipt_and_preserves_terminal_history(
 ) -> anyhow::Result<()> {
-    let root = fixture()?;
-    let submitted = submit(root.path())?;
-    let target = submitted["result"]["turn"]["command_id"]
-        .as_str()
-        .context("native turn id")?;
-    let mut request = observe(target);
-    request["reason"] = json!("Owner cancelled this request");
-    assert!(rejected(control(
-        root.path(),
-        "foreign-cancel",
-        "foreign",
-        "cancel",
-        request.clone()
-    )));
-    let cancelled = control(root.path(), "cancel", "owner", "cancel", request.clone())?;
-    assert_eq!(cancelled["status"], "completed");
-    assert_eq!(cancelled["result"]["turn"]["status"], "cancelled");
-    assert_eq!(
-        cancelled["result"]["cancellation"]["worker_interrupt_acknowledged"],
-        false
-    );
-    let cancellation = cancelled["result"]["cancellation"]["command_id"]
-        .as_str()
-        .context("native cancellation id")?;
-    let proof = crate::mission::channels::business_command_projection(root.path(), cancellation)?;
-    assert_eq!(proof["status"], "completed");
-    assert_eq!(proof["result"]["target_command_id"], target);
-    assert_eq!(
-        proof["result"]["execution_task_id"],
-        submitted["result"]["turn"]["task_id"]
-    );
-    let replay = control(root.path(), "cancel", "owner", "cancel", request.clone())?;
-    assert_eq!(replay["result"], cancelled["result"]);
-    assert!(rejected(control(
-        root.path(),
-        "cancel-terminal-again",
-        "owner",
-        "cancel",
-        request
-    )));
-    assert_eq!(
-        crate::mission::channels::business_command_projection(root.path(), target)?["status"],
-        "cancelled"
-    );
-    assert_eq!(count(root.path(), "user_thread_messages")?, 1);
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let root = fixture()?;
+        let submitted = submit(root.path())?;
+        let target = submitted["result"]["turn"]["command_id"]
+            .as_str()
+            .context("native turn id")?;
+        let mut request = observe(target);
+        request["reason"] = json!("Owner cancelled this request");
+        assert!(rejected(control(
+            root.path(),
+            "foreign-cancel",
+            "foreign",
+            "cancel",
+            request.clone()
+        )));
+        let cancelled = control(root.path(), "cancel", "owner", "cancel", request.clone())?;
+        assert_eq!(cancelled["status"], "completed");
+        assert_eq!(cancelled["result"]["turn"]["status"], "cancelled");
+        assert_eq!(
+            cancelled["result"]["cancellation"]["worker_interrupt_acknowledged"],
+            false
+        );
+        let cancellation = cancelled["result"]["cancellation"]["command_id"]
+            .as_str()
+            .context("native cancellation id")?;
+        let proof =
+            crate::mission::channels::business_command_projection(root.path(), cancellation)?;
+        assert_eq!(proof["status"], "completed");
+        assert_eq!(proof["result"]["target_command_id"], target);
+        assert_eq!(
+            proof["result"]["execution_task_id"],
+            submitted["result"]["turn"]["task_id"]
+        );
+        let replay = control(root.path(), "cancel", "owner", "cancel", request.clone())?;
+        assert_eq!(replay["result"], cancelled["result"]);
+        assert!(rejected(control(
+            root.path(),
+            "cancel-terminal-again",
+            "owner",
+            "cancel",
+            request
+        )));
+        assert_eq!(
+            crate::mission::channels::business_command_projection(root.path(), target)?["status"],
+            "cancelled"
+        );
+        assert_eq!(count(root.path(), "user_thread_messages")?, 1);
+        Ok(())
+    })
 }
 
 #[test]
 fn supervisor_controls_reject_forged_routes_external_executors_and_large_goals(
 ) -> anyhow::Result<()> {
-    for (field, value) in [
-        ("thread_key", json!("foreign-route")),
-        ("owner_user_id", json!("foreign")),
-        ("external_executor", json!({"computer_id":"foreign"})),
-        ("risk_class", json!("external")),
-        ("goal", json!("x".repeat(4097))),
-        ("goal", json!(" ")),
-    ] {
-        let root = fixture()?;
-        let mut request =
-            json!({"project_id":"project","thread_id":THREAD,"goal":"Prepare report"});
-        request[field] = value;
-        assert!(rejected(control(
-            root.path(),
-            "forged",
-            "owner",
-            "submit",
-            request
-        )));
-        assert_eq!(count(root.path(), "user_thread_messages")?, 0);
-    }
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        for (field, value) in [
+            ("thread_key", json!("foreign-route")),
+            ("owner_user_id", json!("foreign")),
+            ("external_executor", json!({"computer_id":"foreign"})),
+            ("risk_class", json!("external")),
+            ("goal", json!("x".repeat(4097))),
+            ("goal", json!(" ")),
+        ] {
+            let root = fixture()?;
+            let mut request =
+                json!({"project_id":"project","thread_id":THREAD,"goal":"Prepare report"});
+            request[field] = value;
+            assert!(rejected(control(
+                root.path(),
+                "forged",
+                "owner",
+                "submit",
+                request
+            )));
+            assert_eq!(count(root.path(), "user_thread_messages")?, 0);
+        }
+        Ok(())
+    })
 }
 
 #[test]
 fn supervisor_watch_refuses_a_native_turn_from_another_owned_thread() -> anyhow::Result<()> {
-    let root = fixture()?;
-    let conn = open_store(root.path())?;
-    let mut other_project = outbound_load_record(&conn, "workjet_projects", "project")?.unwrap();
-    other_project["id"] = json!("other-project");
-    store::upsert_business_record(&conn, "workjet_projects", "other-project", 2, other_project)?;
-    let other_thread = "b8958e94-4c45-4b47-b44b-03b9d8c47123";
-    control(
-        root.path(),
-        "other-bind",
-        "owner",
-        "bind",
-        json!({"project_id":"other-project","thread_id":other_thread}),
-    )?;
-    let other = control(
-        root.path(),
-        "other-submit",
-        "owner",
-        "submit",
-        json!({"project_id":"other-project","thread_id":other_thread,"goal":"Other report"}),
-    )?;
-    let target = other["result"]["turn"]["command_id"]
-        .as_str()
-        .context("other native turn id")?;
-    assert!(rejected(control(
-        root.path(),
-        "cross-project-watch",
-        "owner",
-        "watch",
-        observe(target)
-    )));
-    assert_eq!(count(root.path(), "user_thread_messages")?, 1);
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let root = fixture()?;
+        let conn = open_store(root.path())?;
+        let mut other_project =
+            outbound_load_record(&conn, "workjet_projects", "project")?.unwrap();
+        other_project["id"] = json!("other-project");
+        store::upsert_business_record(
+            &conn,
+            "workjet_projects",
+            "other-project",
+            2,
+            other_project,
+        )?;
+        let other_thread = "b8958e94-4c45-4b47-b44b-03b9d8c47123";
+        control(
+            root.path(),
+            "other-bind",
+            "owner",
+            "bind",
+            json!({"project_id":"other-project","thread_id":other_thread}),
+        )?;
+        let other = control(
+            root.path(),
+            "other-submit",
+            "owner",
+            "submit",
+            json!({"project_id":"other-project","thread_id":other_thread,"goal":"Other report"}),
+        )?;
+        let target = other["result"]["turn"]["command_id"]
+            .as_str()
+            .context("other native turn id")?;
+        assert!(rejected(control(
+            root.path(),
+            "cross-project-watch",
+            "owner",
+            "watch",
+            observe(target)
+        )));
+        assert_eq!(count(root.path(), "user_thread_messages")?, 1);
+        Ok(())
+    })
 }
 
 #[test]
 fn archived_project_cannot_submit_a_new_supervisor_turn() -> anyhow::Result<()> {
-    let root = fixture()?;
-    let conn = open_store(root.path())?;
-    let mut project = outbound_load_record(&conn, "workjet_projects", "project")?.unwrap();
-    project["status"] = json!("archived");
-    store::upsert_business_record(&conn, "workjet_projects", "project", 2, project)?;
-    assert!(rejected(submit(root.path())));
-    assert_eq!(count(root.path(), "user_thread_messages")?, 0);
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let root = fixture()?;
+        let conn = open_store(root.path())?;
+        let mut project = outbound_load_record(&conn, "workjet_projects", "project")?.unwrap();
+        project["status"] = json!("archived");
+        store::upsert_business_record(&conn, "workjet_projects", "project", 2, project)?;
+        assert!(rejected(submit(root.path())));
+        assert_eq!(count(root.path(), "user_thread_messages")?, 0);
+        Ok(())
+    })
 }
 
 #[test]
 fn conversation_completion_resolves_only_active_verified_owner_aliases() -> anyhow::Result<()> {
-    use crate::mission::channels;
-    const OWNER: &str = "b257efbf-7b24-490c-8189-81a0f5b88cb9";
-    const ALIAS: &str = "owner@example.test";
-    for revoked in [None, Some(ALIAS), Some(OWNER)] {
-        let root = fixture_for_owner(OWNER)?;
-        let now = chrono::Utc::now().timestamp_millis();
-        store::issue_business_os_capability_token_for_managed_user_with_email(
-            root.path(),
-            OWNER,
-            Some(ALIAS),
-            "Owner",
-            "chef",
-            now,
-        )?;
-        store::issue_business_os_capability_token_for_managed_user(
-            root.path(),
-            ALIAS,
-            "Owner",
-            "admin",
-            now,
-        )?;
-        let submitted = control(
-            root.path(),
-            "alias-conversation",
-            ALIAS,
-            "submit",
-            json!({"project_id":"project","thread_id":THREAD,
-                "goal":"Erkläre den nächsten Schritt.","turn_kind":"conversation"}),
-        )?;
-        assert_eq!(submitted["status"], "completed");
-        let turn = &submitted["result"]["turn"];
-        let command_id = turn["command_id"].as_str().context("native command")?;
-        let task_id = turn["task_id"].as_str().context("native task")?;
-        let conn = open_store(root.path())?;
-        let original = store::load_business_command(&conn, "alias-conversation")?;
-        let delegated = store::load_business_command(&conn, command_id)?;
-        assert_eq!(original.client_context["actor"]["id"], ALIAS);
-        assert_eq!(delegated.client_context["actor"]["id"], OWNER);
-        channels::lease_queue_task(root.path(), task_id, "actual-test-worker")?;
-        ensure!(channels::transition_business_command_for_task(
-            root.path(),
-            task_id,
-            "leased",
-            None,
-            None,
-            None,
-            "actual worker fixture acquired its queue lease"
-        )?);
-        assert!(channels::transition_business_command_for_task(
-            root.path(),
-            task_id,
-            "running",
-            None,
-            None,
-            None,
-            "actual test worker starts"
-        )?);
-        channels::persist_business_command_worker_result(
-            root.path(),
-            task_id,
-            "Hier ist der nächste Schritt.",
-        )?;
-        let canonical = channels::inspect_business_command(root.path(), command_id)?.unwrap();
-        assert!(
-            crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
+    crate::persistence::test_support::run_scoped(move || {
+        use crate::mission::channels;
+        const OWNER: &str = "b257efbf-7b24-490c-8189-81a0f5b88cb9";
+        const ALIAS: &str = "owner@example.test";
+        for revoked in [None, Some(ALIAS), Some(OWNER)] {
+            let root = fixture_for_owner(OWNER)?;
+            let now = chrono::Utc::now().timestamp_millis();
+            store::issue_business_os_capability_token_for_managed_user_with_email(
                 root.path(),
-                &canonical["command"]
-            )?
-        );
-        if let Some(revoked) = revoked {
-            conn.execute(
-                "UPDATE business_users SET active=0 WHERE user_id=?1",
-                [revoked],
+                OWNER,
+                Some(ALIAS),
+                "Owner",
+                "chef",
+                now,
             )?;
+            store::issue_business_os_capability_token_for_managed_user(
+                root.path(),
+                ALIAS,
+                "Owner",
+                "admin",
+                now,
+            )?;
+            let submitted = control(
+                root.path(),
+                "alias-conversation",
+                ALIAS,
+                "submit",
+                json!({"project_id":"project","thread_id":THREAD,
+                "goal":"Erkläre den nächsten Schritt.","turn_kind":"conversation"}),
+            )?;
+            assert_eq!(submitted["status"], "completed");
+            let turn = &submitted["result"]["turn"];
+            let command_id = turn["command_id"].as_str().context("native command")?;
+            let task_id = turn["task_id"].as_str().context("native task")?;
+            let conn = open_store(root.path())?;
+            let original = store::load_business_command(&conn, "alias-conversation")?;
+            let delegated = store::load_business_command(&conn, command_id)?;
+            assert_eq!(original.client_context["actor"]["id"], ALIAS);
+            assert_eq!(delegated.client_context["actor"]["id"], OWNER);
+            channels::lease_queue_task(root.path(), task_id, "actual-test-worker")?;
+            ensure!(channels::transition_business_command_for_task(
+                root.path(),
+                task_id,
+                "leased",
+                None,
+                None,
+                None,
+                "actual worker fixture acquired its queue lease"
+            )?);
+            assert!(channels::transition_business_command_for_task(
+                root.path(),
+                task_id,
+                "running",
+                None,
+                None,
+                None,
+                "actual test worker starts"
+            )?);
+            channels::persist_business_command_worker_result(
+                root.path(),
+                task_id,
+                "Hier ist der nächste Schritt.",
+            )?;
+            let canonical = channels::inspect_business_command(root.path(), command_id)?.unwrap();
             assert!(
                 crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
                     root.path(),
                     &canonical["command"]
-                )
-                .is_err()
+                )?
             );
-        } else {
-            // Simulate a changed private provenance actor, not a new trusted
-            // alias. Display names and profile fields cannot supply authority.
-            conn.execute(
-                "UPDATE business_commands SET client_context_json=json_set(
+            if let Some(revoked) = revoked {
+                conn.execute(
+                    "UPDATE business_users SET active=0 WHERE user_id=?1",
+                    [revoked],
+                )?;
+                assert!(
+                    crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
+                        root.path(),
+                        &canonical["command"]
+                    )
+                    .is_err()
+                );
+            } else {
+                // Simulate a changed private provenance actor, not a new trusted
+                // alias. Display names and profile fields cannot supply authority.
+                conn.execute(
+                    "UPDATE business_commands SET client_context_json=json_set(
                 client_context_json,'$.actor.id','foreign@example.test',
                 '$.actor.email',?1) WHERE command_id='alias-conversation'",
-                [ALIAS],
-            )?;
-            assert!(
-                crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
-                    root.path(),
-                    &canonical["command"]
-                )
-                .is_err()
-            );
+                    [ALIAS],
+                )?;
+                assert!(
+                    crate::business_os::project_chats::supervisor_turns::reply_completion_allowed(
+                        root.path(),
+                        &canonical["command"]
+                    )
+                    .is_err()
+                );
+            }
         }
-    }
-    Ok(())
+        Ok(())
+    })
 }
