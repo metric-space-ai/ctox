@@ -17,6 +17,7 @@ use std::sync::{
 // Only cryptographic test custody is replaced. Production app rights, writer,
 // registry, canonical encoder, verifier, projection and session fences are real.
 struct Key {
+    identity: ctox_sync::authority::auth::SigningIdentity,
     pair: Ed25519KeyPair,
     pin: String,
     active: AtomicBool,
@@ -34,6 +35,8 @@ impl Key {
                 .collect::<String>()
         );
         Arc::new(Self {
+            identity: ctox_sync::authority::auth::SigningIdentity::from_pkcs8(doc.as_ref())
+                .unwrap(),
             pair,
             pin,
             active: AtomicBool::new(true),
@@ -51,10 +54,15 @@ impl InstanceSigner for Key {
         if !self.active.load(Ordering::Acquire) {
             return Err("retired".into());
         }
-        assert!(bytes.starts_with(DOMAIN));
-        let claims: AppGrantClaims = serde_json::from_slice(&bytes[DOMAIN.len()..]).unwrap();
-        assert_eq!(signing_bytes(&claims).unwrap(), bytes);
-        Ok(self.pair.sign(bytes).as_ref().to_vec())
+        let packet = if bytes.starts_with(DOMAIN) {
+            let claims: AppGrantClaims = serde_json::from_slice(&bytes[DOMAIN.len()..]).unwrap();
+            assert_eq!(signing_bytes(&claims).unwrap(), bytes);
+            ctox_sync::authority::auth::CanonicalInstancePacket::from_scope_bytes(bytes)
+        } else {
+            ctox_sync::authority::auth::CanonicalInstancePacket::from_stream_bytes(bytes)
+        }
+        .map_err(|_| "canonical E22 encoder denied")?;
+        Ok(self.identity.sign_instance_packet(&packet))
     }
 }
 struct CurrentPeer;
@@ -65,9 +73,11 @@ impl GrantPeerAuthority for CurrentPeer {
         user: &str,
         role: &str,
         device: &str,
+        app_id: &str,
     ) -> Result<(), String> {
         let live: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM c_business_users WHERE id=?1 AND json_extract(data,'$.role')=?2 AND json_extract(data,'$.active')=1 AND deleted=0)",rusqlite::params![user,role],|r|r.get(0)).map_err(|_|"principal unavailable")?;
-        if !live || device != "device" {
+        let may_use: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM c_business_apps WHERE id=?1 AND json_extract(data,'$.state')='active' AND EXISTS(SELECT 1 FROM json_each(json_extract(data,'$.assigned_user_ids')) WHERE value=?2) AND deleted=0)",rusqlite::params![app_id,user],|r|r.get(0)).map_err(|_|"app authority unavailable")?;
+        if !live || !may_use || device != "device" {
             return Err("revoked".into());
         }
         Ok(())
@@ -82,12 +92,26 @@ struct Fixture {
 }
 fn manifests() -> Vec<ManifestRules> {
     vec![
+        ManifestRules::from_manifest(
+            "ctox-platform",
+            "1",
+            [
+                "business_users".into(),
+                "business_apps".into(),
+                "app_user_preferences".into(),
+            ]
+            .into(),
+            &json!({}),
+        )
+        .unwrap(),
         ManifestRules::from_manifest("a", "1", ["alpha".into()].into(), &json!({})).unwrap(),
         ManifestRules::from_manifest("b", "1", ["beta".into()].into(), &json!({})).unwrap(),
+        ManifestRules::from_manifest("shell", "1", ["shell_docs".into()].into(), &json!({}))
+            .unwrap(),
     ]
 }
 fn rules() -> Vec<Right> {
-    ["alpha", "beta"]
+    ["alpha", "beta", "shell_docs"]
         .into_iter()
         .map(|name| Right {
             role: "user".into(),
@@ -111,7 +135,7 @@ impl Fixture {
             .unwrap();
         store.writer().submit(WriteJob::new(Default::default(), |tx| {
             ctox_store::schema::initialize(tx)?;
-            for (name, app) in [("alpha", "a"), ("beta", "b"), ("business_users", "ctox-platform")] {
+            for (name, app) in [("alpha", "a"), ("beta", "b"), ("shell_docs", "shell"), ("business_users", "ctox-platform"), ("business_apps", "ctox-platform"), ("app_user_preferences", "ctox-platform")] {
                 ctox_store::schema::create_collection(tx, &ctox_store::schema::CollectionDefinition {
                     name:name.into(), app_id:app.into(), schema_ver:1,
                     schema_json:json!({"type":"object", "properties":{"id":{"type":"string"}, "owner":{"type":"string"}, "name":{"type":"string"}}, "required":["id"]}),
@@ -119,6 +143,9 @@ impl Fixture {
                 })?;
             }
             tx.execute("INSERT INTO c_business_users (id,rev,schema_ver,data,deleted) VALUES('alice','1',1,?1,0)", [json!({"id":"alice","role":"user","active":true}).to_string()])?;
+            for app in ["a", "b", "shell"] {
+                tx.execute("INSERT INTO c_business_apps (id,rev,schema_ver,data,deleted) VALUES(?1,'1',1,?2,0)", rusqlite::params![app,json!({"id":app,"state":"active","assigned_user_ids":["alice"]}).to_string()])?;
+            }
             Ok(())
         })).unwrap().await.unwrap();
         let auth = StoreRightsAuthority::attach(store.writer(), "instance".into())
@@ -180,7 +207,7 @@ async fn p6_e55_foreign_app_collections_never_enter_the_grant() {
     let c = claims(&token);
     assert_eq!(
         c["collections"].as_array().unwrap().len(),
-        1,
+        2,
         "foreign app collection entered grant"
     );
     assert_eq!(c["collections"][0]["collection"], "alpha");
@@ -193,7 +220,11 @@ async fn p6_e55_foreign_app_collections_never_enter_the_grant() {
     assert!(f.read(&token, "beta", 1001).await.is_err());
     // A second app gets its own token, not an aggregate grant.
     let b = f.session.issue("b", 1000).await.unwrap();
-    assert_eq!(claims(&b)["collections"][0]["collection"], "beta");
+    assert!(claims(&b)["collections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["collection"] == "beta"));
     let no_right = AppGrantSession::new(
         f.auth.clone(),
         f.key.clone(),
@@ -336,5 +367,355 @@ async fn p6_e55_revoked_app_is_unreadable_before_reauthentication() {
         "retired signer remained usable"
     );
     fresh.close().await;
+    f.close().await;
+}
+
+#[tokio::test]
+async fn p6_e55_route_forbidden_duplicate_and_kernel_key_pin() {
+    use p6_e55_contract::rights::app_grant_route::AppGrantRoute;
+    let f = Fixture::new().await;
+    f.store.writer().submit(WriteJob::new(Default::default(), |tx| {
+        tx.execute("UPDATE c_business_apps SET data=json_set(data,'$.assigned_user_ids',json('[]')) WHERE id='b'",[])?;
+        Ok(())
+    })).unwrap().await.unwrap();
+    let route = Arc::new(AppGrantRoute::new(f.session.clone(), f.auth.clone()));
+    let shell = route.shell_token(1000).await.unwrap();
+    assert_eq!(
+        claims(&shell)["app_id"],
+        "shell",
+        "hello grant is not shell"
+    );
+    assert_eq!(
+        claims(&shell)["collections"].as_array().unwrap().len(),
+        2,
+        "hello leaked other app collections"
+    );
+    let denied = route
+        .handle(json!({"type":"scope.grant.request","app_id":"b"}), 1000)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        denied["type"], "forbidden",
+        "unauthorized app received grant"
+    );
+    assert!(
+        route
+            .handle(json!({"type":"scope.grant.request","app_id":"b"}), 1000)
+            .await
+            .unwrap()
+            .is_none(),
+        "duplicate denial answered twice"
+    );
+    let (first, second) = tokio::join!(
+        route.handle(json!({"type":"scope.grant.request","app_id":"a"}), 1000),
+        route.handle(json!({"type":"scope.grant.request","app_id":"a"}), 1000)
+    );
+    let replies = [first.unwrap(), second.unwrap()];
+    assert_eq!(
+        replies.iter().filter(|r| r.is_some()).count(),
+        1,
+        "duplicate app request answered twice"
+    );
+    let response = replies.into_iter().flatten().next().unwrap();
+    assert_eq!(response["type"], "scope.grant");
+    let token = response["token"].as_str().unwrap();
+    assert!(f.read(token, "alpha", 1001).await.is_ok());
+    let mut forged: Value =
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(token).unwrap()).unwrap();
+    let wrong = Key::new();
+    let c: AppGrantClaims = serde_json::from_value(forged["claims"].clone()).unwrap();
+    forged["signature"] =
+        json!(URL_SAFE_NO_PAD.encode(wrong.pair.sign(&signing_bytes(&c).unwrap()).as_ref()));
+    let wrong_token = URL_SAFE_NO_PAD.encode(canonical_json(&forged).unwrap());
+    if let Ok(path) = std::env::var("P6_E55_VECTOR") {
+        std::fs::write(
+            path,
+            json!({"token":token,"wrong_token":wrong_token,"public":f.key.pin,"claims":c})
+                .to_string(),
+        )
+        .unwrap();
+    }
+    assert!(
+        f.read(&wrong_token, "alpha", 1001).await.is_err(),
+        "foreign signing key accepted"
+    );
+    f.store.writer().submit(WriteJob::new(Default::default(), |tx| {
+        tx.execute("UPDATE c_business_apps SET data=json_set(data,'$.assigned_user_ids',json('[]')) WHERE id='a'",[])?;
+        Ok(())
+    })).unwrap().await.unwrap();
+    assert!(
+        f.read(token, "alpha", 1002).await.is_err(),
+        "app assignment revoked but remained readable"
+    );
+    let session = f.session.clone();
+    let revoked = f
+        .store
+        .writer()
+        .submit(WriteJob::new(Default::default(), move |tx| {
+            session
+                .revocations_in_transaction(tx, 1002)
+                .map_err(StoreError::Invalid)
+        }))
+        .unwrap()
+        .await
+        .unwrap();
+    assert_eq!(
+        revoked
+            .iter()
+            .map(|v| v.app_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["a"]
+    );
+    assert_eq!(
+        route
+            .handle(json!({"type":"scope.grant.request","app_id":"a"}), 1240)
+            .await
+            .unwrap()
+            .unwrap()["type"],
+        "forbidden"
+    );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn p6_shell_boot_grant_contains_actor_bound_preferences() {
+    let f = Fixture::new().await;
+    let token = f.session.issue("shell", 1000).await.unwrap();
+    assert!(
+        claims(&token)["collections"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["collection"] == "app_user_preferences"),
+        "shell boot preferences grant missing"
+    );
+    let session = f.session.clone();
+    f.store.writer().submit(WriteJob::new(Default::default(), move |tx| {
+        let scope=session.scope_in_transaction(tx,&token,"app_user_preferences",1001).unwrap();
+        let projection=scope.projection("app_user_preferences").unwrap();
+        let filter=serde_json::to_value(&projection.row_filter).unwrap();
+        assert!(filter.to_string().contains("/user_id") && filter.to_string().contains("alice"), "shell preference filter lost actor");
+        for (user,allowed) in [("alice",true),("bob",false)] {
+            let doc=json!({"id":format!("shell/{user}/layout"),"app_id":"shell","user_id":user,"key":"layout","value":1});
+            assert_eq!(session.with_read_in_transaction(tx,&token,"app_user_preferences",1001,&doc,Ok).is_ok(),allowed,"foreign user preferences leaked");
+        }
+        Ok(())
+    })).unwrap().await.unwrap();
+    f.close().await;
+}
+
+#[tokio::test]
+async fn p6_browser_binding_uses_app_hash_and_retracts_retained_tokens() {
+    let f = Fixture::new().await;
+    let token = f.session.issue("a", 1000).await.unwrap();
+    let hash = claims(&token)["scope_hash"].as_str().unwrap().to_owned();
+    assert_eq!(
+        f.session
+            .bound_token(Some(&hash), "alpha", 1, None)
+            .unwrap(),
+        token
+    );
+    assert!(
+        f.session
+            .bound_token(Some("foreign-app-scope"), "alpha", 1, None)
+            .is_err(),
+        "foreign scope admitted"
+    );
+    assert!(
+        f.session.bound_token(Some(&hash), "beta", 1, None).is_err(),
+        "foreign collection admitted"
+    );
+    assert!(
+        f.session.bound_token(None, "alpha", 1, Some("b")).is_err(),
+        "foreign app write admitted"
+    );
+    assert!(
+        f.session.bound_token(None, "alpha", 2, Some("a")).is_err(),
+        "foreign generation admitted"
+    );
+    f.session.token_current(&token, 1001).unwrap();
+    f.session.revoke_app("a").unwrap().unwrap();
+    assert!(
+        f.session
+            .bound_token(Some(&hash), "alpha", 1, None)
+            .is_err(),
+        "revoked subscription survived"
+    );
+    assert!(
+        f.session.token_current(&token, 1001).is_err(),
+        "queued publication survived revoke"
+    );
+    assert!(f.read(&token, "alpha", 1001).await.is_err());
+    f.close().await;
+}
+
+#[tokio::test]
+async fn p6_shell_boot_preference_cursor_uses_real_p8_and_e55_reader() {
+    use ctox_store::change_log::subscription::{Subscription, SubscriptionKey};
+    let f = Fixture::new().await;
+    f.store.writer().submit(WriteJob::new(Default::default(),|tx| {
+        for (app,user) in [("shell","alice"),("shell","bob"),("b","alice")] {
+            let doc=json!({"id":format!("{app}/{user}/layout"),"app_id":app,"user_id":user,"key":"layout","value":7});
+            tx.execute("INSERT INTO c_app_user_preferences(id,rev,schema_ver,data,deleted) VALUES(?1,'1',1,?2,0)",rusqlite::params![doc["id"].as_str().unwrap(),doc.to_string()])?;
+        }
+        Ok(())
+    })).unwrap().await.unwrap();
+    let token = f.session.issue("shell", 1000).await.unwrap();
+    let hash = claims(&token)["scope_hash"].as_str().unwrap().to_owned();
+    let ctx = ctox_store::preferences::Context::authenticated(
+        "shell",
+        "alice",
+        claims(&token)["rights_ver"]
+            .as_str()
+            .unwrap()
+            .parse()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_ne!(
+        hash,
+        ctx.scope_hash(),
+        "fixture must exercise aggregate E55 scope"
+    );
+    let key = SubscriptionKey {
+        participant: "alice".into(),
+        collection: "app_user_preferences".into(),
+        scope_hash: hash,
+        gen: 1,
+    };
+    let reader =
+        Arc::new(reader::AppGrantReader::new(f.session.clone(), key.clone(), || 1001).unwrap());
+    // This proves projection/authority, not the production 20ms read SLA.
+    // Cold shared-lane scheduling must not turn an authorization assertion into
+    // a timing assertion. Keep the real reader/writer with an explicit budget.
+    let writer = f.store.writer();
+    let readers = ctox_store::read_pool::ReadPool::for_database(
+        writer.db_id(),
+        writer.generation(),
+        Default::default(),
+        ctox_store::config::AdmissionBudget {
+            wait: std::time::Duration::from_secs(2),
+            execution: std::time::Duration::from_secs(2),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    let mut cursor = Subscription::new(readers.clone(), &writer, key, None).unwrap();
+    let page = cursor
+        .next_page(100, reader, &*f.key, || 1_001_000)
+        .await
+        .expect("shell boot preferences cursor rejected aggregate grant");
+    let mut ids = page.docs.iter().map(|d| d.id.as_str()).collect::<Vec<_>>();
+    ids.sort();
+    assert_eq!(
+        ids,
+        vec!["b/alice/layout", "shell/alice/layout"],
+        "Shell lost own-app preferences or leaked foreign user"
+    );
+    assert!(!page.sig.is_empty(), "P8 cursor must use held E22 signer");
+    readers.close();
+    f.close().await;
+}
+
+#[tokio::test]
+async fn p6_browser_publication_follows_the_fresh_app_grant_version() {
+    let f = Fixture::new().await;
+    let epoch = f.auth.hello_snapshot().await.unwrap().0.epoch;
+    let old = f.session.issue("a", 1000).await.unwrap();
+    f.session
+        .with_publication(&old, 1001, &epoch, || Ok(()))
+        .expect("initial grant did not publish");
+    f.auth.replace(rules(), manifests()).await.unwrap();
+    assert!(
+        f.session
+            .with_publication(&old, 1001, &epoch, || Ok(()))
+            .is_err(),
+        "old version survived publication before revoke notification"
+    );
+    let fresh = f.session.issue("a", 1001).await.unwrap();
+    f.session
+        .with_publication(&fresh, 1002, &epoch, || Ok(()))
+        .expect("fresh grant stuck on original hello version");
+    f.session.revoke_app("a").unwrap();
+    assert!(
+        f.session
+            .with_publication(&fresh, 1002, &epoch, || Ok(()))
+            .is_err(),
+        "revoked publication retained"
+    );
+    f.close().await;
+}
+
+#[tokio::test]
+async fn p6_revoked_preference_write_keeps_its_journaled_reason() {
+    use ctox_store::change_log::subscription::{
+        protocol::{OrderedWrite, Write},
+        write_contract::OrderedWriter,
+        WriteAuthority, WritePermission,
+    };
+    struct Revoked(AtomicBool);
+    impl WriteAuthority for Revoked {
+        fn authorize(
+            &self,
+            _: &rusqlite::Transaction<'_>,
+            _: &str,
+            _: &Write,
+        ) -> rusqlite::Result<WritePermission> {
+            Ok(if self.0.load(Ordering::Acquire) { WritePermission::Reject("revoked".into()) } else { WritePermission::Permit })
+        }
+        fn validate_document(
+            &self,
+            _: &rusqlite::Transaction<'_>,
+            _: &str,
+            _: &ctox_store::schema::Collection,
+            _: &Value,
+        ) -> rusqlite::Result<WritePermission> {
+            panic!("revoked write reached document validation")
+        }
+    }
+    let f = Fixture::new().await;
+    let now = 1_001_000u64;
+    let mut bytes = [0u8; 16];
+    bytes[..6].copy_from_slice(&now.to_be_bytes()[2..]);
+    bytes[6] = 0x70;
+    bytes[8] = 0x80;
+    bytes[15] = 1;
+    let hex = bytes.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    let op = format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    );
+    let write:OrderedWrite=serde_json::from_value(json!({"client_seq":"1","op_id":op,"collection":"app_user_preferences","id":"shell/alice/layout","gen":1,"schema_ver":1,"app_ver":"1","op":"put","body":{"id":"shell/alice/layout","app_id":"shell","user_id":"alice","key":"layout","value":7}})).unwrap();
+    let authority = Arc::new(Revoked(AtomicBool::new(false)));
+    let writer = OrderedWriter::new(f.store.writer(), authority.clone());
+    // Arrival was authorized, but client_seq=2 waits for its predecessor.
+    // Revoke before draining it: this must exercise apply_write's CURRENT
+    // authority, not only the early ingest rejection path.
+    let mut pending = write.clone();
+    pending.client_seq = ctox_store::change_log::subscription::protocol::Seq(2);
+    let waiting = writer.submit("device".into(), pending, now).await.unwrap();
+    assert!(waiting.results.is_empty(), "gap write did not remain pending");
+    authority.0.store(true, Ordering::Release);
+    let mut predecessor = write;
+    predecessor.write.op_id.replace_range(35..36, "0");
+    let batch = writer.submit("device".into(), predecessor, now).await.unwrap();
+    let drained = batch.results.iter().find(|r| r.client_seq.0 == 2).expect("pending write was not drained");
+    assert_eq!(
+        drained.result.reason.as_deref(),
+        Some("revoked"),
+        "revoked preference rejection lost its reason"
+    );
+    f.store.readers().read(|tx|{
+        let stored:String=tx.query_row("SELECT result_json FROM _write_results WHERE participant='device' AND client_seq=2",[],|r|r.get(0))?;
+        assert_eq!(serde_json::from_str::<Value>(&stored).unwrap()["reason"],"revoked","durable E14 journal lost revocation");
+        assert_eq!(tx.query_row("SELECT COUNT(*) FROM c_app_user_preferences",[],|r|r.get::<_,u64>(0))?,0);
+        Ok(())
+    }).await.unwrap();
     f.close().await;
 }

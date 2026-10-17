@@ -16,7 +16,7 @@ for(let i=0;i<argv.length;i+=2) {
 }
 if(process.platform!=='linux' || !process.env.BUILD_LANE_BIN || !process.env.TMPDIR || !process.env.CARGO_TARGET_DIR)
   throw Error('Canonical Linux lane required');
-const allowed=new Set(['--build','--expected-revision','--output','--chrome','--modules-root','--turn-bin','--turn-lib','--prepare-only']);
+const allowed=new Set(['--build','--expected-revision','--output','--chrome','--modules-root','--turn-bin','--turn-lib','--prepare-only','--scenario','--control-only']);
 for(const flag of flags.keys())if(!allowed.has(flag))throw Error('Unsupported P6 option: '+flag);
 const expected=flags.get('--expected-revision');
 if(!/^[a-f0-9]{40}$/.test(expected??''))throw Error('Immutable expected daemon revision required');
@@ -42,7 +42,7 @@ try {
   build=verifiedBuild(flags.get('--build'));
   if(build.revision!==expected)throw Error('Daemon receipt does not match requested cutover revision');
 } catch(error) {
-  summary.scenarios=['K13','K21','K22'].map(id=>({id,status:'not_run',pass:false,acceptanceComplete:false,
+  summary.scenarios=['M3','K13','K21','K22'].map(id=>({id,status:'not_run',pass:false,acceptanceComplete:false,
     reason:'build unverified: '+error.message,daemonExecuted:false}));
 }
 let cancelled=false;
@@ -73,7 +73,7 @@ async function namespace(config,log) {
   }
 }
 if(build && !summary.scenarios.length) {
-  for(const [id,seconds] of [['K13',180],['K21',1200],['K22',900]].filter(([id])=>!flags.has('--scenario') || flags.get('--scenario')===id)) {
+  for(const [id,seconds] of [['M3',180],['K13',180],['K21',1200],['K22',900]].filter(([id])=>!flags.has('--scenario') || flags.get('--scenario')===id)) {
     if(cancelled){summary.scenarios.push({id,status:'not_run',pass:false,acceptanceComplete:false,reason:'Controller interrupted',daemonExecuted:false});save();continue;}
     const dir=join(output,id);fs.mkdirSync(dir,{mode:0o700});
     const config={owner:summary.owner,...build,output:dir,profile:'small',clients:1,rttMs:20,warmRttMs:20,lossPercent:0,
@@ -82,8 +82,8 @@ if(build && !summary.scenarios.length) {
       root:join('/tmp','p6-'+id.toLowerCase()+'-'+expected.slice(0,8)),port:19865,signalingPort:19866,turnPort:34789,
       runner:join(here,'service-runner.mjs'),sourceManifest,buildReceipt:resolve(flags.get('--build')),
       lane,canonicalTmpdir:process.env.TMPDIR,durationSeconds:seconds,hostNetworkNamespace:fs.readlinkSync('/proc/self/ns/net'),
-      chrome:flags.get('--chrome')??'/opt/google/chrome/chrome',
-      modulesRoot:flags.get('--modules-root')??join(lane,'deps/shell-browser-collection-auth/node_modules'),
+      chrome:flags.get('--chrome')??process.env.P6_BUNDLED_CHROMIUM,
+      modulesRoot:flags.get('--modules-root')??resolve(process.env.PLAYWRIGHT_MODULE_PATH??'', '..'),
       turnBin:flags.get('--turn-bin')??'/usr/bin/turnserver',turnLib:flags.get('--turn-lib','--prepare-only')??''};
     const configPath=join(dir,'config.private.json');
     config.configPath=configPath;config.fixturePrivate=join(dir,'fixture.private.json');
@@ -126,6 +126,6 @@ if(build && !summary.scenarios.length) {
   }
 }
 summary.terminal=true;summary.finishedAt=new Date().toISOString();
-summary.pass=summary.scenarios.length===3 && summary.scenarios.every(row=>row.pass);save();
+summary.pass=summary.scenarios.length===4 && summary.scenarios.every(row=>row.pass);save();
 for(const row of summary.scenarios)console.log(row.id+' | '+(row.pass?'green':'red')+' | '+row.status+' | '+(row.evidence??join(output,'p6-result.json')));
 process.exitCode=summary.pass?0:1;

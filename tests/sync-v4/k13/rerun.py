@@ -6,7 +6,7 @@ P=argparse.ArgumentParser();P.add_argument('--revision',required=True);P.add_arg
 ROOT=Path(__file__).resolve().parents[3];HERE=Path(__file__).resolve().parent
 assert os.environ.get('BUILD_LANE_BIN') and os.environ.get('CARGO_TARGET_DIR'),'canonical lane required'
 OUT=Path(os.environ['CARGO_TARGET_DIR'])/('p6-k-rerun-'+time.strftime('%Y%m%dT%H%M%SZ',time.gmtime()));OUT.mkdir()
-ENV=dict(os.environ,CARGO_BUILD_JOBS='2',RUST_TEST_THREADS='2',TOKIO_WORKER_THREADS='2',CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS='1',CMAKE_BUILD_PARALLEL_LEVEL='2')
+ENV=dict(os.environ,CARGO_BUILD_JOBS='2',RUST_TEST_THREADS='2',TOKIO_WORKER_THREADS='2',CTOX_SKIP_OPTIONAL_RUNTIME_BUILDS='1',CMAKE_BUILD_PARALLEL_LEVEL='2',CARGO_PROFILE_DEV_DEBUG='0',CARGO_PROFILE_TEST_DEBUG='0')
 ACTIVE=None;steps=[];results={'expected_revision':a.revision,'steps':steps};artifacts=[]
 def hash_file(p):
  h=hashlib.sha256()
@@ -38,10 +38,10 @@ def run(name,args,cap):
  steps.append({'name':name,'exit':code,'seconds':round(time.monotonic()-start,3)});save();print('P6_K_STEP',name,code,flush=True)
  return code,(OUT/(name+'.log')).read_text()
 def summary(text):
- m=re.search(r'^K13 \| .* \| (.+)/K13/result\.json$',text,re.M)
+ m=re.search(r'^(?:M3|K13) \| .* \| (.+)/(?:M3|K13)/result\.json$',text,re.M)
  if not m:raise RuntimeError('scenario summary path absent')
  path=Path(m[1]);artifacts.append(path);return path,json.loads((path/'p6-result.json').read_text())
-def private(s):return len(s.get('scenarios',[]))==3 and all(r.get('namespaceVerified') and r.get('cleanup') for r in s['scenarios'])
+def private(s):return len(s.get('scenarios',[]))==4 and all(r.get('namespaceVerified') and r.get('cleanup') for r in s['scenarios'])
 try:
  paths=['src/core/service/store_startup.rs','src/core/service/store_native.rs','src/core/business_os/policy.rs','src/core/business_os/app_platform/runtime_host.rs']
  paths += ['src/apps/business-os/kernel/boot.mjs','src/apps/business-os/kernel/loader.mjs','src/apps/business-os/kernel/transport-webrtc.mjs','src/core/service/store_http.rs','src/core/business_os/store.rs',str(HERE.relative_to(ROOT)/'enrolled-fixture.rs')]

@@ -26,6 +26,30 @@ pub trait ReadAuthority: Send + Sync {
     fn preference_context(&self, _participant: &str) -> Option<crate::preferences::Context> {
         None
     }
+    /// App/user preferences remain private. A verified Shell mirror may read
+    /// multiple app contexts for the SAME authenticated user.
+    fn owns_preference(
+        &self,
+        context: &crate::preferences::Context,
+        id: &str,
+        body: Option<&Value>,
+    ) -> bool {
+        context.owns_id(id) && body.is_none_or(|doc| context.owns(doc))
+    }
+    /// Default E51 callers use a single preference scope. E55 adapters override
+    /// this only after verifying their aggregate app grant in this snapshot.
+    fn authorize_preference_scope(
+        &self,
+        _tx: &Transaction<'_>,
+        key: &SubscriptionKey,
+        context: &crate::preferences::Context,
+    ) -> rusqlite::Result<()> {
+        if key.scope_hash == context.scope_hash() {
+            Ok(())
+        } else {
+            Err(invalid("forbidden"))
+        }
+    }
     fn authorize(&self, tx: &Transaction<'_>, key: &SubscriptionKey) -> rusqlite::Result<()>;
     fn project(
         &self,
@@ -185,9 +209,7 @@ impl Subscription {
                     let context = authority
                         .preference_context(&key.participant)
                         .ok_or_else(|| invalid("forbidden"))?;
-                    if key.scope_hash != context.scope_hash() {
-                        return Err(invalid("forbidden"));
-                    }
+                    authority.authorize_preference_scope(tx, &key, &context)?;
                     Some(context)
                 } else {
                     None
@@ -217,13 +239,17 @@ impl Subscription {
                 let docs = page
                     .docs
                     .iter()
-                    .filter(|doc| prefs.as_ref().is_none_or(|ctx| ctx.owns_id(&doc.id)))
+                    .filter(|doc| {
+                        prefs
+                            .as_ref()
+                            .is_none_or(|ctx| authority.owns_preference(ctx, &doc.id, None))
+                    })
                     .map(|doc| {
                         let body = if doc.op == Operation::Delete {
                             None
                         } else {
                             if prefs.as_ref().is_some_and(|ctx| {
-                                !doc.body.as_ref().is_some_and(|body| ctx.owns(body))
+                                !authority.owns_preference(ctx, &doc.id, doc.body.as_ref())
                             }) {
                                 None
                             } else {
@@ -438,7 +464,9 @@ pub(crate) fn apply_write(
         let mut permission = authority.authorize(tx, participant, request)?;
         let prefs = if request.collection == crate::preferences::COLLECTION {
             let context = authority.preference_context(participant);
-            if !context.as_ref().is_some_and(|ctx| ctx.owns_id(&request.id)) {
+            if !matches!(&permission, WritePermission::Reject(_))
+                && !context.as_ref().is_some_and(|ctx| ctx.owns_id(&request.id))
+            {
                 permission = WritePermission::Reject("forbidden".into());
             }
             context

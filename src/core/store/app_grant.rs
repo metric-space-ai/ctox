@@ -12,6 +12,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+#[path = "app_grant_reader.rs"]
+pub mod reader;
+
 pub const DOMAIN: &[u8] = b"ctox:v4:scope\0";
 pub const MAX_TOKEN_BYTES: usize = 16 * 1024;
 const MAX_APPS: usize = 256;
@@ -57,6 +60,7 @@ pub struct ScopeRevoke {
     pub reason: &'static str,
 }
 struct Issued {
+    token: String,
     fingerprint: String,
     claims: AppGrantClaims,
 }
@@ -80,6 +84,7 @@ pub trait GrantPeerAuthority: Send + Sync {
         user: &str,
         role: &str,
         device: &str,
+        app_id: &str,
     ) -> scope::Result<()>;
 }
 /// No Deserialize/Clone identity setter: only the authenticated native adapter
@@ -151,6 +156,28 @@ fn decode(token: &str) -> scope::Result<SignedGrant> {
     Ok(grant)
 }
 
+/// Shell owns the user's preference mirror across app contexts (E51). App
+/// grants keep their app+user filter; writes always use authorize_app_write.
+fn app_read_scope(
+    rights: &RightsSnapshot,
+    app: &str,
+    role: &str,
+    user: &str,
+    collection: &str,
+) -> scope::Result<scope::ResolvedScope> {
+    let mut resolved = rights.resolve_app_collection(app, role, user, collection)?;
+    if app == "shell" && collection == ctox_store::preferences::COLLECTION {
+        for projection in &mut resolved.projections {
+            projection.row_filter = scope::RowFilter::Eq {
+                path: "/user_id".into(),
+                value: scope::FilterValue::Literal {
+                    value: Value::String(user.into()),
+                },
+            };
+        }
+    }
+    Ok(resolved)
+}
 /// Resolves ONLY manifest-declared, user-readable collections in this writer
 /// snapshot. The field mask and resolved row filters feed the P6 scope hash.
 fn resolve(
@@ -167,16 +194,32 @@ fn resolve(
     manifest.validate_registry(&rights.manifests)?;
     let mut collections = Vec::new();
     let mut projections = Vec::new();
+    // E51 is a synthesized scope, not an explicit release-rights row. Shell
+    // boot always subscribes it; resolve_app_collection binds app AND actor.
+    let preference = super::Right {
+        role: state.role.clone(),
+        collection: ctox_store::preferences::COLLECTION.into(),
+        row_filter: scope::RowFilter::None,
+        field_mask: scope::FieldMask::All,
+        ops: [Operation::Read, Operation::Write].into(),
+    };
+    let include_preferences = true;
     for rule in rights
         .rules
         .iter()
         .filter(|r| r.role == state.role && r.ops.contains(&Operation::Read))
+        .chain(
+            (include_preferences
+                && !rights.rules.iter().any(|r| {
+                    r.role == state.role && r.collection == ctox_store::preferences::COLLECTION
+                }))
+            .then_some(&preference),
+        )
     {
-        let scope =
-            match rights.resolve_app_collection(app, &state.role, &state.user, &rule.collection) {
-                Ok(scope) => scope,
-                Err(_) => continue,
-            };
+        let scope = match app_read_scope(rights, app, &state.role, &state.user, &rule.collection) {
+            Ok(scope) => scope,
+            Err(_) => continue,
+        };
         let Some(mut projection) = scope.projection(&rule.collection).cloned() else {
             continue;
         };
@@ -195,9 +238,10 @@ fn resolve(
         };
         let mut operations = vec!["read".to_owned()];
         if rule.ops.contains(&Operation::Write)
-            && manifest
-                .authorize_collection(&rights.manifests, &rule.collection, AppOperation::Write)
-                .is_ok()
+            && (rule.collection == ctox_store::preferences::COLLECTION
+                || manifest
+                    .authorize_collection(&rights.manifests, &rule.collection, AppOperation::Write)
+                    .is_ok())
         {
             operations.push("write".to_owned());
         }
@@ -291,7 +335,7 @@ impl AppGrantSession {
                     return Err("revoked".into());
                 }
                 self.peer_authority
-                    .validate(tx, &state.user, &state.role, &state.device)?;
+                    .validate(tx, &state.user, &state.role, &state.device, app)?;
                 if !state.last_exp.contains_key(app) && state.last_exp.len() >= MAX_APPS {
                     return Err("grant app budget".into());
                 }
@@ -336,12 +380,113 @@ impl AppGrantSession {
                 state.issued.insert(
                     app.into(),
                     Issued {
+                        token: token.clone(),
                         fingerprint: scope::digest(token.as_bytes()),
                         claims: grant.claims,
                     },
                 );
                 Ok(token)
             })
+    }
+    /// Lookup is not authorization: callers must use the transactional methods.
+    pub fn bound_token(
+        &self,
+        scope_hash: Option<&str>,
+        collection: &str,
+        gen: u64,
+        app: Option<&str>,
+    ) -> scope::Result<String> {
+        let state = self.state.lock().map_err(|_| "grant session unavailable")?;
+        if !state.active {
+            return Err("revoked".into());
+        }
+        state
+            .issued
+            .values()
+            .find(|g| {
+                scope_hash.is_none_or(|h| g.claims.scope_hash == h)
+                    && app.is_none_or(|a| g.claims.app_id == a)
+                    && g.claims
+                        .collections
+                        .iter()
+                        .any(|c| c.collection == collection && c.gen == gen)
+            })
+            .map(|g| g.token.clone())
+            .ok_or_else(|| "revoked".into())
+    }
+    pub fn scope_in_transaction(
+        &self,
+        tx: &Transaction<'_>,
+        token: &str,
+        collection: &str,
+        now: u64,
+    ) -> scope::Result<scope::ResolvedScope> {
+        self.with_verified_in_transaction(tx, token, now, |claims, rights, state| {
+            let base = logical_collection(claims, collection, "read")?;
+            let resolved = app_read_scope(rights, &claims.app_id, &state.role, &state.user, &base)?;
+            let mut projection = resolved.projection(&base).cloned().ok_or("forbidden")?;
+            projection.collection = collection.into();
+            scope::ResolvedScope::new(rights.rights_ver, vec![projection], &state.user)
+        })
+    }
+    pub fn issued_claims(&self) -> scope::Result<Vec<AppGrantClaims>> {
+        Ok(self
+            .state
+            .lock()
+            .map_err(|_| "grant session unavailable")?
+            .issued
+            .values()
+            .map(|g| g.claims.clone())
+            .collect())
+    }
+    /// Retained-state fence at physical handoff, after transactional validation.
+    pub fn token_current(&self, token: &str, now: u64) -> scope::Result<()> {
+        self.with_token_current(token, now, || Ok(()))
+    }
+    pub fn with_token_current<T>(
+        &self,
+        token: &str,
+        now: u64,
+        publish: impl FnOnce() -> scope::Result<T>,
+    ) -> scope::Result<T> {
+        let state = self.state.lock().map_err(|_| "grant session unavailable")?;
+        if state.active
+            && state
+                .issued
+                .values()
+                .any(|g| g.token == token && now < g.claims.exp)
+        {
+            publish()
+        } else {
+            Err("revoked".into())
+        }
+    }
+    /// Physical publication uses the issued app grant's CURRENT version, not
+    /// the version from the initial hello. Old queued grants fail immediately
+    /// when the router starts a policy update, before any notification drains.
+    pub fn with_publication<T>(
+        &self,
+        token: &str,
+        now: u64,
+        epoch: &str,
+        publish: impl FnOnce() -> scope::Result<T>,
+    ) -> scope::Result<T> {
+        let version = {
+            let state = self.state.lock().map_err(|_| "grant session unavailable")?;
+            let issued = state
+                .issued
+                .values()
+                .find(|g| g.token == token)
+                .ok_or("revoked")?;
+            issued
+                .claims
+                .rights_ver
+                .parse()
+                .map_err(|_| "invalid rights version")?
+        };
+        self.authority.router.with_snapshot(version, epoch, |_, _| {
+            self.with_token_current(token, now, publish)
+        })
     }
     /// Used by P8's native reader in its own SQLite snapshot. Authorization,
     /// reprojection and synchronous frame handoff share live policy/session
@@ -357,13 +502,27 @@ impl AppGrantSession {
     ) -> scope::Result<T> {
         self.with_verified_in_transaction(tx, token, now, |claims, rights, state| {
             let base = logical_collection(claims, collection, "read")?;
-            let projected = rights.authorize_app_read(
-                &claims.app_id,
-                &state.role,
-                &state.user,
-                &base,
-                document,
-            )?;
+            let projected =
+                if claims.app_id == "shell" && base == ctox_store::preferences::COLLECTION {
+                    let app = document["app_id"].as_str().ok_or("forbidden")?;
+                    let context = ctox_store::preferences::Context::authenticated(
+                        app,
+                        &state.user,
+                        rights.rights_ver,
+                    )?;
+                    if !context.owns(document) {
+                        return Err("forbidden".into());
+                    }
+                    document.clone()
+                } else {
+                    rights.authorize_app_read(
+                        &claims.app_id,
+                        &state.role,
+                        &state.user,
+                        &base,
+                        document,
+                    )?
+                };
             deliver(projected)
         })
     }
@@ -419,8 +578,13 @@ impl AppGrantSession {
             .with_snapshot(rights.rights_ver, &head.epoch, |instance, _| {
                 let state = self.state.lock().map_err(|_| "grant session unavailable")?;
                 let claims = &grant.claims;
-                self.peer_authority
-                    .validate(tx, &state.user, &state.role, &state.device)?;
+                self.peer_authority.validate(
+                    tx,
+                    &state.user,
+                    &state.role,
+                    &state.device,
+                    &claims.app_id,
+                )?;
                 if !state.active
                     || claims.instance_id != instance
                     || claims.user_id != state.user
@@ -487,16 +651,15 @@ impl AppGrantSession {
     ) -> scope::Result<Vec<ScopeRevoke>> {
         let rights = super::read(tx).map_err(|_| "grant rights unavailable")?;
         let mut state = self.state.lock().map_err(|_| "grant session unavailable")?;
-        let peer_valid = self
-            .peer_authority
-            .validate(tx, &state.user, &state.role, &state.device)
-            .is_ok();
         let invalid: Vec<_> = state
             .issued
             .iter()
             .filter_map(|(app, issued)| {
                 let valid = state.active
-                    && peer_valid
+                    && self
+                        .peer_authority
+                        .validate(tx, &state.user, &state.role, &state.device, app)
+                        .is_ok()
                     && now < issued.claims.exp
                     && issued.claims.rights_ver == rights.rights_ver.to_string()
                     && resolve(tx, &rights, &state, app).is_ok_and(|(cols, hash)| {
