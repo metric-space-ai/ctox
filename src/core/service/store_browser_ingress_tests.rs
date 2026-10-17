@@ -517,3 +517,45 @@ async fn owner_signaling_precedes_http_and_launch_context_meets_budget() -> anyh
     assert!(p99 < 50.0, "launch-context p99 {p99:.3}ms exceeds 50ms");
     Ok(())
 }
+
+/// Registration precedes owner startup. A readiness read in that real lifecycle
+/// phase must stay a read, including when no signaling task exists yet.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn readiness_accessor_never_starts_browser_ingress() -> anyhow::Result<()> {
+    use crate::service::{queue_store, store_inputs::store_inputs, store_runtime::DaemonStores};
+    let _scope = isolate_test_roots().await;
+    let fixture = tempfile::Builder::new()
+        .prefix("c11-ready-")
+        .tempdir_in("/tmp")?;
+    let root = fixture.path();
+    std::fs::create_dir_all(root.join("runtime"))?;
+    let mut owner =
+        DaemonStores::start(queue_store::endpoint(root), tokio::runtime::Handle::current())?;
+    owner
+        .register(
+            "core",
+            ctox_store::DbId::new(crate::paths::core_db(root))?,
+            false,
+            Arc::new(|_| Ok(())),
+        )
+        .await?;
+    owner
+        .register(
+            "sync",
+            ctox_store::DbId::new(crate::paths::sync_db(root))?,
+            true,
+            Arc::new(|_| Ok(())),
+        )
+        .await?;
+    owner.publish_inputs(root).await?;
+    let inputs = store_inputs(root)?;
+    let ingress = BrowserIngress::new(&inputs);
+    assert!(inputs.browser_ingress.set(ingress.clone()).is_ok());
+    let readiness = inputs.browser_ingress_ready();
+    let started = ingress.owner_started();
+    ingress.shutdown().await?;
+    owner.shutdown().await?;
+    assert!(matches!(readiness, Err(StoreError::Busy)));
+    assert!(!started, "readiness accessor started signaling");
+    Ok(())
+}
