@@ -194,6 +194,14 @@ async fn native_daemon_e42_app_handlers() -> Result<()> {
     run_native_proof(Proof::E42).await
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_matching_policy_snapshot_survives_store_pressure() -> Result<()> {
+    run_native_proof(Proof::E42Pressure).await
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn native_knowledge_manifest_preserves_actor_row_filters() -> Result<()> {
+    run_native_proof(Proof::Knowledge).await
+}
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_daemon_e39_routing_contracts() -> Result<()> {
     run_native_proof(Proof::E39).await
 }
@@ -211,6 +219,8 @@ enum Proof {
     E39,
     Platform,
     E42,
+    E42Pressure,
+    Knowledge,
     Lease,
 }
 async fn run_native_proof(proof: Proof) -> Result<()> {
@@ -364,6 +374,14 @@ async fn run_native_proof(proof: Proof) -> Result<()> {
         if proof == Proof::E42 {
             e42_proof::prove(database, &cas).await?;
             return Ok(json!({"e42_only":true}));
+        }
+        if proof == Proof::E42Pressure {
+            e42_proof::prove_under_policy_pressure(database, &cas).await?;
+            return Ok(json!({"matching_policy_pressure":true}));
+        }
+        if proof == Proof::Knowledge {
+            e42_proof::prove_knowledge(database, &cas).await?;
+            return Ok(json!({"knowledge_typed_row_filters":true}));
         }
         if proof == Proof::All {
             e25_binding::assert_native_workjet_route(database).await?;
