@@ -50,8 +50,8 @@
     "handlers/ctox.cv_print.apply_parse.js": "de6f98a6f79542747635bc4e3307cc466ff3f828223908fb73a99ffaee857401",
     "icon.svg": "524bd59c6a35bc933c3cbea20b1b7ae2402ae6c21f8bad28c76e7510820f63cb",
     "index.css": "68c4e5bc98a6105da544cc64d03a4ca407c6408ab382ba06796ca4635d270667",
-    "index.html": "e64a40fd4690c2272949dbb6319ad95988776c78ff3c93c4afd2bf46ac2de3a8",
-    "index.js": "c77e462cb2944a6fa5a6ea21b815b08fbf1c5783e44905e8b0c9322736964b48",
+    "index.html": "27fefe572d4fb76abee5d83d12d5e99f86e443d1c3a29ed1acdd812642125fca",
+    "index.js": "6c004c7fcaf9e049b4d1791a5e7670933dd3c9b7044a7e89981a401c23c36205",
     "locales/de.json": "0533cfa5e35f7850e5f3ef0546b331099de41b870dc36cb5b1271d2731e45359",
     "locales/en.json": "3087e2a9a5ab5e779573b4490538f1ff7660309e0ba10b3a77140195e8f55eea",
     "module.json": "b262d4b87b208d4866d6a1011a0ca12837f3462c37517f5f06b9fb9cb57dd4a5",
@@ -259,7 +259,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "e7e52f781f7e27c513e00e4aae166f3c0ea6e7a4473b790558c7d19f58f0e634",
+    "base_hash": "ea1274192b32cff07aece80ef5096461b9f02edf4b91fad930a0231121509c52",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

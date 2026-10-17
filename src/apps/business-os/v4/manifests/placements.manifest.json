@@ -174,7 +174,7 @@
     "handlers/ats.placement.early_leave.js": "fcfcdcaccf5a8d186b72b247009ae9747939362e495356326ca8c8d977a8d8c3",
     "icon.svg": "977ad60b8e69602da641cf76a8f97c820e9adf4683abe3826b2eef64095c001f",
     "index.css": "be38937429145af04b0c493685f54f3fe2854c36c62d7c7febd41c0847de2531",
-    "index.html": "3b5dd113a7f155ad16110602bffbe1f86e78230f9dc58cca34d9c07c60ad9b15",
+    "index.html": "e4346bd5e3bcb2a919b63b6773a910b620cb1c88f983426731148d543d3559c1",
     "index.js": "49ac21d587897b8948acc7720e84cf8ce4aaadd35b2db8bc7d5ccf1557417aaa",
     "locales/de.json": "a64a9a9808b275264926f08fbf1d7a5c19f6c40771282c9ad9452b271e1105ef",
     "locales/en.json": "804883f1b02f90bd1dc3f9221d1614b4fb171cf06435687a4f45fc6e8f95c905",
@@ -407,7 +407,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "045624ceb5b907758efb54d22aa0f0c986ed93b9baca88a0255fecfa14992fb5",
+    "base_hash": "8457278ce1bb6276362e1943bc3edac905b8317f63f7985e3838f54640e1868f",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

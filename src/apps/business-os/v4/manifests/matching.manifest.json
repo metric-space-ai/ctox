@@ -295,7 +295,7 @@
     "handlers/matching.source.parse_requirement.js": "c8159540efff354147fc30355fd5336eb6f8188629b0fc7d56d9d0d479489bed",
     "icon.svg": "97d2cf72c43f4ab61a725109b8e2174720c919cf5a2166b14200a0a691d3d7c2",
     "index.css": "66c544d668fc7f6ffca888a18e390166d6e5cb187905139e5c1d419541b6caf8",
-    "index.html": "44289bddd74357a7b9db4320926893693fbcab19f4ed311b5c26581159bb1789",
+    "index.html": "5b0ec58839a797e0e1209a485bec769b66dc017560a23789cabd032339a999a0",
     "index.js": "ffaec0e6b712fe8a2f186bdf42dc3cd869fe7671e9b68f44d88f2705b6d86249",
     "locales/de.json": "a2de07ce18ef70b871948192bd79b940efe32af550fa99bb62c238dff14db489",
     "locales/en.json": "ef6ffbc9fb6fd0d9cd37ee30f2675b5e24f20991d11a6521a7fd97c3ad422dbf",
@@ -305,7 +305,7 @@
     "ui/businessOsDataSource.js": "a79de9c5e399046834bc83d15aaf10fa94ded410d8dc0468d1b28d993713f166",
     "ui/candidateBoard.js": "9b013629314d01a6c4e025e9ddc8923bddc2d590acfbf4d6b616c0c6f515fd25",
     "ui/ctoxCommandAdapter.js": "f4c8c72f19615d136c5cdd1b5bcdb70d9fc9b14d3b191e9d93360d4344672518",
-    "ui/index.js": "c6b16c4b7b2d8714e84c4e3c76ef62a4cbbb296b05e6977db424657e9b241aa9",
+    "ui/index.js": "245338cbe7bd82559e1e9e2a1ee0534b1880cad42905c85580e22a177cdc0329",
     "ui/matchingDefinition.js": "51a92266a400cf968c86f853b3c8af68aae329b6e92166f0640a4125ac9e6427",
     "ui/matchingTools.js": "36158bd58b3a4311923d60677198e0e7c79548ef3537b164235673dab8014ae5",
     "ui/v4Runtime.js": "8c6f9008badf21fc0b82e122a41cf5666cafa7e2851816c85a0c66d59276058f",
@@ -444,7 +444,7 @@
   },
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "cb8c64f12040bac01012a73457d8319aba7031e423281a60c85432d8b74bd105",
+    "base_hash": "43fd02c8bf3d26923ad2f069092e7bebf22ea68f1521a789ded0925afbf6ef4d",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

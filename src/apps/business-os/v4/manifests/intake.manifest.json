@@ -103,7 +103,7 @@
     "handlers/ats.intake.capture.js": "38193b8fbb20832b9c4b8f954107803b2b483d4ea8924ceaffa4e9e670eef9ef",
     "icon.svg": "5ac669bdc1e1d85643d48745fb0c67d5e55923a1c8c376e765e24e37ac28e2c9",
     "index.css": "d86a25dfc7c3ae97b0842df16f8ccee285c4cfa10e518a76ec7c5a359acf9a54",
-    "index.html": "d3028b579df23d4284a2d23a24da58e988a1f296fe5e4eae2497d46d5cc18a2a",
+    "index.html": "99a12c17c3331d717081d9271a440556d0b0f2f9c1a44aac0bca42a37600cca8",
     "index.js": "a40f0031ee42303f2090e5316cd80f82eeaf218b1774d8d84b4765081376862f",
     "locales/de.json": "15a92338d8d0d90976de084ca3ae385d9e9664ffbcd14d501a48056768df263f",
     "locales/en.json": "0720022cf23477599e949ef6f7c32fa44caf1e6cc9182938df3c8b39b89c70e1",
@@ -345,7 +345,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "7c6d1e395d23f0b8f8c7e94c9377d63a31b1e16cbc7cd1b3437cfeabdf5d2709",
+    "base_hash": "077e1bc35630a1c996b0abc7f1bbe36e7703e3f908c3f93a81ea5030a772c5de",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

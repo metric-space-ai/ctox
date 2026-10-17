@@ -1556,8 +1556,8 @@ function workbenchTabButton(tab, label) {
 function renderMainHeaderActions(account) {
   const actions = [];
   if (account) {
-    actions.push(`<button class="ctox-pane-icon" type="button" data-customers-action="edit-account" data-account-id="${escapeAttribute(account.id)}" aria-label="${escapeAttribute(state.t('editCustomer', labels.de.editCustomer))}" title="${escapeAttribute(state.t('editCustomer', labels.de.editCustomer))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>`);
-    actions.push(`<button class="ctox-pane-icon is-danger" type="button" data-customers-action="archive-account" data-account-id="${escapeAttribute(account.id)}" aria-label="${escapeAttribute(state.t('archiveCustomer', labels.de.archiveCustomer))}" title="${escapeAttribute(state.t('archiveCustomer', labels.de.archiveCustomer))}"${mutableDisabledAttr()}>${actionIcon('archive')}</button>`);
+    actions.push(`<button class="ctox-pane-icon" data-short-de="Bearbeiten" type="button" data-customers-action="edit-account" data-account-id="${escapeAttribute(account.id)}" aria-label="${escapeAttribute(state.t('editCustomer', labels.de.editCustomer))}" title="${escapeAttribute(state.t('editCustomer', labels.de.editCustomer))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>`);
+    actions.push(`<button class="ctox-pane-icon is-danger" data-short-de="Archivieren" type="button" data-customers-action="archive-account" data-account-id="${escapeAttribute(account.id)}" aria-label="${escapeAttribute(state.t('archiveCustomer', labels.de.archiveCustomer))}" title="${escapeAttribute(state.t('archiveCustomer', labels.de.archiveCustomer))}"${mutableDisabledAttr()}>${actionIcon('archive')}</button>`);
   }
   const create = {
     contacts: ['create-contact', state.t('newContact', labels.de.newContact)],
@@ -1570,7 +1570,7 @@ function renderMainHeaderActions(account) {
   }
   if (state.detailTab === 'handoff' && state.selectedOutboundCompanyId) {
     const row = outboundHandoffRowByCompanyId(state.selectedOutboundCompanyId);
-    if (row?.status === 'ready') actions.unshift(`<button class="ctox-pane-icon" type="button" data-customers-action="import-outbound" data-outbound-company-id="${escapeAttribute(row.company.id)}" aria-label="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}" title="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}"${mutableDisabledAttr()}>${actionIcon('download')}</button>`);
+    if (row?.status === 'ready') actions.unshift(`<button class="ctox-pane-icon" data-short-de="Import" type="button" data-customers-action="import-outbound" data-outbound-company-id="${escapeAttribute(row.company.id)}" aria-label="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}" title="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}"${mutableDisabledAttr()}>${actionIcon('download')}</button>`);
   }
   return `<div class="ctox-pane-actions">${actions.join('')}</div>`;
 }
@@ -1876,8 +1876,8 @@ function renderLegacyCenter() {
           <h2 class="ctox-pane-title">${summary.accounts} ${escapeHtml(state.t('accounts', labels.de.accounts))} · ${summary.opportunities} ${escapeHtml(state.t('opportunities', labels.de.opportunities))} · ${escapeHtml(formatMoney(pipeline.total_cents, pipeline.currency))}</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon" type="button" data-customers-action="import-customers" aria-label="${escapeAttribute(state.t('importCustomers', labels.de.importCustomers))}" title="${escapeAttribute(state.t('importCustomers', labels.de.importCustomers))}"${mutableDisabledAttr()}>${actionIcon('upload')}</button>
-          <button class="ctox-pane-icon" type="button" data-customers-action="export-customers" aria-label="${escapeAttribute(state.t('exportCustomers', labels.de.exportCustomers))}" title="${escapeAttribute(state.t('exportCustomers', labels.de.exportCustomers))}">${actionIcon('export')}</button>
+          <button class="ctox-pane-icon" data-short-de="Import" type="button" data-customers-action="import-customers" aria-label="${escapeAttribute(state.t('importCustomers', labels.de.importCustomers))}" title="${escapeAttribute(state.t('importCustomers', labels.de.importCustomers))}"${mutableDisabledAttr()}>${actionIcon('upload')}</button>
+          <button class="ctox-pane-icon" data-short-de="Export" type="button" data-customers-action="export-customers" aria-label="${escapeAttribute(state.t('exportCustomers', labels.de.exportCustomers))}" title="${escapeAttribute(state.t('exportCustomers', labels.de.exportCustomers))}">${actionIcon('export')}</button>
           ${primaryAction ? `<button class="ctox-pane-icon" type="button" data-customers-action="${escapeAttribute(primaryAction.action)}"${primaryAction.recordAttr || ''} aria-label="${escapeAttribute(primaryAction.label)}" title="${escapeAttribute(primaryAction.label)}"${mutableDisabledAttr()}>${actionIcon(primaryAction.icon || 'add')}</button>` : ''}
           ${inspectorHasContent() ? `<button class="ctox-pane-icon${state.workbenchCollapsed ? ' is-active' : ''}" type="button" data-customers-action="toggle-inspector" aria-pressed="${state.workbenchCollapsed ? 'true' : 'false'}" aria-label="${escapeAttribute(state.t(state.workbenchCollapsed ? 'showInspector' : 'toggleInspector', labels.de[state.workbenchCollapsed ? 'showInspector' : 'toggleInspector']))}" title="${escapeAttribute(state.t(state.workbenchCollapsed ? 'showInspector' : 'toggleInspector', labels.de[state.workbenchCollapsed ? 'showInspector' : 'toggleInspector']))}">${actionIcon('columns')}</button>` : ''}
         </div>
@@ -2349,7 +2349,7 @@ function renderOutboundInspector() {
           <h2 class="ctox-pane-title">${escapeHtml(row.company.name || row.company.id)}</h2>
           ${subtitle ? `<p class="customers-detail-subtitle">${escapeHtml(subtitle)}</p>` : ''}
         </div>
-        ${row.status === 'ready' ? `<div class="ctox-pane-actions"><button class="ctox-pane-icon" type="button" data-customers-action="import-outbound" data-outbound-company-id="${escapeAttribute(row.company.id)}" aria-label="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}" title="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}"${mutableDisabledAttr()}>${actionIcon('download')}</button></div>` : ''}
+        ${row.status === 'ready' ? `<div class="ctox-pane-actions"><button class="ctox-pane-icon" data-short-de="Import" type="button" data-customers-action="import-outbound" data-outbound-company-id="${escapeAttribute(row.company.id)}" aria-label="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}" title="${escapeAttribute(state.t('importFromOutbound', labels.de.importFromOutbound))}"${mutableDisabledAttr()}>${actionIcon('download')}</button></div>` : ''}
       </div>
       <div class="customers-chip-row customers-pane-chips">
         <span class="ctox-badge">${escapeHtml(row.company.qualification_status || 'outbound')}</span>
@@ -2439,22 +2439,22 @@ function renderRecordHeaderActions(context) {
   if (context.type === 'contact') {
     return `
       <div class="ctox-pane-actions">
-        <button class="ctox-pane-icon" type="button" data-customers-action="edit-contact" data-contact-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('editContact', labels.de.editContact))}" title="${escapeAttribute(state.t('editContact', labels.de.editContact))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>
-        <button class="ctox-pane-icon is-danger" type="button" data-customers-action="archive-contact" data-contact-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('archiveContact', labels.de.archiveContact))}" title="${escapeAttribute(state.t('archiveContact', labels.de.archiveContact))}"${mutableDisabledAttr()}>${actionIcon('archive')}</button>
+        <button class="ctox-pane-icon" data-short-de="Bearbeiten" type="button" data-customers-action="edit-contact" data-contact-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('editContact', labels.de.editContact))}" title="${escapeAttribute(state.t('editContact', labels.de.editContact))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>
+        <button class="ctox-pane-icon is-danger" data-short-de="Archivieren" type="button" data-customers-action="archive-contact" data-contact-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('archiveContact', labels.de.archiveContact))}" title="${escapeAttribute(state.t('archiveContact', labels.de.archiveContact))}"${mutableDisabledAttr()}>${actionIcon('archive')}</button>
       </div>
     `;
   }
   if (context.type === 'opportunity') {
     return `
       <div class="ctox-pane-actions">
-        <button class="ctox-pane-icon" type="button" data-customers-action="edit-opportunity" data-opportunity-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('editOpportunity', labels.de.editOpportunity))}" title="${escapeAttribute(state.t('editOpportunity', labels.de.editOpportunity))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>
+        <button class="ctox-pane-icon" data-short-de="Bearbeiten" type="button" data-customers-action="edit-opportunity" data-opportunity-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('editOpportunity', labels.de.editOpportunity))}" title="${escapeAttribute(state.t('editOpportunity', labels.de.editOpportunity))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>
       </div>
     `;
   }
   return `
     <div class="ctox-pane-actions">
-      <button class="ctox-pane-icon" type="button" data-customers-action="edit-account" data-account-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('editCustomer', labels.de.editCustomer))}" title="${escapeAttribute(state.t('editCustomer', labels.de.editCustomer))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>
-      <button class="ctox-pane-icon is-danger" type="button" data-customers-action="archive-account" data-account-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('archiveCustomer', labels.de.archiveCustomer))}" title="${escapeAttribute(state.t('archiveCustomer', labels.de.archiveCustomer))}"${mutableDisabledAttr()}>${actionIcon('archive')}</button>
+      <button class="ctox-pane-icon" data-short-de="Bearbeiten" type="button" data-customers-action="edit-account" data-account-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('editCustomer', labels.de.editCustomer))}" title="${escapeAttribute(state.t('editCustomer', labels.de.editCustomer))}"${mutableDisabledAttr()}>${actionIcon('edit')}</button>
+      <button class="ctox-pane-icon is-danger" data-short-de="Archivieren" type="button" data-customers-action="archive-account" data-account-id="${escapeAttribute(context.id)}" aria-label="${escapeAttribute(state.t('archiveCustomer', labels.de.archiveCustomer))}" title="${escapeAttribute(state.t('archiveCustomer', labels.de.archiveCustomer))}"${mutableDisabledAttr()}>${actionIcon('archive')}</button>
     </div>
   `;
 }

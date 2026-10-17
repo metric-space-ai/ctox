@@ -999,7 +999,7 @@ function renderShiftListItem(shift) {
         <span class="shiftflow-shift-meta" data-shift-meta="who"><span class="shiftflow-shift-who">${escapeHtml(cardWho)}</span><em class="shiftflow-shift-status" data-shift-status="${shift.status === 'published' ? 'published' : 'draft'}">${escapeHtml(status)}</em></span>
         <span class="shiftflow-shift-meta" data-shift-meta="brief">${escapeHtml(listBrief)}</span>
       </button>
-      <button type="button" class="ctox-pane-icon" data-edit-shift-id="${escapeHtml(shift.id)}" title="${escapeHtml(t('edit', 'Bearbeiten'))}" aria-label="${escapeHtml(`${t('edit', 'Bearbeiten')}: ${title}`)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4l11-11-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg></button>
+      <button type="button" class="ctox-pane-icon" data-short-de="Bearbeiten" data-edit-shift-id="${escapeHtml(shift.id)}" title="${escapeHtml(t('edit', 'Bearbeiten'))}" aria-label="${escapeHtml(`${t('edit', 'Bearbeiten')}: ${title}`)}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h4l11-11-4-4L4 16v4z"/><path d="M13.5 6.5l4 4"/></svg></button>
     </article>
   `;
 }

@@ -1765,7 +1765,7 @@ function taskColumnMarkup(tasks, state, options = {}) {
     <div class="ctox-filterbar">
       <input class="ctox-pane-search" type="search" data-pg-search value="${escapeAttr(state.taskSearch || '')}" placeholder="${escapeAttr(t.taskSearch)}" aria-label="${escapeAttr(t.taskSearch)}">
       <button type="button" class="ctox-pane-icon ctox-view-mode-toggle" data-ctox-view-toggle data-pg-view="${cards ? 'cards' : 'list'}" aria-label="${escapeAttr(viewToggleLabel(state))}" title="${escapeAttr(viewToggleLabel(state))}">${cards ? listViewIcon() : cardsViewIcon()}</button>
-      <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="${escapeAttr(t.filters)}" title="${escapeAttr(t.filters)}">${actionIcon(state, 'filter')}</button>
+      <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-short-de="Filter" data-pg-tray-toggle aria-expanded="false" aria-label="${escapeAttr(t.filters)}" title="${escapeAttr(t.filters)}">${actionIcon(state, 'filter')}</button>
     </div>
     <div class="ctox-filter-tray" data-pg-tray hidden>
       <div class="ctox-filter-row">
@@ -3896,8 +3896,8 @@ function taskDrawer(task, state, { editorOnly = false, remember = true } = {}) {
         </div>
         <div class="ctox-pane-actions">
           ${task.commandId ? `<button type="button" class="ctox-pane-icon" data-ctox-open-chat aria-label="${escapeAttr(t.openInChat)}" title="${escapeAttr(t.openInChat)}">${actionIcon(state, 'chat')}</button>` : ''}
-          ${canResumeCtoxTask(task) ? `<button type="button" class="ctox-pane-icon" data-ctox-task-resume aria-label="${escapeAttr(t.resumeTask)}" title="${escapeAttr(t.resumeTask)}">${actionIcon(state, 'play')}</button>` : ''}
-          <button type="button" class="ctox-pane-icon" data-ctox-task-delete aria-label="${escapeAttr(t.deleteTask)}" title="${escapeAttr(t.deleteTask)}" ${canModifyCtoxApp(state) ? '' : 'disabled'}>${actionIcon(state, 'trash')}</button>
+          ${canResumeCtoxTask(task) ? `<button type="button" class="ctox-pane-icon" data-short-de="Fortsetzen" data-ctox-task-resume aria-label="${escapeAttr(t.resumeTask)}" title="${escapeAttr(t.resumeTask)}">${actionIcon(state, 'play')}</button>` : ''}
+          <button type="button" class="ctox-pane-icon" data-short-de="Löschen" data-ctox-task-delete aria-label="${escapeAttr(t.deleteTask)}" title="${escapeAttr(t.deleteTask)}" ${canModifyCtoxApp(state) ? '' : 'disabled'}>${actionIcon(state, 'trash')}</button>
         </div>
       </header>
       <div class="ctox-card-body">
@@ -5639,7 +5639,7 @@ function memberMemoryMarkup(member, state) {
   // The owner edits statements, one per line; the document syntax stays ours.
   const document = (kind, title, items, raw) => `
     <section class="ctox-card ctox-memory-doc" data-memory-kind="${kind}">
-      <header>${escapeHtml(title)}${editable && kind === 'anchors' ? `<button type="button" class="ctox-pane-icon" data-memory-edit="${kind}" aria-label="${escapeAttr(t.editMemory)}" title="${escapeAttr(t.editMemory)}">${actionIcon(state, 'edit')}</button>` : ''}</header>
+      <header>${escapeHtml(title)}${editable && kind === 'anchors' ? `<button type="button" class="ctox-pane-icon" data-short-de="Bearbeiten" data-memory-edit="${kind}" aria-label="${escapeAttr(t.editMemory)}" title="${escapeAttr(t.editMemory)}">${actionIcon(state, 'edit')}</button>` : ''}</header>
       <div class="ctox-card-body">
         <ul class="ctox-memory-entries" data-memory-view>${items || ''}</ul>
         ${editable && kind === 'anchors' ? `

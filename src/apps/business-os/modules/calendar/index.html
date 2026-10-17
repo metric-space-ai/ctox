@@ -20,13 +20,13 @@
           <h2 class="ctox-pane-title" data-t="myCalendars">Meine Kalender</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" id="btnLeftNew" data-t-title="newRecord" data-t-aria="newRecord" title="Neu" aria-label="Neu">
+          <button type="button" class="ctox-pane-icon" data-short-de="Neu" id="btnLeftNew" data-t-title="newRecord" data-t-aria="newRecord" title="Neu" aria-label="Neu">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
           </button>
-          <button type="button" class="ctox-pane-icon" data-action="import" data-t-title="import" data-t-aria="import" title="Importieren" aria-label="Importieren">
+          <button type="button" class="ctox-pane-icon" data-short-de="Import" data-action="import" data-t-title="import" data-t-aria="import" title="Importieren" aria-label="Importieren">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg>
           </button>
-          <button type="button" class="ctox-pane-icon" data-action="export" data-t-title="export" data-t-aria="export" title="Exportieren" aria-label="Exportieren">
+          <button type="button" class="ctox-pane-icon" data-short-de="Export" data-action="export" data-t-title="export" data-t-aria="export" title="Exportieren" aria-label="Exportieren">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9M12 9l-4 4M12 9l4 4M5 3h14"/></svg>
           </button>
         </div>
@@ -44,7 +44,7 @@
         <svg data-view-icon="list" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg>
         <svg data-view-icon="cards" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg>
       </button>
-      <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
+      <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-short-de="Filter" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
     </div>
     <div class="ctox-filter-tray" data-pg-tray data-shell-v2-header-row="3" hidden>
       <div class="ctox-filter-row">
@@ -83,14 +83,14 @@
         </div>
         <div class="ctox-pane-actions">
           <span class="ctox-badge calendar-data-status" id="calendarDataStatus" hidden aria-live="polite"></span>
-          <button class="ctox-pane-icon" id="btnNewEvent" type="button" data-t-title="newEvent" data-t-aria="newEvent" title="Neuer Termin" aria-label="Neuer Termin">
+          <button class="ctox-pane-icon" data-short-de="Neu" id="btnNewEvent" type="button" data-t-title="newEvent" data-t-aria="newEvent" title="Neuer Termin" aria-label="Neuer Termin">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
           </button>
           <div class="calendar-navigation">
             <button class="ctox-pane-icon" id="prevPeriodBtn" type="button" title="Zurück" aria-label="Vorheriger Zeitraum">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
             </button>
-            <button class="ctox-pane-icon" id="todayPeriodBtn" type="button" data-t-title="today" data-t-aria="today" title="Heute" aria-label="Heute">
+            <button class="ctox-pane-icon" data-short-de="Heute" id="todayPeriodBtn" type="button" data-t-title="today" data-t-aria="today" title="Heute" aria-label="Heute">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 6h14v14H5zM5 10h14M9 4v4M15 4v4"/></svg>
             </button>
             <button class="ctox-pane-icon" id="nextPeriodBtn" type="button" title="Vorwärts" aria-label="Nächster Zeitraum">

@@ -104,8 +104,8 @@
     "handlers/ats.signature.sign.js": "4125f277f17cf4bb423bbf29ebe02c26d21efd90904bde67bdbae960d168dc70",
     "icon.svg": "420acabd7dd113e084742ef65d2f90acfcb9ebea0c1004d925585753e64ee5c9",
     "index.css": "1cc8dcccc409e256d05952e009d0292383f84a161dba15c3bd7301d3d3969064",
-    "index.html": "8b98fc8d424584578435cb174ab2f9a98575b6d48708bb7a2b17dc7cdf6a41c6",
-    "index.js": "484a8e5fdaf6c1d9de1d801f8f6abd4c70a729ca3977884e367fa0b0b4f2738d",
+    "index.html": "154db98008b40905d07292501771b13e1fffbe2f1fa4df246865e2f708690e9e",
+    "index.js": "b3430acd3a5c521583126aa565e3951a35e4528bb7319f95fa65dd9ee1569b48",
     "locales/de.json": "04d6067c7cea15c084f6c1c295267334e5d90c6d79a2fa80bb8b00609c47bbec",
     "locales/en.json": "5f2b76db38d7475116fa7ef955fba673dc95a30038d82e3ed83582cd32bec1b2",
     "module.json": "b109fc2b3f2bbaa4d82850470cfb7ae3f206e57ac556d72182bbf9181d48e587",
@@ -389,7 +389,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "ba117cc067935c1e76f1a31af858f75a1ab80a697e5f145d6f2e86c6012e1a94",
+    "base_hash": "ab0d586b93de3e9a902a4c384f9fe8159876c32e7fd75da63b78abc25ff6efb6",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

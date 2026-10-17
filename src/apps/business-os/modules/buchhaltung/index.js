@@ -1728,7 +1728,7 @@ function renderOcrInvoicePreview(receipt) {
         <span class="ctox-field-label">Datei-Referenz</span>
         <div class="ocr-archive-path-wrapper">
           <code class="ocr-archive-path" title="${escapeHtml(receipt.file_storage_url || '')}">${truncateArchiveUrl(receipt.file_storage_url || '')}</code>
-          <button type="button" class="ctox-pane-icon" onclick="window.fibuCopyArchivePath('${escapeHtml(receipt.file_storage_url || '')}')" aria-label="Archivpfad kopieren" title="Archivpfad kopieren">📋</button>
+          <button type="button" class="ctox-pane-icon" data-short-de="Kopieren" onclick="window.fibuCopyArchivePath('${escapeHtml(receipt.file_storage_url || '')}')" aria-label="Archivpfad kopieren" title="Archivpfad kopieren">📋</button>
         </div>
       </div>
     </div>

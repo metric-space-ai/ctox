@@ -2010,7 +2010,7 @@
     "handlers/support.view_filter.upsert.js": "d891e2583f027702075a16300253593213e5f23dfa82c9b10c560ea46eb656bb",
     "icon.svg": "c875f3c38e91436bef3ee3351f8e37148e151260bd4592773163c1f81dcde045",
     "index.css": "970d5360cb0a1025c25d9171c59a66bf496d854f1b3ac3ed0cb2a4ff0fa2a23c",
-    "index.html": "ec46dba532d4573004e5a9fc77147b8d847d0b476cb897d54e6085fe007331c9",
+    "index.html": "1c4ee783633090eaf26a5b218e8031879a2befe506b189c7c0979b418ce4387e",
     "index.js": "b91642cb24fcf35b27c14346ee786700f19f94bbff16825882859a2ec9e89bb3",
     "locales/de.json": "aa0be35de88307839d471f1b460a8b171e1e77fa88b23a2bae52992fb47f2ace",
     "locales/en.json": "10ab4efec61b9762f62ae5a3f0b1049fa7ca9eb9b4e691186ba1f118a75da3bf",
@@ -2285,7 +2285,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "e11a9c32973b6ed17433874bbb6d8c4de598fb8e2f37d2dd792463847e451d6f",
+    "base_hash": "5f4d41186e0f9c06436cb199028aa1503cac455c86e9138562f1129f03199f75",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

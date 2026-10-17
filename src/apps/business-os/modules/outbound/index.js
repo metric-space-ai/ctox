@@ -2735,9 +2735,9 @@ function campaignColumnMarkup() {
           <h2 class="ctox-pane-title">${escapeHtml(t('campaignsAndSequences', 'Kampagnen'))}</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon" type="button" data-action="new-campaign" title="${escapeHtml(t('newCampaign', 'Neue Kampagne'))}" aria-label="${escapeHtml(t('newCampaign', 'Neue Kampagne'))}">${actionIcon('add')}</button>
-          <button class="ctox-pane-icon" type="button" data-action="import-campaign-records" title="${escapeHtml(t('importCampaigns', 'Kampagnen importieren'))}" aria-label="${escapeHtml(t('importCampaigns', 'Kampagnen importieren'))}">${actionIcon('download')}</button>
-          <button class="ctox-pane-icon" type="button" data-action="export-campaign-records" title="${escapeHtml(t('exportCampaigns', 'Kampagnen exportieren'))}" aria-label="${escapeHtml(t('exportCampaigns', 'Kampagnen exportieren'))}">${actionIcon('export')}</button>
+          <button class="ctox-pane-icon" data-short-de="Neu" type="button" data-action="new-campaign" title="${escapeHtml(t('newCampaign', 'Neue Kampagne'))}" aria-label="${escapeHtml(t('newCampaign', 'Neue Kampagne'))}">${actionIcon('add')}</button>
+          <button class="ctox-pane-icon" data-short-de="Import" type="button" data-action="import-campaign-records" title="${escapeHtml(t('importCampaigns', 'Kampagnen importieren'))}" aria-label="${escapeHtml(t('importCampaigns', 'Kampagnen importieren'))}">${actionIcon('download')}</button>
+          <button class="ctox-pane-icon" data-short-de="Export" type="button" data-action="export-campaign-records" title="${escapeHtml(t('exportCampaigns', 'Kampagnen exportieren'))}" aria-label="${escapeHtml(t('exportCampaigns', 'Kampagnen exportieren'))}">${actionIcon('export')}</button>
           <input type="file" accept="application/json,.json" data-campaign-record-import hidden />
         </div>
       </div>
@@ -2749,7 +2749,7 @@ function campaignColumnMarkup() {
           <button type="button" class="ctox-pane-icon" data-pg-view="cards" aria-pressed="${cards}" aria-label="${escapeHtml(t('cardsView', 'Kachelansicht'))}" title="${escapeHtml(t('cardsView', 'Kachelansicht'))}">${cardsViewIcon()}</button>
           <button type="button" class="ctox-pane-icon" data-pg-view="list" aria-pressed="${!cards}" aria-label="${escapeHtml(t('listView', 'Listenansicht'))}" title="${escapeHtml(t('listView', 'Listenansicht'))}">${listViewIcon()}</button>
         </div>
-        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="${escapeHtml(t('filter', 'Filter'))}" title="${escapeHtml(t('filter', 'Filter'))}">${filterIcon()}</button>
+        <button type="button" class="ctox-pane-icon ctox-filter-toggle" data-short-de="Filter" data-pg-tray-toggle aria-expanded="false" aria-label="${escapeHtml(t('filter', 'Filter'))}" title="${escapeHtml(t('filter', 'Filter'))}">${filterIcon()}</button>
       </div>
       <div class="ctox-filter-tray" data-pg-tray hidden>
         <div class="ctox-filter-row">
@@ -2871,7 +2871,7 @@ function renderCampaignItem(campaign) {
         <span>${escapeHtml(meta)}</span>
       </button>
       <div class="outbound-campaign-actions" aria-label="${escapeHtml(t('campaignActions', 'Kampagnen-Aktionen'))}">
-        <button class="ctox-pane-icon" type="button" data-action="edit-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('editCampaign', 'Kampagne bearbeiten'))}" aria-label="${escapeHtml(t('editCampaign', 'Kampagne bearbeiten'))}">${actionIcon('edit')}</button>
+        <button class="ctox-pane-icon" data-short-de="Bearbeiten" type="button" data-action="edit-campaign" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('editCampaign', 'Kampagne bearbeiten'))}" aria-label="${escapeHtml(t('editCampaign', 'Kampagne bearbeiten'))}">${actionIcon('edit')}</button>
         ${renderMoreButton('campaign-more', campaign.id, t('moreActions', 'Weitere Aktionen'))}
       </div>
     </article>
@@ -3102,8 +3102,8 @@ function renderOutreachCenterShell(campaign) {
           <h2 class="ctox-pane-title">${escapeHtml(campaign.name)}</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button class="ctox-pane-icon" type="button" data-action="import-source" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('importJob', 'Importjob anlegen'))}" aria-label="${escapeHtml(t('importJob', 'Importjob anlegen'))}">${actionIcon('download')}</button>
-          <button class="ctox-pane-icon" type="button" data-action="ao-audit-export" title="${escapeHtml(t('auditExport', 'Audit-Export'))}" aria-label="${escapeHtml(t('auditExport', 'Audit-Export'))}">${actionIcon('export')}</button>
+          <button class="ctox-pane-icon" data-short-de="Import" type="button" data-action="import-source" data-id="${escapeHtml(campaign.id)}" title="${escapeHtml(t('importJob', 'Importjob anlegen'))}" aria-label="${escapeHtml(t('importJob', 'Importjob anlegen'))}">${actionIcon('download')}</button>
+          <button class="ctox-pane-icon" data-short-de="Export" type="button" data-action="ao-audit-export" title="${escapeHtml(t('auditExport', 'Audit-Export'))}" aria-label="${escapeHtml(t('auditExport', 'Audit-Export'))}">${actionIcon('export')}</button>
         </div>
       </div>
     </header>
@@ -3256,7 +3256,7 @@ function renderCenter(force = false) {
         </div>
         <div class="ctox-pane-actions">
           <button
-            class="ctox-pane-icon"
+            class="ctox-pane-icon" data-short-de="Import"
             type="button"
             data-action="import-source"
             data-id="${escapeHtml(campaign.id)}"
@@ -3264,7 +3264,7 @@ function renderCenter(force = false) {
             aria-label="${escapeHtml(t('importJob', 'Importjob anlegen'))}"
           >${actionIcon('download')}</button>
           <button
-            class="ctox-pane-icon"
+            class="ctox-pane-icon" data-short-de="Export"
             type="button"
             data-action="export-table"
             title="${escapeHtml(t('exportExcel', 'Tabelle als Excel exportieren'))}"
@@ -3280,7 +3280,7 @@ function renderCenter(force = false) {
             ${hasSelectedDetail ? '' : 'hidden'}
           >${actionIcon('columns')}</button>
           <button
-            class="ctox-pane-icon"
+            class="ctox-pane-icon" data-short-de="Einstellungen"
             type="button"
             data-action="open-research-settings"
             title="${escapeHtml(t('settingsFields', 'Research-Felder einstellen'))}"

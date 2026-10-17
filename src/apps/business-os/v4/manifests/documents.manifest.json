@@ -371,7 +371,7 @@
     "handlers/research.systematic.report.failed.js": "6fa51a6cfb84051976594436c9c540d1e239d2b262a1eb5689854dfc6f76acf5",
     "icon.svg": "55f4efaeb0cf479fe3f5ea3508723657f11990650e531668c6de9484f3be51ff",
     "index.css": "0681bcd9b653ce4cb5fe801cc1dab0dc76ceb2c3fa70b0efe852daf353bbe5d8",
-    "index.html": "f2e57ed5a990fbec7b1115cd01e9ada1ec9a60b4c4d3878dcaf5fc629bab1e6f",
+    "index.html": "df1f2e853b5a5739bd18397d562f437a3bd49654f4de11beab75eef031e7f3d3",
     "index.js": "55fe5805edbd5f78a6b49d1d35b7a6c2106f01d03f993ab1a6f5412c12ed5dc4",
     "locales/de.json": "8a629d1bb9af502bd2529f31bdda7b31d0b7ee62180ce2cea5fb2fe5590d2c57",
     "locales/en.json": "f6306208eda2ea31faa9db445727c3ad3548fc80fdf91a9bd7c5d0c1dd3a0f23",
@@ -702,7 +702,7 @@
     }
   ],
   "provenance": {
-    "base_hash": "6b4fe21f1443e8470f0fdd3deca5c6d92efedcfac66eceaaa5b149b3a5ea424a",
+    "base_hash": "1c011a1102ae88c4a6baa88323215b3f3e74d6c10d0632aacde2ef0b84653323",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

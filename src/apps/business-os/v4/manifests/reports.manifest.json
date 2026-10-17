@@ -32,7 +32,7 @@
     "core/funnel.js": "a56e0f883d1a2efd2d10361169e8c495055e2d16b35beea4815a3ee01240f6b8",
     "icon.svg": "53d1242e9674cbedfe7e96292bdf2c5059a8a1cab4ec857fcd96f8e58d2adc5c",
     "index.css": "4f51efecbab60f49664b16353ed9d1f5c51f3acab8953459ae492614546c4d83",
-    "index.html": "f99baea03e5bd28f56298ca50cbac2ec9867023dc3e76e30a2feb31243029c03",
+    "index.html": "3729e47f2833e3d602dfa91020ef3caeba969afb5d3963466006a7bb50ca7c0c",
     "index.js": "229ce6c2d75793ad0ec216d1b0dc27247d55a60a9fa4f534e91cd304af661c4e",
     "locales/de.json": "e01ae1854a8a1ddc89604a5538b7057d40e14953f57e3f483a353f3ef0e02910",
     "locales/en.json": "2fcebeaa5064eeaeee2865915cb8b5178ddf508386ab539462189b8db0523c0f",
@@ -204,7 +204,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "0d44680385baac4a1a4e5cdc99567cfaa9861d078fb74f04c8efce9c1d403d9e",
+    "base_hash": "2f5fb1f6731c5f69f3e89f6170e73d3680c331f321f7637c8dfb10edceacd177",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

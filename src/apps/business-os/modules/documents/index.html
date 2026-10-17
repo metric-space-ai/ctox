@@ -21,9 +21,9 @@
               <h2 class="ctox-pane-title" data-documents-title>Dokumente</h2>
             </div>
             <div class="ctox-pane-actions">
-              <button class="ctox-pane-icon" type="button" data-documents-new-markdown aria-label="Leeres Word-Dokument erstellen" title="Leeres Word-Dokument erstellen"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
-              <button class="ctox-pane-icon" type="button" data-documents-import-open aria-label="Dokument importieren" title="Dokument importieren"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"></path></svg></button>
-              <button class="ctox-pane-icon" type="button" data-documents-export disabled aria-disabled="true" aria-label="Ausgewähltes Dokument exportieren" title="Ausgewähltes Dokument exportieren"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7"></path></svg></button>
+              <button class="ctox-pane-icon" data-short-de="Neu" type="button" data-documents-new-markdown aria-label="Leeres Word-Dokument erstellen" title="Leeres Word-Dokument erstellen"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg></button>
+              <button class="ctox-pane-icon" data-short-de="Import" type="button" data-documents-import-open aria-label="Dokument importieren" title="Dokument importieren"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"></path></svg></button>
+              <button class="ctox-pane-icon" data-short-de="Export" type="button" data-documents-export disabled aria-disabled="true" aria-label="Ausgewähltes Dokument exportieren" title="Ausgewähltes Dokument exportieren"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11M12 3 8 7M12 3l4 4M5 12v7h14v-7"></path></svg></button>
             </div>
           </div>
           <!-- Row 2 of the shell band: search + filter tray toggle. Sorting and
@@ -32,7 +32,7 @@
           <div class="ctox-pane-tools ctox-filterbar documents-filter-bar" data-shell-v2-header-row="2">
             <input class="ctox-pane-search" type="search" data-documents-search data-pg-search placeholder="Suchen" aria-label="Dokumente suchen" value="">
             <button class="ctox-pane-icon" type="button" data-pg-view="list" data-pg-view-cycle="list,cards" aria-pressed="true" aria-label="Als Karten anzeigen" title="Als Karten anzeigen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="4" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/></svg></button>
-            <button class="ctox-pane-icon documents-filter-toggle" type="button" data-documents-filter-toggle data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"></path></svg></button>
+            <button class="ctox-pane-icon documents-filter-toggle" data-short-de="Filter" type="button" data-documents-filter-toggle data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4"></path></svg></button>
           </div>
           <!-- Row 3: the collapsed filter tray. Option lists are data-derived,
                so index.js fills them; the controls themselves stay static. -->
@@ -49,7 +49,7 @@
             <select class="ctox-pane-filter documents-filter-control" data-documents-app data-pg-filter data-pg-name="app" aria-label="Ersteller-App filtern"></select>
             <select class="ctox-pane-filter documents-filter-control" data-documents-source data-pg-filter data-pg-name="source" aria-label="Quelle filtern"></select>
             <select class="ctox-pane-filter documents-filter-control" data-documents-tag data-pg-filter data-pg-name="tag" aria-label="Dokument-Tags filtern"></select>
-            <button class="ctox-pane-icon" type="button" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7M4 5v5h5"/></svg></button>
+            <button class="ctox-pane-icon" data-short-de="Zurücksetzen" type="button" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 10a8 8 0 1 1 2 7M4 5v5h5"/></svg></button>
           </div>
         </header>
         <div class="ctox-well documents-list" data-documents-list></div>

@@ -532,8 +532,8 @@
     "exporters/datev.js": "34bd7cc59dc6220d5f391dd9da72bf1e14f959fd8ac3a4631b9c759229fcea41",
     "icon.svg": "e869d739f5c146dd1e8ab6ba0e7ed174ffe6e98e2862504de1f75d148861cc90",
     "index.css": "7ed8b28adecae07faff418eadac92be2a439c650be76b882848c4fe1b009f8bb",
-    "index.html": "79121fdee1cc512ff89eea1e962ccfcc610bf63d91b4ebc821f513d7921c0781",
-    "index.js": "dbbf5698a7e7a18bc8ce61b8f05fc0c45e1d7f4eb2a94a564867b33c9ed5475c",
+    "index.html": "688bd3fcea517f4a57f30aa629e6d510b3bbb84e3663e0c6b6e6f1aa1e08fff3",
+    "index.js": "f7ce71a6adb0dc0edf16a1c726425cb6bb353ce4c65236b7d7d92d1c6f081568",
     "locales/de.json": "6250300df9cc3d6622889d9748c8dbb49b66ff88941eb3ef2641b5d12ddcf3db",
     "locales/en.json": "08d36c647adeb2207ecd29df740f6c78a1df4fe6136ee1f598e4dd1bd17a18c7",
     "module.json": "54e7b291a5abfb57c880c64c14a7c58756a1c4226ac786b552c44b194cf20ef0",
@@ -604,7 +604,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "f3ff6b39ed6405498d8324c1ac9b0a964236694addd2ea78ee8c7371e3f12039",
+    "base_hash": "2f8e122092e3d1000dab82fd847bac752abac5420fd3ad50f48b89b5946d7425",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

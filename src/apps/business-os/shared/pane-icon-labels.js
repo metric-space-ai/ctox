@@ -8,6 +8,11 @@
 // Beobachter reagiert nicht auf das eigene Attribut (keine Rückkopplung). Der v4-Rahmen prüft zusätzlich die
 // reservierten Zonen (v4/frame/pane-heads.js, data-v4-icons-only).
 //
+// In der Shell v4 ruft der Host (v4/shell/column-resizers.js) das für JEDE App-Wurzel nach mount auf; Apps tragen nur
+// data-short-de/-en an ihren Knöpfen. Knöpfe, die die App später rendert, bekommen ihr Wort beim nächsten Durchlauf.
+// Ein Beobachter je Wurzel, auch über Modulinstanzen hinweg (ctox:shared/… und der relative Import der Shell sind zwei
+// Instanzen): Ablage in einer Registry unter Symbol.for.
+//
 //   const labels = applyPaneIconLabels(root, lang);   // mehrfach aufrufbar (Sprachwechsel), ein Beobachter je root
 //   labels.dispose();                                  // beim Abbau: Beobachter trennen, Markierungen entfernen
 
@@ -15,13 +20,28 @@ export const ICONS_ONLY_ATTR = 'data-icons-only';
 const ROWS = '.ctox-pane-header, .ctox-filterbar';
 const LABELLED = '.ctox-pane-icon.has-label';
 const SEARCH_MIN = 120;
-const fitters = new WeakMap();
+const REGISTRY = Symbol.for('ctox.paneIconLabels.fitters');
+const fitters = (globalThis[REGISTRY] ||= new WeakMap());
+const langKey = (lang) => (String(lang || '').toLowerCase().startsWith('en') ? 'shortEn' : 'shortDe');
+// Englische Kurzwörter zum gemeinsamen Wortschatz (Apps tragen nur data-short-de; data-short-en überstimmt).
+// v4-allow: en
+const EN = Object.freeze({
+  Neu: 'New', Import: 'Import', Export: 'Export', Filter: 'Filter', Zurücksetzen: 'Reset', Bearbeiten: 'Edit', // v4-allow: en
+  Löschen: 'Delete', Entfernen: 'Remove', Archivieren: 'Archive', Download: 'Download', Hochladen: 'Upload', // v4-allow: en
+  Speichern: 'Save', Kopieren: 'Copy', Ausführen: 'Run', Berechnen: 'Compute', Generieren: 'Generate', // v4-allow: en
+  CTOX: 'CTOX', Agent: 'Agent', Heute: 'Today', Abbrechen: 'Cancel', Einstellungen: 'Settings', Senden: 'Send', // v4-allow: en
+  Antwort: 'Answer', Research: 'Research', Anonymisieren: 'Anonymize', Erzeugen: 'Generate', Konfigurieren: 'Configure', // v4-allow: en
+  Auftrag: 'Task', Prüfen: 'Check', Aktualisieren: 'Refresh', Aufbauen: 'Build', Fortsetzen: 'Resume', // v4-allow: en
+  Zeile: 'Row', Spalte: 'Column', ZIP: 'ZIP', GitHub: 'GitHub', Webhook: 'Webhook', Reparsen: 'Reparse', // v4-allow: en
+  Datenschutz: 'Privacy', // v4-allow: en
+});
+const wordFor = (button, key) => (key === 'shortEn'
+  ? (button.dataset.shortEn || EN[button.dataset.shortDe] || button.dataset.shortDe)
+  : button.dataset.shortDe);
 
-export function applyPaneIconLabels(root, lang = 'de') {
-  if (!root?.querySelectorAll) return { dispose() {}, fit() {} };
-  const key = lang === 'en' ? 'shortEn' : 'shortDe';
+function labelButtons(root, key) {
   for (const button of root.querySelectorAll('[data-short-de]')) {
-    const word = button.dataset[key] || button.dataset.shortDe;
+    const word = wordFor(button, key);
     let label = button.querySelector(':scope > .ctox-pane-icon-label');
     if (!label) {
       label = button.ownerDocument.createElement('span');
@@ -29,10 +49,15 @@ export function applyPaneIconLabels(root, lang = 'de') {
       button.append(label);
     }
     if (label.textContent !== word) label.textContent = word;
-    button.classList.add('has-label');
+    if (!button.classList.contains('has-label')) button.classList.add('has-label');
   }
+}
+
+export function applyPaneIconLabels(root, lang = 'de') {
+  if (!root?.querySelectorAll) return { dispose() {}, fit() {} };
   let fitter = fitters.get(root);
   if (!fitter) { fitter = createFitter(root); fitters.set(root, fitter); }
+  fitter.setLang(lang);
   fitter.fit();
   return fitter;
 }
@@ -81,23 +106,24 @@ function createFitter(root) {
   let disposed = false;
   const observed = new Set();
   const ro = typeof win?.ResizeObserver === 'function' ? new win.ResizeObserver(() => schedule()) : null;
-  // Titel und Knöpfe ändern sich ohne Größenänderung der Zeile (Thema gewählt, Sprache): Text-/Kindänderungen in den
-  // Zeilen lösen ebenfalls eine Messung aus. Attribute nicht beobachten (das eigene data-icons-only).
+  // Titel und Knöpfe ändern sich ohne Größenänderung der Zeile (Thema gewählt, neu gerenderte Knöpfe): Text- und
+  // Kindänderungen unter root lösen ebenfalls einen Durchlauf aus (Wörter setzen, messen). Attribute nicht beobachten
+  // (das eigene data-icons-only); das eingefügte Wort selbst löst höchstens einen weiteren, wirkungslosen Durchlauf aus.
   const mo = typeof win?.MutationObserver === 'function' ? new win.MutationObserver(() => schedule()) : null;
-  const MO_OPTS = { childList: true, characterData: true, subtree: true };
+  let key = 'shortDe';
   ro?.observe(root);
+  mo?.observe(root, { childList: true, characterData: true, subtree: true });
 
   function fit() {
     frame = 0;
     if (disposed) return;
+    labelButtons(root, key);
     const rows = [...root.querySelectorAll(ROWS)].filter((el) => el.querySelector(LABELLED));
     // Beobachtet werden die Zeilen und darin Titel und Wortknöpfe: ein späterer Umbruch (Schrift nachgeladen, Text
     // geändert) ändert deren Größe, nicht die der Zeile.
     const watch = new Set(rows.flatMap((el) => [el, ...el.querySelectorAll(`.ctox-pane-title, ${LABELLED}`)]));
-    let changed = false;
-    for (const el of observed) if (!watch.has(el)) { ro?.unobserve(el); observed.delete(el); changed = true; }
-    for (const el of watch) if (!observed.has(el)) { ro?.observe(el); observed.add(el); changed = true; }
-    if (changed && mo) { mo.disconnect(); for (const el of rows) mo.observe(el, MO_OPTS); }
+    for (const el of observed) if (!watch.has(el)) { ro?.unobserve(el); observed.delete(el); }
+    for (const el of watch) if (!observed.has(el)) { ro?.observe(el); observed.add(el); }
     // Mit Wörtern messen (alle Markierungen entfernen, ein Layout lesen), dann gezielt setzen.
     for (const el of rows) el.removeAttribute(ICONS_ONLY_ATTR);
     const tight = rows.filter(rowIsTight);
@@ -108,6 +134,7 @@ function createFitter(root) {
   }
   return {
     fit,
+    setLang(lang) { key = langKey(lang); },
     dispose() {
       disposed = true;
       if (frame) caf(frame);

@@ -75,7 +75,7 @@
     "handlers/mail.content.freeze.js": "da793b277800e1bf000e149df65281ab384ce8a165a2fd097732e464f442fe62",
     "icon.svg": "614f1f9985c51dae6fb87541b7cabfdf32545322faec9ce42ce998bed1cc4c7d",
     "index.css": "4dfe35d6d092b6301595a07f3b4ad59ab0b5402bd6ffd8d3ff7a1c4c952488ee",
-    "index.html": "72fa851f4713e0c41085e4c1ee1fdebb77cfba3807910a711fa8711008b9df72",
+    "index.html": "a9635eb2fa9e1f9a07ca05870caf35a6ab972abfd2f73cb94afc902b43636ad1",
     "index.js": "f0e1e8d862e17b91f7bdf5012c08a4fc369b4bd63bccfa4c0c22128ca0932137",
     "lib/mail-body-renderer.mjs": "cab0bade395eff97eece014493e0a1b7a4c96d7890ce8101069c870dde6c6baa",
     "locales/de.json": "baa5e15aa39ee7cb8802834d0961d785c2c90e614295f0dff22c8b68489c0be0",
@@ -412,7 +412,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "3c11cd25fcf30aaa6f9cea7eca25cf7a81b6ef856de08fd2e38223b1bf2110ff",
+    "base_hash": "27df8507161316d6dccf7d930da75c375219491f845aef9e7efd5273183eaf32",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

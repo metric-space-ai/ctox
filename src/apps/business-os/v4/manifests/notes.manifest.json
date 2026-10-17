@@ -94,7 +94,7 @@
     "collections.schema.json": "367dc864caabded9f16f1f0ddd54bfdad607fea6853da7ed84ef08953e66d653",
     "icon.svg": "dee905e37ff16bda3640a5e7446601c95c7b51617de301b81d511f08806eb969",
     "index.css": "734537531c5d6fe1eda0f4fbf547797443ad3645001b232df67dcd66ab7bed02",
-    "index.html": "14f546fe367c7c21f79818f40a8689b1728d279b6f6afec412c0101928ad8ec6",
+    "index.html": "2aafcfd5270015333b812716037bea4e8e186716e62aacc37f4181f9dbdf7c9e",
     "index.js": "d9bf78a70fd10a08f50d0358f1dc095f09931e3e7db1ea83d61fdfe5f08089de",
     "locales/de.json": "42a97b02850ef4e1e0f751e3f4c5b821fd9fef7d5637c713415a3efa651d430e",
     "locales/en.json": "0219be8af4ddbbb4aaa58e34fc5ce22a18f7bda273ed481c1434f0a3dd65e9a0",
@@ -215,7 +215,7 @@
   },
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "265bef8f9f8ed6d74f122b5efe7704a2a0c7c651674f13ebd6b066e9387f2345",
+    "base_hash": "14d3967119f3cf25503ff0ed5dfa347ea14d12a3b99a996053746a43dc8a2574",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

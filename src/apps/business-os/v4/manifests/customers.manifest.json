@@ -1251,8 +1251,8 @@
     "handlers/customers.view.save.js": "c400296e50c5eba109c679507f9adaa5d8ec69d9c86fb4e7947d462eac04c9b7",
     "icon.svg": "96494d50e7d395fdefb352a33acc3df6632da77eb6f5448dcf1b31992aa57909",
     "index.css": "725b304085ca95685ee49c2a551a3186136339a16760f997868cce18603205f7",
-    "index.html": "0f55ab8ca1bca9888069c29258716bf3e1b185090a0d77ad7afb8e820ac1a15c",
-    "index.js": "e7d6569a9960d92cd56d1cbb8903e785c86ac2ef538ef891b33e98b4731f736c",
+    "index.html": "eb7bd993cca22a07a099766b37ba63eb7ebeb57a7f7fb65e220df607d8a20e40",
+    "index.js": "35fff71356ada7bbd619bc68a4e61097a51b49ec8e256ae1c935e9eba566236d",
     "locales/de.json": "0d7543cb169886bb33ed95019ff4e42cd8a9ea13f2707a737d9b93c76ce358ca",
     "locales/en.json": "91997dab3bce684c201263c4117eec4531c3a741efca95d9e806322f1fc37de7",
     "module.json": "c692e77a2d068f1da403877399342a89623c27ca0c4c1d6c2ba19e6f5470c3d1",
@@ -1466,7 +1466,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "04b40a0502a18e5e7735a414117f2f2711c5c1f3a4f6f2f7a193434a592126ab",
+    "base_hash": "f9c2fc56fb12d52418ceed67bc67d5586d15e8bd69424bba1b6f41beb65caa18",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

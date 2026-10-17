@@ -1,0 +1,52 @@
+[
+  {
+    "name": "(a) Büroklammer öffnet den Dateidialog (echte Maus)",
+    "ok": true,
+    "detail": "{\"clipped\":true,\"chooser\":true}"
+  },
+  {
+    "name": "(a) Anhang steht als Vorschau im Chat",
+    "ok": true,
+    "detail": "{\"count\":1,\"names\":[\"rechnung-scan.png\"],\"thumb\":true}"
+  },
+  {
+    "name": "(a) keine Fehlermeldung nach dem Senden, Crew hat angenommen",
+    "ok": true,
+    "detail": "{\"accepted\":true,\"err\":\"\",\"excerpt\":\"\"}"
+  },
+  {
+    "name": "(b) genau ein Befehl business_os.chat.task",
+    "ok": true,
+    "detail": "count=1"
+  },
+  {
+    "name": "(b) Nutzlast trägt den BlobRef (kind blob, ref = sha256 der Datei, beide Listen, Speicher files)",
+    "ok": true,
+    "detail": "{\"ref\":{\"kind\":\"blob\",\"ref\":\"297486d0c55438725f277695e0c18bdb7e8755d704fdddb9ff5775a8c7191380\",\"blob_id\":\"01a14ae4-b881-7000-90a6-0d1211be2fc7\",\"attachment_id\":\"chatatt_b0076b13-5166-4eb3-9950-b66563ddd06d\",\"name\":\"rechnung-scan.png\",\"mime_type\":\"image/png\",\"size_bytes\":1796,\"content_hash\":\"297486d0c55438725f277695e0c18bdb7e8755d704fdddb9ff5775a8c7191380\",\"content_hash_scheme\":\"sha256-bytes-v1\",\"chat_id\":\"chat_seed_chat4\",\"message_id\":\"chatmsg_27a0365a-327d-454d-849c-5652cf30f416\",\"command_id\":\"cmd_3c30a847-ed05-402d-bf48-a3450bc87dd9\",\"content_state\":\"available\",\"blob_doc\":\"business_chats/chat_seed_chat4\"},\"refs\":1,\"prompt\":\"Bitte die Rechnung im Anhang prüfen.\"}"
+  },
+  {
+    "name": "(b) business_chats-Dokument trägt den BlobRef",
+    "ok": true,
+    "detail": "[{\"ref\":\"297486d0c55438725f277695e0c18bdb7e8755d704fdddb9ff5775a8c7191380\",\"name\":\"rechnung-scan.png\",\"size\":1796}]"
+  },
+  {
+    "name": "(b) files.get als App ctox: Bytes byte-gleich (E30 über business_chats)",
+    "ok": true,
+    "detail": "{\"found\":true,\"size\":1796,\"error\":null}"
+  },
+  {
+    "name": "(b) App ohne Leserecht auf business_chats: forbidden",
+    "ok": true,
+    "detail": "forbidden"
+  },
+  {
+    "name": "(b) Verlauf zeigt die gesendete Nachricht",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "keine Seitenfehler",
+    "ok": true,
+    "detail": ""
+  }
+]

@@ -121,8 +121,8 @@
     "handlers/ats.leistungsnachweis.signoff.js": "be09bfad82f95e817389a5e69fa10e60119d41e06ce638f9fddec157302daf3e",
     "icon.svg": "0fd69e68e833ddfbf52f47ddb2586f02b3857521ec2c65b2ed304889bc5d39a5",
     "index.css": "d24e8a68f2d9ab0b90c7936f6ece8471d027a79a30b4b12a1e9aaa5945ab7104",
-    "index.html": "a18505eb007c9000e761ac90ac151de0ab62437210a08f44df70d261b4423a75",
-    "index.js": "e8ea0b09851d53f226b2c9ad342762b4499bd7fa395d81351dd0e3a680c98cd4",
+    "index.html": "f62029e40d0d50a77e240b1b1ab316dfacdaece9798306c47f18a7519c05371e",
+    "index.js": "e2e61e3b6b711d7418da30fb364a0a437db931a8e4a2359f04f1f9b73200c97a",
     "locales/de.json": "60b2ecd8ab28199275e6cc98ecba21bd99d3a3266aaa88cf0a17c87f6d006de3",
     "locales/en.json": "2416f39dc266beab25acf6bfc25bccd90d78ff1cff44e90c5f24d34ba3dc2e8c",
     "module.json": "3dda81d6dac2e786bad08abc56cc691fca537c6dd9bf7a3e3f2dceaaf85424c0",
@@ -375,7 +375,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "1dc431f5712075fe6e630e4f848f30f7447513826e999e79efe6f8fef709975b",
+    "base_hash": "cf9b8e542931526ea4dc1733c4ac91541e5fe98ec4853804a0c6b49f9ac69ad2",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

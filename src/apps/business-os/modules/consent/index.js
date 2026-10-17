@@ -201,8 +201,8 @@ export function recordDetailHtml(r, nowMs) {
     rows.push(field(text.withdrawn, esc(fmtDate(r.withdrawn_at_ms))));
   }
   const rightsIcon = r.subject_id
-    ? '<button type="button" class="ctox-pane-icon" data-action="rights-export" aria-label="' + esc(text.exportTitle) + '" title="' + esc(text.exportTitle) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>'
-      + '<button type="button" class="ctox-pane-icon" data-action="rights-erase" aria-label="' + esc(text.eraseTitle) + '" title="' + esc(text.eraseTitle) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg></button>'
+    ? '<button type="button" class="ctox-pane-icon" data-short-de="Export" data-action="rights-export" aria-label="' + esc(text.exportTitle) + '" title="' + esc(text.exportTitle) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>'
+      + '<button type="button" class="ctox-pane-icon" data-short-de="Löschen" data-action="rights-erase" aria-label="' + esc(text.eraseTitle) + '" title="' + esc(text.eraseTitle) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg></button>'
     : '';
   return '<header class="consent-detail-head">'
     + '<div class="consent-detail-titles">'

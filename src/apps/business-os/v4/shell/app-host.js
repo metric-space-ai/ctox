@@ -424,7 +424,7 @@ export function createWindowHost({ root, appRecord, api = {}, restored = null })
   const zone = createStatusZone(zoneSlot, win.el);
   win.zone = zone;
   // FR2-3: Spaltenteiler im Inhaltsbereich, Breiten je Fenster und App in kernel.windowState.
-  const cols = createColumnResizers({ appId, windowId: win.id, windowState: kernel.windowState });
+  const cols = createColumnResizers({ appId, windowId: win.id, windowState: kernel.windowState, locale: () => kernel.locale || navigator.language || 'de-DE' });
   win.cols = cols;
   // Aktionen der App-Einträge (item.action {label, run}): Funktionen laufen nicht über den Kernel-Strom,
   // der Host hält sie je Code und hängt sie an den zurückkommenden Eintrag.

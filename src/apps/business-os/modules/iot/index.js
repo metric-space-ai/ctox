@@ -664,7 +664,7 @@ function mainHeader() {
   // Textdiät: Kicker nur als echter Pfad (Bereich/Asset), nie der Produktname „CTOX IoT“.
   const path = sel.kind === 'signal' ? (assetById(sel.assetId)?.name || '') : (assetPath(sel.assetId) || '');
   const webhookBtn = sel.kind === 'signal'
-    ? `<button class="ctox-pane-icon" type="button" data-act="signal-webhook" aria-label="${esc(t('menu.asWebhook', 'Als Webhook-Quelle einrichten'))}" title="${esc(t('menu.asWebhook', 'Als Webhook-Quelle einrichten'))}">${iconSvg(ICON.webhook)}</button>`
+    ? `<button class="ctox-pane-icon" data-short-de="Webhook" type="button" data-act="signal-webhook" aria-label="${esc(t('menu.asWebhook', 'Als Webhook-Quelle einrichten'))}" title="${esc(t('menu.asWebhook', 'Als Webhook-Quelle einrichten'))}">${iconSvg(ICON.webhook)}</button>`
     : '';
   return `
     <header class="ctox-pane-header ctox-pane-band">
@@ -675,7 +675,7 @@ function mainHeader() {
         </div>
         <div class="ctox-pane-actions">
           ${webhookBtn}
-          <button class="ctox-pane-icon is-primary iot-order-action" type="button" data-act="new-auftrag" aria-label="${esc(t('cards.newAuftrag', 'Auftrag anlegen'))}" title="${esc(t('cards.newAuftrag', 'Auftrag anlegen'))}">${iconSvg(ICON.spark)}</button>
+          <button class="ctox-pane-icon is-primary iot-order-action" data-short-de="Neu" type="button" data-act="new-auftrag" aria-label="${esc(t('cards.newAuftrag', 'Auftrag anlegen'))}" title="${esc(t('cards.newAuftrag', 'Auftrag anlegen'))}">${iconSvg(ICON.spark)}</button>
         </div>
       </div>
       <div class="ctox-filterbar iot-main-tools">
