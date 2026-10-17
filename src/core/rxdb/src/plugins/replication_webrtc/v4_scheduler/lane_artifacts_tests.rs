@@ -1,6 +1,6 @@
 use super::super::super::{
     hello::{Codec, TransportSelection},
-    lanes::{ASSOCIATION_BUDGET, FRAME_BYTES, REALTIME_LABEL},
+    lanes::{ASSOCIATION_BUDGET, REALTIME_LABEL},
 };
 use super::super::{
     ADMISSION, AssociationBudget, Framer, Incoming, ReliableSession, SessionBinding,

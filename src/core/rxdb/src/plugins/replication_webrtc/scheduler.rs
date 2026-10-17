@@ -1174,7 +1174,12 @@ mod tests {
             seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
             (seed >> 24) as u8
         }).collect();
-        let required: usize = framer().encode(Lane::Transfer, WireSeq(1), &payload)
+        let required: usize = Framer::new(TransportSelection {
+            codec: super::super::hello::Codec::Zstd,
+            frame_bytes: FRAME_BYTES as u32,
+            fragmentation: true,
+            reassembly: true,
+        }).unwrap().encode(Lane::Transfer, WireSeq(1), &payload)
             .unwrap().iter().map(Vec::len).sum();
         assert!(reserved.window(5) >= required, "20-ms BDP must include application framing");
         let startup = reserved.window(5);
