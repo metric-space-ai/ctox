@@ -26,7 +26,6 @@
   "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
   "_legacy_count": 0,
   "_legacy_entry": "modules/knowledge/index.html",
-  "_rust_basis": "`rs:rxdb_peer_knowledge_rows.rs` 113 Z. (Parquet-Quelle für `rxdb.rows.fetch`); weitere ~70 Fundstellen in `rs:rxdb_peer.rs`, 11 in `rs:importer.rs`.",
   "_source_dir": "src/apps/business-os/modules/knowledge",
   "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
   "_todo": [
@@ -422,7 +421,7 @@
   },
   "files": {
     "V4-HANDLERS.md": "a5d6b7aa8cac4306cb4310daec66e301a96f466a31889483839757e0b6fb8d04",
-    "V4-PORT.md": "87a0319215d5513d6b28a93ba4702bef09ffaba4b24ddc04cfc6d06b15587ec9",
+    "V4-PORT.md": "c3e8423d2780c25fabe9f6d47afea6774fa641d9e9de9b97725baa25d8c43f9e",
     "assets/icon/knowledge-1024.png": "d8c2b54b52f9b41de4098fd36c4b058edf7b88db2898e0171cc4b8e81d95e825",
     "assets/icon/knowledge-144.png": "e756262f5c5a2e3089d31091205df27bfc7a014023ac618a2612a283fe585bca",
     "assets/icon/knowledge-256.png": "257526ec6c932c287be864be47e7e7708f32d136d587ab2d17da6cc62629c220",
@@ -460,7 +459,7 @@
     "prompts/runbook-execute.md": "4016c7895ed1d191d6ac4ae0f2a26dfa4df30d1fb8b6cf8140088786b34520e9",
     "prompts/runbook-modify.md": "297fe338620ff5399b1b2d834b202f52e9c69062826d6c6613fd2f257de5377f",
     "skills/knowledge-maintenance/SKILL.md": "fb9f977fbfb6338661345bc1a232564f62445e2ea02c54810712edbdf6603ef6",
-    "v4-manifest.json": "0f3ed72212f7290ae05ba730af6a65305b82bd33f5e79b6251fef08c2dc56bad"
+    "v4-manifest.json": "d307db0c1e467dad3fb408183ddc2bd54c93e82093add65c6ca49856b3327628"
   },
   "foreign_collections": {
     "business_commands": {
@@ -573,16 +572,24 @@
     }
   ],
   "provenance": {
-    "base_hash": "e20e9960752f1c89bdf8cc3cd7b40f3d249a68baac902e3188bc4b7e87de6e75",
+    "base_hash": "7ed9335a2e4c53e01054545d051f8e66d5010021e42c3a7daae05094dc1ef43c",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },
   "row_filters": {
     "knowledge_table_rows": {
-      "actor_id": "$self"
+      "op": "eq",
+      "path": "/actor_id",
+      "value": {
+        "kind": "actor_id"
+      }
     },
     "knowledge_views": {
-      "actor_id": "$self"
+      "op": "eq",
+      "path": "/actor_id",
+      "value": {
+        "kind": "actor_id"
+      }
     }
   },
   "skills": [

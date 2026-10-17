@@ -143,7 +143,7 @@ pub(super) async fn submit(
         .await?;
     terminal(database, "business_commands", id).await
 }
-fn seed(tx: &rusqlite::Transaction<'_>) -> Result<(), StoreError> {
+fn seed(tx: &rusqlite::Transaction<'_>, platform_catalog: bool) -> Result<(), StoreError> {
     let names = [
         "business_apps",
         "business_app_versions",
@@ -172,11 +172,38 @@ fn seed(tx: &rusqlite::Transaction<'_>) -> Result<(), StoreError> {
         )?;
     }
     sync_rights::initialize(tx)?;
-    sync_rights::replace(
-        tx,
-        1,
-        &policy::base_release_rights(&names.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
-    )?;
+    if platform_catalog {
+        // Consume the actual Core collection/export catalog. Core commands keep
+        // their existing registry/permission authority, outside app command_rights.
+        let platform: Value =
+            serde_json::from_str(include_str!("../../v4/ctox-platform.manifest.json"))
+                .map_err(sql_error)?;
+        let owned = platform["collections"]
+            .as_object()
+            .ok_or_else(|| invalid("platform collections"))?
+            .keys()
+            .cloned()
+            .collect();
+        let core = sync_rights::manifest_rules::ManifestRules::from_manifest(
+            "ctox-platform",
+            "platform-1",
+            owned,
+            &json!({"exports":platform["exports"]}),
+        )
+        .map_err(sql_error)?;
+        sync_rights::replace_with_manifests(
+            tx,
+            1,
+            &policy::base_release_rights(&names.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+            &[core],
+        )?;
+    } else {
+        sync_rights::replace(
+            tx,
+            1,
+            &policy::base_release_rights(&names.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+        )?;
+    }
     super::super::commands::put(
         tx,
         "business_users",
@@ -242,7 +269,9 @@ async fn run_native_proof(proof: Proof) -> Result<()> {
             .inputs
             .sync
             .writer
-            .submit(WriteJob::new(Default::default(), seed))?
+            .submit(WriteJob::new(Default::default(), move |tx| {
+                seed(tx, proof == Proof::Knowledge)
+            }))?
             .await?;
         peers.insert(
             node,

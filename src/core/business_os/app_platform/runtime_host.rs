@@ -425,6 +425,12 @@ pub(super) fn publish_rights_with_fence(
             .map_err(sql_error)?;
     current.manifests.retain(|m| m.app_id() != app);
     current.manifests.push(rules);
+    // APP-PLATFORM registry preflight before suspension.
+    for manifest in &current.manifests {
+        manifest
+            .validate_registry(&current.manifests)
+            .map_err(sql_error)?;
+    }
     // Suspend the existing P6 router only for an actual rights write, after
     // validation. An unchanged/rejected/preparing request is not a revocation.
     if let Some(publication) = publication {

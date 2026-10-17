@@ -1,5 +1,38 @@
 // Unit checks use the actual P3/P6 transaction helpers and an ephemeral test key.
 //! Native codec contracts; these do not stand in for the composed daemon proof.
+
+#[test]
+fn invalid_foreign_registry_never_suspends_rights_publication() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut fixture = Fixture::new();
+    let before = rights(&fixture.db).unwrap().rights_ver;
+    let calls = AtomicUsize::new(0);
+    let tx = fixture.db.transaction().unwrap();
+    let rejected = json!({"collections":{},"foreign_collections":{"rows":{"owner_app":"missing-native-owner","ops":["read"]}}});
+    let error = publish_rights_with_fence(
+        &tx,
+        "rejected-reader",
+        "v1",
+        &rejected,
+        Some(&|| {
+            calls.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }),
+    )
+    .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("foreign collection owner missing"),
+        "{error}"
+    );
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        0,
+        "invalid foreign registry suspended the rights router before rollback"
+    );
+    assert_eq!(sync_rights::read(&tx).unwrap().rights_ver, before);
+}
 use super::*;
 use ctox_app_runtime::core_host::{StoreCodec, StoreWrite};
 use ctox_store::{
