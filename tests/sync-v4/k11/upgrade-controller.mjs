@@ -15,7 +15,7 @@ const privileged=process.env.M7_NAMESPACE_MODE==='privileged';
 const config={owner:'01a087a0-169a',oldReceipt,newReceipt,root:resolve(root),output,roundtrip:roundtrip==='yes',resumeRolledBack:resume==='resume-rolled-back',dressSmoke:dressConfig?JSON.parse(fs.readFileSync(dressConfig)):null,tmpdir:process.env.TMPDIR,path:process.env.PATH,laneBin:process.env.BUILD_LANE_BIN,node:process.execPath,uid:process.getuid(),gid:process.getgid(),mappedUser:!privileged,traceRollback:process.env.M7_TRACE_ROLLBACK==='1',runner:join(here,'upgrade-runner.mjs'),host:Object.fromEntries(['user','net','mnt','pid','cgroup'].map(n=>[n,fs.readlinkSync('/proc/self/ns/'+n)]))};
 const file=join(output,'sandbox.json');fs.writeFileSync(file,JSON.stringify(config,null,2),{mode:0o600});
 const ns=['--kill-child=SIGKILL','--net','--mount','--pid','--fork','--mount-proc',process.execPath,join(here,'sandbox.mjs'),file];
-if(config.dressSmoke?.version)execFileSync('mkfifo',[join(output,'network-ack')]);
+if(config.dressSmoke)execFileSync('mkfifo',[join(output,'network-ack')]);
 const child=privileged?spawn('sudo',['-n','unshare',...ns],{stdio:'inherit',detached:true}):spawn('unshare',['--user','--map-root-user',...ns],{stdio:'inherit',detached:true});
 const row={owner:'01a087a0-169a',pid:child.pid,pgid:child.pid,purpose:'supported installer in private PID/mount/network namespaces',stop:'terminal or 10 min',startedAt:new Date().toISOString()};
 const save=()=>fs.writeFileSync(join(output,'controller.json'),JSON.stringify(row,null,2));save();
@@ -23,7 +23,7 @@ const kill=s=>{try{process.kill(-child.pid,s);}catch(e){if(e.code!=='ESRCH')thro
 const timer=setTimeout(()=>kill('SIGKILL'),10*60*1000);process.once('SIGTERM',()=>kill('SIGKILL'));
 let network;
 try {
- if(config.dressSmoke?.version){
+ if(config.dressSmoke){
   const request=join(output,'network-request.json');
   await new Promise((resolve,reject)=>{
    const done=()=>{if(fs.existsSync(request)){clearTimeout(timer);watch.close();resolve();}};

@@ -78,7 +78,7 @@ def setup(config, delegated=False):
         'group': 'root:x:0:\n' + ('' if c.get('mappedUser') else f"m7-fixture:x:{c['gid']}:m7-fixture\n"),
         'nsswitch.conf': 'passwd: files\ngroup: files\nshadow: files\nhosts: files dns\nnetworks: files\nservices: files\nprotocols: files\n',
     }
-    if (c.get('dressSmoke') or {}).get('version'):
+    if c.get('dressSmoke'):
         entries['resolv.conf'] = 'nameserver 10.0.2.3\n'
     for name, content in entries.items():
         file = nss / name
@@ -93,7 +93,7 @@ def setup(config, delegated=False):
         run('mount', '--bind', str(file), str(target))
     if pwd.getpwuid(c['uid']).pw_dir != str(home):
         raise RuntimeError('Private NSS home does not match owned profile')
-    if (c.get('dressSmoke') or {}).get('version'):
+    if c.get('dressSmoke'):
         ack = os.open(out / 'network-ack', os.O_RDWR | os.O_NONBLOCK)
         try:
             (out / 'network-request.json').write_text(json.dumps({'privateNet': True}))
