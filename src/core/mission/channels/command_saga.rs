@@ -1052,9 +1052,12 @@ pub(crate) fn complete_business_control_command(
     // cannot be upgraded if its publisher commits in the meantime.
     let linked: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM business_command_task_links WHERE command_id=?1)",
-        [command_id], |row| row.get(0),
+        [command_id],
+        |row| row.get(0),
     )?;
-    if linked { attach_queue_projection_store(root, &conn)?; }
+    if linked {
+        attach_queue_projection_store(root, &conn)?;
+    }
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     complete_business_control_command_tx(
         root,
