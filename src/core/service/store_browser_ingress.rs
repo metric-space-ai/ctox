@@ -39,9 +39,89 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+/// Original typed causes stay in memory. Log only their classes/codes: RxError
+/// parameters and io messages may contain signaling URLs or credentials.
+#[derive(Clone)]
+struct StartupFailure {
+    stage: &'static str,
+    cause: Arc<anyhow::Error>,
+}
+impl std::fmt::Debug for StartupFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
+    }
+}
+impl StartupFailure {
+    fn at(stage: &'static str, error: impl Into<anyhow::Error>) -> Self {
+        Self {
+            stage,
+            cause: Arc::new(error.into()),
+        }
+    }
+    fn codes(&self) -> String {
+        self.cause
+            .chain()
+            .map(|cause| {
+                if let Some(rx) = cause.downcast_ref::<rxdb::rx_error::RxError>() {
+                    let code = rx.code();
+                    if code.len() <= 80
+                        && code.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                    {
+                        return format!("RxError({code})");
+                    }
+                    return "RxError(redacted-code)".into();
+                }
+                if let Some(io) = cause.downcast_ref::<std::io::Error>() {
+                    let inner = io
+                        .get_ref()
+                        .and_then(|e| e.downcast_ref::<rxdb::rx_error::RxError>())
+                        .map(|rx| StartupFailure::at("native_io", rx.clone()).codes());
+                    return format!(
+                        "io({:?}){}",
+                        io.kind(),
+                        inner.map(|s| format!(" <- {s}")).unwrap_or_default()
+                    );
+                }
+                if let Some(store) = cause.downcast_ref::<StoreError>() {
+                    return match store {
+                        StoreError::Busy => "store(Busy)",
+                        StoreError::Closed => "store(Closed)",
+                        StoreError::Cancelled => "store(Cancelled)",
+                        StoreError::DeadlineExceeded => "store(DeadlineExceeded)",
+                        StoreError::AlreadyOwned => "store(AlreadyOwned)",
+                        StoreError::Panicked => "store(Panicked)",
+                        StoreError::Invalid(_) => "store(Invalid)",
+                        StoreError::Sqlite(_) => "store(Sqlite)",
+                        StoreError::Io(_) => "store(Io)",
+                    }
+                    .into();
+                }
+                if let Some(sql) = cause.downcast_ref::<rusqlite::Error>() {
+                    return format!("sqlite({:?})", sql.sqlite_error_code());
+                }
+                "cause(redacted)".into()
+            })
+            .collect::<Vec<_>>()
+            .join(" <- ")
+    }
+}
+impl std::fmt::Display for StartupFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "browser V4 startup stage={} cause={}",
+            self.stage,
+            self.codes()
+        )
+    }
+}
+// Do not expose raw source Display through anyhow's automatic CLI rendering.
+impl std::error::Error for StartupFailure {}
+
 pub(super) struct BrowserIngress {
     inputs: Weak<StoreInputs>,
     state: std::sync::atomic::AtomicU8,
+    failure: std::sync::Mutex<Option<StartupFailure>>,
     changed: tokio::sync::Notify,
     task: std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
     session: tokio::sync::Mutex<
@@ -56,6 +136,7 @@ impl BrowserIngress {
         Arc::new(Self {
             inputs: Arc::downgrade(inputs),
             state: std::sync::atomic::AtomicU8::new(0),
+            failure: std::sync::Mutex::new(None),
             changed: tokio::sync::Notify::new(),
             task: std::sync::Mutex::new(None),
             session: tokio::sync::Mutex::new(None),
@@ -72,13 +153,29 @@ impl BrowserIngress {
             .map_err(|_| StoreError::AlreadyOwned)?;
         let owner = self.clone();
         *self.task.lock().map_err(|_| StoreError::Closed)? = Some(runtime.spawn(async move {
-            let result = owner.start().await;
-            let _ = owner.state.compare_exchange(
-                1,
-                if result.is_ok() { 2 } else { 3 },
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            );
+            // Bounded owner-owned retries; HTTP neither starts nor waits for them.
+            for attempt in 0..3 {
+                if owner.state.load(Ordering::Acquire) != 1 { return; }
+                match owner.start().await {
+                    Ok(()) => {
+                        let _ = owner.state.compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire);
+                        owner.changed.notify_waiters();
+                        return;
+                    }
+                    Err(error) => {
+                        eprintln!("[ctox v4] browser ingress attempt={} {error}", attempt + 1);
+                        *owner.failure.lock().unwrap_or_else(|p| p.into_inner()) = Some(error);
+                        if attempt == 2 { break; }
+                        let changed = owner.changed.notified();
+                        if owner.state.load(Ordering::Acquire) != 1 { return; }
+                        tokio::select! {
+                            _ = tokio::time::sleep(Duration::from_millis(if attempt == 0 {250} else {1000})) => (),
+                            _ = changed => (),
+                        }
+                    }
+                }
+            }
+            let _ = owner.state.compare_exchange(1, 3, Ordering::AcqRel, Ordering::Acquire);
             owner.changed.notify_waiters();
         }));
         Ok(())
@@ -98,17 +195,26 @@ impl BrowserIngress {
         loop {
             let changed = self.changed.notified();
             if self.state.load(std::sync::atomic::Ordering::Acquire) == 3 {
-                return Err(std::io::Error::other(
-                    "browser V4 signaling bring-up failed",
-                ));
+                let failure = self
+                    .failure
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone()
+                    .expect("failed ingress retains its typed cause");
+                return Err(std::io::Error::other(failure));
             }
             changed.await;
         }
     }
-    async fn start(&self) -> Result<(), StoreError> {
+    async fn start(&self) -> Result<(), StartupFailure> {
         let mut session = self.session.lock().await;
-        let inputs = self.inputs.upgrade().ok_or(StoreError::Closed)?;
-        inputs.instance_signer()?;
+        let inputs = self
+            .inputs
+            .upgrade()
+            .ok_or_else(|| StartupFailure::at("owner", StoreError::Closed))?;
+        inputs
+            .instance_signer()
+            .map_err(|e| StartupFailure::at("identity", e))?;
         if session.is_some() {
             return Ok(());
         }
@@ -116,9 +222,25 @@ impl BrowserIngress {
         let (config, urls) =
             crate::persistence::run_core_sync(move || launch_context_v4::native_transport(&root))
                 .await
-                .map_err(|_| StoreError::Invalid("browser native routing unavailable".into()))?;
+                .map_err(|e| StartupFailure::at("routing", e))?;
+        let admission = inputs
+            .browser_admission()
+            .map_err(|e| StartupFailure::at("admission", e))?;
+        let ice_servers = config
+            .ice_servers
+            .into_iter()
+            .map(|mut value| {
+                if let Some(url) = value["urls"].as_str() {
+                    value["urls"] = serde_json::json!([url]);
+                }
+                serde_json::from_value(value)
+            })
+            .collect::<Result<_, _>>()
+            .map_err(|e| StartupFailure::at("ice", e))?;
         let storage =
-            super::store_rxdb::native_storage(inputs.sync.writer.db_id().path().to_owned()).await?;
+            super::store_rxdb::native_storage(inputs.sync.writer.db_id().path().to_owned())
+                .await
+                .map_err(|e| StartupFailure::at("storage", e))?;
         let database =
             rxdb::rx_database::create_rx_database(rxdb::rx_database::RxDatabaseCreator {
                 name: format!("v4-browser-{}", config.instance_id),
@@ -133,8 +255,8 @@ impl BrowserIngress {
                 allow_slow_count: false,
             })
             .await
-            .map_err(|_| StoreError::Invalid("browser native database attachment".into()))?;
-        let admission = inputs.browser_admission()?;
+            .map_err(|e| StartupFailure::at("database", e))?;
+
         let source = Arc::new(Source {
             inputs: Arc::downgrade(&inputs),
             admission: admission.clone(),
@@ -182,17 +304,7 @@ impl BrowserIngress {
             signaling_urls: urls,
             room: config.sync_room,
             peer_session_id: config.native_peer_id,
-            ice_servers: config
-                .ice_servers
-                .into_iter()
-                .map(|mut value| {
-                    if let Some(url) = value["urls"].as_str() {
-                        value["urls"] = serde_json::json!([url]);
-                    }
-                    serde_json::from_value(value)
-                })
-                .collect::<Result<_, _>>()
-                .map_err(|_| StoreError::Invalid("browser ICE config".into()))?,
+            ice_servers,
             bringup_timeout: Duration::from_secs(15),
             admission: ctox_sync::native::NativeAdmission {
                 peer: Arc::new(|_| true),
@@ -216,21 +328,20 @@ impl BrowserIngress {
                 if inputs.instance_signer().is_err() {
                     let _ = native.shutdown().await;
                     let _ = database.close().await;
-                    return Err(StoreError::Closed);
+                    return Err(StartupFailure::at("retired", StoreError::Closed));
                 }
                 *session = Some((native, database));
                 Ok(())
             }
-            Err(_) => {
+            Err(error) => {
                 let _ = database.close().await;
-                Err(StoreError::Invalid(
-                    "browser V4 signaling admission unavailable".into(),
-                ))
+                Err(StartupFailure::at("signaling", error))
             }
         }
     }
     pub async fn shutdown(&self) -> Result<(), StoreError> {
         self.state.store(4, std::sync::atomic::Ordering::Release);
+        self.changed.notify_waiters();
         let task = self.task.lock().map_err(|_| StoreError::Closed)?.take();
         if let Some(task) = task {
             // The bounded bring-up owns its database until it closes on failure.
