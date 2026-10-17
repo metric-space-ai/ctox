@@ -85,6 +85,9 @@ CREATE TABLE IF NOT EXISTS business_provider_reported_quotas (
     FOREIGN KEY(account_id) REFERENCES business_provider_federation_accounts(account_id)
 );";
 
+#[path = "provider_quota_readback.rs"]
+mod quota_readback;
+
 #[path = "provider_account_controls.rs"]
 pub(in crate::business_os) mod account_controls;
 
@@ -180,10 +183,50 @@ fn observations(projection: &Value) -> Result<Vec<NativeAccountObservation>> {
         .collect()
 }
 
+/// Read only holder-private configuration and secret generation metadata. Legacy
+/// unowned accounts are never silently adopted by an arbitrary administrator.
+fn owned_api_observations(root: &Path) -> Result<Vec<(String, NativeAccountObservation)>> {
+    let config = crate::execution::cliproxyapi_integration::load_provider_integration_config(root)?;
+    ensure!(
+        config.config.api_key_accounts.len() <= MAX_ACCOUNTS,
+        "native account limit exceeded"
+    );
+    config
+        .config
+        .api_key_accounts
+        .iter()
+        .filter_map(|account| account.owner_user_id.as_ref().map(|owner| (owner, account)))
+        .map(|(owner, account)| {
+            account.validate()?;
+            let version = crate::secrets::secret_record_content_version(
+                root,
+                &account.api_key_secret.scope,
+                &account.api_key_secret.name,
+            )?;
+            let fingerprint =
+                crate::execution::cliproxyapi_host::account_controls::account_binding(
+                    root,
+                    account.endpoint.provider(),
+                    &account.id,
+                )?;
+            Ok((
+                owner.clone(),
+                NativeAccountObservation {
+                    provider: account.endpoint.provider().into(),
+                    local_account_id: account.id.clone(),
+                    enabled: !account.disabled,
+                    credential_ready: version.is_some(),
+                    private_binding: fingerprint,
+                },
+            ))
+        })
+        .collect()
+}
+
 /// The command plane supplies a currently authorized session actor. Validate
 /// the current actor again in the domain transaction, then resolve only a
 /// verified managed alias. No owner field can be supplied in the payload.
-fn management_owner(conn: &Connection, actor: &str) -> Result<String> {
+pub(in crate::business_os) fn management_owner(conn: &Connection, actor: &str) -> Result<String> {
     let allowed: bool = conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM business_users
          WHERE user_id=?1 AND active=1 AND role IN ('chef','admin'))",
@@ -215,10 +258,7 @@ pub(super) fn handle_command(
     match command.command_type.as_str() {
         "ctox.workjet.providers.list" => {
             let _: EmptyRequest = serde_json::from_value(command.payload.clone())?;
-            let mut conn = store::open_store(root)?;
-            let snapshot = conn.transaction()?;
-            let owner = management_owner(&snapshot, actor)?;
-            list(&snapshot, &owner)
+            quota_readback::read(root, actor)
         }
         "ctox.workjet.providers.adopt_native" => {
             let _: EmptyRequest = serde_json::from_value(command.payload.clone())?;
@@ -232,14 +272,17 @@ pub(super) fn handle_command(
             let mut accounts = observations(&snapshot["provider_subscriptions"])?;
             for account in accounts
                 .iter_mut()
-                .filter(|account| account.provider == "claude")
+                .filter(|account| matches!(account.provider.as_str(), "claude" | "codex"))
             {
                 account.private_binding =
-                    crate::execution::cliproxyapi_claude_catalog::account_binding(
+                    crate::execution::cliproxyapi_host::account_controls::account_binding(
                         root,
+                        &account.provider,
                         &account.local_account_id,
                     )?;
-                account.credential_ready &= account.private_binding.is_some();
+                if account.provider == "claude" {
+                    account.credential_ready &= account.private_binding.is_some();
+                }
             }
             let quota = if let Some(account) = accounts.iter_mut().find(|a| {
                 a.provider == "xai"
@@ -270,27 +313,36 @@ pub(super) fn handle_command(
                 accounts.len() <= MAX_ACCOUNTS,
                 "native account limit exceeded"
             );
+            let api_accounts = owned_api_observations(root)?;
             let mut conn = store::open_store(root)?;
-            let applied = admitted.apply(&mut conn, |tx| {
-                let owner = management_owner(tx, actor)?;
-                let now = store::now_ms() as i64;
-                // Unsupported/unreadable main routes do not erase the last
-                // observation or prevent independent subscription adoption.
-                if let Ok(current) = &inherited {
-                    retire_inherited_route(
-                        tx,
-                        &owner,
-                        &holder,
-                        current.as_ref().map(|metadata| metadata.provider.as_str()),
-                        now,
-                    )?;
-                }
-                adopt(tx, &owner, &holder, &accounts, now)?;
-                if let Some(quota) = &quota {
-                    reported_quotas::retain(tx, &owner, &holder, quota)?;
-                }
-                projection::applied(tx, &owner)
-            })?;
+            let applied =
+                admitted.apply(&mut conn, |tx| {
+                    let owner = management_owner(tx, actor)?;
+                    accounts.extend(api_accounts.into_iter().filter_map(
+                        |(account_owner, account)| (account_owner == owner).then_some(account),
+                    ));
+                    ensure!(
+                        accounts.len() <= MAX_ACCOUNTS,
+                        "native account limit exceeded"
+                    );
+                    let now = store::now_ms() as i64;
+                    // Unsupported/unreadable main routes do not erase the last
+                    // observation or prevent independent subscription adoption.
+                    if let Ok(current) = &inherited {
+                        retire_inherited_route(
+                            tx,
+                            &owner,
+                            &holder,
+                            current.as_ref().map(|metadata| metadata.provider.as_str()),
+                            now,
+                        )?;
+                    }
+                    adopt(tx, &owner, &holder, &accounts, now)?;
+                    if let Some(quota) = &quota {
+                        reported_quotas::retain(tx, &owner, &holder, quota)?;
+                    }
+                    projection::applied(tx, &owner)
+                })?;
             Ok(applied.result)
         }
         "ctox.workjet.providers.observe_native" => {
@@ -303,18 +355,30 @@ pub(super) fn handle_command(
             let admitted =
                 admission.context("native model observation requires domain admission")?;
             let holder = store::existing_instance_id(root)?;
-            let target = {
+            let (target, catalog_owner, expected_binding) = {
                 let conn = store::open_store(root)?;
                 let owner = management_owner(&conn, actor)?;
-                native_catalog_target(&conn, &owner, &holder, &request)?
+                let target = native_catalog_target(&conn, &owner, &holder, &request)?;
+                let binding = native_binding(&conn, &request.account_id)?;
+                (target, owner, binding)
             };
             // Network wait is outside the policy transaction. Caller-supplied
             // endpoints, credentials and model lists are never accepted.
             let observation = if target.local_account_id == INHERITED_NATIVE_ACCOUNT_ID {
                 crate::coding_agents::pi_sidecar::inherited_coding_model_catalog(root)?
-            } else {
+            } else if target.provider == "claude" {
                 crate::execution::cliproxyapi_claude_catalog::observe(
                     root,
+                    &target.local_account_id,
+                )?
+            } else {
+                crate::execution::cliproxyapi_integration::observe_api_key_catalog(
+                    root,
+                    &catalog_owner,
+                    expected_binding
+                        .as_deref()
+                        .context("native API catalog binding unavailable")?,
+                    &target.provider,
                     &target.local_account_id,
                 )?
             };
@@ -636,7 +700,7 @@ fn native_catalog_target(
     conn.query_row(
         "SELECT provider,private_local_account_id FROM business_provider_federation_accounts
          WHERE account_id=?1 AND owner_user_id=?2 AND holder_instance_id=?3
-           AND (private_local_account_id=?4 OR provider='claude')
+           AND (private_local_account_id=?4 OR provider='claude' OR (provider IN ('zai','minimax','xai','kimi') AND EXISTS(SELECT 1 FROM business_provider_federation_native_bindings b WHERE b.account_id=business_provider_federation_accounts.account_id AND b.fingerprint LIKE 'api-key:v1:%')))
            AND revision=?5 AND enabled=1 AND credential_ready=1",
         params![
             request.account_id,
@@ -865,8 +929,13 @@ mod tests;
 #[path = "provider_federation_catalog_tests.rs"]
 mod catalog_tests;
 
+#[path = "provider_gateway_models.rs"]
+mod gateway_models;
 #[path = "provider_models.rs"]
 mod models;
+#[cfg(test)]
+pub(crate) use gateway_models::seed_gateway_api_catalog;
+pub(crate) use gateway_models::{read as gateway_api_models, GatewayModels};
 
 pub(crate) use models::{
     capture_consumable_model, resolve_supervisor_model, with_consumable_model, ConsumableModel,

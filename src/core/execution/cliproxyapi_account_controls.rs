@@ -10,6 +10,39 @@ use serde::{Deserialize, Serialize};
 #[path = "cliproxyapi_account_controls_tests.rs"]
 mod tests;
 
+#[path = "cliproxyapi_account_control_api.rs"]
+mod api;
+#[path = "cliproxyapi_account_control_binding.rs"]
+mod binding;
+
+pub(crate) fn account_binding(
+    root: &Path,
+    provider: &str,
+    id: &str,
+) -> anyhow::Result<Option<String>> {
+    if api::supports(provider) {
+        return api::binding(root, provider, id);
+    }
+    let Some(first) = binding::capture(root, provider, id)? else {
+        return Ok(None);
+    };
+    if binding::capture(root, provider, id)?.as_ref() != Some(&first) {
+        return Ok(None);
+    }
+    first.fingerprint().map(Some)
+}
+
+pub(crate) fn api_key_binding_for_config(
+    account: &crate::execution::cliproxyapi_integration::ApiKeyAccountConfig,
+    version: &str,
+) -> anyhow::Result<String> {
+    api::fingerprint(account, Some(version))
+}
+
+fn legacy_provider() -> String {
+    "claude".into()
+}
+
 const TABLE: &str = "cliproxyapi_account_control_effects";
 #[derive(Serialize, Deserialize)]
 pub(crate) struct Effect {
@@ -17,11 +50,19 @@ pub(crate) struct Effect {
     pub(crate) payload_hash: String,
     pub(crate) actor: String,
     pub(crate) local_id: String,
+    #[serde(default = "legacy_provider")]
+    pub(crate) provider: String,
     pub(crate) enabled: Option<bool>,
     pub(crate) before_binding: String,
     pub(crate) after_binding: Option<String>,
     pub(crate) config_revision: u64,
     keys: Vec<(String, String, String)>,
+    #[serde(default)]
+    api_key: bool,
+    #[serde(default)]
+    api_absent_keys: Vec<(String, String)>,
+    #[serde(default)]
+    pub(crate) configured: Option<bool>,
 }
 fn schema(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch(&format!("CREATE TABLE IF NOT EXISTS {TABLE} (command_id TEXT PRIMARY KEY, effect_json TEXT NOT NULL)"))?;
@@ -39,8 +80,15 @@ fn read(conn: &Connection, id: &str) -> anyhow::Result<Option<Effect>> {
         .transpose()
 }
 pub(crate) fn has_effect(root: &Path, id: &str) -> anyhow::Result<bool> {
+    // The effect journal serves Codex and API-key accounts alike; an
+    // API-key-only instance has no instance proxy table, so read the runtime
+    // config file directly instead of through with_instance_proxy_read.
+    let path = crate::inference::runtime_env::runtime_config_path(root);
+    if !path.exists() {
+        return Ok(false);
+    }
     let id = id.to_owned();
-    Ok(with_instance_proxy_read(root, move |conn| {
+    crate::lcm::with_lcm_read(&path, move |conn| {
         let exists: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type=\"table\" AND name=?1)",
             [TABLE],
@@ -50,11 +98,11 @@ pub(crate) fn has_effect(root: &Path, id: &str) -> anyhow::Result<bool> {
             return Ok(false);
         }
         Ok(read(conn, &id)?.is_some())
-    })?
-    .unwrap_or(false))
+    })
 }
 
-/// NEW admitted command only. CAS and its private proof share Runtime COMMIT.
+/// Compatibility helper for existing Claude control fixtures.
+#[cfg(test)]
 pub(crate) fn apply(
     root: &Path,
     id: &str,
@@ -65,36 +113,58 @@ pub(crate) fn apply(
     enabled: Option<bool>,
     validate_current_authority: impl FnOnce() -> anyhow::Result<()>,
 ) -> anyhow::Result<()> {
+    apply_account(
+        root,
+        id,
+        hash,
+        actor,
+        "claude",
+        local,
+        expected_binding,
+        enabled,
+        validate_current_authority,
+    )
+}
+
+/// Provider is resolved from the admitted private account, never caller input.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn apply_account(
+    root: &Path,
+    id: &str,
+    hash: &str,
+    actor: &str,
+    provider: &str,
+    local: &str,
+    expected_binding: &str,
+    enabled: Option<bool>,
+    validate_current_authority: impl FnOnce() -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
+    if api::supports(provider) {
+        return api::apply(
+            root,
+            id,
+            hash,
+            actor,
+            provider,
+            local,
+            expected_binding,
+            enabled,
+            validate_current_authority,
+        );
+    }
     let _guard = crate::secrets::credential_lifecycle_guard();
     let mut stored =
         load_instance_proxy_config(root)?.context("provider topology is unavailable")?;
-    let captured = super::super::cliproxyapi_claude_catalog::capture(root, local)?
-        .context("Claude credentials are unavailable")?;
+    let mut captured = binding::capture(root, provider, local)?
+        .context("owned provider credentials are unavailable")?;
     anyhow::ensure!(
-        super::super::cliproxyapi_claude_catalog::fingerprint(&captured)? == expected_binding,
+        captured.fingerprint()? == expected_binding,
         "native account configuration changed; refresh account metadata"
     );
-    let account = stored
-        .runtime
-        .claude_accounts
-        .iter()
-        .find(|a| a.id == local)
-        .cloned()
-        .context("Claude account is unavailable")?;
-    anyhow::ensure!(
-        account == captured.account,
-        "native account configuration changed"
-    );
+    captured.check_config(&stored.runtime)?;
     let mut keys = Vec::new();
     if enabled.is_none() {
-        let mut refs = vec![
-            account.access_token_secret.clone(),
-            account.refresh_token_secret.clone(),
-        ];
-        if let Some(key) = account.proxy_url_secret.clone() {
-            refs.push(key);
-        }
-        stored.runtime.claude_accounts.retain(|a| a.id != local);
+        let refs = captured.remove(&mut stored.runtime);
         let remaining = runtime_secret_keys(&stored.runtime);
         for key in refs {
             anyhow::ensure!(
@@ -108,17 +178,10 @@ pub(crate) fn apply(
             keys.push((key.scope, key.name, version));
         }
     } else {
-        stored
-            .runtime
-            .claude_accounts
-            .iter_mut()
-            .find(|a| a.id == local)
-            .unwrap()
-            .disabled = !enabled.unwrap();
+        captured.set_enabled(&mut stored.runtime, enabled.unwrap());
     }
     anyhow::ensure!(
-        super::super::cliproxyapi_claude_catalog::account_binding(root, local)?.as_deref()
-            == Some(expected_binding),
+        account_binding(root, provider, local)?.as_deref() == Some(expected_binding),
         "native credential generation changed; refresh account metadata"
     );
     // Preserve the default even when dormant. Never select another provider.
@@ -128,19 +191,7 @@ pub(crate) fn apply(
         .checked_add(1)
         .context("proxy revision exhausted")?;
     let after_binding = if enabled.is_some() {
-        let changed = super::super::cliproxyapi_claude_catalog::Captured {
-            account: stored
-                .runtime
-                .claude_accounts
-                .iter()
-                .find(|a| a.id == local)
-                .unwrap()
-                .clone(),
-            credentials: captured.credentials,
-        };
-        Some(super::super::cliproxyapi_claude_catalog::fingerprint(
-            &changed,
-        )?)
+        Some(captured.fingerprint()?)
     } else {
         None
     };
@@ -149,11 +200,15 @@ pub(crate) fn apply(
         payload_hash: hash.into(),
         actor: actor.into(),
         local_id: local.into(),
+        provider: provider.into(),
         enabled,
         before_binding: expected_binding.into(),
         after_binding,
         config_revision: revision,
         keys,
+        api_key: false,
+        api_absent_keys: Vec::new(),
+        configured: None,
     };
     let mut conn = open_instance_proxy_config_db(root)?;
     schema(&conn)?;
@@ -194,8 +249,10 @@ pub(crate) fn finish(root: &Path, id: &str, hash: &str, actor: &str) -> anyhow::
         effect.payload_hash == hash && effect.actor == actor,
         "holder account effect identity mismatch"
     );
-    let binding =
-        super::super::cliproxyapi_claude_catalog::account_binding(root, &effect.local_id)?;
+    if effect.api_key {
+        return api::finish(root, effect);
+    }
+    let binding = account_binding(root, &effect.provider, &effect.local_id)?;
     anyhow::ensure!(
         binding == effect.after_binding,
         "native account generation changed after mutation; reconciliation required"
@@ -215,14 +272,18 @@ pub(crate) fn finish(root: &Path, id: &str, hash: &str, actor: &str) -> anyhow::
     let runtime: CliproxyRuntimeConfig = serde_json::from_str(&raw.1)?;
     if effect.enabled.is_none() {
         anyhow::ensure!(
-            !runtime
-                .claude_accounts
-                .iter()
-                .any(|a| a.id == effect.local_id),
-            "Claude account was reconfigured; reconciliation required"
+            !binding::configured(&runtime, &effect.provider, &effect.local_id),
+            "provider account was reconfigured; reconciliation required"
         );
         crate::secrets::delete_secret_records_if_versions(root, &effect.keys)?;
-        super::account_quotas::remove_under_lifecycle(root, "claude", &effect.local_id, &_guard)?;
+        if effect.provider == "claude" {
+            super::account_quotas::remove_under_lifecycle(
+                root,
+                "claude",
+                &effect.local_id,
+                &_guard,
+            )?;
+        }
     }
     tx.commit()?;
     Ok(effect)

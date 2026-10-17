@@ -42,7 +42,8 @@ use super::{
     DEFAULT_KIMI_SUBSCRIPTION_MODEL,
 };
 
-const INTEGRATION_CONFIG_TABLE: &str = "cliproxyapi_provider_integration_config";
+pub(in crate::execution) const INTEGRATION_CONFIG_TABLE: &str =
+    "cliproxyapi_provider_integration_config";
 const KIMI_STATE_SCHEMA: &str = "ctox.kimi-subscription-state.v1";
 const PROVIDER_SECRET_SCOPE: &str = "provider-subscriptions";
 const MAX_KIMI_HTTP_RESPONSE_BYTES: u64 = 32 * 1024 * 1024;
@@ -110,6 +111,21 @@ impl StoredKimiState {
         }
         Ok(())
     }
+}
+
+pub(in crate::execution) fn open_config_db(root: &Path) -> anyhow::Result<Connection> {
+    let path = crate::inference::runtime_env::runtime_config_path(root);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let conn = Connection::open(path)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.execute_batch(&format!(
+        "CREATE TABLE IF NOT EXISTS {INTEGRATION_CONFIG_TABLE} (\
+         config_id INTEGER PRIMARY KEY CHECK(config_id = 1), revision INTEGER NOT NULL, \
+         config_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL)"
+    ))?;
+    Ok(conn)
 }
 
 fn with_provider_integration_write<T: Send + 'static>(
@@ -189,6 +205,7 @@ fn save_provider_integration_config_row(
     root: &Path,
     expected_revision: u64,
     serialized: String,
+    api_account_ids: Vec<String>,
 ) -> anyhow::Result<u64> {
     with_provider_integration_write(root, move |tx| {
         let current = tx
@@ -204,6 +221,26 @@ fn save_provider_integration_config_row(
             .unwrap_or(0);
         if current != expected_revision {
             return Err(anyhow::Error::new(ProviderIntegrationRevisionConflict));
+        }
+        // A committed removal retires this private identity. Late creation retries
+        // cannot resurrect it; a new add operation receives a new native identity.
+        let effects_exist: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='cliproxyapi_account_control_effects')",
+            [],
+            |r| r.get(0),
+        )?;
+        if effects_exist {
+            for id in &api_account_ids {
+                let retired: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM cliproxyapi_account_control_effects WHERE json_extract(effect_json,'$.api_key')=1 AND json_extract(effect_json,'$.local_id')=?1 AND json_extract(effect_json,'$.enabled') IS NULL)",
+                    [id],
+                    |r| r.get(0),
+                )?;
+                anyhow::ensure!(
+                    !retired,
+                    "API account was explicitly removed; use a new creation operation"
+                );
+            }
         }
         let revision = current
             .checked_add(1)
@@ -226,7 +263,7 @@ fn save_provider_integration_config_row(
     })
 }
 
-fn save_provider_integration_config(
+pub(crate) fn save_provider_integration_config(
     root: &Path,
     expected_revision: u64,
     config: &ProviderIntegrationConfig,
@@ -235,7 +272,13 @@ fn save_provider_integration_config(
         .validate()
         .map_err(|_| anyhow::anyhow!("provider integration config is invalid"))?;
     let serialized = serde_json::to_string(config)?;
-    let revision = save_provider_integration_config_row(root, expected_revision, serialized)?;
+    let api_account_ids = config
+        .api_key_accounts
+        .iter()
+        .map(|account| account.id.clone())
+        .collect();
+    let revision =
+        save_provider_integration_config_row(root, expected_revision, serialized, api_account_ids)?;
     Ok(revision)
 }
 
@@ -1364,10 +1407,11 @@ async fn runtime_owner_kimi_config_cas_preserves_the_typed_conflict() -> anyhow:
     let work = root.path().to_owned();
     crate::persistence::run_core_sync(move || {
         assert_eq!(
-            save_provider_integration_config_row(&work, 0, "{}".into())?,
+            save_provider_integration_config_row(&work, 0, "{}".into(), Vec::new())?,
             1
         );
-        let error = save_provider_integration_config_row(&work, 0, "stale".into()).unwrap_err();
+        let error =
+            save_provider_integration_config_row(&work, 0, "stale".into(), Vec::new()).unwrap_err();
         assert!(
             error
                 .downcast_ref::<ProviderIntegrationRevisionConflict>()

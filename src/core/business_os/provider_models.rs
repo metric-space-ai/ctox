@@ -41,7 +41,11 @@ fn model_set(models: &[String]) -> Result<BTreeSet<String>> {
     Ok(models.iter().cloned().collect())
 }
 
-fn selection(conn: &Connection, owner: &str, provider: &str) -> Result<Option<BTreeSet<String>>> {
+pub(super) fn selection(
+    conn: &Connection,
+    owner: &str,
+    provider: &str,
+) -> Result<Option<BTreeSet<String>>> {
     let value: Option<String> = conn.query_row(
         "SELECT models_json FROM business_provider_federation_models WHERE owner_user_id=?1 AND provider=?2",
         params![owner, provider], |row| row.get(0),
@@ -54,7 +58,7 @@ fn selection(conn: &Connection, owner: &str, provider: &str) -> Result<Option<BT
         .transpose()
 }
 
-fn exclusions(conn: &Connection, account: &str) -> Result<BTreeSet<String>> {
+pub(super) fn exclusions(conn: &Connection, account: &str) -> Result<BTreeSet<String>> {
     let value: Option<String> = conn.query_row(
         "SELECT models_json FROM business_provider_federation_model_exclusions WHERE account_id=?1",
         [account], |row| row.get(0),
@@ -67,7 +71,7 @@ fn exclusions(conn: &Connection, account: &str) -> Result<BTreeSet<String>> {
     )
 }
 
-fn observed_models(catalog: &Value) -> Result<BTreeSet<String>> {
+pub(super) fn observed_models(catalog: &Value) -> Result<BTreeSet<String>> {
     let models: Vec<String> = serde_json::from_value(catalog["models"].clone())?;
     // Discovery may contain more models than a curated selection. It is
     // already bounded and validated by the live catalog adapter.

@@ -76,7 +76,32 @@ mod account_sessions;
 use account_sessions::CtoxAccountSessionStore;
 #[path = "cliproxyapi_account_quotas.rs"]
 mod account_quotas;
+#[path = "cliproxyapi_api_keys.rs"]
+mod api_keys;
+
+/// Holder-private selectors/bindings are supplied only by the authorized native
+/// provider registry. The callback receives normalized public quota fields and
+/// must revalidate current Policy authority before publishing them.
+pub(crate) fn with_reported_claude_quotas<T>(
+    root: &Path,
+    accounts: &[(&str, &str)],
+    publish: impl FnOnce(&std::collections::BTreeMap<String, serde_json::Value>) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    account_quotas::with_public_snapshots(root, accounts, publish)
+}
+
 use account_quotas::CtoxAccountQuotaStore;
+
+#[cfg(test)]
+pub(crate) fn save_reported_quota_for_test(
+    root: &Path,
+    account: &str,
+    snapshot: &ctox_cliproxyapi::sdk::cliproxy::auth::ReportedQuotaSnapshot,
+) -> anyhow::Result<()> {
+    use ctox_cliproxyapi::sdk::cliproxy::auth::AccountQuotaStore;
+    CtoxAccountQuotaStore::new(root).save("claude", account, snapshot)?;
+    Ok(())
+}
 
 const COOLDOWN_STATE_PAYLOAD_KEY: &str = "cliproxyapi.auth.cooldown-state.v1";
 const INSTANCE_CHATGPT_AUTH_SCOPE: &str = "ctox-auth";
@@ -1208,6 +1233,182 @@ impl codex_auth::CodexSecretStore for CtoxCodexSecretStore {
         )
         .map_err(|_| codex_auth::SecretStoreError::Write)
     }
+
+    fn load_credentials_for_refresh_async(
+        self: Arc<Self>,
+        handles: codex_auth::CodexCredentialHandles,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<codex_auth::CodexRefreshSnapshot, codex_auth::SecretStoreError>,
+                > + Send,
+        >,
+    > {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || {
+                Ok(self.load_credentials_for_refresh(&handles))
+            })
+            .await
+            .map_err(|error| {
+                // Do not include store errors or credential material in logs.
+                eprintln!(
+                    "[credential-owner] codex refresh load admission failed: {}",
+                    if matches!(
+                        error.downcast_ref::<ctox_store::StoreError>(),
+                        Some(ctox_store::StoreError::Busy)
+                    ) {
+                        "busy"
+                    } else {
+                        "unavailable"
+                    }
+                );
+                codex_auth::SecretStoreError::Read
+            })?
+        })
+    }
+
+    fn store_refreshed_credentials_async(
+        self: Arc<Self>,
+        handles: codex_auth::CodexCredentialHandles,
+        expected: codex_auth::CodexRefreshSnapshot,
+        credentials: codex_auth::CodexStoredCredentials,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<(), codex_auth::SecretStoreError>> + Send>,
+    > {
+        Box::pin(async move {
+            crate::persistence::run_core_sync(move || {
+                Ok(self.store_refreshed_credentials(&handles, &expected, &credentials))
+            })
+            .await
+            .map_err(|error| {
+                // Do not include store errors or credential material in logs.
+                eprintln!(
+                    "[credential-owner] codex refresh store admission failed: {}",
+                    if matches!(
+                        error.downcast_ref::<ctox_store::StoreError>(),
+                        Some(ctox_store::StoreError::Busy)
+                    ) {
+                        "busy"
+                    } else {
+                        "unavailable"
+                    }
+                );
+                codex_auth::SecretStoreError::Write
+            })?
+        })
+    }
+
+    fn load_credentials_for_refresh(
+        &self,
+        handles: &codex_auth::CodexCredentialHandles,
+    ) -> Result<codex_auth::CodexRefreshSnapshot, codex_auth::SecretStoreError> {
+        if is_instance_codex_handles(handles) {
+            return Ok(codex_auth::CodexRefreshSnapshot {
+                credentials: self.load_credentials(handles)?,
+                generation: None,
+            });
+        }
+        let _guard = crate::secrets::credential_lifecycle_guard();
+        let versions = codex_refresh_versions(&self.root, handles)
+            .map_err(|_| codex_auth::SecretStoreError::Read)?
+            .ok_or(codex_auth::SecretStoreError::Missing)?;
+        let credentials = self.load_credentials(handles)?;
+        if codex_refresh_versions(&self.root, handles)
+            .map_err(|_| codex_auth::SecretStoreError::Read)?
+            .as_ref()
+            != Some(&versions)
+        {
+            return Err(codex_auth::SecretStoreError::Read);
+        }
+        Ok(codex_auth::CodexRefreshSnapshot {
+            credentials,
+            generation: Some(
+                serde_json::to_string(&versions).map_err(|_| codex_auth::SecretStoreError::Read)?,
+            ),
+        })
+    }
+
+    fn store_refreshed_credentials(
+        &self,
+        handles: &codex_auth::CodexCredentialHandles,
+        expected: &codex_auth::CodexRefreshSnapshot,
+        credentials: &codex_auth::CodexStoredCredentials,
+    ) -> Result<(), codex_auth::SecretStoreError> {
+        // The inherited single auth snapshot is not a removable owned account.
+        if is_instance_codex_handles(handles) {
+            return self.store_credentials(handles, credentials);
+        }
+        let _guard = crate::secrets::credential_lifecycle_guard();
+        // Controls use this same fence across topology COMMIT. A refresh must
+        // not write in the interval between account removal and secret cleanup.
+        let stored = load_instance_proxy_config(&self.root)
+            .map_err(|_| codex_auth::SecretStoreError::Read)?
+            .ok_or(codex_auth::SecretStoreError::Write)?;
+        if !stored
+            .runtime
+            .codex_accounts
+            .iter()
+            .any(|a| a.credential_handles().is_ok_and(|h| h == *handles))
+        {
+            return Err(codex_auth::SecretStoreError::Write);
+        }
+        let versions: Vec<String> = serde_json::from_str(
+            expected
+                .generation
+                .as_deref()
+                .ok_or(codex_auth::SecretStoreError::Write)?,
+        )
+        .map_err(|_| codex_auth::SecretStoreError::Write)?;
+        if versions.len() != 3 {
+            return Err(codex_auth::SecretStoreError::Write);
+        }
+        let keys = [
+            handles.id_token(),
+            handles.access_token(),
+            handles.refresh_token(),
+        ];
+        let guards = keys
+            .iter()
+            .zip(versions)
+            .map(|(k, v)| (k.scope().to_owned(), k.name().to_owned(), v))
+            .collect::<Vec<_>>();
+        let values = [
+            credentials.id_token(),
+            credentials.access_token(),
+            credentials.refresh_token(),
+        ];
+        let records = keys
+            .iter()
+            .zip(values)
+            .map(|(k, v)| crate::secrets::SecretRecordWrite {
+                scope: k.scope(),
+                name: k.name(),
+                value: v.expose_secret(),
+                description: Some("Codex subscription refreshed token"),
+                metadata: codex_secret_metadata(k.kind()),
+            })
+            .collect::<Vec<_>>();
+        match crate::secrets::compare_and_write_secret_records_if_versions(
+            &self.root, &guards, &records,
+        ) {
+            Ok(true) => Ok(()),
+            Ok(false) | Err(_) => Err(codex_auth::SecretStoreError::Write),
+        }
+    }
+}
+
+fn codex_refresh_versions(
+    root: &Path,
+    handles: &codex_auth::CodexCredentialHandles,
+) -> anyhow::Result<Option<Vec<String>>> {
+    [
+        handles.id_token(),
+        handles.access_token(),
+        handles.refresh_token(),
+    ]
+    .iter()
+    .map(|k| crate::secrets::secret_record_content_version(root, k.scope(), k.name()))
+    .collect()
 }
 
 fn codex_secret(value: String) -> Result<codex_auth::SecretString, codex_auth::SecretStoreError> {
@@ -2284,6 +2485,11 @@ fn effective_instance_proxy_config(
         .iter()
         .any(|account| !account.disabled);
     let xai_enabled = crate::execution::cliproxyapi_xai::subscription_installed(root);
+    let api_enabled = integration
+        .config
+        .api_key_accounts
+        .iter()
+        .any(|a| !a.disabled && !a.models.is_empty());
     let stored = load_instance_proxy_config(root)?;
     let automatic_codex = instance_codex_runtime_config(root)?;
     let portable = match (stored, automatic_codex) {
@@ -2324,7 +2530,7 @@ fn effective_instance_proxy_config(
     };
     let (default_provider, runtime) = match portable {
         Some(portable) => portable,
-        None if kimi_enabled || xai_enabled => {
+        None if kimi_enabled || xai_enabled || api_enabled => {
             let runtime = CliproxyRuntimeConfig {
                 request_timeout_ms: 30_000,
                 routing_strategy: SchedulerStrategy::RoundRobin,
@@ -2337,8 +2543,16 @@ fn effective_instance_proxy_config(
             (
                 if kimi_enabled {
                     "kimi".to_owned()
-                } else {
+                } else if xai_enabled {
                     String::new()
+                } else {
+                    integration
+                        .config
+                        .api_key_accounts
+                        .iter()
+                        .find(|a| !a.disabled && !a.models.is_empty())
+                        .map(|a| a.endpoint.provider().to_owned())
+                        .unwrap_or_default()
                 },
                 runtime,
             )
@@ -2627,6 +2841,7 @@ pub struct InstanceResponsesRouter {
     default_provider: String,
     portable: Option<Arc<OpenAiResponsesProviderRouter>>,
     kimi: Option<Arc<KimiResponsesHandler>>,
+    api_keys: Option<Arc<api_keys::Routes>>,
 }
 
 impl fmt::Debug for InstanceResponsesRouter {
@@ -2660,8 +2875,52 @@ impl OpenAiResponsesRouteHandler for InstanceResponsesRouter {
         body: &'a [u8],
     ) -> Pin<Box<dyn Future<Output = OpenAiResponsesRouteResponse> + Send + 'a>> {
         Box::pin(async move {
-            let provider = provider.unwrap_or(&self.default_provider).trim();
+            let normalized = provider
+                .unwrap_or(&self.default_provider)
+                .trim()
+                .to_ascii_lowercase();
+            let provider = normalized.as_str();
+            let pinned = ctox_cliproxyapi::internal::api::account_selection::requested_account();
+            let legacy = (provider == "kimi" && self.kimi.is_some())
+                || (provider == "xai"
+                    && self.xai_root.as_ref().is_some_and(|r| {
+                        crate::execution::cliproxyapi_xai::subscription_installed(r)
+                    }));
+            if let Some(routes) = &self.api_keys {
+                // Preserve the existing unpinned OAuth route; explicitly bound
+                // API accounts use their own current holder credential only.
+                if pinned.is_some() || !legacy {
+                    match routes.route_for(provider) {
+                        Ok(Some(handler))
+                            if pinned.as_deref().is_some_and(|id| handler.contains(id))
+                                || pinned.is_none() =>
+                        {
+                            return handler.handle_route(body).await
+                        }
+                        Ok(_) => {}
+                        Err(_) => {
+                            return OpenAiResponsesRouteResponse::Buffered(
+                                OpenAiResponsesHttpResponse::error(
+                                    503,
+                                    "API account configuration unavailable",
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
             if provider.eq_ignore_ascii_case("xai") {
+                if pinned
+                    .as_deref()
+                    .is_some_and(|id| id != crate::execution::cliproxyapi_xai::ACCOUNT_ID)
+                {
+                    return OpenAiResponsesRouteResponse::Buffered(
+                        OpenAiResponsesHttpResponse::error(
+                            503,
+                            "requested provider account is unavailable",
+                        ),
+                    );
+                }
                 if let Some(root) = &self.xai_root {
                     return crate::execution::cliproxyapi_xai::handle_route(root, body).await;
                 }
@@ -2761,6 +3020,11 @@ fn build_provider_routes(
 ) -> anyhow::Result<InstanceProviderRoutes> {
     let factory = CtoxCliproxyRuntimeFactory::new(root);
     let account_clock: Arc<dyn AccountStateClock> = Arc::new(SystemCtoxAccountStateClock);
+    let api_keys = api_keys::build(
+        root,
+        &effective.integration,
+        effective.runtime.request_timeout(),
+    )?;
     let mut auxiliary_handlers: Vec<Arc<dyn AuxiliaryRouteHandler>> = Vec::new();
     let mut kimi_accounts = effective
         .integration
@@ -2980,6 +3244,7 @@ fn build_provider_routes(
             default_provider: effective.default_provider.clone(),
             portable,
             kimi,
+            api_keys: Some(api_keys),
         }),
         messages,
         auxiliary: (!auxiliary_handlers.is_empty()).then(|| {
@@ -5622,6 +5887,7 @@ mod tests {
             .unwrap();
         let router = Arc::new(InstanceResponsesRouter {
             xai_root: None,
+            api_keys: None,
             default_provider: "kimi".to_owned(),
             portable: None,
             kimi: Some(Arc::new(KimiResponsesHandler {
@@ -6393,6 +6659,7 @@ mod tests {
         );
         let router = Arc::new(InstanceResponsesRouter {
             xai_root: None,
+            api_keys: None,
             default_provider: "antigravity".to_owned(),
             portable: Some(portable),
             kimi: None,
@@ -6493,6 +6760,7 @@ mod tests {
             .unwrap();
         let router = Arc::new(InstanceResponsesRouter {
             xai_root: None,
+            api_keys: None,
             default_provider: "kimi".to_owned(),
             portable: None,
             kimi: Some(Arc::new(KimiResponsesHandler {

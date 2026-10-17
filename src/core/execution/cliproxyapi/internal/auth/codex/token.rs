@@ -170,6 +170,13 @@ impl CodexStoredCredentials {
     }
 }
 
+/// Holder-private receipt across the OAuth network wait. No Debug or Serialize:
+/// its opaque generation is not public metadata or an execution authority.
+pub struct CodexRefreshSnapshot {
+    pub credentials: CodexStoredCredentials,
+    pub generation: Option<String>,
+}
+
 pub trait CodexSecretStore: Send + Sync {
     /// Async host boundary. Native stores override this to admit the job on
     /// their existing file owners; the portable default performs no Core IO.
@@ -209,6 +216,46 @@ pub trait CodexSecretStore: Send + Sync {
         })
     }
 
+    /// Async host boundary for the generation-guarded refresh read; native
+    /// stores admit it on their file owners like `load_credentials_async`.
+    fn load_credentials_for_refresh_async(
+        self: std::sync::Arc<Self>,
+        handles: CodexCredentialHandles,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<CodexRefreshSnapshot, SecretStoreError>> + Send,
+        >,
+    >
+    where
+        Self: 'static,
+    {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || self.load_credentials_for_refresh(&handles))
+                .await
+                .map_err(|_| SecretStoreError::Read)?
+        })
+    }
+
+    /// Async host boundary for the generation CAS write after the OAuth wait;
+    /// native stores admit it on their file owners like `store_credentials_async`.
+    fn store_refreshed_credentials_async(
+        self: std::sync::Arc<Self>,
+        handles: CodexCredentialHandles,
+        expected: CodexRefreshSnapshot,
+        credentials: CodexStoredCredentials,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), SecretStoreError>> + Send>>
+    where
+        Self: 'static,
+    {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                self.store_refreshed_credentials(&handles, &expected, &credentials)
+            })
+            .await
+            .map_err(|_| SecretStoreError::Write)?
+        })
+    }
+
     fn load_credentials(
         &self,
         handles: &CodexCredentialHandles,
@@ -219,6 +266,28 @@ pub trait CodexSecretStore: Send + Sync {
         handles: &CodexCredentialHandles,
         credentials: &CodexStoredCredentials,
     ) -> Result<(), SecretStoreError>;
+
+    fn load_credentials_for_refresh(
+        &self,
+        handles: &CodexCredentialHandles,
+    ) -> Result<CodexRefreshSnapshot, SecretStoreError> {
+        Ok(CodexRefreshSnapshot {
+            credentials: self.load_credentials(handles)?,
+            generation: None,
+        })
+    }
+
+    /// Concurrent persistent stores must override with an atomic generation CAS.
+    /// The default retains compatibility for portable single-owner stores.
+    fn store_refreshed_credentials(
+        &self,
+        handles: &CodexCredentialHandles,
+        expected: &CodexRefreshSnapshot,
+        credentials: &CodexStoredCredentials,
+    ) -> Result<(), SecretStoreError> {
+        let _ = expected;
+        self.store_credentials(handles, credentials)
+    }
 }
 
 /// Codex token storage adapted to CTOX's encrypted secret-store boundary.

@@ -6461,7 +6461,12 @@ pub(crate) fn ack_owned_in_transaction(
             "failed queue ack requires a non-empty failure reason"
         );
     }
-    outbound_review::guard_founder_handled_ack_with_settings(tx, &request.keys, status.as_str(), policy_settings)?;
+    outbound_review::guard_founder_handled_ack_with_settings(
+        tx,
+        &request.keys,
+        status.as_str(),
+        policy_settings,
+    )?;
     if let Some(attempt) = request.attempt.as_deref() {
         let applied: Option<Option<String>>=tx.query_row("SELECT queue_effects_applied_at FROM worker_attempt_finalizations WHERE attempt_id=?1",[attempt],|r|r.get(0)).optional()?;
         let applied = applied

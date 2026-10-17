@@ -13,7 +13,23 @@ use std::fmt;
 use ctox_cliproxyapi::internal::config::validate_credential_weight;
 use serde::{Deserialize, Serialize};
 
+mod api_key_catalog;
+mod api_key_config;
+mod api_key_ingress;
+pub(crate) use api_key_catalog::observe as observe_api_key_catalog;
+// The only consumer is the native WebRTC API-key receiver, which lands with
+// CTOX Sync v4 (see docs/native-provider-api-key-ingress.md).
+#[allow(unused_imports)]
+pub(crate) use api_key_ingress::{
+    install_api_key_account_owned_authorized, ApiKeyProvider, DiscoveryError,
+};
 mod kimi_host;
+pub use api_key_config::{ApiKeyAccountConfig, ApiKeyEndpoint};
+pub(crate) use kimi_host::save_provider_integration_config;
+pub(in crate::execution) use kimi_host::{
+    open_config_db as open_integration_config_db,
+    INTEGRATION_CONFIG_TABLE as PROVIDER_INTEGRATION_CONFIG_TABLE,
+};
 
 pub use kimi_host::{
     build_instance_kimi_auth, build_kimi_subscription_route,
@@ -153,6 +169,8 @@ pub struct ProviderIntegrationConfig {
     pub schema: String,
     #[serde(default)]
     pub kimi_subscription_accounts: Vec<KimiSubscriptionAccountConfig>,
+    #[serde(default)]
+    pub api_key_accounts: Vec<ApiKeyAccountConfig>,
 }
 
 impl Default for ProviderIntegrationConfig {
@@ -160,6 +178,7 @@ impl Default for ProviderIntegrationConfig {
         Self {
             schema: PROVIDER_INTEGRATION_SCHEMA.to_owned(),
             kimi_subscription_accounts: Vec::new(),
+            api_key_accounts: Vec::new(),
         }
     }
 }
@@ -171,6 +190,18 @@ impl ProviderIntegrationConfig {
         }
         let mut ids = HashSet::new();
         let mut secret_refs = HashSet::new();
+        for account in &self.api_key_accounts {
+            account.validate()?;
+            if !ids.insert(account.id.as_str()) {
+                return Err(ProviderIntegrationConfigError::DuplicateAccountId);
+            }
+            if !secret_refs.insert((
+                account.api_key_secret.scope.trim(),
+                account.api_key_secret.name.trim(),
+            )) {
+                return Err(ProviderIntegrationConfigError::DuplicateSecretReference);
+            }
+        }
         for account in &self.kimi_subscription_accounts {
             account.validate()?;
             if !ids.insert(account.id.trim()) {

@@ -159,6 +159,82 @@ pub(super) fn remove_under_lifecycle(
     })
     .map_err(|_| AccountQuotaStoreError::Write)
 }
+/// All IO completes before the Policy callback opens its read snapshot. The
+/// lifecycle guard and Runtime fence prevent a replacement credential being
+/// associated with the old adopted account while this public result is built.
+pub(super) fn with_public_snapshots<T>(
+    root: &Path,
+    accounts: &[(&str, &str)],
+    publish: impl FnOnce(&BTreeMap<String, serde_json::Value>) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    anyhow::ensure!(accounts.len() <= 256, "quota account limit exceeded");
+    if accounts.is_empty() {
+        return publish(&BTreeMap::new());
+    }
+    let _guard = crate::secrets::credential_lifecycle_guard();
+    let mut runtime = super::open_instance_proxy_config_db(root)?;
+    let _runtime_fence = runtime.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    // Bindings and generations read Runtime/Secret owners; resolve them before
+    // the single Core snapshot read so no owner job nests inside another.
+    let mut wanted = Vec::with_capacity(accounts.len());
+    for (id, binding) in accounts {
+        let resolved =
+            (|| -> Result<Option<(String, AccountQuotaGeneration)>, AccountQuotaStoreError> {
+                let current =
+                    crate::execution::cliproxyapi_claude_catalog::account_binding(root, id)
+                        .map_err(|_| AccountQuotaStoreError::Read)?;
+                if current.as_deref() != Some(*binding) {
+                    return Ok(None);
+                }
+                let Some(current) = generation(root, "claude", id)? else {
+                    return Ok(None);
+                };
+                Ok(Some((key("claude", id)?, current)))
+            })();
+        wanted.push(((*id).to_owned(), resolved));
+    }
+    let ids: Vec<String> = wanted.iter().map(|(id, _)| id.clone()).collect();
+    let observed = crate::lcm::with_lcm_read(&crate::paths::core_db(root), move |conn| {
+        Ok(wanted
+            .into_iter()
+            .map(|(id, resolved)| {
+                let observed = match resolved {
+                    Ok(Some((key, current))) => read(conn, &key, &current),
+                    Ok(None) => Ok(None),
+                    Err(error) => Err(error),
+                };
+                (id, observed)
+            })
+            .collect::<Vec<_>>())
+    })
+    // A failed Core snapshot read leaves every account unavailable, never unknown.
+    .unwrap_or_else(|_| {
+        ids.into_iter()
+            .map(|id| (id, Err(AccountQuotaStoreError::Read)))
+            .collect()
+    });
+    let mut snapshots = BTreeMap::new();
+    for (id, observed) in observed {
+        let value = match observed {
+            Ok(Some(snapshot))
+                if snapshot.observed_at_ms <= chrono::Utc::now().timestamp_millis() =>
+            {
+                let windows: Vec<_> = snapshot.windows.iter().map(|window| serde_json::json!({
+                    "kind":window.kind,"status":window.status,"resetAtMs":window.reset_at_ms,
+                    "utilization":window.utilization
+                })).collect();
+                serde_json::json!({"state":"reported","observedAtMs":snapshot.observed_at_ms,
+                    "windows":windows})
+            }
+            Ok(_) => serde_json::json!({"state":"unknown"}),
+            Err(_) => serde_json::json!({"state":"unavailable","errorClass":"quota_read_failed"}),
+        };
+        snapshots.insert(id, value);
+    }
+    // Never serialize the map itself: its keys are private local selectors.
+    publish(&snapshots)
+}
+
 impl AccountQuotaStore for CtoxAccountQuotaStore {
     fn load(
         &self,

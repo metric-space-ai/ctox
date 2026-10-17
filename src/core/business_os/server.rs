@@ -4231,6 +4231,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn guard_prod_foreground_http_bootstrap_and_restart_identity() -> anyhow::Result<()> {
         use crate::service::store_startup::{isolate_test_roots, Foreground};

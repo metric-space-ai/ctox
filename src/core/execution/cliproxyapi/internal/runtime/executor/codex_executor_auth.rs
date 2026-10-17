@@ -71,12 +71,17 @@ impl CodexSubscriptionAuth {
             let load_store = Arc::clone(&store);
             let load_handles = handles.clone();
             let current = load_store
-                .load_credentials_async(load_handles)
+                .load_credentials_for_refresh_async(load_handles)
                 .await
                 .map_err(CodexSubscriptionAuthError::Store)?;
             let refreshed_at = clock.now();
             let token = coordinator
-                .refresh(transport.as_ref(), clock.as_ref(), current, max_attempts)
+                .refresh(
+                    transport.as_ref(),
+                    clock.as_ref(),
+                    current.credentials.clone(),
+                    max_attempts,
+                )
                 .await
                 .map_err(CodexSubscriptionAuthError::Refresh)?;
             let credentials = CodexStoredCredentials::new(
@@ -88,7 +93,7 @@ impl CodexSubscriptionAuth {
             let persist_handles = handles.clone();
             let persist_credentials = credentials.clone();
             persist_store
-                .store_credentials_async(persist_handles, persist_credentials)
+                .store_refreshed_credentials_async(persist_handles, current, persist_credentials)
                 .await
                 .map_err(CodexSubscriptionAuthError::Store)?;
 
