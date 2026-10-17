@@ -143,6 +143,11 @@ impl SqliteStore {
             tx.commit().map_err(other)
         }).await
     }
+    /// Signals only after the actual connection and exclusive lease close.
+    pub fn closed_signal(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.owner.closed_signal()
+    }
+
     pub fn open(path: &Path) -> io::Result<Self> {
         // Startup is queued on the owner thread. Initialization errors surface
         // on the first async job, before any Raft acknowledgement.
