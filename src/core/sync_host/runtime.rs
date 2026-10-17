@@ -23,11 +23,13 @@ pub(super) fn run<S, F>(root: &Path, stop: S, started: F) -> Result<()>
 where
     S: std::future::Future<Output = io::Result<()>>,
     F: FnOnce(
-        HostStarted,
-        Arc<dyn ctox_sync::authority::client::ExecutionAuthority>,
-        Option<Arc<crate::business_os::NativeGuestRegistry>>,
-        super::super::NativeControlChannel,
-    ) -> Result<()>,
+            HostStarted,
+            Arc<dyn ctox_sync::authority::client::ExecutionAuthority>,
+            Option<Arc<crate::business_os::NativeGuestRegistry>>,
+            super::super::NativeControlChannel,
+        ) -> Result<()>
+        + Send
+        + 'static,
 {
     // This process lease precedes opening Raft/RxDB and outlives the Tokio
     // runtime, including blocking storage work during unwind or shutdown.
@@ -45,13 +47,7 @@ where
         .worker_threads(2)
         .enable_all()
         .build()?;
-    let mut descriptor = None;
-    let mut guest_host = None;
-    let mut handoff_host = None;
-    let mut checkpoint_host = None;
-    let mut control_owner = None;
-    #[cfg(unix)]
-    let mut speech_host = None;
+    let mut owners = None;
     runtime.block_on(async {
         let database = create_rx_database(RxDatabaseCreator {
             name: format!("ctox-execution-{}", config.node_id()),
@@ -79,12 +75,12 @@ where
             },
             database: database.clone(),
             collections: Vec::new(),
-            signaling_urls: Arc::new(move || match transport(&provider_root, &provider_config) {
-                Ok(value) => value.signaling_urls,
-                Err(_) => {
-                    eprintln!("native Sync signaling credentials are unavailable or invalid");
-                    Vec::new()
-                }
+            // The connector below awaits fresh credential resolution on the
+            // bounded Core executor, including every reconnect. This fallback
+            // is memory-only and is never used by that connector.
+            signaling_urls: Arc::new({
+                let urls = initial_transport.signaling_urls.clone();
+                move || urls.clone()
             }),
             room: config.room(),
             peer_session_id: key.public_identity(),
@@ -123,78 +119,54 @@ where
                 live_change: None,
             },
         };
-        let result = ctox_sync::host_runtime::run_with_native_session(
-            &config,
-            root,
-            ipc.path(),
-            key,
-            options,
-            stop,
-            |ready, authority, peer| {
-                control_owner = Some(super::super::control_channel::Owner::start_with_routes(
-                    root,
-                    peer.pool(),
-                    peer.native_route_channel(),
-                )?);
-                #[cfg(unix)]
-                {
-                    speech_host = Some(
-                        crate::execution::speech::target::TargetSpeechHost::start(
-                            root,
-                            peer.pool().clone(),
-                        )
-                        .map_err(io::Error::other)?,
-                    );
-                }
-                handoff_host = Some(
-                    crate::business_os::NativeHandoffHost::start(root, peer.pool().clone())
-                        .map_err(io::Error::other)?,
-                );
-                guest_host = guests::Host::start(root, ipc.path(), authority.clone(), peer)
-                    .map_err(io::Error::other)?;
-                checkpoint_host = Some(
-                    handoff_host
-                        .as_ref()
-                        .unwrap()
-                        .serve_checkpoint(
-                            ipc.path(),
-                            peer.pool().clone(),
-                            guest_host.as_ref().map(|host| host.registry.clone()),
-                        )
-                        .map_err(io::Error::other)?,
-                );
-                descriptor = Some(
-                    DescriptorGuard::publish(
-                        root,
-                        &ready,
-                        guest_host.as_ref().map(|host| host.endpoint.clone()),
-                        checkpoint_host.as_ref().map(|host| host.endpoint.clone()),
-                    )
-                    .map_err(io::Error::other)?,
-                );
-                started(
-                    ready,
-                    authority,
-                    guest_host.as_ref().map(|host| host.registry.clone()),
-                    control_owner.as_ref().unwrap().channel(),
-                )
-                .map_err(io::Error::other)
-            },
-        )
-        .await
-        .map_err(|error| anyhow::anyhow!("native Sync host failed ({:?})", error.kind()));
-        #[cfg(unix)]
-        drop(speech_host.take());
-        drop(control_owner.take());
-        drop(handoff_host.take());
-        drop(checkpoint_host.take());
-        drop(guest_host.take());
+        let startup_root = root.to_owned();
+        let startup_ipc = ipc.path().to_owned();
+        let retained = &mut owners;
+        let signaling: ctox_sync::native::AsyncSignalingUrls = Arc::new(move ||
+            Box::pin(current_signaling_urls(provider_root.clone(), provider_config.clone())));
+        let result = ctox_sync::host_runtime::run_with_native_session_bootstrap(
+            &config, root, ipc.path(), key, options, stop,
+            (Some(signaling), move |ready, authority, peer: Arc<ctox_sync::native::NativeSyncSession>| async move {
+                // This callback runs after asynchronous attachment. Its LCM,
+                // secret and guest initialization must leave the runtime worker;
+                // a borrowed sync admission from the outer CLI is not enough.
+                let boot = crate::persistence::run_core_sync(move || {
+                    let root = &startup_root;
+                    let ipc = &startup_ipc;
+                    let control = super::super::control_channel::Owner::start_with_routes(
+                        root, peer.pool(), peer.native_route_channel())?;
+                    let speech = crate::execution::speech::target::TargetSpeechHost::start(
+                        root, peer.pool().clone())?;
+                    let handoff = crate::business_os::NativeHandoffHost::start(root, peer.pool().clone())?;
+                    let guest = guests::Host::start(root, ipc, authority.clone(), &peer)?;
+                    let checkpoint = handoff.serve_checkpoint(ipc, peer.pool().clone(),
+                        guest.as_ref().map(|host| host.registry.clone()))?;
+                    let descriptor = DescriptorGuard::publish(root, &ready,
+                        guest.as_ref().map(|host| host.endpoint.clone()), Some(checkpoint.endpoint.clone()))?;
+                    started(ready, authority, guest.as_ref().map(|host| host.registry.clone()), control.channel())?;
+                    Ok::<_, anyhow::Error>((speech, control, handoff, checkpoint, guest, descriptor))
+                }).await.map_err(io::Error::other)?;
+                *retained = Some(boot);
+                Ok(())
+            }),
+        ).await.map_err(|error| anyhow::anyhow!("native Sync host failed ({:?})", error.kind()));
+        drop(owners.take());
         let closed = database
             .close()
             .await
             .context("cannot close native Sync database");
         result.and(closed)
     })
+}
+
+async fn current_signaling_urls(root: PathBuf, config: HostConfiguration) -> Vec<String> {
+    match crate::persistence::run_core_sync(move || transport(&root, &config)).await {
+        Ok(value) => value.signaling_urls,
+        Err(_) => {
+            eprintln!("native Sync signaling credentials are unavailable or invalid");
+            Vec::new()
+        }
+    }
 }
 
 pub(super) fn status(root: &Path) -> Result<()> {

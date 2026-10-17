@@ -92,6 +92,42 @@ where
     F: FnOnce(HostStarted, Arc<dyn ExecutionAuthority>, &NativeSyncSession) -> io::Result<()>,
     S: Future<Output = io::Result<()>>,
 {
+    run_with_native_session_bootstrap(
+        config,
+        root,
+        ipc_directory,
+        key,
+        options,
+        stop,
+        (
+            None,
+            |ready, authority, session: Arc<NativeSyncSession>| async move {
+                started(ready, authority, &session)
+            },
+        ),
+    )
+    .await
+}
+
+/// Await host-owned credential and startup phases before publication. The
+/// original attachment, authority checks and shutdown remain the sole owner.
+/// The URL provider and callback are paired to keep the lifecycle API unchanged for
+/// memory-only hosts while storage-backed hosts await their blocking executor.
+pub async fn run_with_native_session_bootstrap<F, Started, S>(
+    config: &HostConfiguration,
+    root: &Path,
+    ipc_directory: &Path,
+    key: Arc<SigningIdentity>,
+    options: NativeSyncOptions,
+    stop: S,
+    bootstrap: (Option<crate::native::AsyncSignalingUrls>, F),
+) -> io::Result<()>
+where
+    F: FnOnce(HostStarted, Arc<dyn ExecutionAuthority>, Arc<NativeSyncSession>) -> Started,
+    Started: Future<Output = io::Result<()>>,
+    S: Future<Output = io::Result<()>>,
+{
+    let (signaling, started) = bootstrap;
     config.validate_key(&key)?;
     let expected = match config.local {
         HostMember::Voter { .. } => NativePeerRole::CtoxInstance,
@@ -118,20 +154,44 @@ where
     } else {
         None
     };
-    let mut session = NativeSyncSession::start(options).await?;
-    let result = async {
+    let mut session = match signaling {
+        Some(provider) => {
+            NativeSyncSession::start_with_async_signaling_provider(options, move || provider())
+                .await?
+        }
+        None => NativeSyncSession::start(options).await?,
+    };
+    let attached = async {
         let (endpoint, authority, waiting): (
             PathBuf,
             Arc<dyn ExecutionAuthority>,
-            HostWaiting<'_>,
+            HostWaiting<'static>,
         ) = if let Some(options) = voter {
             let host = Arc::clone(session.attach_execution(options, key).await?);
-            (host.ipc_endpoint().to_path_buf(), host.node().clone(), Box::pin(async move { host.wait_stopped().await }))
+            (
+                host.ipc_endpoint().to_path_buf(),
+                host.node().clone(),
+                Box::pin(async move { host.wait_stopped().await }),
+            )
         } else {
-            let host = Arc::clone(session.attach_worker(worker.expect("validated worker"), key).await?);
-            (host.ipc_endpoint().to_path_buf(), host.node().clone(), Box::pin(async move { host.wait_stopped().await }))
+            let host = Arc::clone(
+                session
+                    .attach_worker(worker.expect("validated worker"), key)
+                    .await?,
+            );
+            (
+                host.ipc_endpoint().to_path_buf(),
+                host.node().clone(),
+                Box::pin(async move { host.wait_stopped().await }),
+            )
         };
-        started(HostStarted { ipc_endpoint: endpoint, node_id: config.node_id(), scope_id: config.scope_id.clone() }, authority, &session)?;
+        Ok::<_, io::Error>((endpoint, authority, waiting))
+    }
+    .await;
+    let session = Arc::new(session);
+    let result = async {
+        let (endpoint, authority, waiting) = attached?;
+        started(HostStarted { ipc_endpoint: endpoint, node_id: config.node_id(), scope_id: config.scope_id.clone() }, authority, session.clone()).await?;
         tokio::select! {
             result = stop => result,
             result = waiting => result.and(Err(io::Error::other("native execution listener or discovery stopped unexpectedly"))),

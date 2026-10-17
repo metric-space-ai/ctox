@@ -64,6 +64,8 @@ static RUSTLS_CRYPTO_PROVIDER: Once = Once::new();
 
 type WsWrite = SplitSink<WsStream, Message>;
 type WsRead = SplitStream<WsStream>;
+type UrlListFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Vec<String>> + Send>>;
+type UrlListProvider = Arc<dyn Fn() -> UrlListFuture + Send + Sync>;
 
 /// Test-only local WebSocket listener shared by signaling and responder
 /// regressions. Production signaling remains an outbound WebSocket client.
@@ -87,7 +89,7 @@ pub struct SignalingClient {
     /// candidate only when an establish attempt fails (the configured list
     /// used to be cosmetic — only the first URL was ever tried, so a downed
     /// primary signaling server meant no new session could ever pair).
-    url_provider: Arc<dyn Fn() -> Vec<String> + Send + Sync>,
+    url_provider: UrlListProvider,
     /// Index into the provider's URL list for the next (re)connect attempt.
     /// Sticky on success, advanced on a failed establish. Never touches the
     /// reconnect backoff: rotation must not reset it (backoff resets only on
@@ -146,8 +148,27 @@ impl SignalingClient {
     where
         F: Fn() -> Vec<String> + Send + Sync + 'static,
     {
-        let url_provider: Arc<dyn Fn() -> Vec<String> + Send + Sync> = Arc::new(url_provider);
+        let provider = Arc::new(url_provider);
+        Self::connect_with_async_url_list_provider(move || {
+            let provider = provider.clone();
+            async move { provider() }
+        })
+        .await
+    }
+
+    /// Await host-owned credential resolution on every attempt. Hosts with
+    /// synchronous stores must dispatch that work to their bounded executor;
+    /// neither initial connection nor reconnect may block the signaling task.
+    pub async fn connect_with_async_url_list_provider<F, Fut>(
+        url_provider: F,
+    ) -> Result<Arc<Self>, RxError>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = Vec<String>> + Send + 'static,
+    {
+        let url_provider: UrlListProvider = Arc::new(move || Box::pin(url_provider()));
         let candidates: Vec<String> = url_provider()
+            .await
             .into_iter()
             .filter(|url| !url.trim().is_empty())
             .collect();
@@ -243,6 +264,7 @@ impl SignalingClient {
                     // below. Rotation is independent of the backoff (which
                     // still resets only on a `joined` broadcast).
                     let fresh_candidates: Vec<String> = (supervisor_client.url_provider)()
+                        .await
                         .into_iter()
                         .filter(|url| !url.trim().is_empty())
                         .collect();
