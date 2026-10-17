@@ -52,7 +52,7 @@ function ownerOf(name) {
 }
 
 // Plattformmanifest des Kerns (nur gelesen): Schemata der v4-eigenen Plattform-Collections (app_activations, …).
-const PLATFORM_MANIFEST_PATH = path.join(os.homedir(), '.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json');
+const PLATFORM_MANIFEST_PATH = path.resolve(BOS, '../../core/business_os/v4/ctox-platform.manifest.json');
 const platformManifest = fs.existsSync(PLATFORM_MANIFEST_PATH) ? readJson(PLATFORM_MANIFEST_PATH) : { collections: {} };
 
 const manifests = {};
@@ -227,10 +227,10 @@ for (const name of [...allNames].sort()) {
   let schema = ownerJson?.collections?.[name];
   let source = owner === PLATFORM ? apps.ctox.src : apps[owner]?.src;
   let strategies = ownerJson?.migration_strategies?.[name];
-  if (!schema && owner === PLATFORM && platformManifest.collections?.[name]?.schema) {
+  if ((!schema || name === 'business_commands') && owner === PLATFORM && platformManifest.collections?.[name]?.schema) {
     const { _note, schema: ps, ...pmeta } = platformManifest.collections[name];
     schema = { schema: ps, ...pmeta };
-    source = '~/.local/state/ctox-sync-v4/docs/v4-manifests/ctox-platform.manifest.json';
+    source = 'src/core/business_os/v4/ctox-platform.manifest.json';
     target.report.push({ collection: name, field: '(Collection)', old: 'fehlt (v4-Plattform-Collection)', next: 'aus dem Plattformmanifest übernommen (Schema + class/rights/client_limit/byte_budget)', ev: `${source} collections.${name}`, src: 'ownership.json platform; Kern §16.17', kind: 'kompatibel (neue Collection)' });
   }
   if (!schema) {

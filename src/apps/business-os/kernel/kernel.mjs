@@ -1054,8 +1054,8 @@ export function createKernel(opts = {}) {
     const {owner,ver,definition,gen}=collectionVersion(app,collection);
     // Wire versions describe the collection owner, never the calling app.
     // Production needs the authoritative platform catalog before a local write.
-    if(!fakeCore&&owner===PLATFORM_APP_ID&&(!ver||!definition?.schema?.version))throw new CtoxError('unavailable','Active platform catalog missing',{collection});
-    return {schema_ver:definition?.schema?.version??1,app_ver:ver??(owner===PLATFORM_APP_ID?PLATFORM_APP.ver:app.ver),...(gen===undefined?{}:{gen})};
+    if(!fakeCore && owner===PLATFORM_APP_ID && (!ver || !isPlainObject(definition?.schema)))throw new CtoxError('unavailable','Active platform catalog missing',{collection});
+    return {schema_ver:definition?.schema?.version??(!fakeCore && owner===PLATFORM_APP_ID?0:1),app_ver:ver??(owner===PLATFORM_APP_ID?PLATFORM_APP.ver:app.ver),...(gen===undefined?{}:{gen})};
   }
   // §16.19 Nr. 3: shell_preferences – eine Zeile je Nutzer (id = actor.id), lesen und schreiben nur die eigene.
   function ownRowOk(collection, id) {
