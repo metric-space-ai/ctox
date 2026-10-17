@@ -338,14 +338,15 @@ mod tests {
         let updated_plan = call(args.clone(), Some(&trusted))?;
         assert_eq!(updated_plan["execution_plan"]["percent"], 90);
         assert_eq!(updated_plan["execution_plan"]["review_status"], "pending");
+        let guard_task_id = task_id.clone();
         let rejected = crate::crew::open_engine(root)?.record_task_execution_plan_guarded(
             crate::lcm::TaskExecutionPlanUpdate {
                 work_key: "crew-context-plan", task_id: &task_id, command_id: "crew-parent",
                 attempt_id: "crew-attempt", explanation: None,
                 steps: &[crate::lcm::TaskExecutionPlanStepInput {label: "Must not persist".into(), status: "pending".into()}],
             },
-            |transaction| {
-                transaction.execute("UPDATE communication_routing_state SET lease_owner='uncommitted-owner' WHERE message_key=?1", [&task_id])?;
+            move |transaction| {
+                transaction.execute("UPDATE communication_routing_state SET lease_owner='uncommitted-owner' WHERE message_key=?1", [&guard_task_id])?;
                 anyhow::bail!("authority changed before write")
             },
         );

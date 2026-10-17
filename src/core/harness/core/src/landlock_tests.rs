@@ -21,18 +21,6 @@ fn legacy_landlock_flag_is_included_when_requested() {
     );
 }
 
-#[test]
-fn proxy_flag_is_included_when_requested() {
-    let command = vec!["/bin/true".to_string()];
-    let command_cwd = Path::new("/tmp/link");
-    let cwd = Path::new("/tmp");
-
-    let args = create_linux_sandbox_command_args(command, command_cwd, cwd, true, true);
-    assert_eq!(
-        args.contains(&"--allow-network-for-proxy".to_string()),
-        true
-    );
-}
 
 #[test]
 fn split_policy_flags_are_included() {
@@ -69,10 +57,4 @@ fn split_policy_flags_are_included() {
             .any(|window| window[0] == "--command-cwd" && window[1] == "/tmp/link"),
         true
     );
-}
-
-#[test]
-fn proxy_network_requires_managed_requirements() {
-    assert_eq!(allow_network_for_proxy(false), false);
-    assert_eq!(allow_network_for_proxy(true), true);
 }

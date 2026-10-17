@@ -24,10 +24,11 @@ test('placements: manifest is consistent and has no inline SVG', () => {
   assert.ok(!manifest.layout || !manifest.layout.icon_svg, 'no inline SVG in manifest');
 });
 
-test('placements: schema declares its owned collection', () => {
-  const schemaSrc = read('schema.js');
-  assert.match(schemaSrc, /offers/);
-  assert.match(schemaSrc, /export const collections/);
+test('placements: collections.schema.json is the only schema source (schema.js removed, §16.13)', () => {
+  const schema = JSON.parse(read('collections.schema.json'));
+  assert.ok(schema.collections.offers, 'offers declared');
+  assert.ok(schema.collections.placements, 'placements declared');
+  assert.throws(() => read('schema.js'), /ENOENT/, 'schema.js is gone');
 });
 
 test('placements: left column carries the canonical grammar markup pins', () => {
@@ -45,7 +46,7 @@ test('placements: left column carries the canonical grammar markup pins', () => 
 // Betreiber-Direktive 31.08.2026: EIN Umschalt-Knopf statt Knopfpaar.
   assert.equal((html.match(/<button[^>]*data-placements-view-toggle/g) || []).length, 1);
   // Footer target.
-  assert.match(html, /data-pg-footer/);
+  assert.doesNotMatch(html, /data-pg-footer/, 'keine Fußzeile, die nur den Reiterzähler wiederholt (Textdiät Regel 5)');
   // Counted view band with >= 2 real views (bands with a single tab are a
   // static-check failure).
   const bandTabs = (html.match(/data-pg-band=/g) || []).length;
@@ -63,13 +64,13 @@ test('placements: header carries Neu, Import and Export actions', () => {
 
 test('placements: import/export handlers are wired in index.js', () => {
   const js = read('index.js');
-  // Export via Blob URL download, import via file input + JSON, upsert through
-  // the shell-provided collection handle — no HTTP.
+  // Export via Blob URL download, import via file input + JSON, writes through
+  // api.put (App-API 4.0) — no HTTP.
   assert.match(js, /new Blob\(/);
   assert.match(js, /URL\.createObjectURL/);
   assert.match(js, /input\.type = 'file'/);
   assert.match(js, /JSON\.parse/);
-  assert.match(js, /\.upsert\(/);
+  assert.match(js, /api\.put\(PRIMARY, record\)/);
   assert.match(js, /\[data-action="import"\]/);
   assert.match(js, /\[data-action="export"\]/);
 });
@@ -84,12 +85,12 @@ test('placements: existing command flows are preserved unchanged', () => {
 
 test('placements: renders a shard list from a stub doc array with the context trio', () => {
   const docs = [
-    { id: 'p1', candidate_id: 'CAND-1', client_account_id: 'ACME', placement_type: '', status: 'confirmed', fee: 5000 },
-    { id: 'p2', candidate_id: 'CAND-2', client_account_id: 'GLOBEX', placement_type: 'arbeitnehmerueberlassung', status: 'early_leave' },
+    { id: 'p1', candidate_id: 'CAND-1', candidate_name: 'Anna Eins', client_account_id: 'ACME', placement_type: '', status: 'confirmed', fee: 5000 },
+    { id: 'p2', candidate_id: 'CAND-2', candidate_name: 'Bernd Zwei', client_account_id: 'GLOBEX', placement_type: 'arbeitnehmerueberlassung', status: 'early_leave' },
   ];
   const cardsHtml = renderList(docs, { view: 'cards', selectedId: 'p2' });
-  assert.match(cardsHtml, /CAND-1/);
-  assert.match(cardsHtml, /CAND-2/);
+  assert.match(cardsHtml, /Anna Eins/);
+  assert.match(cardsHtml, /Bernd Zwei/);
   assert.match(cardsHtml, /data-context-record-id="p1"/);
   assert.match(cardsHtml, /data-context-record-type="placement"/);
   assert.match(cardsHtml, /data-ats-row="p2"/);
@@ -98,29 +99,15 @@ test('placements: renders a shard list from a stub doc array with the context tr
   // Compact variant is a distinct rendering behind the toggle.
   const listHtml = renderList(docs, { view: 'list', selectedId: '' });
   assert.match(listHtml, /placements-row-compact/);
-  // Empty state (no readiness info → legacy plain empty).
-  assert.match(renderList([], { view: 'cards' }), /ctox-empty/);
+  // An empty list renders nothing (App-API 4.0).
+  assert.equal(renderList([], { view: 'cards' }), '');
 });
 
-test('placements: empty source gates on collection readiness', () => {
-  // Source empty + not yet replicated → kit syncing shell (role=status).
-  const syncingHtml = renderList([], { view: 'cards', sourceEmpty: true, readiness: { ready: false, state: 'catching-up' } });
-  assert.match(syncingHtml, /ctox-syncing/);
-  assert.match(syncingHtml, /role="status"/);
-  assert.doesNotMatch(syncingHtml, /ctox-empty/);
-  // Source empty + live → the real empty state.
-  const emptyHtml = renderList([], { view: 'cards', sourceEmpty: true, readiness: { ready: true, state: 'live' } });
-  assert.match(emptyHtml, /ctox-empty/);
-  assert.doesNotMatch(emptyHtml, /ctox-syncing/);
-  // Filter-empty (source holds rows) never shows the syncing shell, even
-  // while the collection is still catching up.
-  const filterEmptyHtml = renderList([], { view: 'cards', sourceEmpty: false, readiness: { ready: false } });
-  assert.match(filterEmptyHtml, /ctox-empty/);
-  assert.doesNotMatch(filterEmptyHtml, /ctox-syncing/);
-  // The mount path wires the canonical readiness API for the primary collection.
+test('placements: no readiness / syncing state in the content (App-API 4.0, R4/R11)', () => {
+  assert.equal(renderList([], { view: 'cards', sourceEmpty: true, readiness: { ready: false } }), '');
   const js = read('index.js');
-  assert.match(js, /ctx\.sync\?\.collectionReadiness/);
-  assert.match(js, /subscribeCollectionReadiness\(PRIMARY/);
+  assert.doesNotMatch(js, /ctox-syncing|renderListOrState|collectionReadiness|commandBus|ctx\.db/, 'no v3 data/sync paths left');
+  assert.match(js, /api\.command\(type, payload\)/, 'commands go through api.command without waiting');
 });
 
 test('placements: band counts and filtering derive from the status field', () => {

@@ -1,0 +1,54 @@
+import {test} from 'node:test';
+import assert from 'node:assert/strict';
+import {createStubKernel} from '../testkit.mjs';
+const schema={schema:{type:'object',properties:{id:{type:'string'}}}};
+async function setup(t){
+ const k=createStubKernel({instanceId:`e30-${process.pid}-${Math.random()}`,userId:'alice',storage:'memory',multiTab:false,latencyMs:0});t.after(()=>k.close());await k.ready;
+ await k.sim.publishAppVersion('vault','1',{collections:{private_refs:schema}});
+ await k.sim.publishAppVersion('desktop','1',{collections:{desktop_files:schema},manifestExtra:{exports:{desktop_files:['read']}}});
+ await k.sim.publishAppVersion('reader','1',{collections:{readable_refs:schema},manifestExtra:{foreign_collections:{desktop_files:{owner_app:'desktop',ops:['read']}}}});
+ await k.sim.publishAppVersion('spy','1',{collections:{spy_refs:schema}});
+ const owner=k.appApi('vault','1'),reader=k.appApi('reader','1'),spy=k.appApi('spy','1');
+ const file=await owner.files.put({text:'canonical bytes'},{id:'file-id',name:'bytes.txt'});await k.sim.settle();
+ return {k,owner,reader,spy,file};
+}
+test('E30 own file and exact desktop id, including exported read; no blanket shell grant',async t=>{
+ const {k,owner,reader,spy,file}=await setup(t);
+ assert.equal((await owner.files.get({id:file.id})).text,'canonical bytes');
+ await assert.rejects(reader.files.get({id:file.id}),e=>e.code==='forbidden');
+ await k.sim.push('desktop_files',[{id:'desktop-id',content_ref:file.ref,name:'desktop.txt',size:15}]);
+ const own=await k.appApi('desktop','1').files.get({id:'desktop-id'}),shared=await reader.files.get({id:'desktop-id'});
+ assert.equal(own.ref,file.ref);assert.equal(shared.id,'desktop-id');assert.equal(shared.text,'canonical bytes');
+ await assert.rejects(reader.files.get({id:file.id}),e=>e.code==='forbidden','a different readable desktop id grants nothing');
+ await assert.rejects(spy.files.get({id:'desktop-id'}),e=>e.code==='forbidden');
+ await assert.rejects(k.appApi('shell','1').files.get({id:'desktop-id'}),e=>e.code==='forbidden');
+ await assert.rejects(reader.files.delete({id:file.id}),e=>e.code==='forbidden');assert.deepEqual(await reader.files.list(),{files:[]});
+ await k.sim.publishAppVersion('desktop','2',{collections:{desktop_files:schema}});
+ await assert.rejects(reader.files.get({id:'desktop-id'}),e=>e.code==='forbidden','removed read export revokes the grant');
+});
+test('E30 canonical BlobRef in readable document grants bytes; foreign, forged and removed references do not',async t=>{
+ const {k,owner,reader,spy,file}=await setup(t);
+ await k.sim.push('private_refs',[{id:'secret',attachment:{ref:file.ref}}]);
+ await k.sim.push('business_commands',[{id:'foreign-command-ref',app_id:'vault',actor_id:'alice',status:'done',result:{blob:{ref:file.ref}}}]);
+ await assert.rejects(reader.files.get({ref:file.ref}),e=>e.code==='forbidden');
+ await k.sim.push('readable_refs',[{id:'ok',attachments:[{blob:{ref:file.ref}}]}]);
+ assert.equal((await reader.files.get({id:file.id})).text,'canonical bytes');
+ assert.deepEqual([...(await reader.files.get({ref:file.ref,range:{start:2,end:7}})).bytes],[110,111,110,105,99]);
+ await owner.files.delete({id:file.id});
+ assert.equal((await reader.files.get({ref:file.ref})).text,'canonical bytes');
+ assert.deepEqual([...(await reader.files.get({ref:file.ref,range:{start:2,end:7}})).bytes],[110,111,110,105,99]);
+ await assert.rejects(spy.files.get(file.ref),e=>e.code==='forbidden','legacy string cannot bypass reference authorization');
+ await k.sim.push('readable_refs',[{id:'ok',_deleted:true}]);
+ await assert.rejects(reader.files.get({ref:file.ref}),e=>e.code==='forbidden');
+ await k.sim.push('business_commands',[{id:'own-command-ref',app_id:'reader',actor_id:'alice',status:'done',result:{blob:{ref:file.ref}}}]);
+ assert.equal((await reader.files.get({ref:file.ref})).text,'canonical bytes','own canonical command result grants its BlobRef before file metadata arrives');
+ await k.sim.push('business_commands',[{id:'own-command-ref',_deleted:true}]);
+ await assert.rejects(reader.files.get({ref:file.ref}),e=>e.code==='forbidden');
+ await k.sim.setLink({state:'offline'});const optimistic=reader.put('readable_refs',{id:'forged',blob:{ref:file.ref}});await optimistic.local;
+ await assert.rejects(reader.files.get({ref:file.ref}),e=>e.code==='forbidden','unconfirmed reference cannot grant CAS access');
+ await assert.rejects(reader.files.get({id:'unknown'}),e=>e.code==='forbidden');
+ const forgery=spy.put('files',{id:'forged-owner',ref:file.ref,owner_app:'spy',size:15,name:'fake',mime:'text/plain'});await forgery.local;
+ await assert.rejects(spy.files.get({id:'forged-owner'}),e=>e.code==='forbidden','optimistic owner_app is not authority');
+ const local=await spy.files.put({text:'offline bytes'},{id:'local-owned'});
+ assert.equal((await spy.files.get({id:local.id})).text,'offline bytes','real local upload remains readable before Core ACK');
+});

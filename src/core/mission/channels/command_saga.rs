@@ -211,11 +211,27 @@ pub(crate) fn claim_business_command_with_queue(
         }),
         now_ms,
     )?;
+    let native_crew_target = request
+        .extra_metadata
+        .as_ref()
+        .and_then(|v| v.get("native_crew_target"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let mut task = create_queue_task_with_native_app_origin_tx(
         &tx,
         request,
         Some(json!({"command_id":claim.command_id,"module":claim.module})),
     )?;
+    if let Some(member) = native_crew_target {
+        // Same transaction as the queue/command link: no executor can lease an untargeted task.
+        crate::crew::assign_member_before_lease(
+            &tx,
+            &task.message_key,
+            &member,
+            &chrono::Utc::now().to_rfc3339(),
+        )?;
+        task.crew_assigned_member_id = Some(member);
+    }
     let queued_version = accepted_version.saturating_add(1);
     tx.execute(
         "INSERT INTO business_command_task_links (command_id, task_id, created_at_ms)
@@ -2588,7 +2604,8 @@ fn business_command_core_diagnostics_uncached(root: &Path) -> Result<Value> {
     let links_without_task = conn.query_row(
         "SELECT COUNT(*) FROM business_command_task_links link
          LEFT JOIN communication_messages task ON task.message_key = link.task_id
-         WHERE task.message_key IS NULL",
+         LEFT JOIN capability_deleted_queue_tasks removed ON removed.task_id = link.task_id
+         WHERE task.message_key IS NULL AND removed.task_id IS NULL",
         [],
         |row| row.get::<_, u64>(0),
     )?;

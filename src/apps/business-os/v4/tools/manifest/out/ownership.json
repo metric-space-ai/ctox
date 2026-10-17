@@ -1,0 +1,2676 @@
+{
+  "ownership": {
+    "accounting_accounts": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "buchhaltung"
+      ],
+      "owner": "buchhaltung",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_bank_statement_lines": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "buchhaltung"
+      ],
+      "owner": "buchhaltung",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_bank_statements": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "buchhaltung"
+      ],
+      "owner": "buchhaltung",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_credit_notes": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "invoices"
+      ],
+      "owner": "invoices",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_dunning_letters": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "invoices"
+      ],
+      "owner": "invoices",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_dunning_runs": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "invoices"
+      ],
+      "owner": "invoices",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_invoice_approvals": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "invoices"
+      ],
+      "owner": "invoices",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_invoice_attachments": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "invoices"
+      ],
+      "owner": "invoices",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_invoice_lines": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "invoices"
+      ],
+      "owner": "invoices",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_invoices": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "invoices"
+      ],
+      "owner": "invoices",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_journal_entries": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "buchhaltung"
+      ],
+      "owner": "buchhaltung",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_journal_entry_lines": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "buchhaltung"
+      ],
+      "owner": "buchhaltung",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_ledger_entries": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "buchhaltung"
+      ],
+      "owner": "buchhaltung",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_number_series": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "buchhaltung"
+      ],
+      "owner": "buchhaltung",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_payment_allocations": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "invoices"
+      ],
+      "owner": "invoices",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_payment_terms": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "invoices"
+      ],
+      "owner": "invoices",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_payments": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "invoices"
+      ],
+      "owner": "invoices",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_receipts": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "buchhaltung"
+      ],
+      "owner": "buchhaltung",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "accounting_recurring_invoices": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "invoices"
+      ],
+      "owner": "invoices",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "app_activations": {
+      "basis": "Entscheidung: Plattform-Collection (§16.17, ctox-platform.manifest.json)",
+      "in_contract": true,
+      "json_definers": [],
+      "owner": "ctox-platform",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "app_catalog": {
+      "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
+      "in_contract": false,
+      "json_definers": [],
+      "no_defining_app": true,
+      "owner": "ctox-platform",
+      "proposal": true,
+      "schema_js_definers": []
+    },
+    "app_drafts": {
+      "basis": "Entscheidung: Plattform-Collection (§16.22: Entwürfe je (App, Nutzer), Eigentum ctox-platform)",
+      "in_contract": true,
+      "json_definers": [],
+      "owner": "ctox-platform",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "app_user_preferences": {
+      "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
+      "in_contract": true,
+      "json_definers": [],
+      "no_defining_app": true,
+      "owner": "ctox-platform",
+      "proposal": true,
+      "schema_js_definers": []
+    },
+    "applications": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "intake"
+      ],
+      "owner": "intake",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "appsec_approvals": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "appsec-pentest"
+      ],
+      "owner": "appsec-pentest",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "appsec_artifacts": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "appsec-pentest"
+      ],
+      "owner": "appsec-pentest",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "appsec_assessments": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "appsec-pentest"
+      ],
+      "owner": "appsec-pentest",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "appsec_coverage": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "appsec-pentest"
+      ],
+      "owner": "appsec-pentest",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "appsec_findings": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "appsec-pentest"
+      ],
+      "owner": "appsec-pentest",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "appsec_investigations": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "appsec-pentest"
+      ],
+      "owner": "appsec-pentest",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "appsec_pipeline_stages": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "appsec-pentest"
+      ],
+      "owner": "appsec-pentest",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "appsec_runs": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "appsec-pentest"
+      ],
+      "owner": "appsec-pentest",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "appsec_scanner_inventory": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "appsec-pentest"
+      ],
+      "owner": "appsec-pentest",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "browser_frames": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "browser"
+      ],
+      "owner": "browser",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "browser_input_events": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "browser"
+      ],
+      "owner": "browser",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "browser_sessions": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "browser"
+      ],
+      "owner": "browser",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "browser_tabs": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "browser"
+      ],
+      "owner": "browser",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "business_app_versions": {
+      "basis": "Entscheidung: Plattform-Collection (§9.2, §16.17)",
+      "in_contract": true,
+      "json_definers": [],
+      "owner": "ctox-platform",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "business_apps": {
+      "basis": "Entscheidung: Plattform-Collection (§9.2, §16.14, §16.17)",
+      "in_contract": true,
+      "json_definers": [],
+      "owner": "ctox-platform",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "business_chats": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "business_commands": {
+      "basis": "Entscheidung: Plattform-Collection (§16.17; Shell-registriert app.js:211-216)",
+      "in_contract": true,
+      "json_definers": [],
+      "owner": "ctox-platform",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "business_consents": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "consent"
+      ],
+      "owner": "consent",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "business_credentials": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "nachweise"
+      ],
+      "owner": "nachweise",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "business_module_acl": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "business_module_catalog": {
+      "basis": "Entscheidung: Plattform-Collection (§16.17: entfällt, ersetzt durch business_apps/business_app_versions)",
+      "in_contract": true,
+      "json_definers": [],
+      "owner": "ctox-platform",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "business_module_commits": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "business_module_releases": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "business_module_reports": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "business_module_source_blob_chunks": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "business_module_source_files": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "business_users": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "business_workspace_branding": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "calendar_availability_rules": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "calendar"
+      ],
+      "owner": "calendar",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "calendar_booking_holds": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "calendar"
+      ],
+      "owner": "calendar",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "calendar_booking_pages": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "calendar"
+      ],
+      "owner": "calendar",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "calendar_bookings": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "calendar"
+      ],
+      "owner": "calendar",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "calendar_calendars": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "calendar"
+      ],
+      "owner": "calendar",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "calendar_event_instances": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "calendar"
+      ],
+      "owner": "calendar",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "calendar_events": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "calendar"
+      ],
+      "owner": "calendar",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "calendar_sources": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "calendar"
+      ],
+      "owner": "calendar",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "channel_pairing_state": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "desktop"
+      ],
+      "owner": "desktop",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "coding_agent_events": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "coding-agents"
+      ],
+      "owner": "coding-agents",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "coding_agent_sessions": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "coding-agents"
+      ],
+      "owner": "coding-agents",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "coding_agent_workspace_grants": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "coding-agents"
+      ],
+      "owner": "coding-agents",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "coding_turns": {
+      "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
+      "in_contract": false,
+      "json_definers": [],
+      "no_defining_app": true,
+      "owner": "ctox-platform",
+      "proposal": true,
+      "schema_js_definers": []
+    },
+    "communication_accounts": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "conversations"
+      ],
+      "owner": "conversations",
+      "proposal": false,
+      "schema_js_definers": [
+        "conversations"
+      ]
+    },
+    "communication_messages": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "conversations"
+      ],
+      "owner": "conversations",
+      "proposal": false,
+      "schema_js_definers": [
+        "conversations"
+      ]
+    },
+    "communication_threads": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "conversations"
+      ],
+      "owner": "conversations",
+      "proposal": false,
+      "schema_js_definers": [
+        "conversations"
+      ]
+    },
+    "ctox_bug_reports": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "ctox_crew_assignments": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_crew_continuity": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_crew_continuity_commits": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_crew_learnings": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "ctox_crew_members": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "ctox_harness_events": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "ctox_harness_status": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "ctox_queue_tasks": {
+      "basis": "Entscheidung: Plattform-Collection (§16.17; CTOX-Queue gehört dem Core)",
+      "in_contract": true,
+      "json_definers": [],
+      "owner": "ctox-platform",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "ctox_runs": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "ctox_runtime_settings": {
+      "basis": "Entscheidung: Plattform-Collection (§16.17)",
+      "in_contract": true,
+      "json_definers": [],
+      "owner": "ctox-platform",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "ctox_task_approval_requests": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "threads"
+      ],
+      "owner": "threads",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_ticket_approvals": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "tickets"
+      ],
+      "owner": "tickets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_ticket_cases": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "tickets"
+      ],
+      "owner": "tickets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_ticket_clarification_requests": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "tickets"
+      ],
+      "owner": "tickets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_ticket_control_bundles": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "tickets"
+      ],
+      "owner": "tickets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_ticket_event_routing_state": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "tickets"
+      ],
+      "owner": "tickets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_ticket_events": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "tickets"
+      ],
+      "owner": "tickets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_ticket_items": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "tickets"
+      ],
+      "owner": "tickets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_ticket_label_assignments": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "tickets"
+      ],
+      "owner": "tickets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_ticket_self_work_items": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "tickets"
+      ],
+      "owner": "tickets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_ticket_self_work_notes": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "tickets"
+      ],
+      "owner": "tickets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_ticket_verifications": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "tickets"
+      ],
+      "owner": "tickets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "ctox_ticket_writebacks": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "tickets"
+      ],
+      "owner": "tickets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "customer_accounts": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "customers"
+      ],
+      "owner": "customers",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "customer_activities": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "customers"
+      ],
+      "owner": "customers",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "customer_contacts": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "customers"
+      ],
+      "owner": "customers",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "customer_dedupe_candidates": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "customers"
+      ],
+      "owner": "customers",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "customer_files": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "customers"
+      ],
+      "owner": "customers",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "customer_import_batches": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "customers"
+      ],
+      "owner": "customers",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "customer_notes": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "customers"
+      ],
+      "owner": "customers",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "customer_opportunities": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "customers"
+      ],
+      "owner": "customers",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "customer_tasks": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "customers"
+      ],
+      "owner": "customers",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "customer_view_filters": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "customers"
+      ],
+      "owner": "customers",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "customer_view_sorts": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "customers"
+      ],
+      "owner": "customers",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "customer_views": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "customers"
+      ],
+      "owner": "customers",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "desktop_file_chunks": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "desktop"
+      ],
+      "owner": "desktop",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "desktop_files": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "desktop"
+      ],
+      "owner": "desktop",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "desktop_icons": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "desktop"
+      ],
+      "owner": "desktop",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "desktop_layout": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "desktop"
+      ],
+      "owner": "desktop",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "desktop_notifications": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "desktop"
+      ],
+      "owner": "desktop",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "desktop_windows": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "desktop"
+      ],
+      "owner": "desktop",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "devices": {
+      "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
+      "in_contract": false,
+      "json_definers": [],
+      "no_defining_app": true,
+      "owner": "ctox-platform",
+      "proposal": true,
+      "schema_js_definers": []
+    },
+    "document_blob_chunks": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "documents"
+      ],
+      "owner": "documents",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "document_runbooks": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "documents"
+      ],
+      "owner": "documents",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "document_versions": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "documents"
+      ],
+      "owner": "documents",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "documents": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "documents"
+      ],
+      "owner": "documents",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "files": {
+      "basis": "Entscheidung: Plattform-Collection (§10.2a api.files, ctox-platform.manifest.json)",
+      "in_contract": true,
+      "json_definers": [],
+      "owner": "ctox-platform",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "interview_meetings": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "interviews"
+      ],
+      "owner": "interviews",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "interview_scorecards": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "interviews"
+      ],
+      "owner": "interviews",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "iot_agent_status": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "iot"
+      ],
+      "owner": "iot",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "iot_agents": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "iot"
+      ],
+      "owner": "iot",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "iot_alarms": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "iot"
+      ],
+      "owner": "iot",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "iot_asset_types": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "iot"
+      ],
+      "owner": "iot",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "iot_assets": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "iot"
+      ],
+      "owner": "iot",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "iot_attributes": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "iot"
+      ],
+      "owner": "iot",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "iot_dashboards": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "iot"
+      ],
+      "owner": "iot",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "iot_datapoints": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "iot"
+      ],
+      "owner": "iot",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "iot_realms": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "iot"
+      ],
+      "owner": "iot",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "iot_rulesets": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "iot"
+      ],
+      "owner": "iot",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "iot_widgets": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "iot"
+      ],
+      "owner": "iot",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "knowledge_items": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "knowledge"
+      ],
+      "owner": "knowledge",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "knowledge_runbooks": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "knowledge"
+      ],
+      "owner": "knowledge",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "knowledge_table_rows": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "knowledge"
+      ],
+      "owner": "knowledge",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "knowledge_tables": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "knowledge"
+      ],
+      "owner": "knowledge",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "knowledge_tasks": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "knowledge"
+      ],
+      "owner": "knowledge",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "knowledge_views": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "knowledge"
+      ],
+      "owner": "knowledge",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "kundenpipeline_entscheidungen": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "kundenpipeline"
+      ],
+      "owner": "kundenpipeline",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "kundenpipeline_projekte": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "kundenpipeline"
+      ],
+      "owner": "kundenpipeline",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "kundenpipeline_vorgaenge": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "kundenpipeline"
+      ],
+      "owner": "kundenpipeline",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "legacy_records": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "machine_enrollments": {
+      "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
+      "in_contract": false,
+      "json_definers": [],
+      "no_defining_app": true,
+      "owner": "ctox-platform",
+      "proposal": true,
+      "schema_js_definers": []
+    },
+    "mail_server_state": {
+      "basis": "keine App definiert die Collection; keine Präfixregel → Plattform",
+      "in_contract": true,
+      "json_definers": [],
+      "no_defining_app": true,
+      "owner": "ctox-platform",
+      "proposal": true,
+      "schema_js_definers": []
+    },
+    "matching_objects": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "matching"
+      ],
+      "owner": "matching",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "matching_requirements": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "matching"
+      ],
+      "owner": "matching",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "matching_results": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "matching"
+      ],
+      "owner": "matching",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "news_issues": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "news"
+      ],
+      "owner": "news",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "news_posts": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "news"
+      ],
+      "owner": "news",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "news_sources": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "news"
+      ],
+      "owner": "news",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "news_topics": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "news"
+      ],
+      "owner": "news",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "notes": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "notes"
+      ],
+      "owner": "notes",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "offers": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "placements"
+      ],
+      "owner": "placements",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_account_limits": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "outbound"
+      ]
+    },
+    "outbound_approvals": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "conversations",
+        "outbound"
+      ]
+    },
+    "outbound_campaigns": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "conversations",
+        "outbound"
+      ]
+    },
+    "outbound_companies": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "outbound"
+      ]
+    },
+    "outbound_engagements": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "conversations",
+        "outbound"
+      ]
+    },
+    "outbound_lead_generation_adapters": {
+      "basis": "Entscheidung: §16.21 Eigentum (Registry, Basis-Release-Import): OLG; browser deklariert foreign",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_lead_generation_field_status_witnesses": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_lead_generation_imports": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_lead_generation_leads": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_lead_generation_policy_report_reviews": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_lead_generation_research_policies": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_lead_generation_scrape_account_states": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_lead_generation_scrape_runs": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_lead_generation_scrape_scripts": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_lead_generation_scrape_targets": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_lead_generation_sources": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_letter_templates": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "outbound"
+      ]
+    },
+    "outbound_meeting_requests": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "outbound"
+      ]
+    },
+    "outbound_messages": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "conversations",
+        "outbound"
+      ]
+    },
+    "outbound_pipeline_items": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "conversations",
+        "outbound"
+      ]
+    },
+    "outbound_research_adapters": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "outbound"
+      ]
+    },
+    "outbound_research_policies": {
+      "basis": "Entscheidung: §16.21 Eigentum: OLG (einziger Schreiber outbound.research_policy.publish; heute nur nativ in business_records)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_research_runs": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "outbound"
+      ]
+    },
+    "outbound_sender_assignments": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "outbound"
+      ]
+    },
+    "outbound_sequences": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "outbound"
+      ]
+    },
+    "outbound_skillbooks": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "outbound"
+      ]
+    },
+    "outbound_sources": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "outbound"
+      ]
+    },
+    "outbound_suppression_entries": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": [
+        "outbound"
+      ]
+    },
+    "outbound_tracking_endpoints": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_tracking_events": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "outbound_tracking_tokens": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "outbound"
+      ],
+      "owner": "outbound",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "placements": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "placements"
+      ],
+      "owner": "placements",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "planned_steps": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "planning_absences": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "shiftflow"
+      ],
+      "owner": "shiftflow",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "planning_employees": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "shiftflow"
+      ],
+      "owner": "shiftflow",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "planning_projects": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "shiftflow"
+      ],
+      "owner": "shiftflow",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "planning_shifts": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "shiftflow"
+      ],
+      "owner": "shiftflow",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "planning_time_records": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "shiftflow"
+      ],
+      "owner": "shiftflow",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "research_notes": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "research"
+      ],
+      "owner": "research",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "research_runs": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "research"
+      ],
+      "owner": "research",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "research_tasks": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "research"
+      ],
+      "owner": "research",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "sellify_campaigns": {
+      "basis": "Entscheidung: §16.21 Eigentum: OLG (Projektion der externen SQL-Quelle Sellify)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "sellify_companies": {
+      "basis": "Entscheidung: §16.21 Eigentum: OLG (Projektion der externen SQL-Quelle Sellify)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "sellify_people": {
+      "basis": "Entscheidung: §16.21 Eigentum: OLG (Projektion der externen SQL-Quelle Sellify)",
+      "in_contract": true,
+      "json_definers": [
+        "outbound-lead-generation"
+      ],
+      "owner": "outbound-lead-generation",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "shell_preferences": {
+      "basis": "Entscheidung: Plattform-Collection (§16.19 Nr. 3)",
+      "in_contract": true,
+      "json_definers": [],
+      "owner": "ctox-platform",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "signature_requests": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "esign"
+      ],
+      "owner": "esign",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "spreadsheet_blob_chunks": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "spreadsheets"
+      ],
+      "owner": "spreadsheets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "spreadsheet_runbooks": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "spreadsheets"
+      ],
+      "owner": "spreadsheets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "spreadsheet_versions": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "spreadsheets"
+      ],
+      "owner": "spreadsheets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "spreadsheets": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "spreadsheets"
+      ],
+      "owner": "spreadsheets",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "submissions": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "submissions"
+      ],
+      "owner": "submissions",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_agent_requests": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_agent_suggestions": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_applied_slas": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_assignment_events": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_assignment_policies": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_automation_rules": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_conversation_events": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_conversations": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_identity_links": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_inboxes": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_label_assignments": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_labels": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_macros": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_notes": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_reporting_events": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_reporting_rollups": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_sla_events": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_sla_policies": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_thread_links": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_view_filters": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "support_views": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "support"
+      ],
+      "owner": "support",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "user_notifications": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "threads"
+      ],
+      "owner": "threads",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "user_thread_links": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "threads"
+      ],
+      "owner": "threads",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "user_thread_messages": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "threads"
+      ],
+      "owner": "threads",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "user_thread_states": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "threads"
+      ],
+      "owner": "threads",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "user_threads": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "threads"
+      ],
+      "owner": "threads",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "workjet_computers": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "workjet_jour_fixe_meetings": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "workjet_luma_state": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "workjet"
+      ],
+      "owner": "workjet",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "workjet_mailbox_envelopes": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "workjet"
+      ],
+      "owner": "workjet",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "workjet_project_chats": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "workjet_project_workers": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "workjet_projects": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "workjet_provider_registry": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "workjet_session_transfers": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "workjet_sessions": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "workjet_worker_dispatch_intents": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "workjet"
+      ],
+      "owner": "workjet",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "workjet_worker_dispatch_outcomes": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "workjet"
+      ],
+      "owner": "workjet",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "workjet_worker_dispatch_sources": {
+      "basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "in_contract": true,
+      "json_definers": [
+        "workjet"
+      ],
+      "owner": "workjet",
+      "proposal": false,
+      "schema_js_definers": []
+    },
+    "workjet_worker_profile_bindings": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    },
+    "workjet_working_copies": {
+      "basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "in_contract": true,
+      "json_definers": [
+        "ctox"
+      ],
+      "owner": "ctox",
+      "proposal": false,
+      "schema_js_definers": [
+        "ctox"
+      ]
+    }
+  },
+  "platform": {
+    "ctox-platform": {
+      "collections": [
+        "app_activations",
+        "app_catalog",
+        "app_drafts",
+        "app_user_preferences",
+        "business_app_versions",
+        "business_apps",
+        "business_commands",
+        "business_module_catalog",
+        "coding_turns",
+        "ctox_queue_tasks",
+        "ctox_runtime_settings",
+        "devices",
+        "files",
+        "machine_enrollments",
+        "mail_server_state",
+        "shell_preferences"
+      ],
+      "exports": {
+        "app_activations": [
+          "read",
+          "write"
+        ],
+        "app_catalog": [
+          "read"
+        ],
+        "app_drafts": [
+          "read"
+        ],
+        "business_app_versions": [
+          "read"
+        ],
+        "business_apps": [
+          "read"
+        ],
+        "business_commands": [
+          "read",
+          "write"
+        ],
+        "coding_turns": [
+          "read"
+        ],
+        "ctox_queue_tasks": [
+          "read"
+        ],
+        "ctox_runtime_settings": [
+          "read"
+        ],
+        "devices": [
+          "read"
+        ],
+        "files": [
+          "read",
+          "write"
+        ],
+        "machine_enrollments": [
+          "read"
+        ],
+        "mail_server_state": [
+          "read"
+        ],
+        "shell_preferences": [
+          "read",
+          "write"
+        ]
+      },
+      "source": "src/core/business_os/v4/ctox-platform.manifest.json",
+      "used_by": {
+        "app_activations": [],
+        "app_catalog": [
+          "app-store"
+        ],
+        "app_drafts": [
+          "app-store"
+        ],
+        "business_app_versions": [
+          "app-store",
+          "mail"
+        ],
+        "business_apps": [
+          "app-store",
+          "appsec-pentest",
+          "coding-agents",
+          "creator",
+          "desktop",
+          "mail",
+          "reports",
+          "threads"
+        ],
+        "business_commands": [
+          "appsec-pentest",
+          "browser",
+          "buchhaltung",
+          "calendar",
+          "coding-agents",
+          "consent",
+          "creator",
+          "credentials",
+          "ctox",
+          "customers",
+          "cv-print-builder",
+          "desktop",
+          "documents",
+          "esign",
+          "file-viewer",
+          "importer",
+          "intake",
+          "interviews",
+          "invoices",
+          "iot",
+          "knowledge",
+          "kundenpipeline",
+          "mail",
+          "matching",
+          "nachweise",
+          "news",
+          "notes",
+          "outbound",
+          "outbound-lead-generation",
+          "placements",
+          "reports",
+          "research",
+          "shell",
+          "shiftflow",
+          "spreadsheets",
+          "submissions",
+          "support",
+          "threads",
+          "tickets"
+        ],
+        "coding_turns": [
+          "coding-agents",
+          "shell"
+        ],
+        "ctox_queue_tasks": [
+          "browser",
+          "ctox",
+          "cv-print-builder",
+          "outbound",
+          "reports",
+          "research",
+          "shell",
+          "support",
+          "threads",
+          "tickets"
+        ],
+        "ctox_runtime_settings": [
+          "ctox",
+          "documents"
+        ],
+        "devices": [],
+        "files": [
+          "app-store",
+          "appsec-pentest",
+          "customers",
+          "cv-print-builder",
+          "documents",
+          "explorer",
+          "file-viewer",
+          "interviews",
+          "mail",
+          "matching",
+          "outbound-lead-generation",
+          "research",
+          "shell",
+          "spreadsheets"
+        ],
+        "machine_enrollments": [],
+        "mail_server_state": [
+          "mail"
+        ],
+        "shell_preferences": [
+          "shell"
+        ]
+      }
+    }
+  }
+}

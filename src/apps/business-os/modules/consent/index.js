@@ -1,5 +1,6 @@
+import { autoWirePaneGrammar } from 'ctox:shared/pane-grammar.js';
 
-const MOD_BUILD = '20260721-consent-ia';
+
 const MODULE_ID = 'consent';
 const PRIMARY = 'business_consents';
 const CHECK_COMMAND = 'ats.consent.check';
@@ -7,24 +8,24 @@ const EXPORT_COMMAND = 'ats.subject.export';
 const ERASE_COMMAND = 'ats.subject.erase';
 const COPY = {
   de: {
-    title: 'Einwilligungen', kicker: 'ATS', mainKicker: 'Prüfung', listTitle: 'Einwilligungen', newTitle: 'Neue Prüfung',
+    title: 'Einwilligungen', listTitle: 'Einwilligungen', newTitle: 'Neue Prüfung',
     newAction: 'Neue Prüfung', importAction: 'Importieren', exportAction: 'Exportieren',
     searchPlaceholder: 'Suchen...', closeDetail: 'Details schließen',
     bandAll: 'Alle', bandValid: 'Gültig', bandOpen: 'Offen', bandEnded: 'Erloschen',
-    subjectLabel: 'Subjekt', purposeLabel: 'Zweck', rightsLabel: 'Betroffenenrechte', subjectPlaceholder: 'Subjekt-ID', purposePlaceholder: 'Zweck (optional — leer = nur Existenz)',
-    checkConsent: 'Einwilligung prüfen', rightsSubjectPlaceholder: 'Subjekt-ID',
+    subjectLabel: 'Person', purposeLabel: 'Zweck', rightsLabel: 'Betroffenenrechte', subjectPlaceholder: 'Kandidaten-ID', purposePlaceholder: 'optional',
+    checkConsent: 'Einwilligung prüfen', rightsSubjectPlaceholder: 'Kandidaten-ID',
     exportArticle15: 'Auskunft (Art. 15)', eraseArticle17: 'Löschen (Art. 17)',
     exportTitle: 'Recht auf Auskunft (DSGVO Art. 15)', eraseTitle: 'Recht auf Löschung (DSGVO Art. 17)',
-    entries: 'Einträge', entriesEmpty: 'Noch keine Einträge.', emptyFiltered: 'Kein Eintrag passt zum Filter.',
-    syncing: 'Daten werden synchronisiert.',
-    statusAll: 'Alle Status', commandOffline: 'Offline: Befehlsdienst nicht verfügbar.',
+    entries: 'Einträge',
+    statusAll: 'Alle Status',
     dataLocked: 'Datenzugriff gesperrt.',
-    dataLockedHint: 'Die App ist installiert. Gib business_consents im App Store frei, um vorhandene Einwilligungen zu sehen.',
-    databaseOffline: 'Offline: Datenbank nicht verfügbar.',
+    dataLockedHint: 'Einwilligungsdaten im App Store freigeben.',
+    eraseConfirmTitle: 'Daten endgültig löschen?', eraseConfirmText: 'Alle gespeicherten Daten zu „{subject}“ werden app-übergreifend gelöscht. Das lässt sich nicht rückgängig machen.', eraseConfirm: 'Endgültig löschen',
+    basisConsent: 'Einwilligung (Art. 6 Abs. 1 a)', basisContract: 'Vertrag (Art. 6 Abs. 1 b)', basisLegal: 'Rechtliche Pflicht (Art. 6 Abs. 1 c)', basisInterest: 'Berechtigtes Interesse (Art. 6 Abs. 1 f)', unlimited: 'unbefristet',
     imported: 'Importiert', importInvalid: 'Ungültige JSON-Datei.', importEmpty: 'Keine Datensätze in der Datei.',
-    subjectRequired: 'Subjekt-ID erforderlich.', dispatchOffline: 'Offline: Befehl konnte nicht gesendet werden.',
+    subjectRequired: 'Kandidaten-ID erforderlich.',
     checkFailed: 'Prüfung fehlgeschlagen.', consentPresent: 'Einwilligung vorhanden.', consentMissing: 'Keine gültige Einwilligung.',
-    subject: 'Subjekt', purpose: 'Zweck', existenceOnly: '— (nur Existenzprüfung)', decision: 'Entscheidung',
+    subject: 'Person', purpose: 'Zweck', existenceOnly: '—', decision: 'Entscheidung',
     allowed: 'erlaubt', denied: 'verweigert', blocked: 'blockiert', executed: 'ausgeführt',
     deletedRecords: 'Gelöschte Datensätze', affectedRecords: 'Betroffene Datensätze', auditEntries: 'Audit-Einträge',
     exportLabel: 'Auskunft (Art. 15)', valid: 'gültig', withdrawn: 'widerrufen', expired: 'abgelaufen', open: 'offen',
@@ -32,24 +33,24 @@ const COPY = {
     viewToList: 'Als Liste anzeigen', viewToCards: 'Als Karten anzeigen',
   },
   en: {
-    title: 'Consent', kicker: 'ATS', mainKicker: 'Check', listTitle: 'Consent', newTitle: 'New check',
+    title: 'Consent', listTitle: 'Consent', newTitle: 'New check',
     newAction: 'New check', importAction: 'Import', exportAction: 'Export',
     searchPlaceholder: 'Search...', closeDetail: 'Close details',
     bandAll: 'All', bandValid: 'Valid', bandOpen: 'Pending', bandEnded: 'Ended',
-    subjectLabel: 'Subject', purposeLabel: 'Purpose', rightsLabel: 'Data-subject rights', subjectPlaceholder: 'Subject ID', purposePlaceholder: 'Purpose (optional — blank checks existence only)',
+    subjectLabel: 'Person', purposeLabel: 'Purpose', rightsLabel: 'Data-subject rights', subjectPlaceholder: 'Candidate ID', purposePlaceholder: 'optional',
     checkConsent: 'Check consent', rightsSubjectPlaceholder: 'Subject ID',
     exportArticle15: 'Access request (Art. 15)', eraseArticle17: 'Erase (Art. 17)',
     exportTitle: 'Right of access (GDPR Art. 15)', eraseTitle: 'Right to erasure (GDPR Art. 17)',
-    entries: 'entries', entriesEmpty: 'No entries yet.', emptyFiltered: 'No entry matches the filter.',
-    syncing: 'Syncing data.',
-    statusAll: 'All statuses', commandOffline: 'Offline: command service unavailable.',
+    entries: 'entries',
+    statusAll: 'All statuses',
     dataLocked: 'Data access is locked.',
-    dataLockedHint: 'The app is installed. Grant business_consents in the App Store to view existing consent records.',
-    databaseOffline: 'Offline: database unavailable.',
+    dataLockedHint: 'Grant consent data in the App Store.',
+    eraseConfirmTitle: 'Erase data permanently?', eraseConfirmText: 'All stored data for “{subject}” will be erased across apps. This cannot be undone.', eraseConfirm: 'Erase permanently',
+    basisConsent: 'Consent (Art. 6(1)(a))', basisContract: 'Contract (Art. 6(1)(b))', basisLegal: 'Legal obligation (Art. 6(1)(c))', basisInterest: 'Legitimate interest (Art. 6(1)(f))', unlimited: 'unlimited',
     imported: 'Imported', importInvalid: 'Invalid JSON file.', importEmpty: 'No records in the file.',
-    subjectRequired: 'Subject ID is required.', dispatchOffline: 'Offline: command could not be sent.',
+    subjectRequired: 'Subject ID is required.',
     checkFailed: 'Consent check failed.', consentPresent: 'Valid consent exists.', consentMissing: 'No valid consent.',
-    subject: 'Subject', purpose: 'Purpose', existenceOnly: '— (existence check only)', decision: 'Decision',
+    subject: 'Person', purpose: 'Purpose', existenceOnly: '—', decision: 'Decision',
     allowed: 'allowed', denied: 'denied', blocked: 'blocked', executed: 'completed',
     deletedRecords: 'Deleted records', affectedRecords: 'Affected records', auditEntries: 'Audit entries',
     exportLabel: 'Access request (Art. 15)', valid: 'valid', withdrawn: 'withdrawn', expired: 'expired', open: 'pending',
@@ -149,7 +150,7 @@ export function consentRow(r, opts = {}) {
   const selected = Boolean(opts.selected);
   const now = Number(opts.nowMs) || 0;
   const status = statusOf(r, now);
-  const subject = r.subject_id || '—';
+  const subject = refName(r, 'subject', locale);
   const title = r.purpose || subject;
   const badge = '<span class="ctox-badge' + badgeStateClass(status) + '" data-status="' + esc(status) + '">' + esc(statusLabel(status)) + '</span>';
   const id = r.id || '';
@@ -164,7 +165,7 @@ export function consentRow(r, opts = {}) {
       + '<span class="consent-row-side">' + badge + '</span>'
       + '</div>';
   }
-  const assignment = [text.subject + ': ' + subject, text.legalBasis + ': ' + (r.legal_basis || 'consent')];
+  const assignment = [text.subject + ': ' + subject, text.legalBasis + ': ' + legalBasisLabel(r.legal_basis)];
   const dates = [text.granted + ': ' + fmtDate(r.granted_at_ms), text.validUntil + ': ' + fmtValidUntil(r.expires_at_ms)];
   if (Number.isFinite(Number(r.withdrawn_at_ms)) && Number(r.withdrawn_at_ms) > 0) {
     dates.push(text.withdrawn + ': ' + fmtDate(r.withdrawn_at_ms));
@@ -176,20 +177,11 @@ export function consentRow(r, opts = {}) {
     + '</div>';
 }
 
-// The list body markup (shards or compact rows), or the empty/sync state.
-// Readiness gates ONLY the data-driven empty (unfiltered source empty): while
-// the backing collection has not finished its initial replication
-// (ready === false) we show the kit syncing shell instead of "no entries".
+// The list body markup (shards or compact rows). App-API 4.0 (R11): eine leere Liste rendert nichts – kein
+// Lade-, Sync- oder Leertext; Zustände gehen nur in die Zustandszone der Shell.
 export function renderRecordList(rows, opts = {}) {
   const list = Array.isArray(rows) ? rows : [];
-  if (!list.length) {
-    if (opts.readiness?.ready === false) {
-      return '<div class="ctox-syncing" role="status" aria-live="polite">'
-        + '<strong>' + esc(opts.syncingText || text.syncing) + '</strong>'
-        + '</div>';
-    }
-    return '<div class="ctox-empty"><strong>' + esc(opts.emptyText || text.entriesEmpty) + '</strong></div>';
-  }
+  if (!list.length) return '';
   return list.map((r) => consentRow(r, { view: opts.view, nowMs: opts.nowMs, selected: r.id && r.id === opts.selectedId })).join('');
 }
 
@@ -197,18 +189,17 @@ export function renderRecordList(rows, opts = {}) {
 export function recordDetailHtml(r, nowMs) {
   const now = Number(nowMs) || 0;
   const status = statusOf(r, now);
-  const subject = r.subject_id || '—';
+  const subject = refName(r, 'subject', locale);
   const title = r.purpose || subject;
   const rows = [];
   rows.push(field(text.subject, esc(subject)));
   rows.push(field(text.purpose, esc(r.purpose || text.existenceOnly)));
-  rows.push(field(text.legalBasis, esc(r.legal_basis || 'consent')));
+  rows.push(field(text.legalBasis, esc(legalBasisLabel(r.legal_basis))));
   rows.push(field(text.validUntil, esc(fmtValidUntil(r.expires_at_ms))));
   rows.push(field(text.granted, esc(fmtDate(r.granted_at_ms))));
   if (Number.isFinite(Number(r.withdrawn_at_ms)) && Number(r.withdrawn_at_ms) > 0) {
     rows.push(field(text.withdrawn, esc(fmtDate(r.withdrawn_at_ms))));
   }
-  if (r.id) rows.push(field('ID', '<span class="ats-tag">' + esc(r.id) + '</span>'));
   const rightsIcon = r.subject_id
     ? '<button type="button" class="ctox-pane-icon" data-action="rights-export" aria-label="' + esc(text.exportTitle) + '" title="' + esc(text.exportTitle) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M12 15l-4-4M12 15l4-4M5 21h14"/></svg></button>'
       + '<button type="button" class="ctox-pane-icon" data-action="rights-erase" aria-label="' + esc(text.eraseTitle) + '" title="' + esc(text.eraseTitle) + '"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg></button>'
@@ -224,6 +215,13 @@ export function recordDetailHtml(r, nowMs) {
     + '</div>'
     + '</header>'
     + '<dl class="ctox-fields ctox-fields--stacked">' + rows.join('') + '</dl>';
+}
+
+// Namen statt IDs (Textdiät Regel 4): Anzeigename aus dem Datensatz (<basis>_name / <basis>.name / <basis>_title),
+// sonst „Unbekannt“ – nie die technische ID.
+function refName(r, base, lang = 'de') {
+  const v = r?.[base + '_name'] ?? r?.[base]?.name ?? r?.[base + '_title'];
+  return v ? String(v) : (lang === 'en' ? 'Unknown' : 'Unbekannt'); // v4-allow: en
 }
 
 function field(label, valueHtml) {
@@ -250,7 +248,7 @@ export function prepareImport(raw, nowMs, salt = '') {
     source: String(src.source || 'import'),
     created_at_ms: num(src.created_at_ms) || now,
     updated_at_ms: now,
-    _deleted: false,
+    // _deleted ist reserviert (Kern-Tombstone, E47) und wird nie von der App geschrieben.
   };
 }
 
@@ -258,21 +256,38 @@ export function prepareImport(raw, nowMs, salt = '') {
 // Mount
 // ---------------------------------------------------------------------------
 
-export async function mount(ctx) {
-  locale = String(ctx.locale || document.documentElement.lang || 'de').toLowerCase().startsWith('en') ? 'en' : 'de';
-  text = COPY[locale];
-  await ensureStyles();
-  ctx.host.innerHTML = await loadMarkup();
-  ctx.host.dataset.atsModule = MODULE_ID;
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
+function langFrom(value) {
+  return String(value || '').toLowerCase().startsWith('en') ? 'en' : 'de';
+}
 
-  const root = ctx.host.querySelector('[data-ats-root]');
+// App-API 4.0: mount(host, api, {restored}) → {unmount, snapshot}. Daten nur über api.query/put, Befehle über
+// api.command (nie warten), Zustände nur in die Zustandszone (api.status.report).
+export async function mount(host, api, { restored } = {}) {
+  locale = langFrom(api.shell.locale.get());
+  text = COPY[locale];
+  if (!host.dataset.app) host.dataset.app = api.app?.id || MODULE_ID;
+  host.innerHTML = await loadMarkup();
+  host.dataset.atsModule = MODULE_ID;
+  const disposers = [];
+
+  const root = host.querySelector('[data-ats-root]');
   root?.setAttribute('lang', locale);
-  const t = (key) => text[key] || COPY.de[key] || key;
-  root?.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
-  root?.querySelectorAll('[data-i18n-placeholder]').forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
-  root?.querySelectorAll('[data-i18n-title]').forEach((node) => { node.title = node.ariaLabel = t(node.dataset.i18nTitle); });
+  // api.shell.t übersteuert die eingebetteten Texte (Schlüsselraum offen, app-api.d.ts OFFEN-B).
+  const t = (key) => {
+    const scoped = MODULE_ID + '.' + key;
+    const value = api.shell.t?.(scoped);
+    if (typeof value === 'string' && value && value !== scoped) return value;
+    return text[key] || COPY.de[key] || key;
+  };
+  const applyLabels = () => {
+    root?.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n); });
+    root?.querySelectorAll('[data-i18n-placeholder]').forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
+    root?.querySelectorAll('[data-i18n-title]').forEach((node) => { node.title = node.ariaLabel = t(node.dataset.i18nTitle); });
+  };
+  applyLabels();
+  // Pane-Grammatik verdrahtet die App selbst (PORTING.md R14), keine DOM-Heuristik der Shell.
+  autoWirePaneGrammar(host);
+  api.shell.setTitle(t('title'));
 
   const rail = root?.querySelector('.consent-rail');
   const listEl = root?.querySelector('[data-ats-list]');
@@ -281,56 +296,35 @@ export async function mount(ctx) {
   const subjectFormEl = root?.querySelector('[data-ats-subject-form]');
   const gateEl = root?.querySelector('[data-ats-gate]');
   const titleEl = root?.querySelector('[data-ats-title]');
-  const subEl = root?.querySelector('[data-ats-sub]');
   const toggleRightsEl = root?.querySelector('[data-toggle-rights]');
   const viewToggleEl = rail?.querySelector('.consent-view-toggle');
-  if (titleEl) titleEl.textContent = locale === 'en' ? t('title') : (ctx.manifest?.title || t('title'));
-  // Der Kicker ist ein Etikett in einer 37px-Kopfzeile. Die vollstaendige
-  // Modulbeschreibung (84 Zeichen, gemessen 619px) passte dort nie und hat den
-  // Titel messbar auf 0px zerdrueckt. Sichtbar bleibt das kurze Etikett, die
-  // Beschreibung wandert in den Tooltip — nichts geht verloren.
-  if (subEl) {
-    subEl.textContent = t('mainKicker');
-    subEl.title = ctx.manifest?.description || '';
-  }
+  if (titleEl) titleEl.textContent = t('title');
 
   let rowsCache = [];
   let selectedId = null;
   let userCollapsed = false;
-  let consentReadiness = readConsentReadiness();
   const nowMs = () => Date.now();
-  const collection = () => { try { return ctx.db?.collection?.(PRIMARY) || null; } catch { return null; } };
-  const canReadCollection = () => {
-    const permissionCheck = ctx.permissions?.canReadCollection;
-    return typeof permissionCheck !== 'function' || permissionCheck(PRIMARY) === true;
-  };
-  function isPermissionDenied(error) {
-    return error?.code === 'CTOX_BUSINESS_OS_PERMISSION_DENIED'
-      || error?.name === 'BusinessOsPermissionError';
-  }
-
-  // Canonical shell readiness for the backing collection (render hint only —
-  // never a mount blocker). Missing sync API ⇒ null ⇒ treated as ready.
-  function readConsentReadiness() {
-    const read = ctx.sync?.collectionReadiness;
-    return typeof read === 'function' ? read.call(ctx.sync, PRIMARY) : null;
-  }
-  function wireConsentReadiness() {
-    const subscribe = ctx.sync?.subscribeCollectionReadiness;
-    if (typeof subscribe !== 'function') return () => {};
-    const unsubscribe = subscribe.call(ctx.sync, PRIMARY, (snapshot) => {
-      consentReadiness = snapshot;
-      render();
-    });
-    return typeof unsubscribe === 'function' ? unsubscribe : () => {};
-  }
+  // Zustand in die Zustandszone (stabile codes je Fall, damit clear greift).
+  const report = (code, key, level = 'warn', extra = '') => api.status.report({ level, code: MODULE_ID + '.' + code, text: t(key) + (extra ? ': ' + extra : '') });
+  const clear = (code) => api.status.clear(MODULE_ID + '.' + code);
 
   // Gate callout → kit .ctox-callout variants (base.css).
-  const GATE_VARIANTS = { ok: ' is-success', block: ' is-danger', offline: ' is-warning' };
+  // Ergebnis der Prüfung/Auskunft steht als neutrale Karte am Arbeitsbereich (kein farbiger Hinweiskasten);
+  // Sperren/Fehler gehen in die Zustandszone (Textdiät Regel 1).
   function setGate(html, kind) {
     if (!gateEl) return;
-    gateEl.className = 'ctox-callout' + (GATE_VARIANTS[kind] || '');
+    if (kind === 'block' || kind === 'offline') {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = html || '';
+      api.status.report({ level: 'error', code: MODULE_ID + '.gate.blocked', text: tmp.textContent.replace(/\s+/g, ' ').trim() });
+      gateEl.innerHTML = '';
+      gateEl.hidden = true;
+      return;
+    }
+    if (html) api.status.clear(MODULE_ID + '.gate.blocked');
+    gateEl.className = 'ctox-card consent-result';
     gateEl.innerHTML = html || '';
+    gateEl.hidden = !html;
   }
 
   // Read the SHELL-wired grammar state straight from the pane DOM. Die Ansicht
@@ -362,17 +356,14 @@ export async function mount(ctx) {
     if (node) node.textContent = str || '';
   }
 
+  // Kein Lesezugriff (Core antwortet forbidden): Liste leer, Hinweis in der Zustandszone statt im Inhalt.
   function renderLockedCollection() {
     rowsCache = [];
-    if (listEl) {
-      listEl.innerHTML = '<div class="ctox-empty ctox-empty--locked" role="status">'
-        + '<strong>' + esc(t('dataLocked')) + '</strong>'
-        + '<span>' + esc(t('dataLockedHint')) + '</span>'
-        + '</div>';
-    }
+    if (listEl) listEl.innerHTML = '';
     writeCounts({ all: 0, valid: 0, open: 0, ended: 0 });
     writeFooter('— ' + t('entries'));
     if (detailEl) { detailEl.hidden = true; detailEl.innerHTML = ''; }
+    api.status.report({ level: 'warn', code: MODULE_ID + '.data.locked', text: t('dataLocked') + ' ' + t('dataLockedHint') });
   }
 
   function renderDetail() {
@@ -385,44 +376,40 @@ export async function mount(ctx) {
     if (show) {
       detailEl.setAttribute('data-context-record-id', rec.id || '');
       detailEl.setAttribute('data-context-record-type', 'consent');
-      detailEl.setAttribute('data-context-label', (rec.purpose || rec.subject_id || rec.id || ''));
+      detailEl.setAttribute('data-context-label', (rec.purpose || refName(rec, 'subject', locale)));
     }
-    if (titleEl) titleEl.textContent = rec ? ((rec.purpose || rec.subject_id || '—')) : t('newTitle');
+    if (titleEl) titleEl.textContent = rec ? (rec.purpose || refName(rec, 'subject', locale)) : t('newTitle');
   }
 
   function render() {
-    if (!canReadCollection()) { renderLockedCollection(); return; }
+    if (locked) { renderLockedCollection(); return; }
     const g = readGrammar();
     const now = nowMs();
     const filtered = filterRows(rowsCache, g, now);
-    if (listEl) {
-      const emptyText = rowsCache.length ? t('emptyFiltered') : t('entriesEmpty');
-      // Readiness gates only the data-driven empty (source empty); a filter
-      // empty (source has rows, none match) always shows the filter text.
-      const readiness = rowsCache.length ? null : consentReadiness;
-      listEl.innerHTML = renderRecordList(filtered, { view: g.view, selectedId, nowMs: now, emptyText, readiness });
-    }
+    if (listEl) listEl.innerHTML = renderRecordList(filtered, { view: g.view, selectedId, nowMs: now });
     writeCounts(countsFor(rowsCache, now));
     const scope = { all: t('bandAll'), valid: t('bandValid'), open: t('bandOpen'), ended: t('bandEnded') }[g.band] || t('bandAll');
     writeFooter(filtered.length + ' ' + t('entries') + ' · ' + scope);
     renderDetail();
   }
 
-  async function load() {
-    if (!canReadCollection()) { rowsCache = []; return; }
-    const col = collection();
-    let rows = [];
-    if (col?.find) {
-      try {
-        const docs = await col.find({ selector: {} }).exec();
-        rows = docs.map((d) => (typeof d.toJSON === 'function' ? d.toJSON() : d)).filter((r) => !r._deleted);
-      } catch (error) {
-        if (isPermissionDenied(error)) { rowsCache = []; return; }
-        console.error('[consent] load failed:', error);
-      }
+  let locked = false;
+  function sortRows(rows) {
+    return [...rows].sort((a, b) => (Number(b.updated_at_ms || b.created_at_ms || 0) - Number(a.updated_at_ms || a.created_at_ms || 0)));
+  }
+  // Live-Abo (App-API 4.0): subscribe ruft sofort mit dem lokalen Stand und bei jeder Änderung.
+  function subscribeRows() {
+    try {
+      return api.query(PRIMARY, {}).subscribe((rows) => {
+        rowsCache = sortRows(Array.isArray(rows) ? rows : []);
+        render();
+      });
+    } catch (error) {
+      if (error?.code !== 'forbidden') throw error;
+      locked = true;
+      render();
+      return () => {};
     }
-    rows.sort((a, b) => (Number(b.updated_at_ms || b.created_at_ms || 0) - Number(a.updated_at_ms || a.created_at_ms || 0)));
-    rowsCache = rows;
   }
 
   // Selecting a record pre-fills the consent-check form (subject + purpose) as a
@@ -486,8 +473,6 @@ export async function mount(ctx) {
   }
 
   function importRecords() {
-    const col = collection();
-    if (!col?.upsert) { setGate(t('databaseOffline'), 'offline'); return; }
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'application/json,.json';
@@ -495,38 +480,60 @@ export async function mount(ctx) {
       const file = input.files && input.files[0];
       if (!file) return;
       let parsed;
-      try { parsed = JSON.parse(await file.text()); } catch { setGate(t('importInvalid'), 'block'); return; }
+      try { parsed = JSON.parse(await file.text()); } catch { report('import.invalid', 'importInvalid', 'error'); return; }
       const items = Array.isArray(parsed) ? parsed : (parsed && typeof parsed === 'object' ? [parsed] : []);
-      if (!items.length) { setGate(t('importEmpty'), 'block'); return; }
+      if (!items.length) { report('import.empty', 'importEmpty'); return; }
       const stamp = nowMs();
       let count = 0;
       for (const raw of items) {
-        try { await col.upsert(prepareImport(raw, stamp, String(count))); count += 1; }
+        try { await api.put(PRIMARY, prepareImport(raw, stamp, String(count))).local; count += 1; }
         catch (e) { console.error('[consent] import failed:', e); }
       }
-      setGate('<strong>' + esc(t('imported')) + '</strong>: ' + count, 'ok');
-      await load();
-      render();
+      report('import.done', 'imported', 'info', String(count));
     });
     input.click();
   }
 
+  // Befehl über api.command: legt das Befehlsdokument an und liefert sofort (nie warten). Das Ergebnis (`done`)
+  // ist die fachliche Antwort und erscheint im Prüfbereich; `failed`/lokal ungültig → Zustandszone.
+  function runCommand(type, payload, onResult) {
+    const code = MODULE_ID + '.command.' + type;
+    const handle = api.command(type, { ...payload, record_id: payload.subject_id || MODULE_ID, client_context: { module_id: MODULE_ID } });
+    let off = null;
+    let finished = false;
+    const stop = () => { finished = true; off?.(); off = null; };
+    off = handle.status.subscribe((value) => {
+      if (value?.status === 'failed') {
+        api.status.report({ level: 'error', code, text: type + ': ' + (value.error || 'failed'), ref: handle.id });
+        stop();
+      } else if (value?.status === 'done') {
+        api.status.clear(code);
+        stop();
+        onResult(value.result);
+      }
+    });
+    if (finished) off?.();
+    handle.local.catch((error) => {
+      api.status.report({ level: 'error', code, text: type + ': ' + (error?.code || 'local') + ' ' + (error?.message || error), ref: handle.id });
+    });
+    disposers.push(stop);
+    return handle;
+  }
+
   // ats.consent.check — reads { subject_id, purpose? }, returns { ok, allowed, purpose }.
-  async function onCheckSubmit(event) {
+  function onCheckSubmit(event) {
     event.preventDefault();
     setGate('');
-    const dispatch = ctx.commandBus?.dispatch;
-    if (typeof dispatch !== 'function') { setGate(t('commandOffline'), 'offline'); return; }
     const f = Object.fromEntries(new FormData(formEl).entries());
     const subject_id = String(f.subject_id || '').trim();
-    if (!subject_id) { setGate(t('subjectRequired'), 'block'); return; }
+    if (!subject_id) { report('form.subject_required', 'subjectRequired'); return; }
+    clear('form.subject_required');
     const purposeRaw = String(f.purpose || '').trim();
     const payload = { subject_id, purpose: purposeRaw || null };
+    runCommand(CHECK_COMMAND, payload, (result) => renderCheckResult(result, subject_id, purposeRaw));
+  }
 
-    let result;
-    try { result = await dispatch.call(ctx.commandBus, { module: MODULE_ID, command_type: CHECK_COMMAND, payload }); }
-    catch (e) { console.error('[consent] check dispatch failed:', e); setGate(t('dispatchOffline'), 'offline'); return; }
-
+  function renderCheckResult(result, subject_id, purposeRaw) {
     const blockers = collectBlockers(result);
     if (result?.ok === false || (Array.isArray(blockers) && blockers.length > 0)) {
       setGate('<strong>' + esc(t('checkFailed')) + '</strong>' + blockerList(blockers), 'block');
@@ -549,22 +556,30 @@ export async function mount(ctx) {
   // Betroffenenrechte: Art. 15 export / Art. 17 erase, both keyed by subject_id.
   async function dispatchSubject(commandType, subjectId, label) {
     setGate('');
-    const dispatch = ctx.commandBus?.dispatch;
-    if (typeof dispatch !== 'function') { setGate(t('commandOffline'), 'offline'); return; }
     const subject_id = String(subjectId || '').trim();
-    if (!subject_id) { setGate(t('subjectRequired'), 'block'); return; }
-
-    let result;
-    try { result = await dispatch.call(ctx.commandBus, { module: MODULE_ID, type: commandType, command_type: commandType, payload: { subject_id } }); }
-    catch (e) { console.error('[consent] ' + commandType + ' dispatch failed:', e); setGate(t('dispatchOffline'), 'offline'); return; }
-
-    const blockers = collectBlockers(result);
-    if (result?.ok === false || (Array.isArray(blockers) && blockers.length > 0)) {
-      setGate('<strong>' + esc(label) + ' ' + esc(t('blocked')) + '.</strong>' + blockerList(blockers), 'block');
-      return;
+    if (!subject_id) { report('form.subject_required', 'subjectRequired'); return; }
+    clear('form.subject_required');
+    // Art. 17 löscht app-übergreifend und endgültig: nur nach ausdrücklicher Bestätigung im App-Fenster.
+    if (commandType === ERASE_COMMAND) {
+      const confirmed = await api.shell.dialog({
+        kind: 'confirm',
+        title: t('eraseConfirmTitle'),
+        text: t('eraseConfirmText').replace('{subject}', subject_id),
+        confirm_label: t('eraseConfirm'),
+        danger: true,
+        default: false,
+      });
+      if (confirmed !== true) return;
     }
-    renderSubjectResult(commandType, label, subject_id, result);
-    if (commandType === ERASE_COMMAND) { try { await load(); render(); } catch {} }
+    runCommand(commandType, { subject_id }, (result) => {
+      const blockers = collectBlockers(result);
+      if (result?.ok === false || (Array.isArray(blockers) && blockers.length > 0)) {
+        setGate('<strong>' + esc(label) + ' ' + esc(t('blocked')) + '.</strong>' + blockerList(blockers), 'block');
+        return;
+      }
+      // Löschung: die Liste folgt über das Live-Abo, kein Nachladen.
+      renderSubjectResult(commandType, label, subject_id, result);
+    });
   }
 
   function renderSubjectResult(commandType, label, subjectId, result) {
@@ -694,30 +709,72 @@ export async function mount(ctx) {
   const onGrammarChange = () => { render(); };
   rail?.addEventListener('ctox-pane-grammar-change', onGrammarChange);
 
-  let subscription = null;
-  const col = collection();
-  if (col?.find) {
-    try { subscription = col.find({ selector: {} }).$?.subscribe?.(() => { load().then(render).catch(() => {}); }); }
-    catch { /* live sync optional */ }
-  }
-  const stopReadiness = wireConsentReadiness();
-  await load();
-  render();
+  disposers.push(subscribeRows());
+  disposers.push(api.shell.locale.subscribe((value) => {
+    const next = langFrom(value);
+    if (next === locale) return;
+    locale = next;
+    text = COPY[locale];
+    root?.setAttribute('lang', locale);
+    applyLabels();
+    syncViewToggle();
+    render();
+  }));
+  applyRestored(restored);
 
-  return () => {
-    try { subscription?.unsubscribe?.(); } catch {}
-    try { stopReadiness(); } catch {}
-    formEl?.removeEventListener('submit', onCheckSubmit);
-    subjectFormEl?.removeEventListener('submit', onSubjectSubmit);
-    toggleRightsEl?.removeEventListener('click', onToggleRights);
-    viewToggleEl?.removeEventListener('click', onViewToggle);
-    rail?.removeEventListener('click', stripViewTogglePressed);
-    listEl?.removeEventListener('click', onListClick);
-    listEl?.removeEventListener('keydown', onListKey);
-    root?.removeEventListener('click', onAction);
-    rail?.removeEventListener('ctox-pane-grammar-change', onGrammarChange);
-    ctx.host.replaceChildren();
-    delete ctx.host.dataset.atsModule;
+  // Snapshot für den Live-Remount: Auswahl, Ansicht, offene Formulareingaben.
+  function snapshot() {
+    const g = readGrammar();
+    const form = formEl ? Object.fromEntries(new FormData(formEl).entries()) : {};
+    const subjectForm = subjectFormEl ? Object.fromEntries(new FormData(subjectFormEl).entries()) : {};
+    return {
+      v: 1,
+      selectedId,
+      userCollapsed,
+      search: rail?.querySelector('[data-pg-search]')?.value || '',
+      view: g.view,
+      rightsOpen: !root?.classList.contains('is-rights-hidden'),
+      form: { subject_id: String(form.subject_id || ''), purpose: String(form.purpose || '') },
+      subjectForm: { subject_id: String(subjectForm.subject_id || '') },
+    };
+  }
+
+  function applyRestored(snap) {
+    if (!snap || typeof snap !== 'object') return;
+    if (typeof snap.selectedId === 'string') selectedId = snap.selectedId;
+    if (typeof snap.userCollapsed === 'boolean') userCollapsed = snap.userCollapsed;
+    const search = rail?.querySelector('[data-pg-search]');
+    if (search && typeof snap.search === 'string') search.value = snap.search;
+    if (snap.view === 'list' && viewToggleEl && viewToggleEl.dataset.pgView !== 'list') onViewToggle();
+    if (snap.rightsOpen === true && root?.classList.contains('is-rights-hidden')) onToggleRights();
+    if (snap.form && typeof snap.form === 'object') {
+      setField('subject_id', snap.form.subject_id || '');
+      setField('purpose', snap.form.purpose || '');
+    }
+    const subjectInput = subjectFormEl?.querySelector('[name="subject_id"]');
+    if (subjectInput && typeof snap.subjectForm?.subject_id === 'string') subjectInput.value = snap.subjectForm.subject_id;
+    applyListSelection();
+    renderDetail();
+  }
+
+  return {
+    unmount() {
+      for (const dispose of disposers.splice(0)) {
+        try { dispose(); } catch (error) { console.warn('[consent] unsubscribe failed', error); }
+      }
+      formEl?.removeEventListener('submit', onCheckSubmit);
+      subjectFormEl?.removeEventListener('submit', onSubjectSubmit);
+      toggleRightsEl?.removeEventListener('click', onToggleRights);
+      viewToggleEl?.removeEventListener('click', onViewToggle);
+      rail?.removeEventListener('click', stripViewTogglePressed);
+      listEl?.removeEventListener('click', onListClick);
+      listEl?.removeEventListener('keydown', onListKey);
+      root?.removeEventListener('click', onAction);
+      rail?.removeEventListener('ctox-pane-grammar-change', onGrammarChange);
+      host.replaceChildren();
+      delete host.dataset.atsModule;
+    },
+    snapshot,
   };
 }
 
@@ -742,8 +799,15 @@ function fmtDate(ms) {
   try { return new Date(n).toLocaleDateString(locale === 'en' ? 'en-US' : 'de-DE'); } catch { return String(n); }
 }
 
+// Rechtsgrundlage als Nutzerbegriff (Art. 6 DSGVO) statt Rohwert.
+function legalBasisLabel(raw) {
+  const v = String(raw || 'consent').toLowerCase();
+  const map = { consent: 'basisConsent', contract: 'basisContract', legal_obligation: 'basisLegal', legitimate_interest: 'basisInterest' };
+  return map[v] ? text[map[v]] : String(raw);
+}
+
 function fmtValidUntil(ms) {
-  return Number.isFinite(Number(ms)) && Number(ms) > 0 ? fmtDate(ms) : '∞';
+  return Number.isFinite(Number(ms)) && Number(ms) > 0 ? fmtDate(ms) : text.unlimited;
 }
 
 // Key/value result rows inside the gate callout → kit .ctox-fields (base.css).
@@ -771,22 +835,9 @@ function blockerList(blockers) {
   return '<ul class="ats-blockers">' + items + '</ul>';
 }
 
-async function ensureStyles() {
-  const cssVersion = String(import.meta.url).split('?v=')[1] || MOD_BUILD;
-  const cssHref = new URL('./index.css', import.meta.url).pathname + (cssVersion ? `?v=${cssVersion}` : '');
-  let link = document.querySelector('link[data-consent-style]');
-  if (!link) {
-    link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.dataset.consentStyle = 'true';
-    document.head.append(link);
-  }
-  if (link.getAttribute('href') !== cssHref) link.href = cssHref;
-}
 async function loadMarkup() {
-  const markupVersion = String(import.meta.url).split('?v=')[1] || MOD_BUILD;
-  const markupHref = new URL('./index.html', import.meta.url).pathname + (markupVersion ? `?v=${markupVersion}` : '');
-  const html = await fetch(markupHref).then((r) => r.text());
+  // index.html liefert der Service Worker versioniert (§16.15) – kein Cache-Buster; CSS lädt die Shell.
+  const html = await fetch(new URL('./index.html', import.meta.url)).then((r) => r.text());
   const doc = new DOMParser().parseFromString(html, 'text/html');
   doc.querySelectorAll('script, link[rel="stylesheet"]').forEach((n) => n.remove());
   return doc.body.innerHTML;

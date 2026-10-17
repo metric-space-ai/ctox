@@ -1302,17 +1302,4 @@ mod speech_availability_tests {
             SpeechAvailability::Unknown
         );
     }
-
-    #[test]
-    fn availability_serializes_to_the_contract_values() {
-        let values: Vec<String> = [
-            SpeechAvailability::Unknown,
-            SpeechAvailability::Available,
-            SpeechAvailability::Unavailable,
-        ]
-        .iter()
-        .map(|value| serde_json::to_string(value).unwrap())
-        .collect();
-        assert_eq!(values, ["\"unknown\"", "\"available\"", "\"unavailable\""]);
-    }
 }

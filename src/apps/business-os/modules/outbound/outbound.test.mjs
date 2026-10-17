@@ -6,7 +6,14 @@ import { Buffer } from 'node:buffer';
 import fs from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+
+// esbuild aus dem Repo; der Klon hat keine node_modules → Rückfall auf den Haupt-Checkout (ESBUILD_MODULE).
+const { build } = await import('esbuild').catch(() => createRequire(import.meta.url)(
+  process.env.ESBUILD_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/esbuild'),
+));
 
 if (typeof globalThis.DOMParser !== 'function') {
   class TestXmlNode {
@@ -93,6 +100,15 @@ const bundledModule = await build({
   format: 'esm',
   platform: 'browser',
   write: false,
+  // v4: `ctox:shared/x.js` löst sonst nur der Service Worker auf (PORTING §4 Falle 2).
+  plugins: [{
+    name: 'ctox-shared',
+    setup(b) {
+      b.onResolve({ filter: /^ctox:shared\// }, (args) => ({
+        path: fileURLToPath(new URL(`../../shared/${args.path.slice('ctox:shared/'.length)}`, import.meta.url)),
+      }));
+    },
+  }],
 });
 
 const [{ text: bundledEntrypoint }] = bundledModule.outputFiles;
@@ -153,24 +169,24 @@ test('campaign column uses shell-owned grammar and stable in-place selection', a
   assert.match(js, /row\.classList\.toggle\('is-selected', selected\)/);
   assert.match(js, /function updateQualificationSelectionInPlace/);
   assert.match(js, /renderContactQualificationRow[\s\S]*data-context-record-id=[^\n]+data-context-record-type=[^\n]+data-context-label=/);
-  assert.match(js, /state\.ctx\?\.storageScope\?\.get\?\.\(OUTBOUND_CENTER_SPLIT_KEY\)/);
-  assert.match(js, /state\.ctx\?\.storageScope\?\.set\?\.\(OUTBOUND_CENTER_SPLIT_KEY/);
-  assert.match(js, /openBusinessChat = state\.ctx\?\.openBusinessChat/);
+  // v4: Spaltenverhältnis im Fensterzustand (snapshot/restored) statt ctx.storageScope. Strang SKL-O: kein Chat-Auftrag
+  // mehr aus der App (Campaign-Setup ist der App-Befehl outbound.campaign.setup.request).
+  assert.match(js, /const value = Number\(state\.centerSplitRatio\)/);
+  assert.match(js, /if \(Number\.isFinite\(value\)\) state\.centerSplitRatio = value;/);
+  assert.match(js, /snap\.centerSplitRatio = /);
+  assert.doesNotMatch(js, /openBusinessChat|shell\.navigate\('ctox'/);
   assert.match(activeJs, /function selectEngagementInPlace/);
   assert.doesNotMatch(`${js}\n${activeJs}`, /localStorage|sessionStorage|window\.dispatchEvent|ctox-business-os-chat-submit/);
   assert.doesNotMatch(css, /\.ctox-filterbar\s*\{|\.ctox-filter-tray\s*\{|\.ctox-view-switch\s*\{|\.ctox-well\s*\{|\.ctox-pane-footer\s*\{/);
 });
 
-test('data-driven empty states gate on canonical collection readiness', async () => {
+test('data-driven empty states render nothing and never show sync state (App-API 4.0)', async () => {
   const js = await fs.readFile(new URL('./index.js', import.meta.url), 'utf8');
-
-  assert.match(js, /sync\?\.subscribeCollectionReadiness/, 'canonical readiness changes are subscribed');
-  assert.match(js, /sync\?\.collectionReadiness/, 'readiness snapshots are read from the shell sync context');
-  assert.match(js, /outboundCollectionReadiness\('outbound_campaigns'\)/, 'campaign empties gate on outbound_campaigns readiness');
-  assert.match(js, /outboundCollectionReadiness\('outbound_companies'\)/, 'company table empty gates on outbound_companies readiness');
-  assert.match(js, /ctox-syncing" role="status" aria-live="polite"/, 'unready + empty renders the syncing shell');
-  assert.match(js, /readiness\?\.ready === false[\s\S]*?ctox-empty/, 'empty fallback only renders once the collection is ready');
-  assert.match(js, /t\('syncingData', 'Daten werden synchronisiert\.'\)/, 'sync hint goes through module i18n');
+  // v4: Es gibt keine Readiness mehr (lokaler Spiegel = Wahrheit); leere Listen rendern nichts, Zustand nur in der Zone.
+  assert.doesNotMatch(js, /collectionReadiness|subscribeCollectionReadiness|ctox-syncing|syncingData|Daten werden synchronisiert/);
+  assert.match(js, /\/\/ v4: leere Liste rendert nichts/);
+  assert.match(js, /if \(!campaign\) \{\s*root\.innerHTML = '';/);
+  assert.match(js, /function renderTableEmptyState\(_message\) \{\s*if \(currentSources\(\)\.length > 0\) return '';/);
 });
 
 test('campaign scope recovers existing outbound rows for the only visible campaign', () => {
@@ -340,46 +356,16 @@ test('research auth assist opens the exact protected-source browser session with
   assert.equal(args.secret_value_in_rxdb, false);
   assert.equal(JSON.stringify(args).includes('credential_ref'), false);
   assert.equal(JSON.stringify(args).includes('password'), false);
-  assert.match(outboundSource, /openDesktopApp\?\.\(['"]browser['"]/);
+  // v4: Browser über api.shell.navigate, Startargumente aus dem gepushten Befehlsergebnis.
+  assert.match(outboundSource, /state\.api\?\.shell\.navigate\('browser', \{ title: t\('browser', 'Browser'\), mode: 'maximized', args: browserArgs \}\)/);
 });
 
-test('a failed auth assist closes only the browser window it pre-opened', async () => {
-  const windows = [{ id: 'win-mail' }];
-  const destroyed = [];
-  const ctx = {
-    windowManager: {
-      listWindows: () => windows.map((win) => ({ ...win })),
-      destroy: async (id) => { destroyed.push(id); },
-    },
-    openDesktopApp: async (appId) => {
-      assert.equal(appId, 'browser');
-      const id = 'win-browser-new';
-      windows.push({ id });
-      return id;
-    },
-  };
-  const created = await hooks.preopenAuthAssistBrowserWindow(ctx);
-  assert.equal(created, 'win-browser-new');
-  assert.equal(await hooks.closePreopenedAuthAssistBrowserWindow(ctx, created), true);
-  assert.deepEqual(destroyed, ['win-browser-new']);
-
-  // A browser window the user already had open is reused by openDesktopApp
-  // and must never be closed by a failed login request.
-  const existingCtx = {
-    ...ctx,
-    openDesktopApp: async () => 'win-mail',
-  };
-  const reused = await hooks.preopenAuthAssistBrowserWindow(existingCtx);
-  assert.equal(reused, null);
-  assert.equal(await hooks.closePreopenedAuthAssistBrowserWindow(existingCtx, reused), false);
-  assert.deepEqual(destroyed, ['win-browser-new']);
-
-  // The command-bus rejection (no capability token) flows through the
-  // try/finally that closes the pre-opened window.
-  assert.match(
-    outboundSource,
-    /finally \{\s*if \(!browserLaunched\) \{\s*await closePreopenedAuthAssistBrowserWindow\(state\.ctx, preopenedBrowserWindowId\);/,
-  );
+test('a failed auth assist opens no browser window (App-API 4.0: no pre-opened window)', async () => {
+  // v4: Apps haben keinen Fenstermanager mehr; vorher wurde ein leeres Browserfenster vorab geöffnet und bei
+  // Fehlschlag wieder geschlossen. Jetzt öffnet der Browser erst mit Startargumenten – ein Fehlschlag öffnet nichts.
+  assert.equal(hooks.browserAuthAssistLaunchArgs(hooks.authAssistFromCommandResult({ ok: false, status: 'failed', error: 'x' })), null);
+  assert.doesNotMatch(outboundSource, /preopenAuthAssistBrowserWindow|closePreopenedAuthAssistBrowserWindow|windowManager|openDesktopApp/);
+  assert.match(outboundSource, /\}, async \(error\) => \{\s*const result = \{ ok: false, status: 'failed', error: error\?\.message \|\| String\(error\) \};/);
 });
 
 test('outbound import extracts company rows from uploaded Excel workbooks', async () => {
@@ -402,7 +388,7 @@ test('outbound import extracts company rows from uploaded Excel workbooks', asyn
   assert.deepEqual(rows.map((row) => row.name), ['A GmbH', 'B GmbH']);
 });
 
-test('every campaign idea template is actionable and channel-explicit', () => {
+test('every campaign idea template is actionable and channel-explicit', async () => {
   for (const lang of ['de', 'en']) {
     const templates = hooks.campaignIdeaTemplates(lang);
     const ids = new Set();
@@ -428,16 +414,8 @@ test('every campaign idea template is actionable and channel-explicit', () => {
         assert.match(template.text, /(?:Brief|Briefe|physical letter|physical letters|letter templates|printable letters)/i, `${template.id} must explicitly name physical letters as the channel`);
       }
 
-      const prompt = hooks.campaignSetupPrompt(
-        {
-          id: `camp-${template.id}`,
-          name: template.title,
-          payload: {
-            briefing: template.text,
-            briefing_template_id: template.id,
-            briefing_language: lang,
-          },
-        },
+      const prompt = await campaignSetupPrompt(
+        { id: `camp-${template.id}`, name: template.title, payload: { briefing: template.text } },
         `cmd-${template.id}`,
         template,
       );
@@ -463,63 +441,45 @@ test('campaign briefing uses stored free text as the central campaign instructio
   assert.equal(hooks.campaignBriefingSummary(campaign), 'Ich möchte 100 Handwerksbetriebe per Mail anschreiben.');
 });
 
-test('campaign briefing save opens the current CTOX Business Chat contract for the setup skill', () => {
-  assert.match(outboundSource, /openBusinessChat/);
-  assert.doesNotMatch(outboundSource, /ctox-business-os-chat-submit|window\.dispatchEvent/);
-  assert.match(outboundSource, /business-os-outbound-campaign-setup/);
+// Strang SKL-O: Prompt aus dem Paket (prompts/campaign-setup.md), gefüllt wie im Handler outbound.campaign.setup.request.
+async function campaignSetupPrompt(campaign, commandId, template) {
+  const { renderPrompt } = await import('../../shared/prompt-template.js');
+  const read = (rel) => fs.readFile(new URL(`./${rel}`, import.meta.url), 'utf8');
+  return renderPrompt(null, 'campaign-setup', {
+    campaign_id: campaign.id,
+    campaign_name: campaign.name,
+    command_id: commandId,
+    template_id: template ? template.id : 'custom',
+    template_title: template ? template.title : 'custom',
+    briefing: hooks.campaignBriefing(campaign),
+  }, { read });
+}
+
+test('campaign briefing save sends the app command outbound.campaign.setup.request (no chat task)', async () => {
+  assert.doesNotMatch(outboundSource, /business_os\.chat\.task|openBusinessChat|ctox-business-os-chat-submit|window\.dispatchEvent/);
+  assert.doesNotMatch(outboundSource, /business-os-outbound-campaign-setup/);
   assert.match(outboundSource, /outbound\.campaign\.briefing\.update/);
-  assert.match(outboundSource, /function dispatchOutboundPromptTask/);
-  assert.match(outboundSource, /action:\s*['"]context-chat['"]/);
-  assert.match(outboundSource, /reuseActive:\s*false/);
-  assert.match(outboundSource, /business_os\.chat\.task/);
-  assert.match(outboundSource, /outbound\.campaign\.apply_setup/);
+  assert.match(outboundSource, /sendCommand\('outbound\.campaign\.setup\.request'/);
   assert.doesNotMatch(outboundSource, /\/api\/business-os\/commands/);
 
-  const prompt = hooks.campaignSetupPrompt(
-    {
-      id: 'camp-1',
-      name: 'Nord-Handwerk',
-      payload: {
-        briefing: 'Ich möchte 100 Handwerksbetriebe in Norddeutschland per Mail anschreiben.',
-        briefing_template_id: 'de-mail-handwerk-nord',
-      },
-    },
+  const prompt = await campaignSetupPrompt(
+    { id: 'camp-1', name: 'Nord-Handwerk', payload: { briefing: 'Ich möchte 100 Handwerksbetriebe in Norddeutschland per Mail anschreiben.' } },
     'cmd-setup-1',
     { id: 'de-mail-handwerk-nord', title: 'Handwerk in Norddeutschland per E-Mail' },
   );
 
-  assert.match(prompt, /Nutze den CTOX Skill business-os-outbound-campaign-setup/);
+  assert.match(prompt, /Nutze den CTOX Skill outbound\/campaign-setup/);
   assert.match(prompt, /keine HTTP-Datenkanaele/i);
   assert.match(prompt, /outbound\.campaign\.apply_setup/);
   assert.match(prompt, /cmd-setup-1/);
   assert.match(prompt, /selected_template_id: de-mail-handwerk-nord/);
   assert.match(prompt, /selected_template_title: Handwerk in Norddeutschland per E-Mail/);
+  assert.doesNotMatch(prompt, /ctox business-os|commands dispatch/);
 });
 
-test('outbound prompt tasks use ctx.openBusinessChat with the context-chat contract', () => {
-  const opened = [];
-  const detail = hooks.dispatchOutboundPromptTask({
-    text: 'Bitte richte diese Outbound-Kampagne ein.',
-    commandId: 'cmd-context-chat-1',
-    recordId: 'camp-1',
-    title: 'Outbound Campaign einrichten',
-    instruction: 'Nutze den Outbound Skill.',
-    requiredSkills: ['business-os-outbound-campaign-setup'],
-    writebackContract: { command_type: 'outbound.campaign.apply_setup' },
-    payload: { prompt: 'Bitte richte diese Outbound-Kampagne ein.' },
-    clientContext: { outbound_action: 'campaign-setup-briefing' },
-    openBusinessChat(value) { opened.push(value); },
-  });
-
-  assert.equal(opened.length, 1);
-  assert.equal(opened[0], detail);
-  assert.equal(detail.action, 'context-chat');
-  assert.equal(detail.reuseActive, false);
-  assert.equal(detail.command_type, 'business_os.chat.task');
-  assert.deepEqual(detail.required_skills, ['business-os-outbound-campaign-setup']);
-  assert.equal(detail.writeback_contract.command_type, 'outbound.campaign.apply_setup');
-  assert.equal(detail.client_context.action, 'context-chat');
-  assert.equal(detail.client_context.outbound_action, 'campaign-setup-briefing');
+test('outreach draft button sends data only; instruction, skill and callback live in the handler', () => {
+  assert.match(outboundSource, /command_type: 'outbound\.pipeline\.outreach_draft'/);
+  assert.doesNotMatch(outboundSource, /outreachDraftInstruction|writeback: \{/);
 });
 
 test('campaign editor keeps template briefing drafts across rerenders', () => {
@@ -535,17 +495,17 @@ test('campaign editor keeps template briefing drafts across rerenders', () => {
 
 test('campaign editor rerenders templates when shell language changes', () => {
   assert.match(outboundSource, /function applyOutboundLanguage/);
-  assert.match(outboundSource, /ctox-business-os-preferences/);
-  assert.match(outboundSource, /ctox-business-os-language/);
+  // v4: Sprache live über api.shell.locale statt Fenster-Ereignissen.
+  assert.match(outboundSource, /api\.shell\.locale\.subscribe\(\(lang\) => \{\s*applyOutboundLanguage\(lang \|\| 'de'\)/);
   assert.match(outboundSource, /syncCampaignEditDraftFromEditor\(editor\);\s*render\(true\);/);
   assert.match(outboundSource, /campaignIdeaTemplates\(lang = state\.lang\)/);
 });
 
 test('outbound transient overlays remain scoped to the mounted module host', async () => {
   const js = await fs.readFile(new URL('./index.js', import.meta.url), 'utf8');
-  assert.match(js, /const moduleHost = state\.ctx\?\.host \|\| hostCell\?\.closest/);
+  assert.match(js, /const moduleHost = state\.root \|\| hostCell\?\.closest/);
   assert.match(js, /moduleHost\.appendChild\(overlay\)/);
-  assert.match(js, /const panel = state\.ctx\?\.host\?\.querySelector/);
+  assert.match(js, /const panel = state\.root\?\.querySelector/);
   assert.match(js, /moduleHost\.appendChild\(panel\)/);
   assert.doesNotMatch(js, /document\.body\.appendChild\((?:overlay|panel)\)/);
 });

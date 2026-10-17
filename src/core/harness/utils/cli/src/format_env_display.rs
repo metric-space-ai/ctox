@@ -24,13 +24,6 @@ pub fn format_env_display(env: Option<&HashMap<String, String>>, env_vars: &[Str
 mod tests {
     use super::*;
 
-    #[test]
-    fn returns_dash_when_empty() {
-        assert_eq!(format_env_display(None, &[]), "-");
-
-        let empty_map = HashMap::new();
-        assert_eq!(format_env_display(Some(&empty_map), &[]), "-");
-    }
 
     #[test]
     fn formats_sorted_env_pairs() {

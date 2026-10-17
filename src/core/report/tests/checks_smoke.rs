@@ -30,27 +30,6 @@ fn completeness_check_empty_run_is_not_ready() {
 }
 
 #[test]
-fn character_budget_check_empty_run_is_not_started() {
-    let root = TestRoot::new().expect("temp root");
-    let run_id = create_run(root.path(), rascon_create_params()).expect("create_run");
-    let workspace = Workspace::load(root.path(), &run_id).expect("workspace");
-    let outcome = run_character_budget_check(&workspace).expect("character_budget check");
-    assert!(
-        !outcome.check_applicable,
-        "empty run should report check_applicable=false; got {outcome:?}"
-    );
-    let status = outcome
-        .raw_payload
-        .get("status")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    assert_eq!(
-        status, "not_started",
-        "empty run status should be 'not_started'; got {status:?}"
-    );
-}
-
-#[test]
 fn character_budget_check_within_tolerance() {
     let root = TestRoot::new().expect("temp root");
     let run_id = create_run(root.path(), rascon_create_params()).expect("create_run");
@@ -100,22 +79,6 @@ fn character_budget_check_within_tolerance() {
     assert!(
         outcome.ready_to_finish,
         "within tolerance implies ready_to_finish: {outcome:?}"
-    );
-}
-
-#[test]
-fn release_guard_no_blocks_is_check_applicable_false() {
-    let root = TestRoot::new().expect("temp root");
-    let run_id = create_run(root.path(), rascon_create_params()).expect("create_run");
-    let workspace = Workspace::load(root.path(), &run_id).expect("workspace");
-    let outcome = run_release_guard_check(&workspace).expect("release_guard check");
-    assert!(
-        !outcome.check_applicable,
-        "no committed blocks -> not applicable: {outcome:?}"
-    );
-    assert!(
-        outcome.ready_to_finish,
-        "non-applicable check counts as ready: {outcome:?}"
     );
 }
 

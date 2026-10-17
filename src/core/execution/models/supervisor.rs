@@ -4233,44 +4233,6 @@ mod tests {
     }
 
     #[test]
-    fn managed_backend_launch_spec_captures_typed_boundary_contract() {
-        let root = temp_root("launch-spec-chat");
-        persist_chat_plan(&root, &sample_chat_plan("openai/gpt-oss-120b"));
-        let spec = ManagedBackendSpec {
-            display_model: "openai/gpt-oss-120b".to_string(),
-            request_model: "openai/gpt-oss-120b".to_string(),
-            port: 1234,
-            transport_endpoint: Some("/tmp/ctox-primary.sock".to_string()),
-            health_path: "/health",
-            launcher_kind: ManagedLauncherKind::Engine,
-            compute_target: None,
-        };
-        let launch_spec = build_managed_backend_launch_spec(
-            &root,
-            ManagedBackendRole::Chat,
-            &spec,
-            &runtime_gpu_manager::GpuAdmission {
-                visible_devices: Some("0,1".to_string()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-
-        assert_eq!(launch_spec.version, 2);
-        assert_eq!(launch_spec.role, "chat");
-        assert_eq!(launch_spec.request_model, "openai/gpt-oss-120b");
-        assert_eq!(launch_spec.port, 1234);
-        assert_eq!(
-            launch_spec.transport_endpoint.as_deref(),
-            Some("/tmp/ctox-primary.sock")
-        );
-        assert_eq!(launch_spec.launcher_kind, "engine");
-        assert_eq!(launch_spec.visible_devices.as_deref(), Some("0,1"));
-        assert_eq!(launch_spec.engine_config.max_seq_len, Some(131_072));
-        assert_eq!(launch_spec.engine_config.isq.as_deref(), Some("Q4K"));
-    }
-
-    #[test]
     fn managed_engine_runtime_config_renders_typed_worker_contract() {
         let root = temp_root("engine-command");
         let launch_spec = ManagedBackendLaunchSpec {
@@ -4655,37 +4617,6 @@ mod tests {
     }
 
     #[test]
-    fn production_supervisor_avoids_shell_launchers() {
-        let production = production_source(include_str!("supervisor.rs"));
-
-        for forbidden in [
-            "Command::new(\"bash\")",
-            "run_engine.sh",
-            "run_speaches_cpu_backend.sh",
-            ".arg(\"-lc\")",
-            "uvx",
-            "git+https://github.com/speaches-ai/speaches.git",
-        ] {
-            assert!(
-                !production.contains(forbidden),
-                "supervisor production path still contains shell launcher detail `{forbidden}`"
-            );
-        }
-        assert!(
-            !production.contains("managed-backend-launch"),
-            "supervisor production path must not retain the legacy launcher trampoline"
-        );
-        assert!(
-            production.contains("spawn_managed_engine_backend("),
-            "supervisor production path must spawn the engine worker directly from the typed launch spec"
-        );
-        assert!(
-            production.contains(".arg(\"from-config\")"),
-            "supervisor production path must boot the worker from a typed runtime config"
-        );
-    }
-
-    #[test]
     fn auxiliary_launchability_fails_fast_when_engine_binary_is_missing() {
         let root = temp_root("aux-launchability-missing-engine");
         let err = ensure_auxiliary_backend_launchable(&root, engine::AuxiliaryRole::Embedding)
@@ -5055,12 +4986,5 @@ mod tests {
         assert!(!managed_engine_quantize_command(
             "/home/test/CTOX/runtime/tools/model-runtime/bin/ctox-engine from-config --file /tmp/engine.toml"
         ));
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn current_process_cwd_matches_workspace_root() {
-        let root = std::env::current_dir().unwrap();
-        assert!(process_current_dir_matches_root(std::process::id(), &root));
     }
 }

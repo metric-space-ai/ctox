@@ -1,0 +1,9 @@
+{
+  "schema": "shell-v4-frame-palette-baseline-v1",
+  "note": "Nur senken. Hoechstzahl frame_palette je Datei; neue Dateien 0.",
+  "total": 2,
+  "files": {
+    "customer-modules/outbound-lead-generation/module.json": 1,
+    "modules/knowledge/module.json": 1
+  }
+}

@@ -1,0 +1,860 @@
+{
+  "_app_id": "invoices",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {
+    "accounting_credit_notes": {
+      "source": "modules/invoices/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "accounting_dunning_letters": {
+      "source": "modules/invoices/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "accounting_dunning_runs": {
+      "source": "modules/invoices/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "accounting_invoice_approvals": {
+      "source": "modules/invoices/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "accounting_invoice_attachments": {
+      "source": "modules/invoices/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "accounting_invoice_lines": {
+      "source": "modules/invoices/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "accounting_invoices": {
+      "source": "modules/invoices/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "accounting_payment_allocations": {
+      "source": "modules/invoices/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "accounting_payment_terms": {
+      "source": "modules/invoices/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "accounting_payments": {
+      "source": "modules/invoices/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "accounting_recurring_invoices": {
+      "source": "modules/invoices/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    }
+  },
+  "_foreign_copies_not_taken": [
+    {
+      "name": "accounting_accounts",
+      "owner": "buchhaltung"
+    },
+    {
+      "name": "accounting_bank_statement_lines",
+      "owner": "buchhaltung"
+    },
+    {
+      "name": "accounting_journal_entries",
+      "owner": "buchhaltung"
+    },
+    {
+      "name": "accounting_journal_entry_lines",
+      "owner": "buchhaltung"
+    },
+    {
+      "name": "accounting_ledger_entries",
+      "owner": "buchhaltung"
+    },
+    {
+      "name": "accounting_number_series",
+      "owner": "buchhaltung"
+    },
+    {
+      "name": "accounting_receipts",
+      "owner": "buchhaltung"
+    },
+    {
+      "name": "customer_accounts",
+      "owner": "customers"
+    },
+    {
+      "name": "customer_activities",
+      "owner": "customers"
+    },
+    {
+      "name": "desktop_file_chunks",
+      "owner": "desktop"
+    },
+    {
+      "name": "desktop_files",
+      "owner": "desktop"
+    }
+  ],
+  "collections": {
+    "accounting_credit_notes": {
+      "additionalProperties": true,
+      "indexes": [
+        "invoice_id"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "corrective_invoice_number": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "credit_note_invoice_id": {
+          "type": "string"
+        },
+        "delta_gross_cents": {
+          "type": "number"
+        },
+        "delta_net_cents": {
+          "type": "number"
+        },
+        "delta_tax_cents": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reason_text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "invoice_id",
+        "credit_note_invoice_id",
+        "created_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_dunning_letters": {
+      "additionalProperties": true,
+      "indexes": [
+        "invoice_id",
+        "dunning_run_id"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "dunning_run_id": {
+          "type": "string"
+        },
+        "fee_cents": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "interest_cents": {
+          "type": "number"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "letter_date_ms": {
+          "type": "number"
+        },
+        "level": {
+          "type": "number"
+        },
+        "pdf_attachment_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sent_at_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "sent_via": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": "string"
+        },
+        "total_cents": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "dunning_run_id",
+        "invoice_id",
+        "level",
+        "letter_date_ms",
+        "total_cents",
+        "status",
+        "created_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "accounting_dunning_runs": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "filter": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoices_total": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "letters_sent": {
+          "type": "number"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "run_by": {
+          "type": "string"
+        },
+        "run_date_ms": {
+          "type": "number"
+        },
+        "state": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "run_date_ms",
+        "invoices_total",
+        "state",
+        "created_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "accounting_invoice_approvals": {
+      "additionalProperties": true,
+      "indexes": [
+        "invoice_id"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "actor_user_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "decision": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "note": {
+          "type": "string"
+        },
+        "revision_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "invoice_id",
+        "decision",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_invoice_attachments": {
+      "additionalProperties": true,
+      "indexes": [
+        "invoice_id"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "desktop_file_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "invoice_id",
+        "kind",
+        "desktop_file_id",
+        "created_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_invoice_lines": {
+      "additionalProperties": true,
+      "indexes": [
+        "invoice_id"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "account_code": {
+          "type": "string"
+        },
+        "article_number": {
+          "type": "string"
+        },
+        "cost_center_id": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "discount_percent": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "line_gross_cents": {
+          "type": "number"
+        },
+        "line_net_cents": {
+          "type": "number"
+        },
+        "line_tax_cents": {
+          "type": "number"
+        },
+        "position": {
+          "type": "number"
+        },
+        "project_id": {
+          "type": "string"
+        },
+        "quantity": {
+          "type": "number"
+        },
+        "service_period_end_ms": {
+          "type": "number"
+        },
+        "service_period_start_ms": {
+          "type": "number"
+        },
+        "tax_rate": {
+          "type": "number"
+        },
+        "unit": {
+          "type": "string"
+        },
+        "unit_price_cents": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "invoice_id",
+        "position",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_invoices": {
+      "additionalProperties": true,
+      "indexes": [
+        "party_id",
+        "state",
+        "invoice_date_ms",
+        "due_date_ms",
+        "invoice_number",
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "approval_id": {
+          "type": "string"
+        },
+        "approval_status": {
+          "type": "string"
+        },
+        "cancel_journal_entry_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "credit_note_for_id": {
+          "type": "string"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "deleted_at_ms": {
+          "type": "number"
+        },
+        "draft_status": {
+          "type": "string"
+        },
+        "due_date_ms": {
+          "type": "number"
+        },
+        "dunning_level": {
+          "type": "number"
+        },
+        "eu_ic_supply": {
+          "type": "boolean"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoice_date_ms": {
+          "type": "number"
+        },
+        "invoice_number": {
+          "type": "string"
+        },
+        "invoice_type": {
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "last_dunning_run_id": {
+          "type": "string"
+        },
+        "linked_invoice_id": {
+          "type": "string"
+        },
+        "open_cents": {
+          "type": "number"
+        },
+        "paid_cents": {
+          "type": "number"
+        },
+        "party_id": {
+          "type": "string"
+        },
+        "party_snapshot": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "payment_terms_id": {
+          "type": "string"
+        },
+        "pdf_attachment_id": {
+          "type": "string"
+        },
+        "post_journal_entry_id": {
+          "type": "string"
+        },
+        "proposal_status": {
+          "type": "string"
+        },
+        "reverse_charge": {
+          "type": "boolean"
+        },
+        "search_text": {
+          "type": "string"
+        },
+        "service_period_end_ms": {
+          "type": "number"
+        },
+        "service_period_start_ms": {
+          "type": "number"
+        },
+        "skonto_days": {
+          "type": "number"
+        },
+        "skonto_percent": {
+          "type": "number"
+        },
+        "small_business": {
+          "type": "boolean"
+        },
+        "state": {
+          "type": "string"
+        },
+        "state_changed_at_ms": {
+          "type": "number"
+        },
+        "state_changed_by_command_id": {
+          "type": "string"
+        },
+        "subtotal_cents": {
+          "type": "number"
+        },
+        "tax_breakdown": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "tax_cents": {
+          "type": "number"
+        },
+        "total_cents": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "xrechnung_xml": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "invoice_type",
+        "state",
+        "currency",
+        "search_text",
+        "is_deleted",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_payment_allocations": {
+      "additionalProperties": true,
+      "indexes": [
+        "payment_id",
+        "invoice_id"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "allocated_at_ms": {
+          "type": "number"
+        },
+        "allocated_by_command_id": {
+          "type": "string"
+        },
+        "allocated_cents": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "invoice_id": {
+          "type": "string"
+        },
+        "note": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "payment_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "skonto_cents": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "payment_id",
+        "invoice_id",
+        "allocated_cents",
+        "allocated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "accounting_payment_terms": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "is_default": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "net_days": {
+          "type": "number"
+        },
+        "skonto_days": {
+          "type": "number"
+        },
+        "skonto_percent": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "net_days",
+        "is_default",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_payments": {
+      "additionalProperties": true,
+      "indexes": [
+        "party_id",
+        "payment_date_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "amount_cents": {
+          "type": "number"
+        },
+        "bank_statement_line_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "method": {
+          "type": "string"
+        },
+        "party_id": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "payment_date_ms": {
+          "type": "number"
+        },
+        "reference": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "payment_date_ms",
+        "amount_cents",
+        "currency",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "accounting_recurring_invoices": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "auto_send": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "end_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "interval": {
+          "type": "string"
+        },
+        "interval_count": {
+          "type": "number"
+        },
+        "last_run_at_ms": {
+          "type": "number"
+        },
+        "next_run_at_ms": {
+          "type": "number"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "start_at_ms": {
+          "type": "number"
+        },
+        "template_invoice_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "template_invoice_id",
+        "interval",
+        "interval_count",
+        "start_at_ms",
+        "auto_send",
+        "active",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "migrations": {
+    "accounting_dunning_letters": {
+      "from_ver": "main@4794af03d",
+      "steps": [],
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_reasons": [
+        "Typ von „pdf_attachment_id“: string → string|null",
+        "Typ von „sent_at_ms“: number → number|null",
+        "Typ von „sent_via“: string → string|null",
+        "Feld „updated_at_ms“ neu ohne Default"
+      ]
+    },
+    "accounting_dunning_runs": {
+      "from_ver": "main@4794af03d",
+      "migrate_fn": "migrations/accounting_dunning_runs.js",
+      "_file": "v4/schemas/migrations/invoices/accounting_dunning_runs.js",
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_reasons": [
+        "Typ von „invoices_total“: number → array",
+        "Feld „updated_at_ms“ neu ohne Default"
+      ]
+    },
+    "accounting_payment_allocations": {
+      "from_ver": "main@4794af03d",
+      "steps": [],
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_reasons": [
+        "Typ von „note“: string → string|null",
+        "Typ von „payment_id“: string → string|null",
+        "Feld „updated_at_ms“ neu ohne Default"
+      ]
+    }
+  },
+  "migration_strategies": {
+    "accounting_dunning_letters": {
+      "1": {
+        "operations": []
+      }
+    },
+    "accounting_dunning_runs": {
+      "1": {
+        "operations": []
+      }
+    },
+    "accounting_payment_allocations": {
+      "1": {
+        "operations": []
+      }
+    }
+  }
+}

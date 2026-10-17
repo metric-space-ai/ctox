@@ -363,7 +363,7 @@ pub(crate) fn dkim_probe_registered_account(
     let email = setting(&settings, "CTO_EMAIL_ADDRESS");
     let args = sync_args_from_settings(&settings, &email);
     let runtime = runtime_from_settings(root, &settings);
-    let db_path = root.join("runtime/ctox.sqlite3");
+    let db_path = crate::paths::core_db(root);
     let request = AdapterSyncCommandRequest {
         db_path: db_path.as_path(),
         passthrough_args: &args,
@@ -376,18 +376,20 @@ pub(crate) fn dkim_probe_registered_account(
     );
     let client = EwsClient::from_options(&options)?;
     let account_key = format!("email:{}", options.email.trim().to_ascii_lowercase());
-    let conn = Connection::open_with_flags(&db_path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    let mut stmt = conn.prepare(
-        "SELECT message_key, remote_id FROM communication_messages
+    let mails = crate::lcm::with_lcm_read(&db_path, move |conn: &Connection| {
+        let mut stmt = conn.prepare(
+            "SELECT message_key, remote_id FROM communication_messages
          WHERE account_key = ?1 AND channel = 'email' AND direction = 'inbound'
          ORDER BY observed_at DESC LIMIT ?2",
-    )?;
-    let mails = stmt
-        .query_map(
-            rusqlite::params![account_key, limit.clamp(1, 50) as i64],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
-        )?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+        )?;
+        let mails = stmt
+            .query_map(
+                rusqlite::params![account_key, limit.clamp(1, 50) as i64],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(mails)
+    })?;
     let authenticator = mail_auth::MessageAuthenticator::new_system_conf()
         .map_err(|error| anyhow!("dns resolver: {error}"))?;
     let tokio = tokio::runtime::Builder::new_current_thread()

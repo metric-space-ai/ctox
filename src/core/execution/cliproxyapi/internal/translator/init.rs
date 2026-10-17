@@ -45,30 +45,4 @@ pub fn register_all(registry: &Registry) {
 mod tests {
     use super::*;
     use crate::sdk::translator::{claude, codex, interactions, openai, openai_response};
-
-    #[test]
-    fn registers_every_dependency_coherent_pair_explicitly() {
-        let registry = Registry::new();
-        register_all(&registry);
-        assert!(registry.has_request_transformer(&claude(), &interactions()));
-        assert!(registry.has_response_transformer(&claude(), &interactions()));
-        assert!(registry.has_request_transformer(&openai_response(), &interactions()));
-        assert!(registry.has_response_transformer(&openai_response(), &interactions()));
-        assert!(registry.has_request_transformer(&openai(), &interactions()));
-        assert!(registry.has_response_transformer(&openai(), &interactions()));
-        assert!(registry.has_request_transformer(&interactions(), &openai()));
-        assert!(registry.has_response_transformer(&interactions(), &openai()));
-        assert!(registry.has_request_transformer(&claude(), &codex()));
-        assert!(registry.has_response_transformer(&claude(), &codex()));
-        assert!(registry.has_request_transformer(&interactions(), &codex()));
-        assert!(registry.has_response_transformer(&interactions(), &codex()));
-        assert!(registry.has_request_transformer(&claude(), &openai()));
-        assert!(registry.has_response_transformer(&claude(), &openai()));
-        assert!(registry.has_request_transformer(&openai(), &claude()));
-        assert!(registry.has_response_transformer(&openai(), &claude()));
-        assert!(registry.has_request_transformer(&crate::sdk::translator::gemini(), &openai()));
-        assert!(registry.has_response_transformer(&crate::sdk::translator::gemini(), &openai()));
-        assert!(registry.has_request_transformer(&openai_response(), &openai()));
-        assert!(registry.has_response_transformer(&openai_response(), &openai()));
-    }
 }

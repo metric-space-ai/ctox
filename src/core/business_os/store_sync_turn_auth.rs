@@ -742,6 +742,35 @@ fn write_native_signaling_token(root: &Path, token: &str, source: &str) -> anyho
     Ok(())
 }
 
+// Secret material stays in the owning process, without Debug/Serialize.
+pub(crate) struct BrowserBootstrapMaterial {
+    config: BusinessOsSyncConfig,
+    turn: Option<(String, String)>,
+}
+impl BrowserBootstrapMaterial {
+    pub(crate) fn refresh_after(&self) -> Option<std::time::Duration> {
+        // Managed relay credentials expire even without a Store mutation.
+        let expiry = self.config.ice_diagnostics["credentialExpiresAtMs"].as_i64()?;
+        let delay = expiry.saturating_sub(now_ms() as i64).saturating_sub(30_000);
+        Some(std::time::Duration::from_millis(delay.max(60_000) as u64))
+    }
+    pub(crate) fn for_session(&self, session: &str) -> BusinessOsSyncConfig {
+        let mut config = self.config.clone();
+        if let Some((url, secret)) = &self.turn {
+            let (username, credential) = mint_ephemeral_turn_credentials(secret, session, now_ms() as i64);
+            config.ice_servers.push(serde_json::json!({"urls": url,"username":username,"credential":credential}));
+        }
+        config.ice_diagnostics = ice_diagnostics(&config.ice_servers);
+        config
+    }
+}
+pub(crate) fn browser_bootstrap_material(root: &Path) -> anyhow::Result<BrowserBootstrapMaterial> {
+    let mut config = sync_config(root)?;
+    config.signaling_room_password.clear();
+    let turn = business_os_turn_url(root).zip(business_os_turn_secret(root));
+    Ok(BrowserBootstrapMaterial { config, turn })
+}
+
 pub fn sync_config_for_browser(
     root: &Path,
     turn_session_id: &str,
@@ -935,7 +964,11 @@ fn managed_turn_edge_key(root: &Path) -> Option<String> {
     if let Ok(value) = env::var(BUSINESS_OS_TURN_EDGE_KEY) {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
-            let _ = crate::secrets::set_credential(root, BUSINESS_OS_TURN_EDGE_KEY, trimmed);
+            // Avoid generating a new encrypted row/notification on every read
+            // of an unchanged environment-imported edge key.
+            if crate::secrets::get_credential(root, BUSINESS_OS_TURN_EDGE_KEY).as_deref() != Some(trimmed) {
+                let _ = crate::secrets::set_credential(root, BUSINESS_OS_TURN_EDGE_KEY, trimmed);
+            }
             return Some(trimmed.to_owned());
         }
     }
@@ -1803,6 +1836,161 @@ pub(super) fn module_manifest_collection_ids(manifest: &Value) -> Vec<String> {
     collections
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ModuleCatalogFileIdentity {
+    path: PathBuf,
+    metadata: Option<(u64, std::time::SystemTime, u64, u64, i64, i64)>,
+    content_fallback: Option<Vec<u8>>,
+}
+
+fn module_catalog_file_identity(path: &Path) -> anyhow::Result<ModuleCatalogFileIdentity> {
+    #[cfg(unix)]
+    let content_fallback = None;
+    #[cfg(not(unix))]
+    let mut content_fallback = None;
+    let metadata = match fs::metadata(path) {
+        Ok(value) => {
+            #[cfg(not(unix))]
+            if value.is_file() {
+                content_fallback =
+                    Some(<sha2::Sha256 as sha2::Digest>::digest(fs::read(path)?).to_vec());
+            }
+            #[cfg(unix)]
+            let identity = {
+                use std::os::unix::fs::MetadataExt;
+                (value.dev(), value.ino(), value.ctime(), value.ctime_nsec())
+            };
+            #[cfg(not(unix))]
+            let identity = (0, 0, 0, 0);
+            Some((
+                value.len(),
+                value.modified()?,
+                identity.0,
+                identity.1,
+                identity.2,
+                identity.3,
+            ))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    Ok(ModuleCatalogFileIdentity {
+        path: path.to_path_buf(),
+        metadata,
+        content_fallback,
+    })
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct BootstrapCatalogGeneration {
+    files: Vec<ModuleCatalogFileIdentity>,
+    state: Vec<String>,
+}
+
+fn bootstrap_catalog_generation(root: &Path) -> anyhow::Result<BootstrapCatalogGeneration> {
+    let source = resolve_business_os_app_root(root)?;
+    let installed = resolve_business_os_installed_app_root(root);
+    let mut files = Vec::new();
+    // Directory identity and sorted children cover install/remove/rename too.
+    for app_root in [&source, &installed] {
+        for namespace in [
+            "modules",
+            "installed-modules",
+            "local-modules",
+            "template-store",
+        ] {
+            let directory = app_root.join(namespace);
+            files.push(module_catalog_file_identity(&directory)?);
+            if !directory.is_dir() {
+                continue;
+            }
+            let mut entries = fs::read_dir(&directory)?.collect::<Result<Vec<_>, _>>()?;
+            entries.sort_by_key(|entry| entry.path());
+            for entry in entries {
+                files.push(module_catalog_file_identity(&entry.path())?);
+                if !entry.file_type()?.is_dir() {
+                    continue;
+                }
+                for file in ["module.json", "collections.schema.json", "template.json"] {
+                    files.push(module_catalog_file_identity(&entry.path().join(file))?);
+                }
+            }
+        }
+    }
+    // Domain rows, not database/WAL mtime: unrelated session/command writes
+    // must not turn every GET into a cache miss. Use one read snapshot.
+    // Include all catalog governance/version values, but not the user last-seen
+    // timestamp: authenticated GETs refresh that timestamp without changing
+    // the catalog. A read must not run store initialization.
+    let mut state = vec![configured_business_users_projection_hash()];
+    let mut conn = Connection::open_with_flags(
+        business_os_store_path(root),
+        OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )?;
+    conn.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
+    let tx = conn.transaction()?;
+    for sql in [
+        "SELECT version_id,module_id,seq,origin,label,bundle_sha256,files_json,sealed,created_by,created_at_ms,updated_at_ms FROM business_module_versions ORDER BY module_id,seq,version_id",
+        "SELECT version_id,module_id,version,status,manifest_json,snapshot_json,created_by,created_at_ms,notes FROM business_module_releases ORDER BY module_id,version,version_id",
+        "SELECT module_id,user_id,role,active,created_at_ms,updated_at_ms FROM business_module_acl ORDER BY module_id,user_id,role",
+        "SELECT user_id,display_name,role,active,created_at_ms FROM business_users ORDER BY user_id",
+        "SELECT grant_id,subject_type,subject_id,permission,scope_type,scope_id,active,reason,created_by,created_at_ms,updated_at_ms FROM business_permission_grants ORDER BY grant_id",
+        "SELECT json_extract(state_json,'$.currentSlot'),json_extract(state_json,'$.activeVersion'),json_extract(state_json,'$.previousSlot') FROM business_os_shell_update_state WHERE singleton=1",
+    ] {
+        let mut statement = tx.prepare(sql)?;
+        let columns = statement.column_count();
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            for column in 0..columns { state.push(format!("{:?}", row.get_ref(column)?)); }
+            state.push("row".to_owned());
+        }
+        state.push("table".to_owned());
+    }
+    state.push(serde_json::to_string(&business_os_module_allowlist(root))?);
+    Ok(BootstrapCatalogGeneration { files, state })
+}
+
+type BootstrapCatalogCell =
+    std::sync::Arc<std::sync::Mutex<Option<(BootstrapCatalogGeneration, Value)>>>;
+static BOOTSTRAP_MODULE_CATALOGS: std::sync::OnceLock<
+    std::sync::Mutex<BTreeMap<PathBuf, BootstrapCatalogCell>>,
+> = std::sync::OnceLock::new();
+
+/// One catalog per observed installation generation. No TTL, stale-on-error,
+/// or dependency on a browser's current module/window lease.
+pub(crate) fn cached_module_catalog_for_bootstrap(root: &Path) -> anyhow::Result<Value> {
+    let key = fs::canonicalize(root)?;
+    let cell = BOOTSTRAP_MODULE_CATALOGS
+        .get_or_init(Default::default)
+        .lock()
+        .map_err(|_| anyhow::anyhow!("module catalog cache poisoned"))?
+        .entry(key)
+        .or_insert_with(Default::default)
+        .clone();
+    let mut cached = cell
+        .lock()
+        .map_err(|_| anyhow::anyhow!("module catalog generation poisoned"))?;
+    for _ in 0..3 {
+        let generation = bootstrap_catalog_generation(root)?;
+        if let Some((previous, value)) = cached.as_ref() {
+            if *previous == generation {
+                return Ok(value.clone());
+            }
+        }
+        let catalog = module_catalog_for_rxdb(root)?;
+        if bootstrap_catalog_generation(root)? == generation {
+            *cached = Some((generation, catalog.clone()));
+            return Ok(catalog);
+        }
+    }
+    anyhow::bail!("module installation changed while building bootstrap catalog")
+}
+
+type ModuleSchemaCell = (ModuleCatalogFileIdentity, BTreeSet<String>, Vec<Value>);
+static MODULE_FILE_PLANE_SCHEMAS: std::sync::OnceLock<
+    std::sync::Mutex<BTreeMap<PathBuf, ModuleSchemaCell>>,
+> = std::sync::OnceLock::new();
+
 pub(super) fn augment_module_manifest_file_plane(manifest: &mut ModuleManifest, module_dir: &Path) {
     let declared = manifest
         .collections
@@ -1815,13 +2003,36 @@ pub(super) fn augment_module_manifest_file_plane(manifest: &mut ModuleManifest, 
         return;
     }
     let schema_path = module_dir.join("collections.schema.json");
-    let Ok(schema_text) = fs::read_to_string(&schema_path) else {
+    let Ok(identity) = module_catalog_file_identity(&schema_path) else {
         return;
     };
-    let Ok(schema_doc) = serde_json::from_str::<Value>(&schema_text) else {
+    let Ok(mut cache) = MODULE_FILE_PLANE_SCHEMAS
+        .get_or_init(Default::default)
+        .lock()
+    else {
         return;
     };
-    let declarations = business_os_file_plane_declarations_from_schema_doc(&schema_doc, &declared);
+    let declarations = match cache.get(&schema_path) {
+        Some((previous, collections, value))
+            if previous == &identity && collections == &declared =>
+        {
+            value.clone()
+        }
+        _ => {
+            let Ok(schema_text) = fs::read_to_string(&schema_path) else {
+                return;
+            };
+            let Ok(schema_doc) = serde_json::from_str::<Value>(&schema_text) else {
+                return;
+            };
+            if module_catalog_file_identity(&schema_path).ok().as_ref() != Some(&identity) {
+                return;
+            }
+            let value = business_os_file_plane_declarations_from_schema_doc(&schema_doc, &declared);
+            cache.insert(schema_path, (identity, declared, value.clone()));
+            value
+        }
+    };
     if declarations.is_empty() {
         return;
     }

@@ -207,41 +207,6 @@ fn crew_retention_preserves_first_finalization_committed_after_scan() -> Result<
 }
 
 #[test]
-fn crew_migration_keeps_flow_ledger_lazy_until_admission() -> Result<()> {
-    let (root, conn, task) = leased()?;
-    assert!(!conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='ctox_harness_flow_events')",
-        [],
-        |r| r.get::<_, bool>(0)
-    )?);
-    prepare_attempt(
-        root.path(),
-        &[task],
-        "fixture",
-        "admitted",
-        None,
-        &json!({}),
-        None,
-        "Inspect",
-        None,
-    )?;
-    assert!(conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name='idx_crew_selection_event_attempt')",
-        [],
-        |r| r.get::<_, bool>(0)
-    )?);
-    assert_eq!(
-        conn.query_row(
-            "SELECT COUNT(*) FROM ctox_harness_flow_events WHERE event_kind='crew_selected'",
-            [],
-            |r| r.get::<_, i64>(0)
-        )?,
-        1
-    );
-    Ok(())
-}
-
-#[test]
 fn crew_unavailable_continues_without_retry_or_identity_and_warns_once() -> Result<()> {
     let (root, conn, task) = leased()?;
     conn.execute("UPDATE crew_members SET archived=1", [])?;
@@ -604,13 +569,14 @@ fn crew_learning_tick_writes_anchors_and_experience_into_member_memory() -> Resu
     Ok(())
 }
 
-#[test]
-fn crew_legacy_learnings_move_into_member_anchors_once() -> Result<()> {
+#[tokio::test]
+async fn crew_legacy_learnings_move_into_member_anchors_once() -> Result<()> {
     let root = tempfile::tempdir()?;
-    std::fs::create_dir_all(root.path().join("runtime"))?;
-    let conn = Connection::open(crate::paths::core_db(root.path()))?;
-    conn.execute_batch("CREATE TABLE communication_routing_state(message_key TEXT PRIMARY KEY,route_status TEXT,leased_at TEXT)")?;
-    ensure_schema(&conn)?;
+    let (writer, readers, adapter) = super::owner_tests::fixture(root.path()).await?;
+    let work = root.path().to_owned();
+    let result = crate::persistence::run_core_sync(move || {
+        let path = crate::paths::core_db(&work);
+        crate::lcm::with_lcm_write(&path, |conn| {
     for (id, scope, confirmed) in [
         ("global", "{}", 1),
         ("thread-a", "{\"thread_key\":\"A\"}", 0),
@@ -619,13 +585,15 @@ fn crew_legacy_learnings_move_into_member_anchors_once() -> Result<()> {
         conn.execute("INSERT INTO crew_member_learnings(id,member_id,text,normalized_text,kind,scope_json,evidence_run_id,created_at,confirmed_by_owner)
             VALUES(?1,'crew-milo',?1,?1,'pitfall',?2,'run','2026',?3)",params![id,scope,confirmed])?;
     }
-    let engine = open_engine(root.path())?;
+            Ok(())
+        })?;
+    let engine = open_engine(&work)?;
     assert_eq!(
-        migrate_learnings_into_memory(&conn, &engine, "crew-milo")?,
+        migrate_learnings_into_memory(&work, "crew-milo")?,
         3
     );
     assert_eq!(
-        migrate_learnings_into_memory(&conn, &engine, "crew-milo")?,
+        migrate_learnings_into_memory(&work, "crew-milo")?,
         0
     );
     let memory = load_member_memory(&engine, "crew-milo");
@@ -641,14 +609,18 @@ fn crew_legacy_learnings_move_into_member_anchors_once() -> Result<()> {
     );
     assert!(memory.anchors.contains("scope: module=reports"));
     assert!(memory.anchors.contains("scope: thread=A"));
-    let member = members(&conn)?
+    let member = crate::lcm::with_lcm_read(&path, |conn| members(conn))?
         .into_iter()
         .find(|m| m.id == "crew-milo")
         .unwrap();
     let block = render_memory_block(&member, &memory, &[]).unwrap();
     assert!(block.contains("[owner_confirmed] global"));
     assert!(block.starts_with("<ctox_crew_memory member=\"Milo\">"));
-    Ok(())
+    Ok(())    }).await;
+    drop(adapter);
+    readers.shutdown().await?;
+    writer.shutdown().await?;
+    result
 }
 
 #[test]

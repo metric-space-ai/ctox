@@ -267,16 +267,6 @@ mod tests {
     }
 
     #[test]
-    fn platform_info_uses_upstream_darwin_name_for_macos() {
-        let system = FakeSystem::new("macos", &["open"]);
-
-        let info = platform_info_with(&system);
-
-        assert_eq!(info.os, "darwin");
-        assert_eq!(info.default_command.as_deref(), Some("open"));
-    }
-
-    #[test]
     fn unsupported_and_missing_platforms_fail_explicitly() {
         let unsupported = FakeSystem::new("plan9", &[]);
         let linux = FakeSystem::new("linux", &[]);

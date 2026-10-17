@@ -8,6 +8,20 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn project_cli_result(root: &Path, forwarded_args: &[String], output: &Value) -> Result<Value> {
+    // Sync v4 (E17): once the active appsec-pentest version declares
+    // `core_projection: false`, the app projects its own collections and the
+    // core must not write them too. Read per call from the committed store.
+    if !ctox_store::app_catalog::core_projection_enabled(
+        &crate::paths::sync_db(root),
+        "appsec-pentest",
+    ) {
+        return Ok(json!({
+            "version": "ctox.appsec.durable_projection.v1",
+            "module_id": "appsec-pentest",
+            "skipped": "core_projection_disabled",
+            "counts": {},
+        }));
+    }
     let state_dir = appsec_state_dir(root, forwarded_args);
     let command = appsec_command(forwarded_args);
     let db_path = crate::paths::core_db(root);
@@ -151,26 +165,24 @@ pub fn handle_state_command(root: &Path, args: &[String]) -> Result<Value> {
 
 fn durable_status(root: &Path, state_dir: &Path) -> Result<Value> {
     let db_path = crate::paths::core_db(root);
-    if let Some(parent) = db_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create {}", parent.display()))?;
-    }
-    let conn = Connection::open(&db_path)
-        .with_context(|| format!("failed to open {}", db_path.display()))?;
-    ensure_schema(&conn)?;
-    let counts = projected_counts(&conn, state_dir)?;
-    let latest_assessment = latest_assessment(&conn, state_dir)?;
-    let review = completion_review(&conn, state_dir)?;
-    Ok(json!({
-        "ok": true,
-        "version": "ctox.appsec.durable_status.v1",
-        "command": "appsec state status",
-        "database": path_json(&db_path),
-        "state_dir": path_json(state_dir),
-        "counts": counts,
-        "latest_assessment": latest_assessment,
-        "completion_review": review,
-    }))
+    crate::lcm::with_lcm_write(&db_path, |conn| ensure_schema(conn))?;
+    let query_path = db_path.clone();
+    let state_dir = state_dir.to_owned();
+    crate::lcm::with_lcm_read(&db_path, move |conn: &Connection| {
+        let counts = projected_counts(conn, &state_dir)?;
+        let latest_assessment = latest_assessment(conn, &state_dir)?;
+        let review = completion_review(conn, &state_dir)?;
+        Ok(json!({
+            "ok": true,
+            "version": "ctox.appsec.durable_status.v1",
+            "command": "appsec state status",
+            "database": path_json(&query_path),
+            "state_dir": path_json(&state_dir),
+            "counts": counts,
+            "latest_assessment": latest_assessment,
+            "completion_review": review,
+        }))
+    })
 }
 
 fn projected_counts(conn: &Connection, state_dir: &Path) -> Result<Value> {

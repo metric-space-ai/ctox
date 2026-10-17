@@ -1,4 +1,14 @@
 {
   "title": "Datei-Viewer",
-  "description": "Gespeicherte Dateien sicher laden, in einer passenden Vorschau anzeigen und herunterladen."
+  "description": "Gespeicherte Dateien sicher laden, in einer passenden Vorschau anzeigen und herunterladen.",
+  "cancel": "Abbrechen",
+  "download": "Herunterladen",
+  "file": "Datei",
+  "materializeFailed": "Materialisieren fehlgeschlagen",
+  "noFileOpen": "Keine Datei geöffnet",
+  "noPreview": "Keine Vorschau verfügbar – bitte herunterladen.",
+  "openFailed": "Datei konnte nicht geöffnet werden",
+  "openFile": "Datei öffnen…",
+  "pickerTitle": "Datei öffnen",
+  "search": "Suchen"
 }

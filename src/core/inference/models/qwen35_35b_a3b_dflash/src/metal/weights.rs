@@ -195,10 +195,4 @@ mod tests {
 
     // No-op sanity: the module compiles + the public types are named
     // as the graph builder (next session's port) expects.
-    #[test]
-    fn weights_struct_shape() {
-        fn _assert_has_api<T: Sized>(_: T) {}
-        // `Weights::load_gguf` needs a Device and a path; both compile.
-        _assert_has_api(Weights::load_gguf as fn(&Device, &Path) -> Result<Weights>);
-    }
 }

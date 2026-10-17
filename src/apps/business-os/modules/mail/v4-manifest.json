@@ -1,0 +1,21 @@
+{
+  "_basis": {
+    "foreign_collections": "modules/mail/V4-PORT.md „D mail_server_state“ / „Offen für andere Stränge“; Kern §16.28",
+    "foreign_drop": "modules/mail/V4-HANDLERS.md „Manifest … Beantragt“ (Einfrierpfad braucht document_versions/document_blob_chunks nicht mehr)",
+    "styles": "modules/mail/V4-PORT.md OFFEN 9 (styles index.css und editor/editor.css)"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "foreign_collections": {
+    "mail_server_state": [
+      "read"
+    ]
+  },
+  "foreign_drop": [
+    "document_versions",
+    "document_blob_chunks"
+  ],
+  "styles": [
+    "editor/editor.css"
+  ]
+}

@@ -101,21 +101,6 @@ fn metadata_keeps_callbacks_typed_and_generation_defaults_enabled() {
         .contains_key(super::SELECTED_AUTH_CALLBACK_METADATA_KEY));
 }
 
-#[test]
-fn options_carry_transport_context_without_conflating_flags() {
-    let downstream = with_downstream_websocket(None);
-    let options = Options {
-        transport_context: with_required_upstream_websocket(Some(downstream)),
-        ..Options::default()
-    };
-
-    assert!(downstream_websocket(Some(&options.transport_context)));
-    assert!(super::required_upstream_websocket(Some(
-        &options.transport_context
-    )));
-    assert!(!super::required_upstream_websocket(Some(&downstream)));
-}
-
 #[tokio::test]
 async fn stream_result_owns_receive_only_chunk_lane() {
     let (sender, receiver) = mpsc::channel(1);

@@ -1,0 +1,27 @@
+{
+  "at": "2026-10-15T23:09:18.050Z",
+  "mut": null,
+  "ms": 2925,
+  "shellFiles": 10,
+  "controlled": true,
+  "root": "/~a/shell@lab~lib:ctox-office@1.0~lib:monaco@0.0/",
+  "editor": "monaco",
+  "editorRendered": true,
+  "workers": [
+    "http://127.0.0.1:53301/~a/lib:monaco@0.0~lib:ctox-office@1.0/vs/base/worker/workerMain.js",
+    "http://127.0.0.1:53301/~a/lib:monaco@0.0~lib:ctox-office@1.0/vs/base/worker/workerMain.js",
+    "http://127.0.0.1:53301/~a/lib:monaco@0.0~lib:ctox-office@1.0/vs/base/worker/workerMain.js"
+  ],
+  "workerMisses": [
+    "monaco@0.0/vs/base/worker/workerMain.js:artifact",
+    "monaco@0.0/vs/language/typescript/tsWorker.js:artifact"
+  ],
+  "misses": 9,
+  "aborts": [],
+  "hits": 9,
+  "serverHitsUnderA": 0,
+  "serverPathsUnderA": [],
+  "fallback": [],
+  "errors": [],
+  "pass": true
+}

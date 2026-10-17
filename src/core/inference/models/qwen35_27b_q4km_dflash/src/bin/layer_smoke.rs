@@ -57,8 +57,7 @@ struct Args {
 fn det_fill(v: &mut [f32], seed: f32) {
     let norm = (v.len() as f32).sqrt();
     for (i, s) in v.iter_mut().enumerate() {
-        *s = ((i as f32 * 0.013 + seed).sin() * 0.5
-            + (i as f32 * 0.007 + seed * 2.0).cos() * 0.25)
+        *s = ((i as f32 * 0.013 + seed).sin() * 0.5 + (i as f32 * 0.007 + seed * 2.0).cos() * 0.25)
             / norm;
     }
 }
@@ -111,10 +110,10 @@ fn main() -> Result<()> {
     let t_gated = gctx.new_tensor_f32([f, s, 1, 1], "gated");
     let t_out = gctx.new_tensor_f32([h, s, 1, 1], "out");
     gctx.realize().map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_x, &h_x).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wg, &h_wgate).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wu, &h_wup).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wd, &h_wdown).map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_x, &h_x) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wg, &h_wgate) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wu, &h_wup) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wd, &h_wdown) }.map_err(|e| anyhow!(e))?;
 
     let stream = CUstream(std::ptr::null_mut());
     let exec = ExecCtx::new(kernels, stream);
@@ -122,8 +121,8 @@ fn main() -> Result<()> {
     let t_start = std::time::Instant::now();
 
     // 1. rms_norm (Rust)
-    let rt_x = gctx.as_rust_tensor(t_x);
-    let rt_xn = gctx.as_rust_tensor(t_xn);
+    let rt_x = unsafe { gctx.as_rust_tensor(t_x) };
+    let rt_xn = unsafe { gctx.as_rust_tensor(t_xn) };
     rms_norm(&exec, &rt_x, &rt_xn, 1e-6).map_err(|e| anyhow!(e))?;
     unsafe { cuStreamSynchronize(stream) };
 
@@ -138,13 +137,13 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow!(e))?;
 
     // 4. act = silu(gate) (Rust)
-    let rt_gate = gctx.as_rust_tensor(t_gate);
-    let rt_act = gctx.as_rust_tensor(t_act);
+    let rt_gate = unsafe { gctx.as_rust_tensor(t_gate) };
+    let rt_act = unsafe { gctx.as_rust_tensor(t_act) };
     silu(&exec, &rt_gate, &rt_act).map_err(|e| anyhow!(e))?;
 
     // 5. gated = act * up  (Rust)
-    let rt_up = gctx.as_rust_tensor(t_up);
-    let rt_gated = gctx.as_rust_tensor(t_gated);
+    let rt_up = unsafe { gctx.as_rust_tensor(t_up) };
+    let rt_gated = unsafe { gctx.as_rust_tensor(t_gated) };
     mul(&exec, &rt_act, &rt_up, &rt_gated).map_err(|e| anyhow!(e))?;
     unsafe { cuStreamSynchronize(stream) };
 
@@ -154,8 +153,8 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow!(e))?;
 
     // 7. out = x + down  (Rust)
-    let rt_down = gctx.as_rust_tensor(t_down);
-    let rt_out = gctx.as_rust_tensor(t_out);
+    let rt_down = unsafe { gctx.as_rust_tensor(t_down) };
+    let rt_out = unsafe { gctx.as_rust_tensor(t_out) };
     add(&exec, &rt_x, &rt_down, &rt_out).map_err(|e| anyhow!(e))?;
     unsafe { cuStreamSynchronize(stream) };
 
@@ -165,7 +164,7 @@ fn main() -> Result<()> {
         hybrid_us
     );
 
-    let h_got = gctx.download_f32(t_out, n_x).map_err(|e| anyhow!(e))?;
+    let h_got = unsafe { gctx.download_f32(t_out, n_x) }.map_err(|e| anyhow!(e))?;
 
     // ══════════════════════════════════════════════════════════
     // Reference — pure ggml graph compute
@@ -176,10 +175,10 @@ fn main() -> Result<()> {
     let r_wu = gref.new_tensor_f32([h, f, 1, 1], "r_W_up");
     let r_wd = gref.new_tensor_f32([f, h, 1, 1], "r_W_down");
     gref.realize().map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_x, &h_x).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wg, &h_wgate).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wu, &h_wup).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wd, &h_wdown).map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_x, &h_x) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wg, &h_wgate) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wu, &h_wup) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wd, &h_wdown) }.map_err(|e| anyhow!(e))?;
 
     let t_start = std::time::Instant::now();
     let r_out = gref
@@ -194,8 +193,11 @@ fn main() -> Result<()> {
         })
         .map_err(|e| anyhow!(e))?;
     let ref_us = t_start.elapsed().as_micros();
-    let h_ref = gref.download_f32(r_out, n_x).map_err(|e| anyhow!(e))?;
-    println!("[layer] ggml reference: full-graph compute in {} µs", ref_us);
+    let h_ref = unsafe { gref.download_f32(r_out, n_x) }.map_err(|e| anyhow!(e))?;
+    println!(
+        "[layer] ggml reference: full-graph compute in {} µs",
+        ref_us
+    );
 
     let mut max_abs = 0.0_f32;
     let mut max_idx = 0usize;

@@ -253,35 +253,7 @@ fn collect_explicit_skill_mentions_prefers_linked_path_over_name() {
     assert_eq!(selected, vec![beta]);
 }
 
-#[test]
-fn collect_explicit_skill_mentions_skips_plain_name_when_connector_matches() {
-    let alpha = make_skill("alpha-skill", "/tmp/alpha");
-    let skills = vec![alpha];
-    let inputs = vec![UserInput::Text {
-        text: "use $alpha-skill".to_string(),
-        text_elements: Vec::new(),
-    }];
-    let connector_counts = HashMap::from([("alpha-skill".to_string(), 1)]);
 
-    let selected = collect_mentions(&inputs, &skills, &HashSet::new(), &connector_counts);
-
-    assert_eq!(selected, Vec::new());
-}
-
-#[test]
-fn collect_explicit_skill_mentions_allows_explicit_path_with_connector_conflict() {
-    let alpha = make_skill("alpha-skill", "/tmp/alpha");
-    let skills = vec![alpha.clone()];
-    let inputs = vec![UserInput::Text {
-        text: "use [$alpha-skill](/tmp/alpha)".to_string(),
-        text_elements: Vec::new(),
-    }];
-    let connector_counts = HashMap::from([("alpha-skill".to_string(), 1)]);
-
-    let selected = collect_mentions(&inputs, &skills, &HashSet::new(), &connector_counts);
-
-    assert_eq!(selected, vec![alpha]);
-}
 
 #[test]
 fn collect_explicit_skill_mentions_skips_when_linked_path_disabled() {

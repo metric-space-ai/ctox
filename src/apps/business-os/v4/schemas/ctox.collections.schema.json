@@ -1,0 +1,3678 @@
+{
+  "_app_id": "ctox",
+  "_format": "ctox-v4-collections-a9",
+  "_base_release": "main@4794af03d",
+  "_generator": "src/apps/business-os/v4/schemas/build-schemas.mjs",
+  "_sources": {
+    "business_chats": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "business_module_acl": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "business_module_commits": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "business_module_releases": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "business_module_reports": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "business_module_source_blob_chunks": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "business_module_source_files": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "business_users": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "business_workspace_branding": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_bug_reports": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_crew_assignments": {
+      "source": "(neu, Strang CREWAPP)",
+      "basis": "crew_commands.rs/crew/mod.rs/lcm: Kern-Tabellen werden ctox-App-Collections (CATALOG.md: kein crew-Primitiv)"
+    },
+    "ctox_crew_continuity": {
+      "source": "(neu, Strang CREWAPP)",
+      "basis": "crew_commands.rs/crew/mod.rs/lcm: Kern-Tabellen werden ctox-App-Collections (CATALOG.md: kein crew-Primitiv)"
+    },
+    "ctox_crew_continuity_commits": {
+      "source": "(neu, Strang CREWAPP)",
+      "basis": "crew_commands.rs/crew/mod.rs/lcm: Kern-Tabellen werden ctox-App-Collections (CATALOG.md: kein crew-Primitiv)"
+    },
+    "ctox_crew_learnings": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_crew_members": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_harness_events": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_harness_status": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "ctox_runs": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "legacy_records": {
+      "source": "(neu, E29 Kern-Cutover)",
+      "basis": "Kern E29 (16.10.2026): Archiv für Daten ohne v4-Manifest beim Cutover; flache Form wie E28; nur Kern-Import schreibt"
+    },
+    "planned_steps": {
+      "source": "(neu, E23.2 Harness-Projektion)",
+      "basis": "Kern-Übergabe docs/evidence/harness-13-20261016/planned-steps-schema-handoff.json (16.10.2026): flach ohne oneOf/const, nur lesen; Owner-, Projekt- und Goal-Revision; Kern-Teil #894"
+    },
+    "workjet_computers": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "workjet_jour_fixe_meetings": {
+      "source": "(neu, Strang JF)",
+      "basis": "Wire-Vertrag src/core/rxdb/tests/fixtures/workjet-jour-fixe-v1.json types.Meeting (origin/main e35a116ae); Kern-Tabelle workjet_jour_fixe_meetings (project_chats/jour_fixe_preparation.rs:16-21) lag nur in SQLite; Kinder slides/comments/transcript als eigene Zeilen (docs/workjet-jour-fixe-contract.md „Identity and persistence“), hier nicht; agenda/prepared_* = Ergebnis von project.jour_fixe.prepare (v4/tools/textdiaet/JF.md); created_operation_id = Anlage durch project.jour_fixe.create (Runde 2)"
+    },
+    "workjet_project_chats": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "workjet_project_workers": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "workjet_projects": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "workjet_provider_registry": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "workjet_session_transfers": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "workjet_sessions": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "workjet_worker_profile_bindings": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    },
+    "workjet_working_copies": {
+      "source": "modules/ctox/collections.schema.json",
+      "basis": "ownership.json: Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)"
+    }
+  },
+  "_foreign_copies_not_taken": [
+    {
+      "name": "business_commands",
+      "owner": "ctox-platform"
+    },
+    {
+      "name": "business_module_catalog",
+      "owner": "ctox-platform"
+    },
+    {
+      "name": "communication_accounts",
+      "owner": "conversations"
+    },
+    {
+      "name": "ctox_queue_tasks",
+      "owner": "ctox-platform"
+    },
+    {
+      "name": "ctox_runtime_settings",
+      "owner": "ctox-platform"
+    }
+  ],
+  "collections": {
+    "business_chats": {
+      "additionalProperties": true,
+      "indexes": [
+        "owner_user_id",
+        "lastTrackingId",
+        "tracking_active",
+        "tracking_status",
+        "tracking_id",
+        "tracking_command_id",
+        "tracking_task_id",
+        "updated_at_ms",
+        [
+          "tracking_active",
+          "updated_at_ms"
+        ],
+        [
+          "tracking_active",
+          "tracking_status",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "createdAt": {
+          "type": "number"
+        },
+        "draft": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "lastTrackingId": {
+          "type": "string"
+        },
+        "messages": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "minimized": {
+          "type": "boolean"
+        },
+        "open": {
+          "type": "boolean"
+        },
+        "owner_user_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "tracking_active": {
+          "type": "boolean"
+        },
+        "tracking_command_id": {
+          "type": "string"
+        },
+        "tracking_id": {
+          "type": "string"
+        },
+        "tracking_message_id": {
+          "type": "string"
+        },
+        "tracking_status": {
+          "type": "string"
+        },
+        "tracking_task_id": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "business_module_acl": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "module_id": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "user_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "module_id",
+        "user_id",
+        "role",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "business_module_commits": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "author": {
+          "type": "string"
+        },
+        "authored_at_ms": {
+          "type": "number"
+        },
+        "bundle_sha256": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "file_manifest": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "module_id": {
+          "type": "string"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": "string"
+        },
+        "sealed": {
+          "type": "boolean"
+        },
+        "seq": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "module_id",
+        "seq",
+        "bundle_sha256",
+        "origin",
+        "authored_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "business_module_releases": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "created_by": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "module_id": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "version": {
+          "type": "number"
+        },
+        "version_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "module_id",
+        "status",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "business_module_reports": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "client_context": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "ctox_command_id": {
+          "type": "string"
+        },
+        "expected": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "module_id": {
+          "type": "string"
+        },
+        "report_id": {
+          "type": "string"
+        },
+        "reporter_id": {
+          "type": "string"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "task_id": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "module_id",
+        "kind",
+        "title",
+        "status",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "business_module_source_blob_chunks": {
+      "additionalProperties": false,
+      "primaryKey": "id",
+      "properties": {
+        "blob_id": {
+          "type": "string"
+        },
+        "commit_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "data": {
+          "type": "string"
+        },
+        "encoding": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 180,
+          "type": "string"
+        },
+        "idx": {
+          "type": "number"
+        },
+        "module_id": {
+          "type": "string"
+        },
+        "total": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "blob_id",
+        "module_id",
+        "commit_id",
+        "idx",
+        "total",
+        "encoding",
+        "data",
+        "created_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "business_module_source_files": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "commit_id": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "language": {
+          "type": "string"
+        },
+        "module_id": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "previous_sha256": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "number"
+        },
+        "snapshot_id": {
+          "type": "string"
+        },
+        "source_kind": {
+          "type": "string"
+        },
+        "synced_at_ms": {
+          "type": "number"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "module_id",
+        "path",
+        "sha256",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "business_users": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "active": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "profile": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "role": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "user_id": {
+          "maxLength": 256,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "display_name",
+        "role",
+        "active",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "business_workspace_branding": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "custom": {
+          "type": "boolean"
+        },
+        "dark": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "light": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "module_accents": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "name": {
+          "type": "string"
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "light",
+        "dark",
+        "module_accents",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_bug_reports": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "evidence": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "inbound_channel": {
+          "type": "string"
+        },
+        "module": {
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "severity": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "surface": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "status",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_crew_assignments": {
+      "additionalProperties": false,
+      "indexes": [
+        [
+          "member_id",
+          "updated_at_ms"
+        ],
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "assigned_at": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 1024,
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "task_id": {
+          "maxLength": 1024,
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "task_id",
+        "member_id",
+        "assigned_at",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_crew_continuity": {
+      "additionalProperties": false,
+      "indexes": [
+        [
+          "member_id",
+          "kind"
+        ],
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "created_at": {
+          "type": "string"
+        },
+        "head_commit_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "anchors",
+            "narrative"
+          ],
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "updated_at": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "member_id",
+        "kind",
+        "head_commit_id",
+        "content",
+        "created_at",
+        "updated_at",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_crew_continuity_commits": {
+      "additionalProperties": false,
+      "indexes": [
+        [
+          "document_id",
+          "created_at_ms"
+        ],
+        [
+          "member_id",
+          "created_at_ms"
+        ],
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "created_at": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "diff_text": {
+          "type": "string"
+        },
+        "document_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "anchors",
+            "narrative"
+          ],
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "parent_commit_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "rendered_text": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "document_id",
+        "member_id",
+        "kind",
+        "parent_commit_id",
+        "diff_text",
+        "rendered_text",
+        "created_at",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_crew_learnings": {
+      "additionalProperties": false,
+      "indexes": [
+        [
+          "member_id",
+          "created_at_ms"
+        ],
+        [
+          "member_id",
+          "confirmed_by_owner"
+        ],
+        "updated_at_ms",
+        [
+          "member_id",
+          "normalized_text"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "archived": {
+          "type": "boolean"
+        },
+        "confirmed_by_owner": {
+          "type": "boolean"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "evidence_run_id": {
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "insight",
+            "pitfall",
+            "preference"
+          ],
+          "type": "string"
+        },
+        "member_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "scope": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "text": {
+          "maxLength": 400,
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "normalized_text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "member_id",
+        "text",
+        "kind",
+        "confirmed_by_owner",
+        "archived",
+        "created_at_ms",
+        "updated_at_ms",
+        "normalized_text"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "ctox_crew_members": {
+      "additionalProperties": false,
+      "indexes": [
+        [
+          "archived",
+          "state"
+        ],
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "active_task_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "color": {
+          "type": "string"
+        },
+        "domain": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "last_learning_at_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "last_memory_read_at_ms": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "memory": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "name": {
+          "maxLength": 60,
+          "type": "string"
+        },
+        "shape": {
+          "enum": [
+            "round",
+            "square",
+            "triangle",
+            "blob"
+          ],
+          "type": "string"
+        },
+        "soul": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "specialties": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "state": {
+          "enum": [
+            "home",
+            "on_duty",
+            "resting_after_failure"
+          ],
+          "type": "string"
+        },
+        "stats": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "created_at": {
+          "type": "string",
+          "default": ""
+        },
+        "created_at_ms": {
+          "type": "number",
+          "default": 0
+        },
+        "updated_at": {
+          "type": "string",
+          "default": ""
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "shape",
+        "color",
+        "archived",
+        "state",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_harness_events": {
+      "additionalProperties": true,
+      "indexes": [
+        [
+          "task_id",
+          "created_at_ms"
+        ],
+        "created_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "attempt": {
+          "type": "number"
+        },
+        "call_id": {
+          "type": "string"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "runtime_seconds": {
+          "type": "number"
+        },
+        "step_position": {
+          "type": "number"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "task_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "tool_name": {
+          "type": "string"
+        },
+        "tool_type": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "usage": {
+          "additionalProperties": true,
+          "properties": {
+            "input": {
+              "type": "number"
+            },
+            "output": {
+              "type": "number"
+            },
+            "reasoning": {
+              "type": "number"
+            },
+            "total": {
+              "type": "number"
+            }
+          },
+          "type": "object"
+        }
+      },
+      "required": [
+        "id",
+        "task_id",
+        "kind",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_harness_status": {
+      "additionalProperties": true,
+      "primaryKey": "id",
+      "properties": {
+        "active_crew_member_id": {
+          "type": "string"
+        },
+        "active_task_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "blocked_count": {
+          "type": "number"
+        },
+        "boot_id": {
+          "type": "string"
+        },
+        "busy": {
+          "type": "boolean"
+        },
+        "failed_recent_count": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "last_error": {
+          "type": "string"
+        },
+        "leased_count": {
+          "type": "number"
+        },
+        "pause_reason": {
+          "type": "string"
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "pending_count": {
+          "type": "number"
+        },
+        "pressure_active": {
+          "type": "boolean"
+        },
+        "pressure_threshold": {
+          "type": "number"
+        },
+        "review_count": {
+          "type": "number"
+        },
+        "service_running": {
+          "type": "boolean"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "work_hours": {
+          "additionalProperties": true,
+          "properties": {
+            "enabled": {
+              "type": "boolean"
+            },
+            "end": {
+              "type": "string"
+            },
+            "inside_window": {
+              "type": "boolean"
+            },
+            "start": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "worker_active_count": {
+          "type": "number"
+        },
+        "worker_capacity": {
+          "type": "number"
+        },
+        "worker_phase": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "ctox_runs": {
+      "additionalProperties": true,
+      "indexes": [
+        [
+          "task_id",
+          "finished_at_ms"
+        ],
+        "finished_at_ms",
+        "crew_member_id"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "agent_outcome": {
+          "type": "string"
+        },
+        "command_id": {
+          "type": "string"
+        },
+        "crew_member_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "error_text": {
+          "type": "string"
+        },
+        "finished_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "metrics": {
+          "additionalProperties": true,
+          "properties": {
+            "cost_usd": {
+              "type": "number"
+            },
+            "elapsed_ms": {
+              "type": "number"
+            },
+            "input_tokens": {
+              "type": "number"
+            },
+            "model": {
+              "type": "string"
+            },
+            "output_tokens": {
+              "type": "number"
+            },
+            "provider": {
+              "type": "string"
+            },
+            "reasoning_tokens": {
+              "type": "number"
+            },
+            "thinking_turns": {
+              "type": "number"
+            },
+            "tool_calls": {
+              "type": "number"
+            }
+          },
+          "type": "object"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        "resumable": {
+          "type": "boolean"
+        },
+        "retrospective": {
+          "type": "string"
+        },
+        "review": {
+          "additionalProperties": true,
+          "properties": {
+            "disposition": {
+              "type": "string"
+            },
+            "hold_reason": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "source_kind": {
+          "type": "string"
+        },
+        "started_at_ms": {
+          "type": "number"
+        },
+        "status": {
+          "type": "string"
+        },
+        "task_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "work_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "status",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "legacy_records": {
+      "type": "object",
+      "additionalProperties": false,
+      "primaryKey": "id",
+      "version": 0,
+      "description": "Cutover-Archiv (E29): Datensätze von Apps ohne v4-Manifest, älteren Collection-Versionen und Spalten aus Teilprojektionen. Schreibt nur der Kern-Import; Nutzer lesen nur. Ein späterer App-Install kann die Daten übernehmen.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "description": "Empfehlung: sha256-hex über source_db|source_table|collection|collection_version|record_id (deterministisch, Wiederholung idempotent)."
+        },
+        "source_db": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "source_table": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "collection": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "collection_version": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "record_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "doc": {
+          "type": [
+            "object",
+            "array"
+          ],
+          "description": "Ursprünglicher Datensatz unverändert. Ab 256 KiB legt der Import ihn als Blob ab: dann {blob_ref, size, sha256} und doc_storage = blob."
+        },
+        "doc_storage": {
+          "type": "string",
+          "enum": [
+            "inline",
+            "blob"
+          ],
+          "description": "Unterscheidet die Blob-Form eindeutig von einem Altdatensatz, der zufällig dieselben Schlüssel hat. Fehlt = inline."
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "minLength": 64,
+          "maxLength": 64,
+          "description": "sha256 des Datensatzes (kanonisches JSON bzw. Blob-Inhalt)."
+        },
+        "imported_at": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        }
+      },
+      "required": [
+        "id",
+        "source_db",
+        "source_table",
+        "collection",
+        "collection_version",
+        "record_id",
+        "doc",
+        "sha256",
+        "imported_at"
+      ],
+      "indexes": [
+        "imported_at",
+        [
+          "collection",
+          "collection_version"
+        ],
+        [
+          "source_db",
+          "source_table"
+        ],
+        "record_id"
+      ]
+    },
+    "planned_steps": {
+      "version": 0,
+      "primaryKey": "id",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "goal_id",
+        "goal_revision",
+        "goal_status",
+        "step_id",
+        "status",
+        "project_id",
+        "owner",
+        "owner_user_id",
+        "title",
+        "failed_step_id"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "goal_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "goal_revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "goal_status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "blocked",
+            "failed",
+            "completed"
+          ]
+        },
+        "step_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "queued",
+            "blocked",
+            "failed",
+            "completed"
+          ]
+        },
+        "project_id": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "owner": {
+          "type": "string"
+        },
+        "owner_user_id": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "title": {
+          "type": "string"
+        },
+        "failed_step_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 256
+        },
+        "updated_at_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "completed_at_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        }
+      },
+      "indexes": [
+        "project_id",
+        "goal_id"
+      ]
+    },
+    "workjet_computers": {
+      "additionalProperties": false,
+      "indexes": [
+        "owner_user_id",
+        "status",
+        "last_seen_at_ms",
+        "updated_at_ms",
+        [
+          "owner_user_id",
+          "status",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "actor_epoch": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "capabilities": {
+          "items": {
+            "maxLength": 80,
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "created_at_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "device_binding_id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "display_name": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "hosting_mode": {
+          "enum": [
+            "workstation",
+            "self_hosted"
+          ],
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "last_seen_at_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "owner_user_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "replication_up": {
+          "type": "boolean"
+        },
+        "self_hosted_colocation": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "assigned",
+            "unassigned"
+          ],
+          "type": "string"
+        },
+        "unassigned_at_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "updated_at_ms": {
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "display_name",
+        "hosting_mode",
+        "status",
+        "capabilities",
+        "self_hosted_colocation",
+        "device_binding_id",
+        "actor_epoch",
+        "last_seen_at_ms",
+        "replication_up",
+        "owner_user_id",
+        "created_at_ms",
+        "updated_at_ms",
+        "is_deleted"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "workjet_jour_fixe_meetings": {
+      "additionalProperties": false,
+      "indexes": [
+        "updated_at_ms",
+        [
+          "project_id",
+          "scheduled_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "agenda": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "ctox.workjet.jour_fixe.agenda.v1"
+              ]
+            },
+            "operation_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "prepared_at_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "source_meeting_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "maxLength": 128
+            },
+            "source_goal": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "goal_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "goal_id",
+                "revision"
+              ]
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "position": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "topic_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "source_meeting_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "P0",
+                      "P1",
+                      "P2"
+                    ]
+                  },
+                  "due_at_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  }
+                },
+                "required": [
+                  "position",
+                  "topic_id",
+                  "source_meeting_id",
+                  "title",
+                  "priority"
+                ]
+              }
+            }
+          },
+          "required": [
+            "schema",
+            "operation_id",
+            "prepared_at_ms",
+            "source_meeting_id",
+            "items"
+          ]
+        },
+        "comments": {
+          "type": [
+            "array",
+            "object"
+          ],
+          "maxItems": 1000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "slide_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "deck_revision": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "x": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "y": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4096
+              },
+              "author_user_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "created_at_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "supervisor_event_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "meeting_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "id",
+              "slide_id",
+              "deck_revision",
+              "x",
+              "y",
+              "text",
+              "author_user_id",
+              "created_at_ms",
+              "meeting_id"
+            ]
+          },
+          "additionalProperties": false,
+          "properties": {
+            "blob_ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 262145,
+              "maximum": 9007199254740991
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "blob_ref",
+            "size",
+            "sha256"
+          ],
+          "description": "Liste nach Wire-Vertrag workjet-jour-fixe-v1.json; über 256 KiB legt der Import den Inhalt als BlobRef ab und das Feld trägt {blob_ref, size, sha256} (E28). items gilt nur für die Liste, properties/required nur für die Blob-Form."
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "created_operation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "deck_revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "error": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "owner_user_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "preparation_task_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "prepare_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "prepared_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "prepared_operation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "previous_goal": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "goal_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          "required": [
+            "goal_id",
+            "revision"
+          ]
+        },
+        "project_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "revision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "scheduled_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "slides": {
+          "type": [
+            "array",
+            "object"
+          ],
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "position": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "title": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "body_markdown": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16384
+              },
+              "audio": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "file_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64
+                  },
+                  "mime_type": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "narration_text_sha256": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64
+                  },
+                  "source_run_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "format": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32
+                  },
+                  "synthesis_duration_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "provenance": {
+                    "type": "string",
+                    "enum": [
+                      "native_gateway",
+                      "authenticated_owner_local_audio"
+                    ]
+                  },
+                  "generation_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "file_id",
+                  "sha256",
+                  "mime_type",
+                  "duration_ms",
+                  "narration_text_sha256",
+                  "source_run_id",
+                  "model",
+                  "format",
+                  "synthesis_duration_ms"
+                ]
+              },
+              "meeting_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "id",
+              "position",
+              "title",
+              "body_markdown",
+              "meeting_id"
+            ]
+          },
+          "additionalProperties": false,
+          "properties": {
+            "blob_ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 262145,
+              "maximum": 9007199254740991
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "blob_ref",
+            "size",
+            "sha256"
+          ],
+          "description": "Liste nach Wire-Vertrag workjet-jour-fixe-v1.json; über 256 KiB legt der Import den Inhalt als BlobRef ab und das Feld trägt {blob_ref, size, sha256} (E28). items gilt nur für die Liste, properties/required nur für die Blob-Form."
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "planned",
+            "preparing",
+            "ready",
+            "live",
+            "review",
+            "confirmed",
+            "cancelled",
+            "failed"
+          ]
+        },
+        "supervisor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "workjet_thread_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            "ctox_thread_key": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            }
+          },
+          "required": [
+            "workjet_thread_id",
+            "ctox_thread_key"
+          ]
+        },
+        "timezone": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "todos": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "revision": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "status": {
+              "type": "string",
+              "enum": [
+                "proposed",
+                "confirmed",
+                "superseded"
+              ]
+            },
+            "items": {
+              "type": "array",
+              "maxItems": 100,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512
+                  },
+                  "acceptance": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4096
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "P0",
+                      "P1",
+                      "P2"
+                    ]
+                  },
+                  "evidence_ids": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  },
+                  "due_at_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "owner": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256
+                  }
+                },
+                "required": [
+                  "id",
+                  "title",
+                  "acceptance",
+                  "priority",
+                  "evidence_ids"
+                ]
+              }
+            },
+            "confirmed_by_user_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "confirmed_at_ms": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            },
+            "goal": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "goal_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "revision": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 9007199254740991
+                }
+              },
+              "required": [
+                "goal_id",
+                "revision"
+              ]
+            },
+            "meeting_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          },
+          "required": [
+            "revision",
+            "status",
+            "items",
+            "meeting_id"
+          ]
+        },
+        "transcript": {
+          "type": [
+            "array",
+            "object"
+          ],
+          "maxItems": 10000,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "sequence": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "speaker": {
+                "type": "string",
+                "enum": [
+                  "owner",
+                  "supervisor"
+                ]
+              },
+              "modality": {
+                "type": "string",
+                "enum": [
+                  "text",
+                  "speech"
+                ]
+              },
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 16384
+              },
+              "started_at_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "ended_at_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "source_run_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "audio": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "file_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "sha256": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64
+                  },
+                  "mime_type": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "duration_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "narration_text_sha256": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64
+                  },
+                  "source_run_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  },
+                  "format": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 32
+                  },
+                  "synthesis_duration_ms": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 9007199254740991
+                  },
+                  "provenance": {
+                    "type": "string",
+                    "enum": [
+                      "native_gateway",
+                      "authenticated_owner_local_audio"
+                    ]
+                  },
+                  "generation_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128
+                  }
+                },
+                "required": [
+                  "file_id",
+                  "sha256",
+                  "mime_type",
+                  "duration_ms",
+                  "narration_text_sha256",
+                  "source_run_id",
+                  "model",
+                  "format",
+                  "synthesis_duration_ms"
+                ]
+              },
+              "stream_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              },
+              "sentence_end_latency_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9007199254740991
+              },
+              "meeting_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128
+              }
+            },
+            "required": [
+              "id",
+              "sequence",
+              "speaker",
+              "modality",
+              "text",
+              "started_at_ms",
+              "ended_at_ms",
+              "meeting_id"
+            ]
+          },
+          "additionalProperties": false,
+          "properties": {
+            "blob_ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 512
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 262145,
+              "maximum": 9007199254740991
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          },
+          "required": [
+            "blob_ref",
+            "size",
+            "sha256"
+          ],
+          "description": "Liste nach Wire-Vertrag workjet-jour-fixe-v1.json; über 256 KiB legt der Import den Inhalt als BlobRef ab und das Feld trägt {blob_ref, size, sha256} (E28). items gilt nur für die Liste, properties/required nur für die Blob-Form."
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "owner_user_id",
+        "supervisor",
+        "scheduled_at_ms",
+        "prepare_at_ms",
+        "timezone",
+        "state",
+        "revision",
+        "deck_revision",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "workjet_project_chats": {
+      "additionalProperties": false,
+      "indexes": [
+        "project_id",
+        "owner_user_id",
+        [
+          "owner_user_id",
+          "project_id",
+          "kind"
+        ],
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "initial": {
+          "type": "boolean"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "kind": {
+          "enum": [
+            "group",
+            "private"
+          ],
+          "type": "string"
+        },
+        "owner_user_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "project_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "thread_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "worker_profile_id": {
+          "maxLength": 256,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "thread_id",
+        "project_id",
+        "owner_user_id",
+        "kind",
+        "initial",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "workjet_project_workers": {
+      "additionalProperties": false,
+      "indexes": [
+        "project_id",
+        "owner_user_id",
+        [
+          "owner_user_id",
+          "project_id",
+          "status"
+        ],
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "created_at_ms": {
+          "type": "number"
+        },
+        "group_chat_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "owner_user_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "project_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "removed"
+          ],
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "worker_profile_id": {
+          "maxLength": 256,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "group_chat_id",
+        "owner_user_id",
+        "worker_profile_id",
+        "status",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "workjet_projects": {
+      "additionalProperties": false,
+      "indexes": [
+        "owner_user_id",
+        "status",
+        "updated_at_ms",
+        [
+          "owner_user_id",
+          "status",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "archived_at_ms": {
+          "type": "number"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "description": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "execution_policy": {
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "enum": [
+                "default",
+                "autonomous_worktree"
+              ],
+              "type": "string"
+            },
+            "revision": {
+              "maximum": 9007199254740991,
+              "minimum": 0,
+              "type": "integer"
+            },
+            "schema": {
+              "enum": [
+                "ctox.workjet.project_execution_policy.v1"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "schema",
+            "mode",
+            "revision"
+          ],
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "info": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            "goal": {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            "phase": {
+              "maxLength": 128,
+              "type": "string"
+            },
+            "status": {
+              "maxLength": 128,
+              "type": "string"
+            },
+            "summary": {
+              "maxLength": 4096,
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "jour_fixe": {
+          "additionalProperties": false,
+          "properties": {
+            "time": {
+              "pattern": "^(?:[01][0-9]|2[0-3]):[0-5][0-9]$",
+              "type": "string"
+            },
+            "timezone": {
+              "maxLength": 128,
+              "type": "string"
+            },
+            "weekday": {
+              "maximum": 7,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "weekday",
+            "time",
+            "timezone"
+          ],
+          "type": "object"
+        },
+        "name": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "owner_user_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "public_url": {
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "repo_url": {
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "repository_url": {
+          "maxLength": 2048,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "archived"
+          ],
+          "type": "string"
+        },
+        "supervisor_luma_id": {
+          "maxLength": 160,
+          "minLength": 1,
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "status",
+        "owner_user_id",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 5
+    },
+    "workjet_provider_registry": {
+      "additionalProperties": false,
+      "indexes": [
+        "owner_user_id",
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "accounts": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "credentialReady": {
+                "type": "boolean"
+              },
+              "effectiveModels": {
+                "items": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "excludedModels": {
+                "items": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "holder": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "kind": {
+                    "enum": [
+                      "ctox_instance"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "id"
+                ],
+                "type": "object"
+              },
+              "id": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "inferenceVerified": {
+                "enum": [
+                  false
+                ],
+                "type": "boolean"
+              },
+              "modelCatalog": {
+                "additionalProperties": false,
+                "properties": {
+                  "lastAttempt": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "checkedAtMs": {
+                        "type": "number"
+                      },
+                      "elapsedMs": {
+                        "type": "number"
+                      },
+                      "failure": {
+                        "maxLength": 128,
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "httpStatus": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "retryAfterSeconds": {
+                        "type": [
+                          "number",
+                          "null"
+                        ]
+                      },
+                      "success": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "checkedAtMs",
+                      "httpStatus",
+                      "elapsedMs",
+                      "retryAfterSeconds",
+                      "failure",
+                      "success"
+                    ],
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  },
+                  "lastSuccessAtMs": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "models": {
+                    "items": {
+                      "maxLength": 256,
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "observed": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "observed",
+                  "models",
+                  "lastSuccessAtMs",
+                  "lastAttempt"
+                ],
+                "type": "object"
+              },
+              "modelCatalogObserved": {
+                "type": "boolean"
+              },
+              "observedAtMs": {
+                "type": "number"
+              },
+              "provider": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "revision": {
+                "minimum": 1,
+                "type": "integer"
+              },
+              "reportedQuota": {
+                "description": "Vom Anbieter gemeldetes Kontingent (Kern #872), drei Zustände laut Feld state. Feldregeln je Zustand und Zeitinvarianten (Beobachtung höchstens 15 min alt, Reset nach Beobachtung und höchstens 40 Tage) prüft der native Erzeuger; das Schema nutzt nur die vom Shell-Validator und RxDB unterstützten Schlüsselwörter.",
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "state"
+                ],
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "unknown",
+                      "unavailable",
+                      "reported"
+                    ]
+                  },
+                  "errorClass": {
+                    "type": "string",
+                    "enum": [
+                      "quota_read_failed"
+                    ]
+                  },
+                  "period": {
+                    "type": "string",
+                    "enum": [
+                      "weekly",
+                      "monthly"
+                    ]
+                  },
+                  "used_percent": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "observedAtMs": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  },
+                  "resetAtMs": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 9007199254740991
+                  }
+                }
+              }
+            },
+            "required": [
+              "id",
+              "holder",
+              "provider",
+              "enabled",
+              "credentialReady",
+              "revision",
+              "observedAtMs",
+              "modelCatalogObserved",
+              "inferenceVerified",
+              "modelCatalog",
+              "excludedModels",
+              "effectiveModels"
+            ],
+            "type": "object"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "catalog_freshness_ms": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "owner_user_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "policy_revision": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "providers": {
+          "items": {
+            "additionalProperties": false,
+            "properties": {
+              "provider": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "selection": {
+                "items": {
+                  "maxLength": 256,
+                  "type": "string"
+                },
+                "type": [
+                  "array",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "provider",
+              "selection"
+            ],
+            "type": "object"
+          },
+          "maxItems": 256,
+          "type": "array"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "owner_user_id",
+        "policy_revision",
+        "catalog_freshness_ms",
+        "updated_at_ms",
+        "is_deleted",
+        "accounts",
+        "providers"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "workjet_session_transfers": {
+      "additionalProperties": false,
+      "indexes": [
+        "owner_user_id",
+        "session_id",
+        "project_id",
+        "state",
+        "deadline_at_ms",
+        "updated_at_ms",
+        [
+          "owner_user_id",
+          "state",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "artifact_file_ids": {
+          "items": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "maxItems": 64,
+          "type": "array"
+        },
+        "artifact_generation_id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "completed_at_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "created_at_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "deadline_at_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "error_code": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "error_detail": {
+          "maxLength": 512,
+          "type": "string"
+        },
+        "fence_epoch": {
+          "minimum": 1,
+          "type": "integer"
+        },
+        "git": {
+          "additionalProperties": false,
+          "properties": {
+            "base_commit": {
+              "maxLength": 64,
+              "minLength": 40,
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "type": "string"
+            },
+            "branch": {
+              "maxLength": 256,
+              "type": "string"
+            },
+            "bundle_file_id": {
+              "maxLength": 160,
+              "type": "string"
+            },
+            "dirty": {
+              "type": "boolean"
+            },
+            "head": {
+              "maxLength": 64,
+              "minLength": 40,
+              "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+              "type": "string"
+            },
+            "index": {
+              "additionalProperties": false,
+              "properties": {
+                "patch_file_id": {
+                  "maxLength": 160,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "patch_sha256": {
+                  "maxLength": 64,
+                  "minLength": 64,
+                  "pattern": "^[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "tree": {
+                  "maxLength": 40,
+                  "minLength": 40,
+                  "pattern": "^[0-9a-f]{40}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "tree",
+                "patch_file_id",
+                "patch_sha256"
+              ],
+              "type": "object"
+            },
+            "patch_file_id": {
+              "maxLength": 160,
+              "type": "string"
+            },
+            "patch_sha256": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            },
+            "untracked_file_id": {
+              "maxLength": 160,
+              "type": "string"
+            },
+            "untracked_sha256": {
+              "maxLength": 64,
+              "minLength": 64,
+              "pattern": "^[0-9a-f]{64}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "head",
+            "branch",
+            "base_commit",
+            "patch_file_id",
+            "patch_sha256",
+            "untracked_file_id",
+            "untracked_sha256",
+            "dirty"
+          ],
+          "type": "object"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "manifest_file_id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "manifest_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "git",
+            "copy"
+          ],
+          "type": "string"
+        },
+        "owner_user_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "project_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "rolled_back_at_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "session_id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "source_computer_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "source_working_copy_id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "pause_requested",
+            "packing",
+            "packed",
+            "shipping",
+            "applying",
+            "applied",
+            "switching",
+            "resuming",
+            "completed",
+            "aborting",
+            "rolled_back",
+            "failed"
+          ],
+          "type": "string"
+        },
+        "target_computer_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "target_path": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "target_working_copy_id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "tree_sha256": {
+          "maxLength": 64,
+          "minLength": 64,
+          "pattern": "^[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "applied_at_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "apply_mismatch_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "apply_mismatch_sha256": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "last_terminal_turn_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 160
+        },
+        "observed_head": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "observed_manifest_sha256": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "observed_tree_sha256": {
+          "type": "string",
+          "maxLength": 64
+        },
+        "packed_at_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "pause_acked_at_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "recovery_aborting_at_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "source_git_repository": {
+          "type": "boolean"
+        },
+        "switched_at_ms": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "target_partial_cleanup_required": {
+          "type": "boolean"
+        },
+        "worker_instance_id": {
+          "type": "string",
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "id",
+        "session_id",
+        "project_id",
+        "source_working_copy_id",
+        "source_computer_id",
+        "target_computer_id",
+        "target_path",
+        "state",
+        "fence_epoch",
+        "artifact_file_ids",
+        "deadline_at_ms",
+        "created_at_ms",
+        "updated_at_ms",
+        "owner_user_id",
+        "is_deleted"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "workjet_sessions": {
+      "additionalProperties": false,
+      "indexes": [
+        "owner_user_id",
+        "project_id",
+        "working_copy_id",
+        "computer_id",
+        "run_status",
+        "updated_at_ms",
+        [
+          "owner_user_id",
+          "run_status",
+          "updated_at_ms"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "active_transfer_id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "coding_session_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "computer_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "created_at_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fence_epoch": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "last_terminal_turn_id": {
+          "maxLength": 160,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owner_user_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "project_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "run_status": {
+          "enum": [
+            "running",
+            "pausing",
+            "paused",
+            "transferring",
+            "resuming",
+            "transfer_failed"
+          ],
+          "type": "string"
+        },
+        "thread_id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "minimum": 0,
+          "type": "integer"
+        },
+        "working_copy_id": {
+          "maxLength": 160,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "working_copy_id",
+        "computer_id",
+        "run_status",
+        "fence_epoch",
+        "owner_user_id",
+        "created_at_ms",
+        "updated_at_ms",
+        "is_deleted"
+      ],
+      "type": "object",
+      "version": 1
+    },
+    "workjet_worker_profile_bindings": {
+      "additionalProperties": false,
+      "indexes": [
+        "owner_user_id",
+        [
+          "owner_user_id",
+          "status"
+        ],
+        "updated_at_ms"
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "computer_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "crew_member_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "owner_user_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "inactive"
+          ],
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "worker_profile_id": {
+          "maxLength": 256,
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "owner_user_id",
+        "worker_profile_id",
+        "computer_id",
+        "status",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    },
+    "workjet_working_copies": {
+      "additionalProperties": false,
+      "indexes": [
+        "project_id",
+        "computer_id",
+        "status",
+        "updated_at_ms",
+        [
+          "project_id",
+          "computer_id",
+          "status"
+        ]
+      ],
+      "primaryKey": "id",
+      "properties": {
+        "computer_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "created_at_ms": {
+          "type": "number"
+        },
+        "id": {
+          "maxLength": 160,
+          "type": "string"
+        },
+        "is_deleted": {
+          "type": "boolean"
+        },
+        "label": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "owner_user_id": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "path": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "project_id": {
+          "maxLength": 128,
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "active",
+            "detached",
+            "missing"
+          ],
+          "type": "string"
+        },
+        "updated_at_ms": {
+          "type": "number"
+        },
+        "verified_at_ms": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "project_id",
+        "computer_id",
+        "path",
+        "status",
+        "owner_user_id",
+        "created_at_ms",
+        "updated_at_ms"
+      ],
+      "type": "object",
+      "version": 0
+    }
+  },
+  "migrations": {
+    "ctox_crew_learnings": {
+      "from_ver": "main@4794af03d",
+      "migrate_fn": "migrations/ctox_crew_learnings.js",
+      "_file": "v4/schemas/migrations/ctox/ctox_crew_learnings.js",
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_reasons": [
+        "Feld „normalized_text“ neu als Pflichtfeld"
+      ]
+    },
+    "workjet_session_transfers": {
+      "from_ver": "main@4794af03d",
+      "steps": [],
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_reasons": [
+        "Feld „applied_at_ms“ neu ohne Default",
+        "Feld „apply_mismatch_count“ neu ohne Default",
+        "Feld „apply_mismatch_sha256“ neu ohne Default",
+        "Feld „last_terminal_turn_id“ neu ohne Default",
+        "Feld „observed_head“ neu ohne Default",
+        "Feld „observed_manifest_sha256“ neu ohne Default",
+        "Feld „observed_tree_sha256“ neu ohne Default",
+        "Feld „packed_at_ms“ neu ohne Default",
+        "Feld „pause_acked_at_ms“ neu ohne Default",
+        "Feld „recovery_aborting_at_ms“ neu ohne Default",
+        "Feld „source_git_repository“ neu ohne Default",
+        "Feld „switched_at_ms“ neu ohne Default",
+        "Feld „target_partial_cleanup_required“ neu ohne Default",
+        "Feld „worker_instance_id“ neu ohne Default"
+      ]
+    },
+    "workjet_sessions": {
+      "from_ver": "main@4794af03d",
+      "steps": [],
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_reasons": [
+        "Typ von „last_terminal_turn_id“: string → string|null"
+      ]
+    },
+    "workjet_provider_registry": {
+      "from_ver": "main@4794af03d",
+      "steps": [],
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_reasons": [
+        "Feld „accounts[].reportedQuota“ neu, optional (Kern #872, Kontingent-Vertrag quota-schema-handoff.json); bestehende Dokumente bleiben gültig, Identitäts-Migration"
+      ]
+    },
+    "workjet_jour_fixe_meetings": {
+      "from_ver": "main@4794af03d",
+      "steps": [],
+      "_schema_version": {
+        "from": 0,
+        "to": 1
+      },
+      "_reasons": [
+        "Felder preparation_task_id, slides, comments, transcript neu, optional (E28, Jour-fixe-Import #881); Elemente nach Wire-Vertrag workjet-jour-fixe-v1.json (Slide, Comment, TranscriptTurn); über 256 KiB als {blob_ref,size,sha256}; bestehende Dokumente bleiben gültig, Identitäts-Migration"
+      ]
+    }
+  },
+  "migration_strategies": {
+    "ctox_crew_learnings": {
+      "1": {
+        "operations": []
+      }
+    },
+    "ctox_runs": {
+      "1": {
+        "operations": []
+      }
+    },
+    "workjet_computers": {
+      "1": {
+        "operations": [
+          {
+            "default": "",
+            "field": "device_binding_id",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "device_binding_id"
+            ]
+          },
+          {
+            "default": 0,
+            "field": "actor_epoch",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "actor_epoch"
+            ]
+          },
+          {
+            "default": 0,
+            "field": "last_seen_at_ms",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "last_seen_at_ms"
+            ]
+          },
+          {
+            "default": false,
+            "field": "replication_up",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "replication_up"
+            ]
+          },
+          {
+            "default": false,
+            "field": "is_deleted",
+            "op": "set_from_first_truthy",
+            "paths": [
+              "is_deleted"
+            ]
+          }
+        ]
+      }
+    },
+    "workjet_projects": {
+      "1": {
+        "operations": []
+      },
+      "2": {
+        "operations": []
+      },
+      "3": {
+        "operations": []
+      },
+      "4": {
+        "operations": []
+      },
+      "5": {
+        "operations": []
+      }
+    },
+    "workjet_session_transfers": {
+      "1": {
+        "operations": []
+      }
+    },
+    "workjet_sessions": {
+      "1": {
+        "operations": []
+      }
+    }
+  }
+}

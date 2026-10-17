@@ -38,11 +38,30 @@ pub(super) const NEWS_SOURCE_AUTH_ASSIST: &str = "news.source.auth_assist";
 pub(super) const NEWS_ISSUE_CONTRACT: &str = "ctox.news.issue.v1";
 const NEWS_SKILL: &str = "news-aggregation";
 const SCHEDULE_PREFIX: &str = "news:";
+/// The weekly digest of a topic has its own schedule next to the regular one.
+const DIGEST_SCHEDULE_PREFIX: &str = "news-digest:";
+const DIGEST_MODE: &str = "weekly_digest";
+const MAX_DIGEST_POSTS: usize = 80;
 const ROUTE_MARKER: &str = "ctox-news-schedule:";
 pub(super) const NEWS_SOURCE_CONTRACT: &str = "ctox.news.source.v1";
 const MAX_POSTS: usize = 40;
 const MAX_TEXT: usize = 8_000;
 const CATEGORIES: [&str; 4] = ["model", "tool", "research", "debate"];
+const HOUR_MS: i64 = 3_600_000;
+const DAY_MS: i64 = 24 * HOUR_MS;
+/// Slack before the window start for feeds that stamp a story a few hours
+/// before it actually went live.
+const FRESHNESS_GRACE_MS: i64 = 6 * HOUR_MS;
+/// Covered stories of the same topic are remembered this long.
+const COVERED_LOOKBACK_MS: i64 = 30 * DAY_MS;
+const MAX_COVERED_URLS: usize = 120;
+const MAX_TREND_TITLE: usize = 60;
+/// Per-run effort cap. A worker attempt is cut at 840 s; on Welsch
+/// (15.10.2026) 24 sources took ~330k input tokens per attempt and all five
+/// attempts timed out at the final check step.
+const MAX_SOURCES_PER_RUN: usize = 12;
+/// Source states that cannot deliver anything this run.
+const UNUSABLE_SOURCE_STATES: [&str; 3] = ["failed", "needs_auth", "auth_requested"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 struct ScheduleRoute {
@@ -51,6 +70,9 @@ struct ScheduleRoute {
     cadence: String,
     #[serde(default)]
     deadline_date: String,
+    /// `digest` for the weekly digest schedule, empty for regular issues.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    mode: String,
 }
 
 fn valid_record_id(value: &str) -> bool {
@@ -63,6 +85,18 @@ fn valid_record_id(value: &str) -> bool {
 
 fn schedule_name(topic_id: &str) -> String {
     format!("{SCHEDULE_PREFIX}{topic_id}")
+}
+
+fn digest_schedule_name(topic_id: &str) -> String {
+    format!("{DIGEST_SCHEDULE_PREFIX}{topic_id}")
+}
+
+fn route_schedule_name(route: &ScheduleRoute) -> String {
+    if route.mode == "digest" {
+        digest_schedule_name(&route.topic_id)
+    } else {
+        schedule_name(&route.topic_id)
+    }
 }
 
 fn topic_thread_key(topic_id: &str) -> String {
@@ -152,11 +186,16 @@ fn handle_topic_schedule(
         "news.topic.schedule requires a valid topic_id"
     );
     let deleted = command.payload.get("deleted").and_then(Value::as_bool) == Some(true);
+    let digest = first_string_field(&command.payload, &["mode"]).as_deref() == Some("digest");
     let cron_expr = first_string_field(&command.payload, &["cron_expr"]).unwrap_or_default();
     let enabled = !deleted
         && command.payload.get("enabled").and_then(Value::as_bool) != Some(false)
         && !cron_expr.trim().is_empty();
-    let name = schedule_name(&topic_id);
+    let name = if digest {
+        digest_schedule_name(&topic_id)
+    } else {
+        schedule_name(&topic_id)
+    };
     let thread_key = topic_thread_key(&topic_id);
     let existing = schedule::list_tasks(root)?
         .into_iter()
@@ -170,7 +209,7 @@ fn handle_topic_schedule(
                 schedule::set_task_enabled(root, &task.task_id, false)?;
             }
         }
-        if !deleted {
+        if !deleted && !digest {
             store_schedule_task_id(
                 root,
                 &topic_id,
@@ -202,6 +241,11 @@ fn handle_topic_schedule(
                     .map(str::to_string)
             })
             .unwrap_or_default(),
+        mode: if digest {
+            "digest".to_string()
+        } else {
+            String::new()
+        },
     };
     let task = schedule::ensure_task_with_calendar(
         root,
@@ -222,7 +266,9 @@ fn handle_topic_schedule(
     } else {
         schedule::set_task_enabled(root, &task.task_id, true)?
     };
-    store_schedule_task_id(root, &topic_id, Some(&task.task_id))?;
+    if !digest {
+        store_schedule_task_id(root, &topic_id, Some(&task.task_id))?;
+    }
     Ok(json!({
         "ok": true,
         "topic_id": topic_id,
@@ -320,7 +366,7 @@ pub(crate) fn emit_scheduled_issue(
     task: &ScheduledTaskView,
     scheduled_for: &str,
 ) -> anyhow::Result<Option<(String, String)>> {
-    if !task.name.starts_with(SCHEDULE_PREFIX) {
+    if !task.name.starts_with(SCHEDULE_PREFIX) && !task.name.starts_with(DIGEST_SCHEDULE_PREFIX) {
         return Ok(None);
     }
     let route: ScheduleRoute = serde_json::from_str(
@@ -329,7 +375,7 @@ pub(crate) fn emit_scheduled_issue(
             .context("news schedule route missing")?,
     )?;
     ensure!(
-        task.name == schedule_name(&route.topic_id)
+        task.name == route_schedule_name(&route)
             && task.thread_key == topic_thread_key(&route.topic_id),
         "news schedule does not match its topic binding"
     );
@@ -348,6 +394,9 @@ pub(crate) fn emit_scheduled_issue(
     if topic.get("enabled").and_then(Value::as_bool) == Some(false) {
         return Ok(Some((skip_key, "skipped".to_string())));
     }
+    if route.mode == "digest" {
+        return emit_digest_issue(root, task, scheduled_for, &route, &topic, skip_key);
+    }
     let sources: Vec<Value> = find_rxdb_collection_records_by_string_field(
         root,
         "news_sources",
@@ -363,6 +412,12 @@ pub(crate) fn emit_scheduled_issue(
     let digest =
         super::hashing::hex_sha256(format!("{}::{scheduled_for}", task.task_id).as_bytes());
     let issue_id = format!("issue_sched_{}", &digest[..24]);
+    let cadence = topic
+        .get("cadence")
+        .and_then(Value::as_str)
+        .unwrap_or(route.cadence.as_str())
+        .to_string();
+    let window = issue_window(root, &route.topic_id, &cadence, &issue_id, now_ms() as i64)?;
     let command_id = format!("cmd_news_issue_generate_sched_{}", &digest[..24]);
     let now = now_ms() as i64;
     let conn = super::store::open_store(root)?;
@@ -398,6 +453,14 @@ pub(crate) fn emit_scheduled_issue(
     drop(conn);
 
     let session = active_domain_recovery_session(root, &route.owner_user_id)?;
+    let payload = generate_payload(
+        &topic,
+        &sources,
+        &issue_id,
+        &issue_date,
+        &command_id,
+        &window,
+    );
     let accepted = accept_rxdb_business_command_with_origin(
         root,
         json!({
@@ -408,7 +471,7 @@ pub(crate) fn emit_scheduled_issue(
             "record_id": route.topic_id,
             "inbound_channel": "business_os.news",
             "sync_collections": ["news_issues", "news_posts"],
-            "payload": generate_payload(&topic, &sources, &issue_id, &issue_date, &command_id),
+            "payload": payload,
             "client_context": {
                 "actor": super::threads::actor_payload(&session),
                 "source": "native-news-schedule",
@@ -443,12 +506,74 @@ pub(crate) fn emit_scheduled_issue(
     Ok(Some((key, "emitted".to_string())))
 }
 
-fn generate_payload(
+// --- weekly digest ------------------------------------------------------------
+
+/// The week's posts of a topic's regular issues, strongest first.
+fn digest_week_posts(issues: &[Value], posts: &[Value], now: i64) -> Vec<Value> {
+    let week: std::collections::HashSet<&str> = issues
+        .iter()
+        .filter(|issue| {
+            let generated = issue
+                .get("generated_at_ms")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            issue.get("status").and_then(Value::as_str) == Some("ready")
+                && !is_digest_issue(issue)
+                && generated > now - 7 * DAY_MS
+                && generated <= now
+        })
+        .filter_map(|issue| issue.get("id").and_then(Value::as_str))
+        .collect();
+    let mut picked: Vec<Value> = posts
+        .iter()
+        .filter(|post| {
+            post.get("issue_id")
+                .and_then(Value::as_str)
+                .is_some_and(|id| week.contains(id))
+        })
+        .cloned()
+        .collect();
+    let score = |post: &Value| {
+        post.get("hype_score")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0)
+            * 1_000_000.0
+            + post
+                .get("discussion_count")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0)
+    };
+    picked.sort_by(|a, b| score(b).total_cmp(&score(a)));
+    picked.truncate(MAX_DIGEST_POSTS);
+    picked
+}
+
+/// What the digest run gets per daily post: enough to rank and summarise,
+/// with the links it must keep.
+fn digest_post_snapshot(post: &Value) -> Value {
+    json!({
+        "post_id": post.get("id"),
+        "issue_id": post.get("issue_id"),
+        "category": post.get("category"),
+        "author_name": post.get("author_name"),
+        "author_handle": post.get("author_handle"),
+        "author_kind": post.get("author_kind"),
+        "intro": post.get("intro"),
+        "body": clip(post.get("body"), 1_200),
+        "published_at_ms": post.get("published_at_ms"),
+        "hype_score": post.get("hype_score"),
+        "discussion_count": post.get("discussion_count"),
+        "link_card": post.get("link_card"),
+        "sources": post.get("sources"),
+    })
+}
+
+fn digest_payload(
     topic: &Value,
-    sources: &[Value],
+    week_posts: &[Value],
     issue_id: &str,
     issue_date: &str,
-    command_id: &str,
+    now: i64,
 ) -> Value {
     let field = |key: &str| {
         topic
@@ -458,6 +583,405 @@ fn generate_payload(
             .to_string()
     };
     let topic_id = field("id");
+    let max_posts = topic
+        .get("max_posts")
+        .and_then(Value::as_u64)
+        .unwrap_or(12)
+        .min(10);
+    let instruction = [
+        format!(
+            "Erstelle die Wochenzusammenfassung für das Thema \"{}\" mit dem Skill {NEWS_SKILL} im Modus {DIGEST_MODE}.",
+            field("title")
+        ),
+        format!(
+            "Grundlage sind ausschließlich die {} Beiträge der Tagesausgaben dieser Woche (digest_posts); keine neue Recherche, keine neuen Quellen.",
+            week_posts.len()
+        ),
+        format!(
+            "Höchstens {max_posts} Top-Meldungen, gleiche Geschichten zusammenführen, dazu drei bis fünf Wochentrends."
+        ),
+        format!("Liefere das Ergebnis im Vertrag {NEWS_ISSUE_CONTRACT}."),
+    ]
+    .join("\n");
+    let digest_urls: Vec<String> = week_posts.iter().flat_map(all_story_urls).collect();
+    json!({
+        "topic_id": topic_id,
+        "issue_id": issue_id,
+        "issue_date": issue_date,
+        "mode": DIGEST_MODE,
+        "instruction": instruction,
+        "required_skills": [NEWS_SKILL],
+        "thread_key": topic_thread_key(&topic_id),
+        "output_contract": NEWS_ISSUE_CONTRACT,
+        "window_start": rfc3339(now - 7 * DAY_MS),
+        "window_start_ms": now - 7 * DAY_MS,
+        "digest_posts": week_posts.iter().map(digest_post_snapshot).collect::<Vec<_>>(),
+        "digest_urls": digest_urls,
+        "record_snapshot": {
+            "topic": {
+                "id": topic_id,
+                "title": field("title"),
+                "prompt": field("prompt"),
+                "cadence": field("cadence"),
+                "language": field("language"),
+                "categories": topic.get("categories").cloned().unwrap_or(json!([])),
+                "max_posts": max_posts,
+            },
+            "sources": [],
+        },
+    })
+}
+
+fn emit_digest_issue(
+    root: &Path,
+    task: &ScheduledTaskView,
+    scheduled_for: &str,
+    route: &ScheduleRoute,
+    topic: &Value,
+    skip_key: String,
+) -> anyhow::Result<Option<(String, String)>> {
+    let digest_enabled = topic
+        .pointer("/payload/digest/enabled")
+        .and_then(Value::as_bool)
+        == Some(true);
+    if !digest_enabled {
+        return Ok(Some((skip_key, "skipped".to_string())));
+    }
+    let now = now_ms() as i64;
+    let issues: Vec<Value> = find_rxdb_collection_records_by_string_field(
+        root,
+        "news_issues",
+        "topic_id",
+        &route.topic_id,
+        500,
+    )?
+    .into_iter()
+    .map(|(_, record)| record)
+    .collect();
+    let posts: Vec<Value> = find_rxdb_collection_records_by_string_field(
+        root,
+        "news_posts",
+        "topic_id",
+        &route.topic_id,
+        2_000,
+    )?
+    .into_iter()
+    .map(|(_, record)| record)
+    .collect();
+    let week_posts = digest_week_posts(&issues, &posts, now);
+    // A week without a single daily post has nothing to summarise.
+    if week_posts.is_empty() {
+        return Ok(Some((skip_key, "skipped".to_string())));
+    }
+    let hash = super::hashing::hex_sha256(format!("{}::{scheduled_for}", task.task_id).as_bytes());
+    let issue_id = format!("issue_digest_{}", &hash[..24]);
+    let command_id = format!("cmd_news_digest_sched_{}", &hash[..24]);
+    let issue_date = scheduled_for.get(..10).unwrap_or_default().to_string();
+    let conn = super::store::open_store(root)?;
+    if load_rxdb_collection_record(root, "news_issues", &issue_id)?.is_none() {
+        write_record(
+            root,
+            &conn,
+            "news_issues",
+            &issue_id,
+            now,
+            json!({
+                "id": issue_id,
+                "topic_id": route.topic_id,
+                "title": topic.get("title").cloned().unwrap_or(json!("")),
+                "issue_date": issue_date,
+                "status": "queued",
+                "command_id": command_id,
+                "task_id": "",
+                "post_count": 0,
+                "generated_at_ms": 0,
+                "error": "",
+                "payload": { "trigger": "schedule", "scheduled_for": scheduled_for, "kind": DIGEST_MODE },
+                "created_at_ms": now,
+                "updated_at_ms": now,
+            }),
+        )?;
+    }
+    drop(conn);
+    let session = active_domain_recovery_session(root, &route.owner_user_id)?;
+    let accepted = accept_rxdb_business_command_with_origin(
+        root,
+        json!({
+            "id": command_id,
+            "command_id": command_id,
+            "module": NEWS_MODULE,
+            "command_type": NEWS_ISSUE_GENERATE,
+            "record_id": route.topic_id,
+            "inbound_channel": "business_os.news",
+            "sync_collections": ["news_issues", "news_posts"],
+            "payload": digest_payload(topic, &week_posts, &issue_id, &issue_date, now),
+            "client_context": {
+                "actor": super::threads::actor_payload(&session),
+                "source": "native-news-digest-schedule",
+            },
+        }),
+        CommandOrigin::TrustedLocal,
+    )?;
+    let key = accepted
+        .get("task_id")
+        .or_else(|| accepted.get("execution_task_id"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+        .with_context(|| {
+            format!(
+                "news digest not admitted to the queue: {}",
+                accepted
+                    .get("error_message")
+                    .cloned()
+                    .unwrap_or(Value::Null)
+            )
+        })?;
+    let conn = super::store::open_store(root)?;
+    patch_record(
+        root,
+        &conn,
+        "news_issues",
+        &issue_id,
+        now_ms() as i64,
+        json!({ "task_id": key }),
+    )?;
+    Ok(Some((key, "emitted".to_string())))
+}
+
+/// A digest re-tells the week; a post whose primary link no daily issue of
+/// the week carried is fresh research and leaves.
+fn enforce_digest_sources(parsed: &mut ParsedIssue, digest_urls: &[String]) -> Vec<Value> {
+    let mut kept = Vec::new();
+    let mut index_map = Vec::new();
+    let mut rejected = Vec::new();
+    for post in parsed.posts.drain(..) {
+        let primary = primary_story_url(&post).unwrap_or_default();
+        if digest_urls.contains(&primary) {
+            index_map.push(Some(kept.len() as u64));
+            kept.push(post);
+        } else {
+            index_map.push(None);
+            rejected.push(json!({ "reason": "not_in_week", "url": primary, "intro": clip(post.get("intro"), 160) }));
+        }
+    }
+    parsed.posts = kept;
+    parsed.dropped += rejected.len();
+    repoint_trends(parsed, &index_map);
+    rejected
+}
+
+// --- freshness window and covered stories -----------------------------------
+
+/// What an issue may contain: stories first published after `start_ms` that
+/// no earlier issue of the same topic already carried.
+#[derive(Debug, Clone, Default, PartialEq)]
+struct IssueWindow {
+    start_ms: i64,
+    previous_issue_id: String,
+    covered_urls: Vec<String>,
+}
+
+fn fallback_window_ms(cadence: &str) -> i64 {
+    if cadence == "daily" {
+        DAY_MS
+    } else {
+        7 * DAY_MS
+    }
+}
+
+fn is_digest_issue(issue: &Value) -> bool {
+    issue.pointer("/payload/kind").and_then(Value::as_str) == Some("weekly_digest")
+}
+
+/// Canonical form for comparing story links across issues.
+fn normalize_story_url(url: &str) -> String {
+    let url = url.trim();
+    let url = url.split('#').next().unwrap_or_default();
+    let scheme_less = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let (host, path) = scheme_less.split_once('/').unwrap_or((scheme_less, ""));
+    let host = host.to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    let path = path.trim_end_matches('/');
+    if path.is_empty() {
+        host.to_string()
+    } else {
+        format!("{host}/{path}")
+    }
+}
+
+/// The story a post stands for: its link card, else its primary source.
+fn primary_story_url(post: &Value) -> Option<String> {
+    let card = post
+        .pointer("/link_card/url")
+        .and_then(Value::as_str)
+        .filter(|url| !url.is_empty());
+    let sources = post.get("sources").and_then(Value::as_array);
+    let primary = sources.and_then(|items| {
+        items
+            .iter()
+            .find(|source| source.get("kind").and_then(Value::as_str) == Some("primary"))
+            .or_else(|| items.first())
+            .and_then(|source| source.get("url").and_then(Value::as_str))
+    });
+    card.or(primary).map(normalize_story_url)
+}
+
+fn all_story_urls(post: &Value) -> Vec<String> {
+    let mut urls: Vec<String> = Vec::new();
+    if let Some(url) = primary_story_url(post) {
+        urls.push(url);
+    }
+    for source in post
+        .get("sources")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        if source.get("kind").and_then(Value::as_str) == Some("discussion") {
+            continue;
+        }
+        if let Some(url) = source.get("url").and_then(Value::as_str) {
+            let url = normalize_story_url(url);
+            if !urls.contains(&url) {
+                urls.push(url);
+            }
+        }
+    }
+    urls
+}
+
+/// Window for the next regular issue of `topic_id`: since the previous ready
+/// issue, otherwise the last 24 hours (daily) or 7 days.
+fn issue_window(
+    root: &Path,
+    topic_id: &str,
+    cadence: &str,
+    exclude_issue_id: &str,
+    now: i64,
+) -> anyhow::Result<IssueWindow> {
+    let issues: Vec<Value> = find_rxdb_collection_records_by_string_field(
+        root,
+        "news_issues",
+        "topic_id",
+        topic_id,
+        500,
+    )?
+    .into_iter()
+    .map(|(_, record)| record)
+    .filter(|issue| {
+        issue.get("id").and_then(Value::as_str) != Some(exclude_issue_id)
+            && issue.get("status").and_then(Value::as_str) == Some("ready")
+            && !is_digest_issue(issue)
+    })
+    .collect();
+    let posts: Vec<Value> = find_rxdb_collection_records_by_string_field(
+        root,
+        "news_posts",
+        "topic_id",
+        topic_id,
+        2_000,
+    )?
+    .into_iter()
+    .map(|(_, record)| record)
+    .collect();
+    Ok(window_from_history(&issues, &posts, cadence, now))
+}
+
+fn window_from_history(issues: &[Value], posts: &[Value], cadence: &str, now: i64) -> IssueWindow {
+    let generated = |issue: &Value| {
+        issue
+            .get("generated_at_ms")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+    };
+    let previous = issues
+        .iter()
+        .filter(|issue| generated(issue) > 0)
+        .max_by_key(|issue| generated(issue));
+    let fallback_start = now - fallback_window_ms(cadence);
+    // A long pause never reaches further back than a week.
+    let start_ms = match previous {
+        Some(issue) if generated(issue) > now - 7 * DAY_MS => generated(issue).min(now),
+        _ => fallback_start,
+    };
+    let recent: std::collections::HashSet<&str> = issues
+        .iter()
+        .filter(|issue| generated(issue) > now - COVERED_LOOKBACK_MS)
+        .filter_map(|issue| issue.get("id").and_then(Value::as_str))
+        .collect();
+    let mut covered: Vec<String> = Vec::new();
+    for post in posts {
+        let in_recent = post
+            .get("issue_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| recent.contains(id));
+        if !in_recent {
+            continue;
+        }
+        for url in all_story_urls(post) {
+            if !covered.contains(&url) {
+                covered.push(url);
+            }
+        }
+    }
+    covered.truncate(MAX_COVERED_URLS * 4);
+    IssueWindow {
+        start_ms,
+        previous_issue_id: previous
+            .and_then(|issue| issue.get("id").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_string(),
+        covered_urls: covered,
+    }
+}
+
+fn rfc3339(ms: i64) -> String {
+    chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
+        .map(|value| value.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default()
+}
+
+/// Why a post leaves the issue, or `None` when it stays.
+fn freshness_rejection(post: &Value, window: &IssueWindow, now: i64) -> Option<&'static str> {
+    let published = post
+        .get("published_at_ms")
+        .and_then(Value::as_i64)
+        .unwrap_or(0);
+    if published <= 0 {
+        return Some("missing_published_at");
+    }
+    if published < window.start_ms - FRESHNESS_GRACE_MS {
+        return Some("published_before_window");
+    }
+    if published > now + DAY_MS {
+        return Some("published_in_future");
+    }
+    let primary = primary_story_url(post)?;
+    if window.covered_urls.contains(&primary) {
+        return Some("already_covered");
+    }
+    None
+}
+
+fn generate_payload(
+    topic: &Value,
+    sources: &[Value],
+    issue_id: &str,
+    issue_date: &str,
+    command_id: &str,
+    window: &IssueWindow,
+) -> Value {
+    let field = |key: &str| {
+        topic
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let topic_id = field("id");
+    let (usable, skipped) = select_run_sources(sources);
+    let sources = usable.as_slice();
     let source_line = sources
         .iter()
         .map(|source| {
@@ -484,6 +1008,14 @@ fn generate_payload(
             topic.get("max_posts").and_then(Value::as_u64).unwrap_or(12),
             sources.len(),
             if source_line.is_empty() { "keine konfiguriert, nutze die Websuche".to_string() } else { source_line }
+        ),
+        format!(
+            "Zeitfenster: nur Meldungen, deren Primärquelle nach {} veröffentlicht wurde; ältere Beiträge verwirft die Übernahme.",
+            rfc3339(window.start_ms)
+        ),
+        format!(
+            "{} Meldungen stehen schon in früheren Ausgaben (covered_urls) und werden nicht wiederholt.",
+            window.covered_urls.len().min(MAX_COVERED_URLS)
         ),
         format!("Liefere das Ergebnis im Vertrag {NEWS_ISSUE_CONTRACT}; jeder Beitrag braucht mindestens eine Quelle mit Link."),
     ];
@@ -524,6 +1056,14 @@ fn generate_payload(
         "required_skills": [NEWS_SKILL],
         "thread_key": topic_thread_key(&topic_id),
         "output_contract": NEWS_ISSUE_CONTRACT,
+        "previous_issue_id": window.previous_issue_id,
+        "window_start": rfc3339(window.start_ms),
+        "window_start_ms": window.start_ms,
+        "covered_urls": window.covered_urls.iter().take(MAX_COVERED_URLS).collect::<Vec<_>>(),
+        "skipped_sources": skipped
+            .iter()
+            .map(|(label, reason)| json!({ "label": label, "reason": reason }))
+            .collect::<Vec<_>>(),
         "record_snapshot": {
             "topic": {
                 "id": topic_id,
@@ -537,6 +1077,126 @@ fn generate_payload(
             "sources": snapshot_sources,
         },
     })
+}
+
+/// Sources for one run: drop ones that cannot deliver (failed, needs_auth)
+/// and cap the rest. Returns the usable sources and `(label, reason)` for the
+/// skipped ones. If nothing usable is left the run falls back to web search.
+fn select_run_sources(sources: &[Value]) -> (Vec<Value>, Vec<(String, String)>) {
+    let mut usable = Vec::new();
+    let mut skipped = Vec::new();
+    for source in sources {
+        let label = source
+            .get("label")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let status = source.get("status").and_then(Value::as_str).unwrap_or("");
+        if UNUSABLE_SOURCE_STATES.contains(&status) {
+            skipped.push((label, status.to_string()));
+        } else if usable.len() >= MAX_SOURCES_PER_RUN {
+            skipped.push((label, "limit".to_string()));
+        } else {
+            usable.push(source.clone());
+        }
+    }
+    (usable, skipped)
+}
+
+/// Gathered items survive a session timeout: the run writes them to this
+/// file after reading the sources, and every later attempt (worker retry or
+/// a Crew "Wiederholen") resumes from it instead of re-reading all sources.
+fn issue_checkpoint_path(root: &Path, issue_id: &str) -> std::path::PathBuf {
+    root.join("runtime")
+        .join("news")
+        .join("checkpoints")
+        .join(format!("{issue_id}.json"))
+}
+
+/// Run contract appended to every `news.issue.generate` prompt, manual
+/// ("Ausgabe jetzt erzeugen") and scheduled alike: skip unusable sources, cap
+/// the effort, and resume from the per-issue checkpoint after a timeout.
+pub(super) fn issue_run_prompt_block(
+    root: &Path,
+    command: &BusinessCommand,
+) -> anyhow::Result<Option<String>> {
+    if command.module != NEWS_MODULE || command.command_type != NEWS_ISSUE_GENERATE {
+        return Ok(None);
+    }
+    // A weekly digest (#813) only condenses the week's daily posts; it reads
+    // no sources, so the source/checkpoint contract does not apply.
+    if first_string_field(&command.payload, &["mode"]).as_deref() == Some("weekly_digest") {
+        return Ok(None);
+    }
+    let issue_id = first_string_field(&command.payload, &["issue_id"]).unwrap_or_default();
+    ensure!(
+        valid_record_id(&issue_id),
+        "news issue command is missing issue_id"
+    );
+    let sources: Vec<Value> = command
+        .payload
+        .pointer("/record_snapshot/sources")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let (usable, skipped) = select_run_sources(&sources);
+    let path = issue_checkpoint_path(root, &issue_id);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut lines = vec!["News-Laufvertrag (verbindlich):".to_string()];
+    if !skipped.is_empty() {
+        let labels = |list: &[Value]| {
+            list.iter()
+                .filter_map(|source| source.get("label").and_then(Value::as_str))
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        lines.push(if usable.is_empty() {
+            "- Keine nutzbare Quelle: nutze die Websuche.".to_string()
+        } else {
+            format!("- Nur diese Quellen lesen: {}.", labels(&usable))
+        });
+        lines.push(format!(
+            "- Überspringen: {}.",
+            skipped
+                .iter()
+                .map(|(label, reason)| format!("{label} ({reason})"))
+                .collect::<Vec<_>>()
+                .join("; ")
+        ));
+    }
+    lines.push("- Höchstens zwei Abrufe pro Quelle, keine Quelle zweimal lesen; sobald genug Beiträge belegt sind, nicht weiter suchen, sondern das Ergebnis liefern.".to_string());
+    lines.push(format!(
+        "- Zwischenstand: Prüfe zuerst {}. Existiert die Datei, sind die Quellen schon gelesen: übernimm die Kandidaten daraus und lies nur die dort fehlenden Quellen. Sonst nach dem Lesen der Quellen sofort alle Kandidaten (Titel, Link, Datum, Quelle, Kurzinhalt) als JSON dorthin schreiben, bevor du auswählst und schreibst.",
+        path.display()
+    ));
+    Ok(Some(lines.join("\n")))
+}
+
+/// Crew "Wiederholen" on a failed issue run submits the command again; put
+/// the issue back to queued under the new command so the News app follows it.
+pub(super) fn requeue_issue_for_retry(
+    root: &Path,
+    payload: &Value,
+    command_id: &str,
+    task_id: &str,
+) -> anyhow::Result<()> {
+    let Some(issue_id) =
+        first_string_field(payload, &["issue_id"]).filter(|id| valid_record_id(id))
+    else {
+        return Ok(());
+    };
+    let conn = super::store::open_store(root)?;
+    patch_record(
+        root,
+        &conn,
+        "news_issues",
+        &issue_id,
+        now_ms() as i64,
+        json!({ "status": "queued", "error": "", "command_id": command_id, "task_id": task_id }),
+    )?;
+    Ok(())
 }
 
 // --- queue writeback ----------------------------------------------------------
@@ -608,8 +1268,42 @@ fn apply_issue_reply(
         valid_record_id(&issue_id),
         "news issue command is missing issue_id"
     );
-    let parsed = parse_issue_reply(reply_text)?;
+    let mut parsed = parse_issue_reply(reply_text)?;
     let now = now_ms() as i64;
+    let digest_mode =
+        first_string_field(&command.payload, &["mode"]).as_deref() == Some(DIGEST_MODE);
+    let rejected: Vec<Value> = if digest_mode {
+        let digest_urls: Vec<String> = command
+            .payload
+            .get("digest_urls")
+            .and_then(Value::as_array)
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(normalize_story_url)
+                    .collect()
+            })
+            .unwrap_or_default();
+        enforce_digest_sources(&mut parsed, &digest_urls)
+    } else {
+        let cadence = command
+            .payload
+            .pointer("/record_snapshot/topic/cadence")
+            .and_then(Value::as_str)
+            .unwrap_or("daily")
+            .to_string();
+        let mut window = issue_window(root, &topic_id, &cadence, &issue_id, now)?;
+        if let Some(start) = command
+            .payload
+            .get("window_start_ms")
+            .and_then(Value::as_i64)
+            .filter(|start| *start > 0)
+        {
+            window.start_ms = start;
+        }
+        enforce_window(&mut parsed, &window, now)
+    };
 
     for (index, post) in parsed.posts.iter().enumerate() {
         let post_id = format!("{issue_id}_p{:02}", index + 1);
@@ -666,6 +1360,10 @@ fn apply_issue_reply(
     if !parsed.summary.is_empty() {
         payload.insert("summary".to_string(), json!(parsed.summary));
     }
+    payload.insert("rejected_posts".to_string(), Value::Array(rejected.clone()));
+    if digest_mode {
+        payload.insert("kind".to_string(), json!(DIGEST_MODE));
+    }
     if let Some(object) = issue.as_object_mut() {
         object.insert("status".to_string(), json!("ready"));
         object.insert("task_id".to_string(), json!(task_id));
@@ -708,7 +1406,94 @@ fn apply_issue_reply(
         "topic_id": topic_id,
         "post_count": parsed.posts.len(),
         "dropped_posts": parsed.dropped,
+        "rejected_posts": rejected.len(),
     }))
+}
+
+/// Drops posts outside the freshness window or already carried by an earlier
+/// issue and re-points trends at the posts that stay. Returns why each
+/// rejected post left, so the issue can show it.
+fn enforce_window(parsed: &mut ParsedIssue, window: &IssueWindow, now: i64) -> Vec<Value> {
+    let mut kept = Vec::new();
+    let mut index_map: Vec<Option<u64>> = Vec::new();
+    let mut rejected = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for post in parsed.posts.drain(..) {
+        let primary = primary_story_url(&post).unwrap_or_default();
+        let reason = freshness_rejection(&post, window, now).or_else(|| {
+            (!primary.is_empty() && seen.contains(&primary)).then_some("duplicate_in_issue")
+        });
+        match reason {
+            Some(reason) => {
+                index_map.push(None);
+                rejected.push(json!({
+                    "reason": reason,
+                    "url": primary,
+                    "intro": clip(post.get("intro"), 160),
+                    "published_at_ms": post.get("published_at_ms").cloned().unwrap_or(json!(0)),
+                }));
+            }
+            None => {
+                index_map.push(Some(kept.len() as u64));
+                seen.push(primary);
+                kept.push(post);
+            }
+        }
+    }
+    parsed.posts = kept;
+    parsed.dropped += rejected.len();
+    repoint_trends(parsed, &index_map);
+    rejected
+}
+
+fn repoint_trends(parsed: &mut ParsedIssue, index_map: &[Option<u64>]) {
+    let trends = std::mem::take(&mut parsed.trends);
+    parsed.trends = trends
+        .into_iter()
+        .filter_map(|mut trend| {
+            let old = trend.get("post_index").and_then(Value::as_u64);
+            let new = match old {
+                Some(index) => index_map.get(index as usize).copied().flatten(),
+                None => None,
+            };
+            if old.is_some() && new.is_none() {
+                // The trend was carried by a rejected post.
+                return None;
+            }
+            trend["post_index"] = json!(new);
+            Some(trend)
+        })
+        .collect();
+}
+
+/// "Gemini 4 Argon und Robotik (Hacker News, 1.403 Punkte)" → "Gemini 4 Argon und Robotik".
+fn concise_trend_title(title: &str) -> String {
+    let base = match title.find(" (") {
+        Some(index) if index > 0 => &title[..index],
+        _ => title,
+    };
+    let base = base.trim();
+    if base.chars().count() <= MAX_TREND_TITLE {
+        return base.to_string();
+    }
+    let clipped: String = base.chars().take(MAX_TREND_TITLE - 1).collect();
+    let clipped = clipped
+        .rsplit_once(' ')
+        .map_or(clipped.as_str(), |(head, _)| head)
+        .trim_end_matches([',', ';', ':', '–', '-'])
+        .trim_end();
+    format!("{clipped}…")
+}
+
+fn is_hacker_news(quote: &Value) -> bool {
+    let url = quote.get("url").and_then(Value::as_str).unwrap_or_default();
+    let source = quote
+        .get("source")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    url.contains("news.ycombinator.com")
+        || url.contains("hn.algolia.com")
+        || source.to_ascii_lowercase().contains("hacker news")
 }
 
 /// Terminal failure of a news queue run: the issue or source shows the error
@@ -877,7 +1662,7 @@ fn parse_issue_reply(reply_text: &str) -> anyhow::Result<ParsedIssue> {
                 .iter()
                 .take(10)
                 .filter_map(|trend| {
-                    let title = clip(trend.get("title"), 120);
+                    let title = concise_trend_title(&clip(trend.get("title"), 200));
                     (!title.is_empty()).then(|| {
                         json!({
                             "title": title,
@@ -992,17 +1777,21 @@ fn normalize_post(raw: &Value) -> Option<Value> {
         "link_card".to_string(),
         link_card.unwrap_or_else(|| json!({})),
     );
-    let quote = raw.get("quote").and_then(|quote| {
-        let text = clip(quote.get("text"), 600);
-        (!text.is_empty()).then(|| {
-            json!({
-                "text": text,
-                "source": clip(quote.get("source"), 120),
-                "meta": clip(quote.get("meta"), 120),
-                "url": http_url(quote.get("url")).unwrap_or_default(),
+    // Comments from the Hacker News thread are discussion noise, not substance.
+    let quote = raw
+        .get("quote")
+        .filter(|quote| !is_hacker_news(quote))
+        .and_then(|quote| {
+            let text = clip(quote.get("text"), 600);
+            (!text.is_empty()).then(|| {
+                json!({
+                    "text": text,
+                    "source": clip(quote.get("source"), 120),
+                    "meta": clip(quote.get("meta"), 120),
+                    "url": http_url(quote.get("url")).unwrap_or_default(),
+                })
             })
-        })
-    });
+        });
     post.insert("quote".to_string(), quote.unwrap_or_else(|| json!({})));
     Some(Value::Object(post))
 }
@@ -1070,12 +1859,24 @@ mod tests {
             owner_user_id: "user_1".into(),
             cadence: "deadline".into(),
             deadline_date: "2026-11-01".into(),
+            mode: String::new(),
         };
         let prompt = format!("{ROUTE_MARKER}{}", serde_json::to_string(&route).unwrap());
         let back: ScheduleRoute =
             serde_json::from_str(prompt.strip_prefix(ROUTE_MARKER).unwrap()).unwrap();
         assert_eq!(back, route);
         assert_eq!(schedule_name("topic_1"), "news:topic_1");
+        assert!(!prompt.contains("mode"));
+        let digest = ScheduleRoute {
+            mode: "digest".into(),
+            ..route
+        };
+        assert_eq!(route_schedule_name(&digest), "news-digest:topic_1");
+        // Routes stored before the digest existed still parse.
+        let old: ScheduleRoute =
+            serde_json::from_str(r#"{"topic_id":"t","owner_user_id":"u","cadence":"daily"}"#)
+                .unwrap();
+        assert_eq!(route_schedule_name(&old), "news:t");
     }
 
     #[test]
@@ -1110,20 +1911,263 @@ mod tests {
         let topic = json!({"id": "topic_1", "title": "KI", "prompt": "", "max_posts": 5});
         let reddit = json!({"id": "source_1", "kind": "reddit", "label": "Reddit", "items": ["r/LocalLLaMA"]});
         let lab = json!({"id": "source_2", "kind": "lab", "label": "OpenAI"});
+        let window = IssueWindow {
+            start_ms: 1_791_867_600_000,
+            previous_issue_id: "issue_0".into(),
+            covered_urls: vec!["openai.com/x".into()],
+        };
         let with_account = generate_payload(
             &topic,
             &[reddit, lab.clone()],
             "issue_1",
             "2026-10-14",
             "cmd_1",
+            &window,
         );
+        assert_eq!(with_account["previous_issue_id"], "issue_0");
+        assert_eq!(with_account["window_start"], "2026-10-13T05:00:00Z");
+        assert_eq!(with_account["covered_urls"], json!(["openai.com/x"]));
         let instruction = with_account["instruction"].as_str().unwrap();
         assert!(instruction.contains("--task-id cmd_1"));
         assert_eq!(
             with_account["record_snapshot"]["sources"][0]["auth_source"],
             "reddit.com"
         );
-        let plain = generate_payload(&topic, &[lab], "issue_1", "2026-10-14", "cmd_1");
+        let plain = generate_payload(&topic, &[lab], "issue_1", "2026-10-14", "cmd_1", &window);
         assert!(!plain["instruction"].as_str().unwrap().contains("--task-id"));
+    }
+
+    fn post(url: &str, published: &str) -> Value {
+        json!({"intro": "x", "published_at": published, "category": "model",
+               "link_card": {"url": url}, "sources": [{"url": url, "kind": "primary"}]})
+    }
+
+    #[test]
+    fn window_drops_stale_covered_and_undated_posts_and_repoints_trends() {
+        let now = chrono::DateTime::parse_from_rfc3339("2026-10-15T07:00:00Z")
+            .unwrap()
+            .timestamp_millis();
+        let reply = json!({
+            "schema": NEWS_ISSUE_CONTRACT,
+            "posts": [
+                post("https://www.anthropic.com/research/self-replicating-ai/", "2026-10-12T19:30:00Z"),
+                post("https://cohere.com/blog/new", "2026-10-14T16:48:00Z"),
+                post("https://deepmind.google/models/model-cards/gemini-4-argon/", "2026-10-14T20:00:00Z"),
+                {"intro": "ohne Datum", "sources": [{"url": "https://a.example/b"}]},
+                post("https://cohere.com/blog/new#top", "2026-10-14T17:00:00Z"),
+            ],
+            "trends": [
+                {"title": "KI-Würmer", "post_index": 0},
+                {"title": "Frontier-Skalierung mit Safety-Vorbehalt (Gemini 4 Argon, Muse Wonder)", "post_index": 2},
+                {"title": "Coding-Agenten", "post_index": 1},
+            ],
+        })
+        .to_string();
+        let mut parsed = parse_issue_reply(&reply).unwrap();
+        let window = IssueWindow {
+            start_ms: now - DAY_MS,
+            previous_issue_id: String::new(),
+            covered_urls: vec!["deepmind.google/models/model-cards/gemini-4-argon".into()],
+        };
+        let rejected = enforce_window(&mut parsed, &window, now);
+        let reasons: Vec<&str> = rejected
+            .iter()
+            .map(|r| r["reason"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            reasons,
+            vec![
+                "published_before_window",
+                "already_covered",
+                "missing_published_at",
+                "duplicate_in_issue"
+            ]
+        );
+        assert_eq!(parsed.posts.len(), 1);
+        assert_eq!(parsed.trends.len(), 1);
+        assert_eq!(parsed.trends[0]["title"], "Coding-Agenten");
+        assert_eq!(parsed.trends[0]["post_index"], json!(0));
+    }
+
+    #[test]
+    fn window_runs_since_previous_issue_and_remembers_its_stories() {
+        let now = 100 * DAY_MS;
+        let issues = vec![
+            json!({"id": "i1", "status": "ready", "generated_at_ms": now - 9 * HOUR_MS}),
+            json!({"id": "i0", "status": "ready", "generated_at_ms": now - 40 * DAY_MS}),
+        ];
+        let posts = vec![
+            post("https://cohere.com/blog/new", "2026-10-14T16:48:00Z")
+                .as_object()
+                .cloned()
+                .map(|mut p| {
+                    p.insert("issue_id".into(), json!("i1"));
+                    Value::Object(p)
+                })
+                .unwrap(),
+            json!({"issue_id": "i0", "link_card": {"url": "https://old.example/a"}, "sources": []}),
+        ];
+        let window = window_from_history(&issues, &posts, "daily", now);
+        assert_eq!(window.start_ms, now - 9 * HOUR_MS);
+        assert_eq!(window.previous_issue_id, "i1");
+        assert_eq!(window.covered_urls, vec!["cohere.com/blog/new".to_string()]);
+        let empty = window_from_history(&[], &[], "weekly", now);
+        assert_eq!(empty.start_ms, now - 7 * DAY_MS);
+        assert_eq!(
+            window_from_history(&[], &[], "daily", now).start_ms,
+            now - DAY_MS
+        );
+    }
+
+    #[test]
+    fn hacker_news_quotes_are_dropped_and_trend_titles_stay_short() {
+        let raw = json!({"intro": "x", "sources": [{"url": "https://a.example"}],
+            "quote": {"source": "Hacker News", "text": "for $250?", "url": "https://news.ycombinator.com/item?id=1"}});
+        assert_eq!(normalize_post(&raw).unwrap()["quote"], json!({}));
+        let reddit = json!({"intro": "x", "sources": [{"url": "https://a.example"}],
+            "quote": {"source": "Reddit", "text": "gut", "url": "https://reddit.com/r/x"}});
+        assert_eq!(normalize_post(&reddit).unwrap()["quote"]["text"], "gut");
+        assert_eq!(
+            concise_trend_title("On-Device-Inferenz aus ungewöhnlichen Bausteinen (EmbeddingGemma-Transcribe, AirLLM, LFM2.5)"),
+            "On-Device-Inferenz aus ungewöhnlichen Bausteinen"
+        );
+        assert!(concise_trend_title(&"Wort ".repeat(30)).chars().count() <= MAX_TREND_TITLE);
+        assert_eq!(
+            normalize_story_url("https://WWW.Cohere.com/blog/new/#x"),
+            "cohere.com/blog/new"
+        );
+    }
+
+    fn test_window() -> IssueWindow {
+        window_from_history(&[], &[], "daily", 0)
+    }
+
+    #[test]
+    fn run_skips_unusable_sources_and_caps_the_rest() {
+        let mut sources = vec![
+            json!({"label": "OpenAI", "kind": "lab", "status": "failed"}),
+            json!({"label": "Reddit", "kind": "reddit", "status": "needs_auth"}),
+        ];
+        for index in 0..(MAX_SOURCES_PER_RUN + 2) {
+            sources.push(json!({"label": format!("S{index}"), "kind": "lab", "status": "ok"}));
+        }
+        let (usable, skipped) = select_run_sources(&sources);
+        assert_eq!(usable.len(), MAX_SOURCES_PER_RUN);
+        assert_eq!(skipped[0], ("OpenAI".to_string(), "failed".to_string()));
+        assert_eq!(skipped[1], ("Reddit".to_string(), "needs_auth".to_string()));
+        assert_eq!(skipped.iter().filter(|(_, r)| r == "limit").count(), 2);
+        let topic = json!({"id": "topic_1", "title": "KI", "prompt": "", "max_posts": 5});
+        let payload = generate_payload(
+            &topic,
+            &sources,
+            "issue_1",
+            "2026-10-15",
+            "cmd_1",
+            &test_window(),
+        );
+        let instruction = payload["instruction"].as_str().unwrap();
+        assert!(
+            !instruction.contains("OpenAI"),
+            "skipped sources stay out of the source list"
+        );
+        assert!(
+            !instruction.contains("--task-id"),
+            "skipped Reddit must not ask for a signed-in read"
+        );
+        assert_eq!(
+            payload["record_snapshot"]["sources"]
+                .as_array()
+                .unwrap()
+                .len(),
+            MAX_SOURCES_PER_RUN
+        );
+    }
+
+    #[test]
+    fn manual_and_scheduled_runs_get_the_same_run_contract() {
+        let root = std::env::temp_dir().join(format!("ctox-news-ckpt-{}", std::process::id()));
+        let command = |id: &str| BusinessCommand {
+            origin: super::super::store::CommandOrigin::TrustedLocal,
+            id: Some(id.to_string()),
+            module: NEWS_MODULE.to_string(),
+            command_type: NEWS_ISSUE_GENERATE.to_string(),
+            record_id: Some("topic_1".to_string()),
+            payload: json!({
+                "issue_id": "issue_1",
+                "record_snapshot": {"sources": [
+                    {"label": "OpenAI", "status": "failed"},
+                    {"label": "Anthropic", "status": "ok"}
+                ]}
+            }),
+            client_context: json!({}),
+        };
+        let a = issue_run_prompt_block(&root, &command("cmd_manual"))
+            .unwrap()
+            .unwrap();
+        let b = issue_run_prompt_block(&root, &command("cmd_sched"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(a, b, "the checkpoint follows the issue, not the command");
+        assert!(a.contains("OpenAI (failed)"));
+        assert!(a.contains("Nur diese Quellen lesen: Anthropic."));
+        assert!(a.contains("checkpoints/issue_1.json"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn digest_uses_only_the_weeks_daily_posts_and_rejects_fresh_research() {
+        let now = 100 * DAY_MS;
+        let issues = vec![
+            json!({"id": "d1", "status": "ready", "generated_at_ms": now - 2 * DAY_MS}),
+            json!({"id": "d0", "status": "ready", "generated_at_ms": now - 9 * DAY_MS}),
+            json!({"id": "w0", "status": "ready", "generated_at_ms": now - DAY_MS, "payload": {"kind": "weekly_digest"}}),
+        ];
+        let mut a = post("https://a.example/1", "2026-10-14T00:00:00Z");
+        a["issue_id"] = json!("d1");
+        a["hype_score"] = json!(10);
+        let mut b = post("https://b.example/2", "2026-10-14T00:00:00Z");
+        b["issue_id"] = json!("d1");
+        b["hype_score"] = json!(90);
+        let mut old = post("https://old.example/3", "2026-10-01T00:00:00Z");
+        old["issue_id"] = json!("d0");
+        let mut digest_post = post("https://w.example/4", "2026-10-14T00:00:00Z");
+        digest_post["issue_id"] = json!("w0");
+        let week = digest_week_posts(&issues, &[a, b, old, digest_post], now);
+        let urls: Vec<String> = week.iter().filter_map(primary_story_url).collect();
+        assert_eq!(
+            urls,
+            vec!["b.example/2".to_string(), "a.example/1".to_string()]
+        );
+
+        let topic = json!({"id": "t1", "title": "KI", "cadence": "daily", "max_posts": 12});
+        let payload = digest_payload(&topic, &week, "issue_w", "2026-10-16", now);
+        assert_eq!(payload["mode"], DIGEST_MODE);
+        assert_eq!(payload["digest_posts"].as_array().unwrap().len(), 2);
+        assert_eq!(payload["record_snapshot"]["topic"]["max_posts"], json!(10));
+        assert!(payload["instruction"]
+            .as_str()
+            .unwrap()
+            .contains("keine neue Recherche"));
+
+        let reply = json!({"schema": NEWS_ISSUE_CONTRACT, "posts": [
+            post("https://b.example/2/", "2026-10-14T00:00:00Z"),
+            post("https://new.example/5", "2026-10-15T00:00:00Z"),
+        ], "trends": [{"title": "Neu", "post_index": 1}, {"title": "B", "post_index": 0}]})
+        .to_string();
+        let mut parsed = parse_issue_reply(&reply).unwrap();
+        let digest_urls: Vec<String> = payload["digest_urls"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|url| url.as_str().unwrap().to_string())
+            .collect();
+        let rejected = enforce_digest_sources(&mut parsed, &digest_urls);
+        assert_eq!(rejected.len(), 1);
+        assert_eq!(rejected[0]["reason"], "not_in_week");
+        assert_eq!(parsed.posts.len(), 1);
+        assert_eq!(
+            parsed.trends,
+            vec![json!({"title": "B", "category": "", "discussion_count": 0.0, "post_index": 0})]
+        );
     }
 }

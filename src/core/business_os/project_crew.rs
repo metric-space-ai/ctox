@@ -7,33 +7,33 @@ use std::path::Path;
 
 /// A queue metadata field or a client-selected member is not an identity grant.
 /// Follow the canonical command/task link, then the authenticated project chat.
-pub(crate) fn project_crew_member_for_task(
-    root: &Path,
-    task_id: &str,
-) -> anyhow::Result<Option<String>> {
-    let core = Connection::open_with_flags(
-        crate::paths::core_db(root),
-        OpenFlags::SQLITE_OPEN_READ_ONLY,
-    )?;
-    core.busy_timeout(crate::persistence::sqlite_busy_timeout_duration())?;
-    // A legacy/non-command queue may have no command ledger at all. Do not
-    // initialize a store or infer a private chat from its prompt/metadata.
-    let has_links: bool = core.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_command_task_links')",
-        [], |row| row.get(0),
-    )?;
-    if !has_links {
-        return Ok(None);
-    }
-    let commands = core
-        .prepare("SELECT command_id FROM business_command_task_links WHERE task_id=?1 LIMIT 2")?
-        .query_map([task_id], |row| row.get::<_, String>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+pub(super) fn command_for_task(root: &Path, task_id: &str) -> anyhow::Result<Option<String>> {
+    let lookup_task = task_id.to_owned();
+    let commands = crate::lcm::with_lcm_read(&crate::paths::core_db(root), move |core| {
+        let has_links: bool = core.query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='business_command_task_links')", [], |row| row.get(0),
+        )?;
+        if !has_links {
+            return Ok(Vec::new());
+        }
+        let commands = core
+            .prepare("SELECT command_id FROM business_command_task_links WHERE task_id=?1 LIMIT 2")?
+            .query_map([lookup_task], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(commands)
+    })?;
     ensure!(
         commands.len() <= 1,
         "project Crew task has ambiguous command links"
     );
-    let Some(command_id) = commands.into_iter().next() else {
+    Ok(commands.into_iter().next())
+}
+
+pub(crate) fn project_crew_member_for_task(
+    root: &Path,
+    task_id: &str,
+) -> anyhow::Result<Option<String>> {
+    let Some(command_id) = command_for_task(root, task_id)? else {
         return Ok(None);
     };
     let command = crate::mission::channels::business_command_projection(root, &command_id)?;
@@ -80,12 +80,13 @@ pub(crate) fn project_crew_member_for_task(
             "project executor changed since submission"
         );
     }
-    ensure!(
-        crate::crew::members(&core)?
+    let lookup_member = member.clone();
+    let available = crate::lcm::with_lcm_read(&crate::paths::core_db(root), move |core| {
+        Ok(crate::crew::members(core)?
             .iter()
-            .any(|candidate| candidate.id == member && !candidate.archived),
-        "project Crew member is unavailable or archived"
-    );
+            .any(|candidate| candidate.id == lookup_member && !candidate.archived))
+    })?;
+    ensure!(available, "project Crew member is unavailable or archived");
     Ok(Some(member))
 }
 

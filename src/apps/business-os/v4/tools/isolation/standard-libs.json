@@ -1,0 +1,21 @@
+{
+  "_format": "ctox-shell-v4-standard-libs-1",
+  "_rule": "R1: Vendor-Bibliotheken sind Teil der App (eigene Kopie im App-Ordner) oder freigegebene Standardbibliothek der Shell unter ctox:lib/<name>@<major>/…. Mehrere Apps -> Standardbibliothek, eine App -> in die App. check-isolation.mjs erlaubt ctox:lib/ nur fuer Eintraege mit status 'approved'.",
+  "_decided": "Strang ISO, 15.10.2026; Begruendung je Eintrag, Einzel-App-Faelle in REPORT.md",
+  "libs": {
+    "ctox-office@1": {
+      "status": "approved",
+      "source": "vendor/ctox-office/ (218 MB, Fork-Provenienz vendor/ctox-office/provenance.json)",
+      "users": ["modules/documents", "modules/spreadsheets", "src/apps/business-os-mobile (Office-Pack)"],
+      "reason": "zwei Apps plus Mobil-Host; 218 MB je App zu kopieren waere unvertretbar",
+      "shell_support": "fehlt: v4/sw.js und v4/blob-loader.js loesen ctox:lib/ noch nicht auf (Shell-Strang FR2/Q3)"
+    },
+    "monaco@0": {
+      "status": "approved",
+      "source": "vendor/monaco/ (9,9 MB, monaco-editor 0.32.1 laut vs/loader.js)",
+      "users": ["desktop-apps/code-editor", "v4/source/editor.js (Quellmodus der Shell)"],
+      "reason": "Shell selbst (Quellmodus) und code-editor nutzen Monaco; damit Shell-Bibliothek",
+      "shell_support": "fehlt: v4/sw.js und v4/blob-loader.js loesen ctox:lib/ noch nicht auf (Shell-Strang FR2/Q3)"
+    }
+  }
+}

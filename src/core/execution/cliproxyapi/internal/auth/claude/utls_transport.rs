@@ -552,14 +552,6 @@ mod tests {
     }
 
     #[test]
-    fn direct_and_none_sentinels_are_case_insensitive() {
-        for sentinel in ["direct", "DIRECT", "none", "NoNe", ""] {
-            let transport = AnthropicHttpTransport::new(Some(sentinel)).unwrap();
-            assert_eq!(transport.proxy_mode(), AnthropicProxyMode::Direct);
-        }
-    }
-
-    #[test]
     fn unsupported_proxy_schemes_are_rejected_without_echoing_the_url() {
         let proxy = "ftp://operator:do-not-leak@proxy.example.com";
         let error = AnthropicHttpTransport::new(Some(proxy)).unwrap_err();

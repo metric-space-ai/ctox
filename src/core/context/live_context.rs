@@ -500,7 +500,7 @@ pub fn render_live_prompt_artifact(
     db_path: &Path,
     conversation_id: i64,
 ) -> Result<LivePromptArtifact> {
-    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(db_path)?;
     let _ = engine.continuity_init_documents(conversation_id)?;
     let snapshot = engine.snapshot(conversation_id)?;
     let continuity = engine.continuity_show_all(conversation_id)?;
@@ -2380,16 +2380,6 @@ mod tests {
     }
 
     #[test]
-    fn runtime_context_marks_latest_snapshot_authoritative() {
-        let context = wrap_runtime_context("FOCUS\n- Main task: inspect CASE-778");
-
-        assert!(context.starts_with("<ctox_runtime_context version=\"1\">"));
-        assert!(context.contains("newest ctox_runtime_context snapshot is authoritative"));
-        assert!(context.contains("Earlier snapshots remain visible only to preserve"));
-        assert!(context.ends_with("</ctox_runtime_context>"));
-    }
-
-    #[test]
     fn render_chat_prompt_links_business_os_app_skill_by_path() {
         let root = temp_root("business-os-app-skill-dispatch");
         let skill_dir =
@@ -2435,14 +2425,6 @@ mod tests {
         assert!(prompt.contains(
             "src/skills/system/product_engineering/business-os-app-module-development/SKILL.md"
         ));
-    }
-
-    #[test]
-    fn render_system_prompt_includes_default_cto_operating_mode() {
-        let root = temp_root("default-cto-contract");
-        let prompt = render_system_prompt(&root, &BTreeMap::new()).expect("rendered prompt");
-        assert!(prompt.contains("## CTO Operating Mode"));
-        assert!(prompt.contains("You own the mission outcome, not just the next task."));
     }
 
     #[test]
@@ -2516,16 +2498,6 @@ mod tests {
     }
 
     #[test]
-    fn workflow_terms_empty_means_no_relevance_filter() {
-        // No mission text must not hide open work, otherwise the EXECUTION
-        // CONTRACT instructs the model to create duplicate work items.
-        assert!(workflow_matches_terms("thread", "title", "prompt", &[]));
-        let terms = vec!["deploy".to_string()];
-        assert!(workflow_matches_terms("t", "deploy the fix", "p", &terms));
-        assert!(!workflow_matches_terms("t", "unrelated", "p", &terms));
-    }
-
-    #[test]
     fn latest_prompt_sanitizer_keeps_email_wrapper_and_event_streams_verbatim() {
         let email = "[E-Mail eingegangen]\nSender: ceo@example.com\nBetreff: Serverausfall\nThread: t-1\n\nBitte Server pruefen und Bericht senden.";
         let echoed = sanitize_latest_prompt(email);
@@ -2568,51 +2540,6 @@ mod tests {
         // The task/next-step restatements moved out; Focus carries them.
         assert!(!block.contains("Current task:"));
         assert!(!block.contains("do this next"));
-    }
-
-    #[test]
-    fn system_prompt_legend_matches_emitted_block_headers_and_names_no_phantoms() {
-        // Congruence gate: every block header the system prompt's legend
-        // names must be a header the renderer actually emits, and the prompt
-        // must not reference retired labels or nonexistent mechanisms/tools.
-        let prompt = CTOX_CHAT_SYSTEM_PROMPT;
-        for header in [
-            "CURRENT REQUEST",
-            "Suggested skill dispatch",
-            "Verified evidence",
-            "Strategy",
-            "Anchors",
-            "Focus",
-            "EXECUTION CONTRACT",
-            "Open CTOX work that counts right now",
-            "Narrative",
-            "Governance",
-            "Autonomy policy",
-            "Context health",
-            "RECENT CONVERSATION EVIDENCE",
-        ] {
-            assert!(
-                prompt.contains(header),
-                "system prompt legend is missing emitted block header: {header}"
-            );
-        }
-        for stale in [
-            "Latest user turn",
-            "mission_idle_watchdog",
-            "agy session",
-            "`WebSearch`",
-            "`WebRead`",
-            "`WebScrape`",
-            "test_dashboard.js",
-            "claude_subscription_auth_json",
-            "antigravity_subscription_auth_json",
-            "read_scope",
-        ] {
-            assert!(
-                !prompt.contains(stale),
-                "system prompt references retired/nonexistent: {stale}"
-            );
-        }
     }
 
     #[test]

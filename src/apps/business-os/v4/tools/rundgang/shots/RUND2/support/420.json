@@ -1,0 +1,406 @@
+{
+ "app": "support",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Support",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Queue importieren",
+    "button:Queue exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Offen (5)",
+    "nav:Meine (5)",
+    "nav:Nicht zugewiesen (0)",
+    "nav:SLA-Risiko (0)",
+    "row:Rechnung wurde an die Buchhalt",
+    "row:Bitte bis Freitag prüfen und f",
+    "row:Rückfrage zur Lieferzeit der E",
+    "row:Termin für die Abnahme vor Ort",
+    "row:Zusammenfassung der Ergebnisse",
+    "button:Kontext öffnen",
+    "button:CTOX fragen"
+   ],
+   "shot": "support/420-01-open.png"
+  },
+  {
+   "step": "nav Offen (5)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "support/420-02-nav_Offen_5_.png"
+  },
+  {
+   "step": "nav Meine (5)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Nicht zugewiesen (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "support/420-03-nav_Nicht_zugewiesen_0_.png"
+  },
+  {
+   "step": "nav SLA-Risiko (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "support/420-04-nav_SLA-Risiko_0_.png"
+  },
+  {
+   "step": "zurück zu Reiter Offen (5)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "support/420-05-zur_ck_zu_Reiter_Offen_5_.png"
+  },
+  {
+   "step": "row Rechnung wurde an die Buchhaltung weitergeleitet. open · all",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "support/420-06-row_Rechnung_wurde_an_die_Buchhaltung_we.png"
+  },
+  {
+   "step": "button Kontext schließen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-07-button_Kontext_schlie_en.png"
+  },
+  {
+   "step": "formular 1 Felder → Notiz hinzufügen",
+   "changed": true,
+   "ops": [
+    "command support.note.create local=ok result=accepted {\"conversation_id\":\"conversation-001\",\"body\":\"Rundgang Test\",\"visibility\":\"internal\",\"source\":\"business-os.support\",\"client_context\":{\"sourc"
+   ],
+   "zone": [
+    "clear support.command.support.note.create"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "support/420-08-formular_1_Felder_Notiz_hinzuf_gen.png"
+  },
+  {
+   "step": "row Bitte bis Freitag prüfen und freigeben. completed · all · in",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "row",
+   "shot": "support/420-09-row_Bitte_bis_Freitag_pr_fen_und_freigeb.png"
+  },
+  {
+   "step": "button Übernehmen",
+   "changed": true,
+   "ops": [
+    "command support.conversation.claim local=ok result=accepted {\"conversation_id\":\"conversation-002\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\"surface\":\"support.conversation.cl"
+   ],
+   "zone": [
+    "clear support.command.support.conversation.claim"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-10-button_bernehmen.png"
+  },
+  {
+   "step": "button Mir zuweisen",
+   "changed": true,
+   "ops": [
+    "command support.conversation.assign local=ok result=accepted {\"conversation_id\":\"conversation-002\",\"assignee_id\":\"owner\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\"surface\":\"s"
+   ],
+   "zone": [
+    "clear support.command.support.conversation.assign"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-11-button_Mir_zuweisen.png"
+  },
+  {
+   "step": "button 1h snoozen",
+   "changed": true,
+   "ops": [
+    "command support.conversation.snooze local=ok result=accepted {\"conversation_id\":\"conversation-002\",\"snoozed_until_ms\":1792090515569,\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\""
+   ],
+   "zone": [
+    "clear support.command.support.conversation.snooze"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-12-button_1h_snoozen.png"
+  },
+  {
+   "step": "button Morgen",
+   "changed": true,
+   "ops": [
+    "command support.conversation.snooze local=ok result=accepted {\"conversation_id\":\"conversation-002\",\"snoozed_until_ms\":1792134000000,\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\""
+   ],
+   "zone": [
+    "clear support.command.support.conversation.snooze"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-13-button_Morgen.png"
+  },
+  {
+   "step": "button Lösen",
+   "changed": true,
+   "ops": [
+    "command support.conversation.resolve local=ok result=accepted {\"conversation_id\":\"conversation-002\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\"surface\":\"support.conversation.re"
+   ],
+   "zone": [
+    "clear support.command.support.conversation.resolve"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-14-button_L_sen.png"
+  },
+  {
+   "step": "button Anwenden",
+   "changed": true,
+   "ops": [
+    "command support.agent.apply_suggestion local=ok result=accepted {\"conversation_id\":\"conversation-001\",\"suggestion_id\":\"agent-suggesti-001\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"suppor"
+   ],
+   "zone": [
+    "clear support.command.support.agent.apply_suggestion"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-15-button_Anwenden.png"
+  },
+  {
+   "step": "button Ablehnen",
+   "changed": true,
+   "ops": [
+    "command support.agent.reject_suggestion local=ok result=accepted {\"conversation_id\":\"conversation-001\",\"suggestion_id\":\"agent-suggesti-001\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"suppor"
+   ],
+   "zone": [
+    "clear support.command.support.agent.reject_suggestion"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-16-button_Ablehnen.png"
+  },
+  {
+   "step": "button Verknüpfter Kunde",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-17-button_Verkn_pfter_Kunde.png"
+  },
+  {
+   "step": "button Verknüpftes Ticket",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-18-button_Verkn_pftes_Ticket.png"
+  },
+  {
+   "step": "button Kommunikation",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-19-button_Kommunikation.png"
+  },
+  {
+   "step": "button CTOX Arbeit",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "support/420-20-button_CTOX_Arbeit.png"
+  },
+  {
+   "step": "auswahl open waiting resolved → waiting",
+   "changed": true,
+   "ops": [
+    "command support.conversation.status local=ok result=accepted {\"conversation_id\":\"conversation-001\",\"status\":\"waiting\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\"surface\":\"supp"
+   ],
+   "zone": [
+    "clear support.command.support.conversation.status"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "support/420-21-auswahl_open_waiting_resolved_waiting.png"
+  },
+  {
+   "step": "auswahl low normal high urgent → normal",
+   "changed": true,
+   "ops": [
+    "command support.conversation.priority local=ok result=accepted {\"conversation_id\":\"conversation-001\",\"priority\":\"normal\",\"client_context\":{\"source\":\"business-os.support\",\"module\":\"support\",\"surface\":\"sup"
+   ],
+   "zone": [
+    "clear support.command.support.conversation.priority"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "shot": "support/420-22-auswahl_low_normal_high_urgent_normal.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "command",
+   "coll": "support.note.create",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.claim",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.assign",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.snooze",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.snooze",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.resolve",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.agent.apply_suggestion",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.agent.reject_suggestion",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.status",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "command",
+   "coll": "support.conversation.priority",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "support",
+  "Support"
+ ]
+}

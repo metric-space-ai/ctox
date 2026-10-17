@@ -1050,6 +1050,7 @@ fn read_rms_norm_entry(pack: &MetalPack, entry: &MetalPackEntry) -> Result<Vec<u
         .collect())
 }
 
+#[cfg(target_os = "macos")]
 fn read_optional_rms_head_norm_entry(
     pack: &MetalPack,
     entry: Option<&MetalPackEntry>,

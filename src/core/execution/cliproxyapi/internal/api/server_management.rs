@@ -172,8 +172,31 @@ impl ManagementHttpResponse {
     }
 }
 
+pub type ManagementJob = Box<dyn FnOnce() -> ManagementHttpResponse + Send + 'static>;
+pub type ManagementFuture = std::pin::Pin<
+    Box<
+        dyn std::future::Future<Output = Result<ManagementHttpResponse, ManagementExecutionError>>
+            + Send
+            + 'static,
+    >,
+>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagementExecutionError {
+    Busy,
+    Unavailable,
+}
+
+/// Native hosts supply their own bounded owner admission. The portable server
+/// does not gain access to the host's file handles or credential authority.
+pub trait ManagementBlockingExecutor: Send + Sync {
+    fn execute(&self, operation: ManagementJob) -> ManagementFuture;
+}
+
+#[derive(Clone)]
 pub struct ManagementHandler {
     authenticator: Arc<ManagementAuthenticator>,
+    executor: Option<Arc<dyn ManagementBlockingExecutor>>,
     runtime_status: Option<Arc<dyn ManagementRuntimeStatusSource>>,
     runtime_config: Option<Arc<dyn ManagementRuntimeConfigSource>>,
     usage_queue: Option<Arc<dyn ManagementUsageQueue>>,
@@ -192,6 +215,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            executor: None,
         }
     }
 
@@ -207,6 +231,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            executor: None,
         }
     }
 
@@ -223,6 +248,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            executor: None,
         }
     }
 
@@ -238,6 +264,7 @@ impl ManagementHandler {
             api_key_usage: None,
             quota_reset: None,
             quota_switches: None,
+            executor: None,
         }
     }
 
@@ -268,6 +295,39 @@ impl ManagementHandler {
     ) -> Self {
         self.quota_switches = Some(quota_switches);
         self
+    }
+
+    pub fn with_blocking_executor(mut self, executor: Arc<dyn ManagementBlockingExecutor>) -> Self {
+        self.executor = Some(executor);
+        self
+    }
+
+    async fn handle_async(
+        &self,
+        method: String,
+        target: String,
+        headers: BTreeMap<String, Vec<String>>,
+        body: Vec<u8>,
+        client_ip: IpAddr,
+    ) -> ManagementHttpResponse {
+        let handler = self.clone();
+        let operation: ManagementJob =
+            Box::new(move || handler.handle(&method, &target, &headers, &body, client_ip));
+        let result = if let Some(executor) = self.executor.as_ref() {
+            executor.execute(operation).await
+        } else {
+            tokio::task::spawn_blocking(operation)
+                .await
+                .map_err(|_| ManagementExecutionError::Unavailable)
+        };
+        result.unwrap_or_else(|error| match error {
+            ManagementExecutionError::Busy => {
+                ManagementHttpResponse::error(503, "Core owner admission busy")
+            }
+            ManagementExecutionError::Unavailable => {
+                ManagementHttpResponse::error(503, "Core owner admission unavailable")
+            }
+        })
     }
 
     pub fn handle(
@@ -556,13 +616,17 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let response = match read_request(stream).await {
-        Ok(request) => handler.handle(
-            &request.method,
-            &request.target,
-            &request.headers,
-            &request.body,
-            client_ip,
-        ),
+        Ok(request) => {
+            handler
+                .handle_async(
+                    request.method,
+                    request.target,
+                    request.headers,
+                    request.body,
+                    client_ip,
+                )
+                .await
+        }
         Err(error) => ManagementHttpResponse::error(error.status, error.message),
     };
     write_management_response(stream, &response).await

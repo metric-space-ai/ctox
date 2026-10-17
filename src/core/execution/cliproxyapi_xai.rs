@@ -15,6 +15,9 @@ use std::{
 };
 use zeroize::Zeroizing;
 
+#[path = "cliproxyapi_xai_quota.rs"]
+pub(crate) mod quota;
+
 static AUTH_USE: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 const SCOPE: &str = "provider-subscriptions";
 const NAME: &str = "xai-instance-oauth";
@@ -344,22 +347,86 @@ async fn operator_login(
     }
 }
 
+/// Closed diagnostics: never carries credential values, endpoint payloads or an
+/// upstream error body. An HTTP status is present only after a response arrived.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum GrokCatalogErrorKind {
+    AccountNotConfigured,
+    SecretStoreUnavailable,
+    InvalidCredential,
+    RefreshUnavailable,
+    RefreshFailed,
+    Transport,
+    UpstreamRejected,
+    InvalidCatalog,
+    ResponseTooLarge,
+    CredentialChanged,
+    Timeout,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+struct GrokCatalogFailure {
+    kind: GrokCatalogErrorKind,
+    phase: &'static str,
+    http_status: Option<u16>,
+}
+impl GrokCatalogFailure {
+    fn new(kind: GrokCatalogErrorKind, phase: &'static str) -> Self {
+        Self {
+            kind,
+            phase,
+            http_status: None,
+        }
+    }
+    fn with_status(mut self, status: u16) -> Self {
+        self.http_status = Some(status);
+        self
+    }
+}
+impl std::fmt::Display for GrokCatalogFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Grok catalog {:?} during {}", self.kind, self.phase)?;
+        if let Some(status) = self.http_status {
+            write!(f, " (HTTP {status})")?;
+        }
+        if self.kind == GrokCatalogErrorKind::AccountNotConfigured {
+            f.write_str("; operator login: ctox runtime grok-login")?;
+        }
+        Ok(())
+    }
+}
+impl std::error::Error for GrokCatalogFailure {}
+
 pub fn handle_operator_models(root: &Path) -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    let models = runtime
-        .block_on(async {
-            tokio::time::timeout(Duration::from_secs(8), discover_models(root)).await
-        })
-        .map_err(|_| anyhow::anyhow!("Grok catalog request timed out"))?;
-    // Never print an upstream error body, credential or token.
-    let models = models.map_err(|_| anyhow::anyhow!("Grok catalog request failed"))?;
-    println!(
-        "{}",
-        serde_json::json!({"account_id":ACCOUNT_ID,"models":models})
-    );
-    Ok(())
+    let models = runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(8), discover_models_detailed(root))
+            .await
+            .unwrap_or_else(|_| {
+                Err(GrokCatalogFailure::new(
+                    GrokCatalogErrorKind::Timeout,
+                    "catalog",
+                ))
+            })
+    });
+    match models {
+        Ok(models) => {
+            println!(
+                "{}",
+                serde_json::json!({"account_id":ACCOUNT_ID,"models":models})
+            );
+            Ok(())
+        }
+        Err(error) => {
+            println!(
+                "{}",
+                serde_json::json!({"account_id":ACCOUNT_ID,"error":error})
+            );
+            Err(error.into())
+        }
+    }
 }
 struct LoginTransport(native_http::Client);
 impl XaiHttpTransport for LoginTransport {
@@ -511,9 +578,40 @@ fn endpoint(root: &Path) -> String {
     let _ = root;
     CLI_CHAT_PROXY_BASE_URL.into()
 }
-async fn active_record(root: &Path, client: &native_http::Client) -> anyhow::Result<Stored> {
-    let encoded = Zeroizing::new(crate::secrets::read_secret_value(root, SCOPE, NAME)?);
-    let mut record: Stored = serde_json::from_str(&encoded)?;
+async fn active_record(
+    root: &Path,
+    client: &native_http::Client,
+) -> Result<Stored, GrokCatalogFailure> {
+    let encoded = crate::secrets::read_secret_value_optional(root, SCOPE, NAME)
+        .map_err(|error| {
+            GrokCatalogFailure::new(
+                match error {
+                    crate::secrets::SecretReadError::Unavailable => {
+                        GrokCatalogErrorKind::SecretStoreUnavailable
+                    }
+                    _ => GrokCatalogErrorKind::InvalidCredential,
+                },
+                "credential",
+            )
+        })?
+        .ok_or_else(|| {
+            GrokCatalogFailure::new(GrokCatalogErrorKind::AccountNotConfigured, "credential")
+        })?;
+    let encoded = Zeroizing::new(encoded);
+    let mut record: Stored = serde_json::from_str(&encoded).map_err(|_| {
+        GrokCatalogFailure::new(GrokCatalogErrorKind::InvalidCredential, "credential")
+    })?;
+    if record.access.is_empty()
+        || record
+            .access
+            .bytes()
+            .any(|b| b.is_ascii_whitespace() || b.is_ascii_control())
+    {
+        return Err(GrokCatalogFailure::new(
+            GrokCatalogErrorKind::InvalidCredential,
+            "credential",
+        ));
+    }
     if record.expires_at.is_some_and(|expiry| {
         expiry
             <= std::time::SystemTime::now()
@@ -529,16 +627,35 @@ async fn active_record(root: &Path, client: &native_http::Client) -> anyhow::Res
         );
         let token = auth
             .refresh_tokens(
-                SecretString::new(
-                    record
-                        .refresh
-                        .clone()
-                        .ok_or_else(|| anyhow::anyhow!("refresh unavailable"))?,
-                )?,
+                SecretString::new(record.refresh.clone().ok_or_else(|| {
+                    GrokCatalogFailure::new(
+                        GrokCatalogErrorKind::RefreshUnavailable,
+                        "token_refresh",
+                    )
+                })?)
+                .map_err(|_| {
+                    GrokCatalogFailure::new(
+                        GrokCatalogErrorKind::InvalidCredential,
+                        "token_refresh",
+                    )
+                })?,
                 Some(&record.token_endpoint),
             )
             .await
-            .map_err(|_| anyhow::anyhow!("Grok refresh failed"))?;
+            .map_err(|error| {
+                let kind = if error.status.is_some_and(|s| !(200..300).contains(&s)) {
+                    GrokCatalogErrorKind::UpstreamRejected
+                } else if error.kind == XaiAuthErrorKind::Transport {
+                    GrokCatalogErrorKind::Transport
+                } else {
+                    GrokCatalogErrorKind::RefreshFailed
+                };
+                GrokCatalogFailure {
+                    kind,
+                    phase: "token_refresh",
+                    http_status: error.status,
+                }
+            })?;
         let bundle = AuthBundle {
             token_data: token,
             last_refresh: std::time::SystemTime::now(),
@@ -546,23 +663,42 @@ async fn active_record(root: &Path, client: &native_http::Client) -> anyhow::Res
             redirect_uri: String::new(),
             token_endpoint: record.token_endpoint.clone(),
         };
-        save_bundle(root, &bundle)?;
-        record = serde_json::from_str(&Zeroizing::new(crate::secrets::read_secret_value(
-            root, SCOPE, NAME,
-        )?))?;
+        save_bundle(root, &bundle).map_err(|_| {
+            GrokCatalogFailure::new(
+                GrokCatalogErrorKind::SecretStoreUnavailable,
+                "token_refresh",
+            )
+        })?;
+        record = serde_json::from_str(&Zeroizing::new(
+            crate::secrets::read_secret_value(root, SCOPE, NAME).map_err(|_| {
+                GrokCatalogFailure::new(
+                    GrokCatalogErrorKind::SecretStoreUnavailable,
+                    "token_refresh",
+                )
+            })?,
+        ))
+        .map_err(|_| {
+            GrokCatalogFailure::new(GrokCatalogErrorKind::InvalidCredential, "token_refresh")
+        })?;
     }
     Ok(record)
 }
 pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
+    discover_models_detailed(root).await.map_err(Into::into)
+}
+async fn discover_models_detailed(root: &Path) -> Result<Vec<String>, GrokCatalogFailure> {
     use ctox_cliproxyapi::internal::runtime::executor::xai_executor_request::apply_xai_chat_headers;
     use ctox_cliproxyapi::sdk::cliproxy::auth::Auth;
     let _guard = AUTH_USE.lock().await;
     let client = native_http::Client::builder()
         .redirect(native_http::redirect::Policy::none())
         .timeout(Duration::from_secs(30))
-        .build()?;
+        .build()
+        .map_err(|_| GrokCatalogFailure::new(GrokCatalogErrorKind::Transport, "client"))?;
     let record = active_record(root, &client).await?;
-    let catalog_binding = credential_binding(root)?;
+    let catalog_binding = credential_binding(root).map_err(|_| {
+        GrokCatalogFailure::new(GrokCatalogErrorKind::SecretStoreUnavailable, "credential")
+    })?;
     let mut auth = Auth::default();
     auth.attributes.insert("auth_kind".into(), "oauth".into());
     auth.attributes
@@ -575,22 +711,79 @@ pub async fn discover_models(root: &Path) -> anyhow::Result<Vec<String>> {
             request = request.header(&key, value);
         }
     }
-    let bytes = bounded_response(request.send().await?, 1024 * 1024).await?;
-    anyhow::ensure!(
-        credential_binding(root)? == catalog_binding,
-        "Grok credential changed during discovery"
-    );
-    let catalog: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let response = request
+        .send()
+        .await
+        .map_err(|_| GrokCatalogFailure::new(GrokCatalogErrorKind::Transport, "catalog"))?;
+    let status = response.status().as_u16();
+    if !response.status().is_success() {
+        return Err(
+            GrokCatalogFailure::new(GrokCatalogErrorKind::UpstreamRejected, "catalog")
+                .with_status(status),
+        );
+    }
+    use futures_util::StreamExt as _;
+    let mut response = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = response.next().await {
+        let chunk = chunk.map_err(|_| {
+            GrokCatalogFailure::new(GrokCatalogErrorKind::Transport, "catalog").with_status(status)
+        })?;
+        if bytes.len().saturating_add(chunk.len()) > 1024 * 1024 {
+            return Err(
+                GrokCatalogFailure::new(GrokCatalogErrorKind::ResponseTooLarge, "catalog")
+                    .with_status(status),
+            );
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    let current = credential_binding(root).map_err(|_| {
+        GrokCatalogFailure::new(GrokCatalogErrorKind::SecretStoreUnavailable, "credential")
+    })?;
+    if current != catalog_binding {
+        return Err(GrokCatalogFailure::new(
+            GrokCatalogErrorKind::CredentialChanged,
+            "credential",
+        ));
+    }
+    parse_catalog(&bytes, &record).map_err(|error| error.with_status(status))
+}
+fn parse_catalog(bytes: &[u8], record: &Stored) -> Result<Vec<String>, GrokCatalogFailure> {
+    let invalid = || GrokCatalogFailure::new(GrokCatalogErrorKind::InvalidCatalog, "catalog");
+    let catalog: serde_json::Value = serde_json::from_slice(bytes).map_err(|_| invalid())?;
     let rows = catalog
         .get("data")
         .and_then(serde_json::Value::as_array)
-        .ok_or_else(|| anyhow::anyhow!("invalid Grok catalog"))?;
-    Ok(rows
-        .iter()
-        .filter_map(|row| row.get("id").and_then(serde_json::Value::as_str))
-        .filter(|id| !id.is_empty())
-        .map(str::to_owned)
-        .collect())
+        .ok_or_else(invalid)?;
+    if rows.len() > 256 {
+        return Err(invalid());
+    }
+    rows.iter()
+        .map(|row| {
+            let id = row
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(invalid)?;
+            if id.is_empty()
+                || id.len() > 128
+                || !id
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"_.:/-".contains(&b))
+                || (!record.access.is_empty() && id.contains(&record.access))
+                || record
+                    .refresh
+                    .as_deref()
+                    .is_some_and(|token| !token.is_empty() && id.contains(token))
+                || record
+                    .identity
+                    .as_deref()
+                    .is_some_and(|token| !token.is_empty() && id.contains(token))
+            {
+                return Err(invalid());
+            }
+            Ok(id.to_owned())
+        })
+        .collect()
 }
 
 /// Explicit subscription route; default provider configuration is never changed.
@@ -692,7 +885,12 @@ async fn execute_route_at(
             upstream = upstream.header(&key, value);
         }
     }
-    let data = bounded_response(upstream.send().await?, 32 * 1024 * 1024).await?;
+    let response = upstream.send().await?;
+    ctox_cliproxyapi::internal::api::account_selection::record_upstream_status(
+        response.status().as_u16(),
+        &[],
+    );
+    let data = bounded_response(response, 32 * 1024 * 1024).await?;
     let data = if stream {
         data
     } else {

@@ -1,0 +1,19 @@
+{
+  "_basis": {
+    "foreign_collections": "modules/file-viewer/V4-PORT.md OFFEN 4 („keine App-Collection mehr“); desktop_files read: E30 – files.get(ref) einer Explorer-/Desktop-Datei ist nur über eine lesbare desktop_files-Zeile berechtigt (FIXT-2, 16.10.2026)"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "foreign_collections": {
+    "business_commands": [
+      "read"
+    ],
+    "desktop_files": [
+      "read"
+    ],
+    "files": [
+      "read"
+    ]
+  },
+  "foreign_exclusive": true
+}

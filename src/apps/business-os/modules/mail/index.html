@@ -9,7 +9,6 @@
           <h2 class="ctox-pane-title" data-mail-navigation-title>Postfach</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" data-mail-compose aria-label="Neue Mail" title="Neue Mail"></button>
           <button type="button" class="ctox-pane-icon" data-mail-new-group hidden aria-label="Neue E-Mail-Gruppe" title="Neue E-Mail-Gruppe"></button>
           <button type="button" class="ctox-pane-icon" data-mail-settings aria-label="Einstellungen" title="Einstellungen"></button>
           <button type="button" class="ctox-pane-icon mail-mobile-only" data-mail-close-nav aria-label="Navigation schließen" title="Navigation schließen"></button>
@@ -61,7 +60,7 @@
       <div class="ctox-pane-title-row" data-shell-v2-header-row="1">
         <button type="button" class="ctox-pane-icon mail-mobile-only" data-mail-open-nav aria-label="Mail-Navigation öffnen" title="Mail-Navigation öffnen"></button>
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-mail-list-kicker>Postfach</span>
+          <span class="ctox-pane-kicker" data-mail-list-kicker hidden>Postfach</span>
           <h2 class="ctox-pane-title" data-mail-list-title>Posteingang</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -119,12 +118,7 @@
         <span class="mail-table-head-subject" data-mail-head-subject>Nachrichten</span>
         <span class="mail-table-head-time" data-mail-head-time>Zeit</span>
       </div>
-      <div class="mail-read-error" data-mail-read-error role="status" hidden><span data-mail-read-error-text></span><button type="button" data-mail-retry-read>Erneut versuchen</button></div>
       <div class="mail-record-list" data-mail-record-list role="listbox" aria-label="E-Mails"></div>
-      <div class="ctox-empty mail-list-empty" data-mail-list-empty>
-        <strong data-mail-empty-title>Keine E-Mails</strong>
-        <span data-mail-empty-body>Nachrichten erscheinen nach der ersten Synchronisierung.</span>
-      </div>
     </div>
     <footer class="ctox-pane-footer mail-list-footer"><span data-pg-footer data-mail-list-footer></span><div class="mail-pager" aria-label="Seitennavigation"><button type="button" class="ctox-pane-icon" data-mail-prev-page aria-label="Vorherige Seite" title="Vorherige Seite"></button><button type="button" class="ctox-pane-icon" data-mail-next-page aria-label="Nächste Seite" title="Nächste Seite"></button></div></footer>
   </section>
@@ -142,10 +136,6 @@
       </div>
     </header>
     <div class="ctox-pane-body mail-detail-body" data-mail-detail>
-      <div class="ctox-empty mail-detail-empty" data-mail-detail-empty>
-        <strong data-mail-detail-empty-title>Keine Mail ausgewählt</strong>
-        <span data-mail-detail-empty-body>Wähle eine Nachricht oder Kampagne aus.</span>
-      </div>
     </div>
   </section>
 
@@ -173,7 +163,6 @@
       <label><span data-mail-subject-label>Betreff</span><input class="ctox-input" type="text" data-mail-compose-subject /></label>
       <label class="mail-body-field"><span data-mail-message-label>Nachricht</span><textarea class="ctox-textarea" rows="12" data-mail-compose-body></textarea></label>
     </div>
-    <div class="mail-composer-status" data-mail-composer-status role="status" aria-live="polite"></div>
     <footer class="mail-composer-footer">
       <button type="button" class="ctox-button" data-mail-save-draft>Als Entwurf speichern</button>
       <button type="button" class="ctox-button" data-mail-request-approval>Zur Freigabe</button>
@@ -196,12 +185,12 @@
     </header>
     <div class="mail-mailbox-admin-body">
       <section class="mail-server-overview">
-        <div class="mail-server-state-line"><span class="mail-server-dot" data-mail-server-dot></span><div><strong data-mail-server-state>Serverstatus wird geladen</strong><span data-mail-server-endpoints></span></div><button type="button" class="ctox-button ctox-button--sm" data-mail-toggle-server>Stoppen</button></div>
+        <div class="mail-server-state-line"><span class="mail-server-dot" data-mail-server-dot></span><div><strong data-mail-server-state></strong><span data-mail-server-endpoints></span></div><button type="button" class="ctox-button ctox-button--sm" data-mail-toggle-server>Stoppen</button></div>
         <div class="mail-server-counters"><span><strong data-mail-queue-count>0</strong> in Queue</span><span><strong data-mail-delivered-count>0</strong> zugestellt</span><span><strong data-mail-failed-count>0</strong> fehlgeschlagen</span></div>
       </section>
 
       <form class="mail-server-form" data-mail-server-form>
-        <div class="mail-section-heading"><span>Server &amp; Tracking</span><span class="mail-section-hint">Änderungen werden sofort angewendet</span></div>
+        <div class="mail-section-heading"><span title="Änderungen werden sofort angewendet">Server &amp; Tracking</span></div>
         <div class="mail-settings-grid">
           <label class="mail-field-wide"><span>Servername</span><input class="ctox-input" data-mail-server-hostname placeholder="mail.example.com" required /></label>
           <label><span>Bind-Adresse</span><input class="ctox-input" data-mail-server-bind-host placeholder="127.0.0.1" required /></label>
@@ -209,13 +198,12 @@
           <label><span>IMAP-Port</span><input class="ctox-input" type="number" min="1" max="65535" data-mail-server-imap-port required /></label>
           <label><span>Versand / Minute</span><input class="ctox-input" type="number" min="1" data-mail-server-throttle required /></label>
           <label><span>Max. Verbindungen</span><input class="ctox-input" type="number" min="1" data-mail-server-connections required /></label>
-          <label class="mail-field-wide"><span>Öffentlich erreichbare Tracking-URL</span><input class="ctox-input" type="url" data-mail-server-tracking-url placeholder="https://mail.example.com" /><small>Aktiviert Öffnungs- und Link-Ereignisse für HTML-Mails.</small></label>
         </div>
         <button type="submit" class="ctox-button is-primary" data-mail-save-server>Serverkonfiguration speichern</button>
       </form>
 
       <form class="mail-domain-form" data-mail-domain-form>
-        <div class="mail-section-heading"><span data-mail-domains-label>Versanddomain &amp; DNS</span><span class="mail-section-hint">DKIM-Schlüssel wird bei Bedarf erzeugt</span></div>
+        <div class="mail-section-heading"><span data-mail-domains-label title="DKIM-Schlüssel wird bei Bedarf erzeugt">Versanddomain &amp; DNS</span></div>
         <div class="mail-settings-grid">
           <label><span>Domain</span><input class="ctox-input" data-mail-domain-name placeholder="example.com" required /></label>
           <label><span>DKIM-Selector</span><input class="ctox-input" data-mail-dkim-selector value="default" required /></label>
@@ -230,14 +218,13 @@
         <div class="mail-section-heading"><span data-mail-new-mailbox-label>Postfach anlegen</span></div>
         <label><span data-mail-address-label>E-Mail-Adresse</span><input class="ctox-input" type="email" data-mail-mailbox-username autocomplete="off" required /></label>
         <label><span data-mail-owner-label>Nutzer</span><select class="ctox-select" data-mail-mailbox-owner required><option value="">— Person wählen —</option></select></label>
-        <label><span data-mail-password-label>Initialpasswort</span><input class="ctox-input" type="password" data-mail-mailbox-password autocomplete="new-password" required /></label>
+        <label><span data-mail-password-label>Initialpasswort</span><input class="ctox-input" type="password" data-mail-mailbox-password data-mail-mailbox-security autocomplete="new-password" required /></label>
         <button type="submit" class="ctox-button is-primary" data-mail-create-mailbox>Postfach anlegen</button>
       </form>
-      <div class="mail-mailbox-status" data-mail-mailbox-status role="status" aria-live="polite"></div>
       <section class="mail-mailbox-users"><div class="mail-section-heading"><span data-mail-existing-mailboxes-label>Vorhandene Postfächer</span><span data-mail-mailbox-count>0</span></div><div class="mail-mailbox-list" data-mail-mailbox-list></div></section>
 
     </div>
-    <footer class="mail-mailbox-admin-footer"><span data-mail-mailbox-security>Das Passwort wird nach der Einrichtung aus dem Command entfernt.</span><button type="button" class="ctox-button" data-mail-reload-mailboxes>Neu laden</button></footer>
+    <footer class="mail-mailbox-admin-footer"><button type="button" class="ctox-button" data-mail-reload-mailboxes hidden>Neu laden</button></footer>
   </section>
 
   <section class="mail-route-drawer" data-mail-route-drawer hidden aria-label="E-Mails an App routen">
@@ -250,9 +237,7 @@
       <label><span>Ziel-App</span><select class="ctox-select" data-mail-route-destination required></select></label>
       <label><span>Übergabe</span><select class="ctox-select" data-mail-route-mode><option value="handoff">Arbeitsverantwortung übergeben</option><option value="reference">Als Referenz verknüpfen</option></select></label>
       <label><span>Arbeitsauftrag</span><textarea class="ctox-textarea" rows="5" data-mail-route-note placeholder="Was soll die Ziel-App mit diesen E-Mails tun?"></textarea></label>
-      <p class="mail-route-note">Original bleibt unverändert; Batch, Ziel und Quelldatensätze werden protokolliert.</p>
-      <div class="mail-route-status" data-mail-route-status role="status" aria-live="polite"></div>
     </div>
-    <footer class="mail-route-footer"><button type="button" class="ctox-button" data-mail-cancel-route>Abbrechen</button><button type="button" class="ctox-button is-primary" data-mail-confirm-route>Routing starten</button></footer>
+    <footer class="mail-route-footer"><button type="button" class="ctox-button" data-mail-cancel-route>Abbrechen</button><button type="button" class="ctox-button is-primary" data-mail-confirm-route title="Original bleibt unverändert; Ziel und Quelldatensätze werden protokolliert.">Routing starten</button></footer>
   </section>
 </main>

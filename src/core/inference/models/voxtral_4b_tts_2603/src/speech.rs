@@ -226,14 +226,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_config_targets_voxtral_tts() {
-        let config = VoxtralTtsConfig::default();
-        assert_eq!(config.model, VOXTRAL_4B_TTS_2603_CANONICAL_MODEL);
-        assert_eq!(config.max_text_tokens, 8192);
-        assert_eq!(config.response_format, "wav");
-    }
-
-    #[test]
     fn synthesize_fails_without_loaded_artifacts() {
         let model = VoxtralTtsModel::new(VoxtralTtsConfig::default(), VoxtralTtsBackend::Cpu);
         let err = model

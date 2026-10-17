@@ -663,6 +663,10 @@ pub fn prepare_claude_oauth_tool_names_for_upstream(
     (body, reverse)
 }
 
+#[path = "claude_executor_request_mcp.rs"]
+mod mcp_alias;
+pub(super) use mcp_alias::{ClaudeMcpAliasError, ClaudeMcpAliasResolver};
+
 pub fn reverse_remap_claude_oauth_tool_names(
     body: &[u8],
     reverse: &HashMap<String, String>,

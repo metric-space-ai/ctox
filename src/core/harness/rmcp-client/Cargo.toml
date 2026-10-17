@@ -70,3 +70,8 @@ keyring = { workspace = true, features = ["windows-native"] }
 
 [target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
 keyring = { workspace = true, features = ["sync-secret-service"] }
+
+[dev-dependencies]
+serial_test = "3.5.0"
+pretty_assertions = { workspace = true }
+tempfile = { workspace = true }

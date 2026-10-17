@@ -39,6 +39,7 @@ async fn fixture() -> anyhow::Result<(
     let s = Arc::new(Session {
         authority: Arc::clone(&authority),
         commands,
+        updates: tokio::sync::watch::channel(()).0,
         cancel: Arc::new(Notify::new()),
         canceled: Arc::new(AtomicBool::new(false)),
         snapshot: Arc::new(Mutex::new(Snapshot::default())),
@@ -61,6 +62,7 @@ async fn fixture() -> anyhow::Result<(
         Arc::clone(&s.canceled),
         Arc::clone(&s.snapshot),
         Arc::clone(&s.commit_gate),
+        s.updates.clone(),
         permit,
     )));
     registry

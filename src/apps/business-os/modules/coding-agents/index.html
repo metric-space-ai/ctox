@@ -1,146 +1,21 @@
-<!-- Shell fragment: styles + mount(ctx) come from the Business OS shell. -->
-<p class="ctox-standalone-note">Dieses Modul-Fragment läuft nur innerhalb der Workjet Business OS. Öffne die App unter <strong>http://localhost:8765/business-os/#coding-agents</strong>.</p>
-<main class="ctox-workspace coding-agents-module" data-coding-agents-root data-resize-frame>
-
-  <!-- Column 1: projects (Business OS apps the pi agent can work on) -->
-  <!-- Narrow icon rail by default (Claude-Desktop pattern): app icons only,
-       names as hover chips; drag the resizer wider for permanent labels.
-       The pane chrome below is the canonical data-pg-* grammar — the SHELL
-       wires search / tray / reset / active-dot / footer (autoWirePaneGrammar);
-       the module only renders lists and listens to ctox-pane-grammar-change.
-       The card/list switch is module-owned (one button, see below), because a
-       one-button switch has no aria-pressed state for the shell to track.
-       Selector-only rail: no counted band. -->
-  <section class="ctox-pane coding-agents-left" aria-label="Projekte">
-    <header class="coding-agents-head ctox-pane-band">
-      <!-- Row 1 is the shell-v2 header band: one --shell-v2-header-row-size
-           row that carries .ctox-pane-title (the shell hangs its version menu
-           on the first one) and keeps the reserved icon corner clear. -->
-      <div class="ctox-pane-header">
-        <div class="ctox-pane-title-row">
-          <div class="ctox-pane-titles">
-            <span class="coding-agents-rail-mark" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="8 6 3 12 8 18"/><polyline points="16 6 21 12 16 18"/></svg></span>
-            <span class="ctox-pane-kicker" data-ca-left-kicker>pi Coding Agent</span>
-            <h2 class="ctox-pane-title" data-ca-left-title>Projekte</h2>
-          </div>
-          <div class="ctox-pane-actions">
-            <button type="button" class="ctox-pane-icon" id="ca-refresh-apps" aria-label="Aktualisieren" title="Aktualisieren"></button>
-          </div>
-        </div>
-      </div>
-      <!-- Row 2 (v2 shell only): reserved band row. The 80x80 shell app icon
-           covers the whole rail top; this row completes the 2x37px header so
-           the rail's list starts below the reserved icon square. -->
-      <div class="ctox-pane-header coding-agents-rail-spacer" aria-hidden="true"></div>
-      <!-- Row 2 (wide rail only): filter section — search + collapsed tray. -->
-      <div class="coding-agents-filterbar" data-rail-wide>
-        <input class="ctox-pane-search" type="search" data-pg-search placeholder="Apps suchen" aria-label="Apps suchen">
-        <!-- ONE control, not two: the button IS the switch. Its icon and label
-             name the view it switches TO, so there is no pressed state to
-             read (Betreiber-Direktive 31.08.2026). data-ca-view carries the
-             view that is currently rendered. -->
-        <button type="button" class="ctox-pane-icon coding-agents-view-toggle" data-ca-view-toggle="apps" data-ca-view="cards" aria-label="Als Liste anzeigen" title="Als Liste anzeigen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
-        <button type="button" class="ctox-pane-icon coding-agents-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
-      </div>
-      <div class="coding-agents-filter-advanced" data-pg-tray hidden>
-        <div class="coding-agents-filter-row">
-          <select class="ctox-select coding-agents-select" data-pg-filter data-pg-name="sort" data-pg-default="title" aria-label="Sortieren nach">
-            <option value="title">Name</option>
-            <option value="id">Modul-ID</option>
-          </select>
-          <button type="button" class="coding-agents-sort-dir" data-app-sort-dir data-dir="asc" aria-label="Sortierrichtung umkehren" title="Aufsteigend"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="19" x2="12" y2="5"/><polyline points="6 11 12 5 18 11"/></svg></button>
-          <button type="button" class="coding-agents-sort-dir coding-agents-filter-reset" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
+<!-- Coding Agents (Shell v4, Strang AGENT): Übersicht aller Agent-Läufe. Der Agent selbst sitzt als Seitenleiste in der
+     Code-Ansicht jeder App (Bedienkonzept §3); ein Klick auf einen Lauf öffnet die Code-Ansicht der App
+     (api.shell.openSource). Kopf = Standard-Pane-Kopf wie in allen Apps: das App-Icon oben links gehört der Shell. -->
+<main class="ctox-workspace coding-agents-module" data-coding-agents-root>
+  <section class="ctox-pane coding-agents-runs" aria-label="Agent-Läufe">
+    <header class="ctox-pane-header ctox-pane-band" data-shell-v2-header-row="1">
+      <div class="ctox-pane-title-row">
+        <div class="ctox-pane-titles">
+          <h2 class="ctox-pane-title" data-ca-title>Agent-Läufe</h2>
         </div>
       </div>
     </header>
+    <div class="ctox-filterbar" data-shell-v2-header-row="2">
+      <input class="ctox-pane-search" type="search" data-ca-search placeholder="Läufe suchen" aria-label="Läufe suchen">
+    </div>
     <div class="ctox-pane-body coding-agents-well">
-      <div class="ctox-list" id="ca-app-list">
-        <div class="ctox-empty"><strong>Apps werden geladen…</strong></div>
-      </div>
+      <ol class="coding-agents-list" data-ca-list></ol>
+      <p class="coding-agents-empty" data-ca-empty hidden></p>
     </div>
-    <footer class="coding-agents-footer"><span id="ca-footer" data-pg-footer></span></footer>
   </section>
-
-  <button class="ctox-column-resizer" type="button" data-resizer="left" data-resizer-var="--ctox-left-width" data-resizer-min="56" data-resizer-max="320" aria-label="Projekt-Spalte anpassen"></button>
-
-  <!-- Column 2: the conversation with the agent -->
-  <section class="ctox-pane coding-agents-center" aria-label="Agent-Chat">
-    <header class="coding-agents-head ctox-pane-band">
-      <div class="ctox-pane-header">
-        <div class="ctox-pane-title-row">
-          <div class="ctox-pane-titles">
-            <span class="ctox-pane-kicker" id="ca-active-app-kicker">pi Coding Agent</span>
-            <h2 class="ctox-pane-title" id="ca-active-app-title">Kein Projekt gewählt</h2>
-          </div>
-          <div class="ctox-pane-actions">
-            <button type="button" class="ctox-pane-icon" id="ca-export-session" title="Sichtbare Session-Daten exportieren" aria-label="Sichtbare Session-Daten exportieren" disabled></button>
-            <button type="button" class="ctox-pane-icon" id="ca-open-editor" title="Im Source-Editor öffnen" aria-label="Im Source-Editor öffnen" disabled>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M9 5H6a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-3"/></svg>
-            </button>
-          </div>
-        </div>
-      </div>
-      <!-- Row 2: filter section — transcript search + collapsed tray. -->
-      <div class="coding-agents-filterbar">
-        <input class="ctox-pane-search" type="search" data-pg-search placeholder="Im Verlauf suchen" aria-label="Im Verlauf suchen">
-        <button type="button" class="ctox-pane-icon coding-agents-view-toggle" data-ca-view-toggle="chat" data-ca-view="cards" aria-label="Als Liste anzeigen" title="Als Liste anzeigen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="18" x2="20" y2="18"/></svg></button>
-        <button type="button" class="ctox-pane-icon coding-agents-filter-toggle" data-pg-tray-toggle aria-expanded="false" aria-label="Filter" title="Filter"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2.4" fill="var(--surface-2)"/><circle cx="15" cy="12" r="2.4" fill="var(--surface-2)"/><circle cx="8" cy="17" r="2.4" fill="var(--surface-2)"/></svg></button>
-      </div>
-      <div class="coding-agents-filter-advanced" data-pg-tray hidden>
-        <div class="coding-agents-filter-row">
-          <select class="ctox-select coding-agents-select" data-pg-filter data-pg-name="role" data-pg-default="all" aria-label="Ereignisse">
-            <option value="all">Alle Ereignisse</option>
-            <option value="user">Nur Aufträge</option>
-            <option value="assistant">Nur Agent</option>
-            <option value="system">Nur Protokoll</option>
-          </select>
-          <button type="button" class="coding-agents-sort-dir coding-agents-filter-reset" data-pg-reset aria-label="Filter zurücksetzen" title="Filter zurücksetzen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 10a8 8 0 1 1 2 7"/><path d="M4 5v5h5"/></svg></button>
-        </div>
-      </div>
-    </header>
-    <!-- Row 3: counted view band — transcript vs. delegation log. -->
-    <nav class="coding-agents-view-switch" aria-label="Chat Ansichten">
-      <div class="ctox-pane-tabs">
-        <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="chat" aria-selected="true">Verlauf<span class="view-count" data-pg-count="chat"></span></button>
-        <button type="button" class="ctox-pane-tab" role="tab" data-pg-band="turns" aria-selected="false">Delegationen<span class="view-count" data-pg-count="turns"></span></button>
-      </div>
-    </nav>
-    <div class="ctox-pane-body coding-agents-chat-well">
-      <div class="coding-agents-chat" id="ca-recent-list" aria-live="polite" tabindex="-1"></div>
-      <div class="ctox-list coding-agents-turns" id="ca-turns-list" tabindex="-1" hidden></div>
-    </div>
-    <div id="ca-result" hidden><span id="ca-result-badge"></span><span id="ca-result-body"></span></div>
-    <form class="coding-agents-composer" id="ca-turn-form">
-      <textarea id="ca-task-input" class="ctox-textarea" rows="2" placeholder="Beschreibe, was der Agent an diesem Projekt tun soll…" required disabled></textarea>
-      <div class="coding-agents-composer-side">
-        <select id="ca-model-select" class="ctox-select" aria-label="Modell"></select>
-        <button type="submit" class="ctox-button ctox-run-control" id="ca-run" disabled><span aria-hidden="true">▶</span> <span data-ca-run-label>Delegieren</span></button>
-      </div>
-      <p class="coding-agents-hint" id="ca-hint" aria-live="polite"></p>
-    </form>
-    <footer class="coding-agents-footer"><span id="ca-center-footer" data-pg-footer></span></footer>
-  </section>
-
-  <button class="ctox-column-resizer" type="button" data-resizer="right" data-resizer-var="--ctox-right-width" data-resizer-min="260" data-resizer-max="560" aria-label="Artefakt-Spalte anpassen"></button>
-
-  <!-- Column 3: the agent's live artifact (free HTML the agent maintains) -->
-  <aside class="ctox-pane coding-agents-right" aria-label="Task-Artefakt">
-    <header class="coding-agents-head ctox-pane-band">
-      <div class="ctox-pane-header">
-        <div class="ctox-pane-title-row">
-          <div class="ctox-pane-titles">
-            <span class="ctox-pane-kicker">Artefakt</span>
-            <h2 class="ctox-pane-title" id="ca-artifact-title">Task-Fortschritt</h2>
-          </div>
-          <div class="ctox-pane-actions"></div>
-        </div>
-      </div>
-    </header>
-    <div class="ctox-pane-body coding-agents-artifact-host">
-      <div id="ca-artifact-host" class="coding-agents-artifact-host-frame"></div>
-      <div class="ctox-empty" id="ca-artifact-empty"><strong>Noch kein Artefakt.</strong><br>Der Agent veröffentlicht hier eine Live-Seite zu seinem Task (session.metadata.artifact_html).</div>
-    </div>
-    <footer class="coding-agents-footer"><span id="ca-artifact-footer"></span></footer>
-  </aside>
-
 </main>

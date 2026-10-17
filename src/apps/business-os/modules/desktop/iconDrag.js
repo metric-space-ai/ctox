@@ -82,7 +82,7 @@ export function makeIconDraggable(iconEl, {
   iconId,
   grid = { offset: 24 },
   onSelect,
-  onActivate,
+  onOpen,
   onMoved,
   onDragToTopbar,
   onReorder,
@@ -105,7 +105,7 @@ export function makeIconDraggable(iconEl, {
   function activateIcon(event) {
     if (shouldIgnoreActivationEvent(event)) return;
     onSelect?.(iconId, iconEl);
-    onActivate?.(iconId, iconEl);
+    onOpen?.(iconId, iconEl);
   }
 
   function onMouseDown(downEvent) {

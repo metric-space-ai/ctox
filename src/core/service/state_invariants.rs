@@ -59,8 +59,8 @@ pub fn evaluate_runtime_state_invariants(
     root: &Path,
     conversation_id: i64,
 ) -> Result<RuntimeStateInvariantReport> {
-    let lcm_db_path = root.join("runtime/ctox.sqlite3");
-    let engine = lcm::LcmEngine::open(&lcm_db_path, lcm::LcmConfig::default())?;
+    let lcm_db_path = crate::paths::core_db(root);
+    let engine = lcm::LcmClient::attach(&lcm_db_path)?;
     let continuity = engine.stored_continuity_show_all(conversation_id)?;
     // Inspect structured state without rendering or persisting anything. Focus
     // text is now a rendered view, not a second source of truth, so there is no

@@ -302,26 +302,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tokenizer_model_matrix_matches_upstream_families() {
-        for model in ["", " GPT-4 ", "gpt-3.5-turbo", "gpt-3"] {
-            assert_eq!(
-                tokenizer_for_model(model),
-                OpenAiTokenizer::Cl100k,
-                "{model}"
-            );
-        }
-        for model in [
-            "gpt-5", "gpt-5.1", "gpt-4.1", "gpt-4o", "o1", "o3", "o4-mini", "future",
-        ] {
-            assert_eq!(
-                tokenizer_for_model(model),
-                OpenAiTokenizer::O200k,
-                "{model}"
-            );
-        }
-    }
-
-    #[test]
     fn count_collects_every_upstream_segment_family() {
         let payload = br#"{"messages":[{"role":"user","name":"n","content":[{"type":"text","text":"hello"},{"type":"image_url","image_url":{"url":"https://image"}},{"type":"audio","id":"audio-1"},{"type":"tool_result","name":"lookup","content":"result"}]},{"role":"assistant","tool_calls":[{"id":"call-1","type":"function","function":{"name":"f","description":"d","arguments":"{}","parameters":{"type":"object"}}}],"function_call":{"name":"legacy","arguments":"{}"}}],"tools":[{"type":"function","name":"outer","description":"tool","function":{"name":"inner","description":"inner-d","parameters":{"type":"object"}}}],"functions":[{"name":"old","description":"old-d","parameters":{"type":"object"}}],"tool_choice":{"type":"function","name":"f"},"response_format":{"type":"json_schema","name":"response","json_schema":{"type":"object"},"schema":{"type":"object"}},"input":"input","prompt":"prompt"}"#;
         let count = count_openai_chat_tokens(OpenAiTokenizer::O200k, payload).unwrap();

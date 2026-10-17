@@ -51,6 +51,17 @@ impl TestRoot {
             .env("CTOX_ROOT", &self.root)
             .output()
             .expect("failed to execute ctox binary");
+        if !output.status.success() {
+            let log_path = self.path("runtime/test-service.log");
+            if let Ok(log) = fs::read_to_string(&log_path) {
+                let tail = log.lines().rev().take(80).collect::<Vec<_>>();
+                eprintln!(
+                    "isolated service log {}:\n{}",
+                    log_path.display(),
+                    tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+                );
+            }
+        }
         CmdOutput { output }
     }
 
@@ -61,11 +72,13 @@ impl TestRoot {
     /// Spawn a long-running ctox child (e.g. `service --foreground`) against
     /// this root. The caller owns the child and must kill/wait it.
     pub fn spawn(&self, args: &[&str]) -> std::process::Child {
+        let log = fs::File::create(self.path("runtime/test-service.log"))
+            .expect("create isolated service log");
         Command::new(env!("CARGO_BIN_EXE_ctox"))
             .args(args)
             .env("CTOX_ROOT", &self.root)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(log.try_clone().expect("clone isolated service log"))
+            .stderr(log)
             .spawn()
             .expect("failed to spawn ctox binary")
     }

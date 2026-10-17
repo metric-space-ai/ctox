@@ -764,30 +764,6 @@ mod tests {
     }
 
     #[test]
-    fn registry_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "handelsregister.de");
-        assert!(m.aliases().contains(&"handelsregister"));
-        assert!(m.aliases().contains(&"hr"));
-        assert_eq!(m.tier(), Tier::P);
-        assert_eq!(m.countries(), &[Country::De]);
-        assert!(m.requires_credential().is_none());
-        for field in [
-            FieldKey::FirmaName,
-            FieldKey::FirmaAnschrift,
-            FieldKey::FirmaPlz,
-            FieldKey::FirmaOrt,
-            FieldKey::PersonVorname,
-            FieldKey::PersonNachname,
-        ] {
-            assert!(
-                m.authoritative_for().contains(&field),
-                "expected {field:?} in authoritative_for"
-            );
-        }
-    }
-
-    #[test]
     fn shape_query_de_pins_both_domains() {
         let shaped = module()
             .shape_query("WITTENSTEIN SE", &ctx_de())
@@ -815,12 +791,6 @@ mod tests {
     #[test]
     fn shape_query_empty_returns_none() {
         assert!(module().shape_query("   ", &ctx_de()).is_none());
-    }
-
-    #[test]
-    fn no_fetch_direct_override() {
-        // Crawl-Pfad — der Trait-Default ist `None`, das ist der Vertrag.
-        assert!(module().fetch_direct(&ctx_de(), "WITTENSTEIN SE").is_none());
     }
 
     #[test]

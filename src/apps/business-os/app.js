@@ -1,30 +1,31 @@
-import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
-import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
-import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
-import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
-import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
-import { requestDictation } from './shared/speech-dictation.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
-import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
-import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
-import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
-import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './shared/workjet-project-execution-policy-contract.generated.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
-import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
-import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
-import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { CtoxResizer } from './shared/resizer.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { createAppActions } from './shared/app-actions.js?v=20261014-shell-v2-query-checkpoint-readonly';
+import { requestSupervisorRoute } from './shared/workjet-supervisor-route-native.mjs?v=20261017-shell-v2-v4-train16m';
+import { requestNativeProviders } from './shared/workjet-provider-native.mjs?v=20261017-shell-v2-v4-train16m';
+import { requestSpeechSettings } from './shared/speech-settings-control.mjs?v=20261017-shell-v2-v4-train16m';
+import { readWorkjetCalendar } from './shared/workjet-calendar-native.mjs?v=20261017-shell-v2-v4-train16m';
+import { connectWorkjetCalendar } from './shared/workjet-calendar-connect.mjs?v=20261017-shell-v2-v4-train16m';
+import { requestJourFixeSpeech } from './shared/jour-fixe-speech.mjs?v=20261017-shell-v2-v4-train16m';
+import { requestDictation } from './shared/speech-dictation.mjs?v=20261017-shell-v2-v4-train16m';
+import { requestWorkjetGrok } from './shared/workjet-grok-native.mjs?v=20261017-shell-v2-v4-train16m';
+import { SUPERVISOR_EXECUTION_SCHEMA, validateSupervisorExecutionValue } from './shared/workjet-supervisor-execution-contract.generated.mjs?v=20261017-shell-v2-v4-train16m';
+import { PROJECT_KPIS_SCHEMA, validateProjectKpiValue } from './shared/workjet-project-kpis-contract.generated.mjs?v=20261017-shell-v2-v4-train16m';
+import { PROJECT_EXECUTION_POLICY_SCHEMA, validateProjectExecutionPolicyValue } from './shared/workjet-project-execution-policy-contract.generated.mjs?v=20261017-shell-v2-v4-train16m';
+import { validateSupervisorLumaValue } from './shared/workjet-supervisor-luma-contract.generated.mjs?v=20261017-shell-v2-v4-train16m';
+import { JOUR_FIXE_SCHEMA, validateJourFixeValue } from './shared/workjet-jour-fixe-contract.generated.mjs?v=20261017-shell-v2-v4-train16m';
+import { subscriptionModelUnavailable } from './shared/model-access-health.js?v=20261017-shell-v2-v4-train16m';
+import { createShellPerformanceTrace } from './shared/shell-performance-trace.js?v=20261017-shell-v2-v4-train16m';
+import { CtoxResizer } from './shared/resizer.js?v=20261017-shell-v2-v4-train16m';
+import { collectionReadinessFromDiagnostics, collectionFreshnessFromDiagnostics } from './shared/sync-contract.js?v=20261017-shell-v2-v4-train16m';
+import { renderCollectionFreshnessWarning as renderFreshnessWarning } from './shared/collection-freshness.js?v=20261017-shell-v2-v4-train16m';
+import { setTopbarAppItems, refreshTopbarAppItems, installTopbarAvatar } from './shared/topbar-apps.js?v=20261017-shell-v2-v4-train16m';
+import { autoWirePaneGrammar } from './shared/pane-grammar.js?v=20261017-shell-v2-v4-train16m';
+import { createAppActions } from './shared/app-actions.js?v=20261017-shell-v2-v4-train16m';
 import {
   appLifecycleBadge,
   appLifecycleState,
   appReleaseProjection,
   canSeeModuleForAppVersion as lifecycleCanSeeModuleForAppVersion,
   isRuntimeInstalledModule,
-} from './shared/app-lifecycle.js?v=20261014-shell-v2-query-checkpoint-readonly';
+} from './shared/app-lifecycle.js?v=20261017-shell-v2-v4-train16m';
 import {
   BusinessOsPermissions,
   businessActorFromSession,
@@ -33,20 +34,20 @@ import {
   canUseBusinessPermission,
   canViewBusinessModuleSource,
   roleMayReadCollection,
-} from './shared/permissions.js?v=20261014-shell-v2-query-checkpoint-readonly';
+} from './shared/permissions.js?v=20261017-shell-v2-v4-train16m';
 import {
   applyWorkspaceBranding,
   brandingForPreferencePayload,
   WORKSPACE_BRANDING_COLLECTION,
   WORKSPACE_BRANDING_DOCUMENT_ID,
-} from './shared/branding.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261014-shell-v2-query-checkpoint-readonly';
+} from './shared/branding.js?v=20261017-shell-v2-v4-train16m';
+import { normalizeRole, roleCanManage, roleDescription, roleDisplayName } from './shared/roles.js?v=20261017-shell-v2-v4-train16m';
 import {
   launchesInWindow,
   resolvePresentation,
   resolveShellWindowContract,
   usesLegacyWorkspace,
-} from './shared/presentation.js?v=20261014-shell-v2-query-checkpoint-readonly';
+} from './shared/presentation.js?v=20261017-shell-v2-v4-train16m';
 import {
   buildLifecyclePermissionView,
   buildGlobalCtoxAgentScopeView,
@@ -57,9 +58,9 @@ import {
   renderModuleWhyDiagnosticsHtml,
   renderGlobalCtoxContextModeHtml,
   shouldRenderModuleSourceAction,
-} from './shared/shell-permissions-ui.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { createDocumentsFacade } from './shared/documents.js?v=20261014-shell-v2-query-checkpoint-readonly';
+} from './shared/shell-permissions-ui.js?v=20261017-shell-v2-v4-train16m';
+import { createShellChatCompositionController } from './shared/shell-chat-composition.js?v=20261017-shell-v2-v4-train16m';
+import { createDocumentsFacade } from './shared/documents.js?v=20261017-shell-v2-v4-train16m';
 import {
   CTOX_MAINTENANCE_MESSAGE,
   CTOX_MAINTENANCE_SYNC_MESSAGE,
@@ -67,27 +68,27 @@ import {
   maintenancePhaseLabel,
   maintenanceRequiredCollections,
   normalizeMaintenancePayload,
-} from './shared/maintenance-state.js?v=20261014-shell-v2-query-checkpoint-readonly';
+} from './shared/maintenance-state.js?v=20261017-shell-v2-v4-train16m';
 import {
   buildWorkspaceSessionSnapshot,
   normalizeWorkspaceSessionSnapshot,
-} from './shared/workspace-session.js?v=20261014-shell-v2-query-checkpoint-readonly';
+} from './shared/workspace-session.js?v=20261017-shell-v2-v4-train16m';
 import {
   decodeTaskbarPinCache,
   encodeTaskbarPinCache,
   resolveTaskbarPinState,
-} from './shared/taskbar-pins.js?v=20261014-shell-v2-query-checkpoint-readonly';
+} from './shared/taskbar-pins.js?v=20261017-shell-v2-v4-train16m';
 import {
   applyWorkjetCategory,
   normalizeWorkjetCategory,
   WORKJET_CATEGORY_IDS,
   workjetCategoryForModule,
   workjetCategoryForTarget,
-} from './shared/workjet-theme.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261014-shell-v2-query-checkpoint-readonly';
+} from './shared/workjet-theme.js?v=20261017-shell-v2-v4-train16m';
+import { operatorIconFor } from './shared/operator-icon-selection.js?v=20261017-shell-v2-v4-train16m';
+import { grokShellIconFor } from './shared/grok-shell-icon-selection.js?v=20261017-shell-v2-v4-train16m';
+import { resolveLauncherIcon } from './shared/launcher-icon.js?v=20261017-shell-v2-v4-train16m';
+import { createShellGenerationReloadGuard } from './shared/shell-generation.js?v=20261017-shell-v2-v4-train16m';
 import {
   LAUNCH_CONTEXT_DEADLINE_MS,
   SHELL_GENERATION_PROBE_DEADLINE_MS,
@@ -95,14 +96,14 @@ import {
   isStartupDeadlineError,
   shouldPropagateGenerationProbeError,
   withStartupDeadline,
-} from './shared/startup-deadlines.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261014-shell-v2-query-checkpoint-readonly';
-import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+} from './shared/startup-deadlines.js?v=20261017-shell-v2-v4-train16m';
+import { createBusinessCompanionScheduler } from './shared/business-companions.js?v=20261017-shell-v2-v4-train16m';
+import { readJourFixeNarration, validateNarrationRead } from './shared/jour-fixe-narration.mjs?v=20261017-shell-v2-v4-train16m';
 import {
   PRESENTATION_ACTIONS, PRESENTATION_READ_ACTION, PRESENTATION_CANVAS_SAVE_ACTION, presentationReadPayload,
   presentationCanvasSavePayload, presentationFromReadResult, presentationMutationFromResult, readJourFixePresentationContent,
-} from './shared/jour-fixe-presentation.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
-import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261014-shell-v2-query-checkpoint-readonly';
+} from './shared/jour-fixe-presentation.mjs?v=20261017-shell-v2-v4-train16m';
+import { PRESENTATION_SCHEMA } from './shared/workjet-presentation-contract.generated.mjs?v=20261017-shell-v2-v4-train16m';
 
 const SESSION_TOKEN_KEY = 'ctox.businessOs.sessionToken';
 const AUTH_HEADER_KEY = 'ctox.businessOs.authHeader';
@@ -123,7 +124,7 @@ const WINDOW_GEOMETRY_KEY = 'ctox.businessOs.windowGeometry';
 const WORKSPACE_SESSION_KEY = 'ctox.businessOs.workspaceSession';
 const SHELL_COLUMN_LAYOUT_KEY_PREFIX = 'ctox.businessOs.shellColumnLayout.';
 const SHELL_MODULE_RESIZER_KEY_PREFIX = 'ctox.businessOs.moduleColumns.';
-const APP_BUILD = '20261014-shell-v2-query-checkpoint-readonly';
+const APP_BUILD = '20261017-shell-v2-v4-train16m';
 const WORKJET_UI_CONTRACT_BUILD = '5173a1155a9a5f1f28ed43afcb004693dd95c073cabfae8157cd01c7e8830419';
 
 const nativeBusinessOsFetch = globalThis.fetch?.bind(globalThis);
@@ -1109,6 +1110,7 @@ const shellMessages = {
     languageAria: 'Sprache',
     themeAria: 'Design Theme',
     appearanceSettings: 'Darstellung und Sprache',
+    settings: 'Einstellungen',
     shellStyleLabel: 'Fenster',
     languageLabel: 'Sprache',
     themeLabel: 'Schema',
@@ -1228,6 +1230,7 @@ const shellMessages = {
     languageAria: 'Language',
     themeAria: 'Theme',
     appearanceSettings: 'Appearance and language',
+    settings: 'Settings',
     shellStyleLabel: 'Window',
     languageLabel: 'Language',
     themeLabel: 'Scheme',
@@ -2431,9 +2434,9 @@ function wireShellActions() {
     const id = currentHashModuleId();
     if (id) openModule(id);
   });
-  document.querySelector('[data-open-settings]')?.addEventListener('click', () => {
+  document.querySelectorAll('[data-open-settings]').forEach((button) => button.addEventListener('click', () => {
     openSettingsDrawer();
-  });
+  }));
   document.querySelectorAll('[data-open-sync-diagnostics]').forEach((button) => button.addEventListener('click', () => {
     if (!state.session?.authenticated
       || document.documentElement.dataset.authState === 'locked'
@@ -12741,8 +12744,8 @@ const OFFLINE_FALLBACK_CATALOG = {
         "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-reports\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-reports\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#ef4444\" /><stop offset=\"100%\" stop-color=\"#f97316\" /></linearGradient></defs><rect x=\"3\" y=\"3\" width=\"18\" height=\"18\" rx=\"2\" fill=\"url(#grad-reports)\" fill-opacity=\"0.12\" stroke=\"url(#grad-reports)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></rect><path d=\"M18 17V10M12 17V6M6 17v-4\" stroke=\"url(#grad-reports)\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"6\" r=\"2\" fill=\"#ffffff\" stroke=\"url(#grad-reports)\" stroke-width=\"1.2\"></circle></svg>",
         "left": "Bug and feature filters and history",
         "center": "Selected report evidence, CTOX change log, and rollback",
-        "right": "CTOX task, coding-agent delegation, and rollback actions for the selected report",
-        "third_pane_justification": "Die Aktions-Spalte (CTOX Task zeigen, Übergabe an den Coding Agent, Modul-Rollback) gehört zum selektierten Report und muss in breiten Fenstern neben Liste und Detail sichtbar bleiben; sie ist default-eingeklappt und öffnet über den Aktionen-Toggle im Detail-Header.",
+        "right": "CTOX task, hand-over to the coding agent in the code view, and rollback actions for the selected report",
+        "third_pane_justification": "Die Aktions-Spalte (CTOX Task zeigen, Übergabe an den Coding Agent in der Code-Ansicht, Modul-Rollback) gehört zum selektierten Report und muss in breiten Fenstern neben Liste und Detail sichtbar bleiben; sie ist default-eingeklappt und öffnet über den Aktionen-Toggle im Detail-Header.",
         "default_width": 1120,
         "default_height": 760,
         "min_width": 640,
@@ -13901,6 +13904,121 @@ async function dispatchWorkjetProjectList(command, options, deadline, diagnostic
   }
 }
 
+// Agent secret requests (ctox secret request). Workjet shows a masked card;
+// the value travels only inside the fulfil command, whose `value` field the
+// daemon detaches at intake. The local pending command document is patched to
+// drop the value as soon as the command settles, and nothing returned here
+// ever contains it.
+async function workjetSecretRequestControl(action, request, authority) {
+  const allowed = {
+    'secret.request.list': ['action', 'commandId', 'status', 'threadKey'],
+    'secret.request.fulfill': ['action', 'commandId', 'requestId', 'value'],
+    'secret.request.decline': ['action', 'commandId', 'requestId'],
+    'secret.list': ['action', 'commandId'],
+    'secret.put': ['action', 'commandId', 'name', 'value'],
+    'secret.delete': ['action', 'commandId', 'name'],
+  }[action];
+  if (!allowed) throw new Error('Unsupported Workjet project control action.');
+  assertWorkjetProjectPayloadKeys(request, new Set(allowed));
+  if (!state.commandBus?.dispatch || !state.db?.collection?.('business_commands')) {
+    throw new Error('Workjet project control is not ready.');
+  }
+  await state.sync?.startCollection?.('business_commands');
+  const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+  const commandType = 'ctox.' + action;
+  let payload;
+  const carriesValue = action === 'secret.request.fulfill' || action === 'secret.put';
+  if (action === 'secret.list') {
+    payload = {};
+  } else if (action === 'secret.put' || action === 'secret.delete') {
+    payload = { name: boundedWorkjetProjectText(request.name, 'name', 64) };
+    if (action === 'secret.put') {
+      if (typeof request.value !== 'string' || !request.value || request.value.length > 8192) {
+        throw new Error('Secret value must be 1-8192 characters.');
+      }
+      payload.value = request.value;
+    }
+  } else if (action === 'secret.request.list') {
+    payload = {};
+    if (request.status != null) payload.status = boundedWorkjetProjectText(request.status, 'status', 16);
+    if (request.threadKey != null) payload.thread_key = boundedWorkjetProjectText(request.threadKey, 'threadKey', 256);
+  } else {
+    payload = { request_id: boundedWorkjetProjectText(request.requestId, 'requestId', 64) };
+    if (action === 'secret.request.fulfill') {
+      if (typeof request.value !== 'string' || !request.value || request.value.length > 8192) {
+        throw new Error('Secret value must be 1-8192 characters.');
+      }
+      payload.value = request.value;
+    }
+  }
+  if (state.session !== authority.requestSession || state.db !== authority.requestDb
+    || actorContext(state.session).id !== authority.ownerUserId) {
+    throw new Error('Workjet project session changed before the secret request was delivered.');
+  }
+  let receipt;
+  try {
+    receipt = await state.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: commandType,
+      record_id: payload.request_id || payload.name || 'secret-requests',
+      payload,
+      client_context: { source: 'workjet-project-control', actor: actorContext(authority.requestSession) },
+    }, { until: 'terminal', timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+  } finally {
+    if (carriesValue) {
+      try {
+        const doc = await state.db.collection('business_commands')?.findOne?.(commandId)?.exec?.();
+        if (doc?.payload && Object.prototype.hasOwnProperty.call(doc.payload, 'value')) {
+          await doc.patch({ payload: payload.request_id ? { request_id: payload.request_id } : { name: payload.name } });
+        }
+      } catch { /* the daemon already redacted the durable record */ }
+      payload.value = undefined;
+    }
+  }
+  const outcome = receipt?.result?.outcome || receipt?.result || {};
+  if (outcome.ok === false) throw new Error(String(outcome.error || 'Secret request failed.').slice(0, 200));
+  if (action === 'secret.list') {
+    const rows = [...(Array.isArray(outcome.catalog) ? outcome.catalog : []), ...(Array.isArray(outcome.extra) ? outcome.extra : [])];
+    return {
+      action,
+      secrets: rows.slice(0, 300).map((row) => ({
+        name: String(row.name || ''),
+        description: row.description == null ? null : String(row.description).slice(0, 500),
+        isSet: row.is_set === true,
+        updatedAt: row.updated_at == null ? null : String(row.updated_at),
+      })),
+    };
+  }
+  if (action === 'secret.put' || action === 'secret.delete') {
+    return { action, name: String(outcome.name || payload.name) };
+  }
+  if (action === 'secret.request.list') {
+    const requests = Array.isArray(outcome.requests) ? outcome.requests : [];
+    return {
+      action,
+      requests: requests.slice(0, 200).map((entry) => ({
+        requestId: String(entry.request_id || ''),
+        scope: String(entry.scope || ''),
+        name: String(entry.name || ''),
+        label: String(entry.label || ''),
+        reason: entry.reason == null ? null : String(entry.reason),
+        threadKey: entry.thread_key == null ? null : String(entry.thread_key),
+        status: String(entry.status || ''),
+        ref: String(entry.secret_ref || ''),
+        createdAt: String(entry.created_at || ''),
+      })),
+    };
+  }
+  return {
+    action,
+    requestId: String(outcome.request_id || payload.request_id),
+    status: String(outcome.status || ''),
+    ...(outcome.ref ? { ref: String(outcome.ref) } : {}),
+  };
+}
+
 async function workjetProjectControl(request = {}, diagnostics = {}) {
   if (!request || typeof request !== 'object' || Array.isArray(request)) {
     throw new TypeError('Workjet project control request must be an object.');
@@ -13913,6 +14031,39 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
     ? { sync: state.sync, instance: boundedWorkjetProjectText(
       state.syncConfig?.instance_id || state.sync?.config?.instance_id, 'native instanceId', 256,
     ) } : null;
+  if (action === 'ctox.plan.step.retry') {
+    // Workjet-Planschritt wiederholen (ctox#872): leitet genau { step_id } als Business-Command weiter.
+    // Antwort sobald der Befehl angenommen ist; den Ausgang meldet die Plan-Projektion.
+    assertWorkjetProjectPayloadKeys(request, new Set(['action', 'commandId', 'payload']));
+    const commandId = boundedWorkjetProjectText(request.commandId, 'commandId', 128);
+    const payloadIn = request.payload;
+    if (!payloadIn || typeof payloadIn !== 'object' || Array.isArray(payloadIn)) {
+      throw new TypeError('Plan step retry requires a payload object.');
+    }
+    assertWorkjetProjectPayloadKeys(payloadIn, new Set(['step_id', 'thread_id']));
+    const stepId = boundedWorkjetProjectText(payloadIn.step_id, 'step_id', 256);
+    if (state.session !== requestSession || state.db !== requestDb
+      || actorContext(state.session).id !== ownerUserId) {
+      throw new Error('Workjet project session changed before the retry was sent.');
+    }
+    if (typeof state.commandBus?.dispatch !== 'function') throw new Error('Command transport is unavailable.');
+    const receipt = await state.commandBus.dispatch({
+      id: commandId,
+      command_id: commandId,
+      module: 'ctox',
+      command_type: 'ctox.plan.step.retry',
+      record_id: stepId,
+      payload: { step_id: stepId },
+      client_context: { source: 'workjet-project-control', actor: actorContext(requestSession) },
+    }, { until: 'accepted', timeoutMs: WORKJET_PROJECT_CONTROL_TIMEOUT_MS });
+    if (receipt?.command_id && receipt.command_id !== commandId) {
+      throw new Error('Plan step retry returned an uncorrelated receipt.');
+    }
+    if (receipt?.ok === false || receipt?.status === 'failed' || receipt?.status === 'rejected') {
+      throw new Error(String(receipt?.error?.message || receipt?.error || 'Plan step retry was rejected.'));
+    }
+    return { action, commandId, status: 'pending' };
+  }
   if (action === 'speech.dictation') {
     const sync = state.sync;
     const instance = boundedWorkjetProjectText(state.syncConfig?.instance_id || sync?.config?.instance_id, 'instanceId', 256);
@@ -13933,6 +14084,18 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
         || actorContext(state.session).id !== ownerUserId
         || (state.syncConfig?.instance_id || state.sync?.config?.instance_id) !== instance) {
         throw new Error('Speech settings instance or authority changed.');
+      }
+    });
+  }
+  // Workjet #784 / Kern ctox#875: „Google Kalender verbinden“. Fehler kommen als {action, commandId, error} zurück.
+  if (action === 'project.calendar.account.connect.start' || action === 'project.calendar.account.connect.complete') {
+    const sync = state.sync;
+    const instance = state.syncConfig?.instance_id || sync?.config?.instance_id || null;
+    return connectWorkjetCalendar(sync, request, () => {
+      if (state.session !== requestSession || state.db !== requestDb || state.sync !== sync
+        || actorContext(state.session).id !== ownerUserId
+        || (state.syncConfig?.instance_id || state.sync?.config?.instance_id || null) !== instance) {
+        throw new Error('Calendar scope changed.');
       }
     });
   }
@@ -13999,6 +14162,9 @@ async function workjetProjectControl(request = {}, diagnostics = {}) {
         },
       });
     } finally { clearTimeout(timer); controller.abort(); }
+  }
+  if (action.startsWith('secret.request.') || ['secret.list', 'secret.put', 'secret.delete'].includes(action)) {
+    return workjetSecretRequestControl(action, request, { requestSession, requestDb, ownerUserId });
   }
   if (action.startsWith('project.presentation.')) {
     return workjetPresentationControl(action, request, { requestSession, requestDb, ownerUserId });

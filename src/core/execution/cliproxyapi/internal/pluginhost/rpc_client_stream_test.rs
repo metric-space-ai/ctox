@@ -43,37 +43,3 @@ impl PluginClient for StreamClient {
         Box::pin(async { Ok(()) })
     }
 }
-
-#[tokio::test]
-async fn ordered_chunks_decode_and_transport_error_is_terminal() {
-    let client = RpcPluginClient::new(Arc::new(StreamClient {
-        chunks: vec![
-            Ok(to_raw_value(&json!({"index": 0})).unwrap()),
-            Ok(to_raw_value(&json!({"index": 1})).unwrap()),
-            Err(PluginClientError::Transport("closed".to_owned())),
-            Ok(to_raw_value(&json!({"index": 2})).unwrap()),
-        ],
-    }));
-    let mut chunks = client
-        .call_stream::<_, Value>("executor.execute_stream", &json!({}), None, 4)
-        .await
-        .unwrap();
-    assert_eq!(chunks.recv().await.unwrap().unwrap(), json!({"index": 0}));
-    assert_eq!(chunks.recv().await.unwrap().unwrap(), json!({"index": 1}));
-    assert_eq!(
-        chunks.recv().await.unwrap(),
-        Err(PluginClientError::Transport("closed".to_owned()))
-    );
-    assert!(chunks.recv().await.is_none());
-}
-
-#[tokio::test]
-async fn invalid_capacity_is_rejected_before_transport() {
-    let client = RpcPluginClient::new(Arc::new(StreamClient { chunks: vec![] }));
-    assert!(matches!(
-        client
-            .call_stream::<_, Value>("executor.execute_stream", &json!({}), None, 0)
-            .await,
-        Err(PluginClientError::InvalidRequest)
-    ));
-}

@@ -313,9 +313,12 @@ pub fn handle_plan_command(root: &Path, args: &[String]) -> Result<()> {
         "retry-step" => {
             let step_id = required_flag_value(args, "--step-id")
                 .or_else(|| args.get(1).map(String::as_str))
-                .context("usage: ctox plan retry-step --step-id <id>")?;
-            let updated = reset_step_to_pending(root, step_id, None)?;
-            print_json(&json!({"ok": true, "updated": updated}))
+                .context("usage: ctox plan retry-step --step-id <id> [--request-id <id>]")?;
+            let request_id = find_flag_value(args, "--request-id")
+                .map(str::to_owned)
+                .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+            let retry = retry_failed_step(root, &request_id, step_id, "local_cli")?;
+            print_json(&json!({"ok": true, "status": "pending", "retry": retry}))
         }
         "block-step" => {
             let step_id = required_flag_value(args, "--step-id")
@@ -817,6 +820,22 @@ fn emit_next_step_for_goal_with_conn(
         tx.commit()?;
         return Ok(None);
     }
+    // A retry reuses its durable message identity. Reopen the settled queue
+    // route atomically with the queued step, never before emission is committed.
+    if pending.step.attempt_count > 0 {
+        let previous = channels::current_queue_route_status(&tx, &message_key)?;
+        anyhow::ensure!(
+            matches!(previous.as_str(), "failed" | "blocked" | "cancelled"),
+            "retry cannot replace runnable or leased queue work"
+        );
+        set_queue_routing_status_tx(&tx, &message_key, QueueRouteStatus::Pending, &now)?;
+        tx.execute(
+            "UPDATE communication_routing_state SET failure_attempt_count=0,
+             failure_class=NULL,retry_not_before=NULL,hold_reason=NULL,wait_entity_type=NULL,
+             wait_entity_id=NULL,lease_expires_at=NULL,first_pending_at=?2 WHERE message_key=?1",
+            params![message_key, now],
+        )?;
+    }
     tx.execute(
         r#"
         UPDATE planned_goals
@@ -998,6 +1017,103 @@ fn mark_step_blocked(root: &Path, step_id: &str, reason: &str) -> Result<usize> 
     Ok(updated)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlanStepRetryReceipt {
+    pub request_id: String,
+    pub step_id: String,
+    pub goal_id: String,
+    pub actor: String,
+    pub retried_at: String,
+    pub attempt_count: i64,
+}
+
+/// Accept an explicit retry without creating a plan or rewriting old attempts.
+/// The immutable request receipt and failed -> pending transition commit together.
+pub fn retry_failed_step(
+    root: &Path,
+    request_id: &str,
+    step_id: &str,
+    actor: &str,
+) -> Result<PlanStepRetryReceipt> {
+    for value in [request_id, step_id, actor] {
+        anyhow::ensure!(
+            !value.is_empty()
+                && value.len() <= 256
+                && value.trim() == value
+                && !value.chars().any(char::is_control),
+            "invalid retry identity"
+        );
+    }
+    let mut conn = open_plan_db(root)?;
+    let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let previous: Option<String> = tx
+        .query_row(
+            "SELECT receipt_json FROM planned_step_retry_audit WHERE request_id=?1",
+            [request_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(previous) = previous {
+        let receipt: PlanStepRetryReceipt = serde_json::from_str(&previous)?;
+        anyhow::ensure!(
+            receipt.step_id == step_id && receipt.actor == actor,
+            "retry request conflicts with its original identity"
+        );
+        return Ok(receipt);
+    }
+    let (goal_id, step_status, attempt_count, goal_status): (String, String, i64, String) = tx
+        .query_row(
+            "SELECT s.goal_id,s.status,s.attempt_count,g.status FROM planned_steps s
+             JOIN planned_goals g ON g.goal_id=s.goal_id WHERE s.step_id=?1",
+            [step_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )
+        .optional()?
+        .context("planned step not found")?;
+    anyhow::ensure!(
+        step_status == PlanStepStatus::Failed.as_str(),
+        "only a failed plan step can be retried"
+    );
+    anyhow::ensure!(
+        matches!(
+            PlanGoalStatus::parse(&goal_status),
+            Some(PlanGoalStatus::Active | PlanGoalStatus::Failed)
+        ),
+        "closed, superseded or blocked plan cannot be retried"
+    );
+    let now = now_iso_string();
+    let updated = tx.execute(
+        "UPDATE planned_steps SET status=?2,defer_until=NULL,blocked_reason=NULL,updated_at=?3
+         WHERE step_id=?1 AND status='failed' AND last_message_key IS NULL",
+        params![step_id, PlanStepStatus::Pending.as_str(), now],
+    )?;
+    anyhow::ensure!(
+        updated == 1,
+        "failed plan step still owns queue work; reconcile first"
+    );
+    refresh_goal_status_tx(&tx, &goal_id)?;
+    let receipt = PlanStepRetryReceipt {
+        request_id: request_id.into(),
+        step_id: step_id.into(),
+        goal_id,
+        actor: actor.into(),
+        retried_at: now,
+        attempt_count,
+    };
+    tx.execute(
+        "INSERT INTO planned_step_retry_audit(request_id,step_id,attempt_count,receipt_json)
+         VALUES(?1,?2,?3,?4)",
+        params![
+            request_id,
+            step_id,
+            attempt_count,
+            serde_json::to_string(&receipt)?
+        ],
+    )?;
+    tx.commit()?;
+    touch_plan_state_stamp(root)?;
+    Ok(receipt)
+}
 fn reset_step_to_pending(root: &Path, step_id: &str, defer_until: Option<String>) -> Result<usize> {
     let conn = open_plan_db(root)?;
     let tx = conn.unchecked_transaction()?;
@@ -1266,7 +1382,10 @@ fn list_goal_ids_with_due_work(conn: &Connection) -> Result<Vec<String>> {
         SELECT DISTINCT g.goal_id
         FROM planned_goals g
         JOIN planned_steps s ON s.goal_id = g.goal_id
-        WHERE g.auto_advance = 1
+        WHERE (g.auto_advance = 1 OR EXISTS (
+                SELECT 1 FROM planned_step_retry_audit a
+                WHERE a.step_id = s.step_id AND a.attempt_count = s.attempt_count
+            ))
           AND g.status = ?2
           AND (
                 g.retry_not_before IS NULL
@@ -1322,7 +1441,10 @@ fn load_next_due_step_at(conn: &Connection, now: &DateTime<Utc>) -> Result<Optio
             )
             FROM planned_goals g
             JOIN planned_steps s ON s.goal_id = g.goal_id
-            WHERE g.auto_advance = 1
+            WHERE (g.auto_advance = 1 OR EXISTS (
+                SELECT 1 FROM planned_step_retry_audit a
+                WHERE a.step_id = s.step_id AND a.attempt_count = s.attempt_count
+            ))
               AND g.status = ?2
               AND s.status = ?3
               AND (
@@ -1465,6 +1587,7 @@ fn touch_plan_state_stamp(root: &Path) -> Result<()> {
     std::fs::write(&path, format!("{}\n{sequence}\n", now_iso_string()))
         .with_context(|| format!("failed to write plan state stamp {}", path.display()))?;
     clear_emit_due_step_scan_gate(root);
+    crate::business_os::harness_cockpit::schedule_refresh(root);
     Ok(())
 }
 
@@ -1877,7 +2000,11 @@ fn next_eligible_step_tx(tx: &Transaction<'_>, goal_id: &str) -> Result<Option<P
                 OR defer_until = ''
                 OR defer_until <= ?2
           )
-        ORDER BY step_order ASC
+        ORDER BY EXISTS (
+            SELECT 1 FROM planned_step_retry_audit a
+            WHERE a.step_id = planned_steps.step_id
+              AND a.attempt_count = planned_steps.attempt_count
+        ) DESC, step_order ASC
         LIMIT 1
         "#,
         params![
@@ -2332,6 +2459,15 @@ fn ensure_plan_schema(conn: &Connection) -> Result<()> {
             updated_at TEXT NOT NULL,
             completed_at TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS planned_step_retry_audit (
+            request_id TEXT PRIMARY KEY,
+            step_id TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL,
+            receipt_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS planned_step_retry_generation
+            ON planned_step_retry_audit(step_id, attempt_count);
 
         CREATE TABLE IF NOT EXISTS planned_goal_waits (
             wait_id TEXT PRIMARY KEY,
@@ -3258,6 +3394,84 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn retry_failed_step_is_durable_audited_and_does_not_replay_a_running_step() -> Result<()> {
+        tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?.block_on(crate::persistence::run_core_sync(move || {
+            let root = temp_plan_root("retry-failed-step");
+            let (goal, step, old_message) = emitted_step_fixture(&root)?;
+            mark_step_failed(&root, &step, "retained failure evidence")?;
+            open_plan_db(&root)?.execute(
+                "UPDATE communication_routing_state SET failure_attempt_count=3,
+             retry_not_before='2099-01-01T00:00:00Z',hold_reason='retry_exhausted'
+             WHERE message_key=?1",
+                [&old_message],
+            )?;
+            let before = load_goal_with_steps(&root, &goal)?.unwrap();
+            let plans_before = list_goals(&root)?
+                .into_iter()
+                .map(|g| g.goal_id)
+                .collect::<Vec<_>>();
+            let receipt = retry_failed_step(&root, "retry-request", &step, "owner")?;
+            let after = load_goal_with_steps(&root, &goal)?.unwrap();
+            let retried = after.steps.iter().find(|s| s.step_id == step).unwrap();
+            let original = before.steps.iter().find(|s| s.step_id == step).unwrap();
+            assert_eq!(
+                retried.status, "pending",
+                "retry must durably reset the failed step"
+            );
+            assert_eq!(retried.attempt_count, original.attempt_count);
+            assert_eq!(retried.last_result_excerpt, original.last_result_excerpt);
+            assert_eq!(
+                list_goals(&root)?
+                    .into_iter()
+                    .map(|g| g.goal_id)
+                    .collect::<Vec<_>>(),
+                plans_before
+            );
+            let stored: String = open_plan_db(&root)?.query_row(
+            "SELECT receipt_json FROM planned_step_retry_audit WHERE request_id='retry-request'",
+            [],
+            |row| row.get(0),
+        )?;
+            assert_eq!(
+                serde_json::from_str::<PlanStepRetryReceipt>(&stored)?,
+                receipt
+            );
+            assert_eq!(receipt.actor, "owner");
+            let due = emit_due_steps(&root)?;
+            let emitted = due
+                .emitted_steps
+                .into_iter()
+                .find(|s| s.step_id == step)
+                .context("manual retry was not scheduled")?;
+            assert_eq!(emitted.step_id, step);
+            assert_eq!(emitted.message_key, old_message);
+            assert_eq!(routing_status_for_message(&root, &old_message), "pending");
+            let retry_gate: (i64, Option<String>, Option<String>) = open_plan_db(&root)?.query_row(
+            "SELECT failure_attempt_count,retry_not_before,hold_reason FROM communication_routing_state
+             WHERE message_key=?1", [&old_message], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
+        )?;
+            assert_eq!(
+                retry_gate,
+                (0, None, None),
+                "explicit retry must reopen admission"
+            );
+            let queued = load_goal_with_steps(&root, &goal)?.unwrap();
+            assert_eq!(
+                retry_failed_step(&root, "retry-request", &step, "owner")?,
+                receipt
+            );
+            let replayed = load_goal_with_steps(&root, &goal)?.unwrap();
+            assert_eq!(
+                serde_json::to_value(&queued)?,
+                serde_json::to_value(&replayed)?,
+                "transport replay must not reset or dispatch a second attempt"
+            );
+            assert!(retry_failed_step(&root, "another-request", &step, "owner").is_err());
+            assert!(retry_failed_step(&root, "retry-request", &step, "foreign").is_err());
+            Ok(())
+        }))
+    }
     #[test]
     fn unreviewed_plan_completion_keeps_step_and_route_leased() -> Result<()> {
         let root = temp_plan_root("complete-without-reviewed-proof");

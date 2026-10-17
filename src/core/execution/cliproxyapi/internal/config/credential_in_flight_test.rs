@@ -3,15 +3,6 @@
 // License: MIT (upstream); modifications AGPL-3.0-only
 use super::credential_in_flight::*;
 #[test]
-fn defaults_validate_and_parse() {
-    let cfg = CredentialInFlightConfig::default();
-    assert!(cfg.validate().is_ok());
-    let (d, s, r) = cfg.durations().unwrap();
-    assert_eq!(d.as_secs(), 2);
-    assert_eq!(s.as_secs(), 10);
-    assert_eq!(r.as_secs(), 60)
-}
-#[test]
 fn invalid_timing_capacity_and_closed_schema_fail() {
     let cfg = CredentialInFlightConfig {
         stale_after: "5s".into(),

@@ -201,7 +201,9 @@ fn account_host(
 
 #[path = "transfers_admission.rs"]
 mod admission;
-pub(crate) use admission::{enqueue_peer, enqueue_workspace_peer, pair, PeerDownload};
+pub(crate) use admission::{
+    enqueue_peer, enqueue_workspace_peer, pair, pair_invite, AfterReady, PeerDownload,
+};
 
 /// A local workspace consumer uses its own query database/session lifetime,
 /// revalidating the original grants before and after synchronous reconstruction.

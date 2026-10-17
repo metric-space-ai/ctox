@@ -2,6 +2,30 @@
 
 ## State
 
+- Candidate `97ba1e896181b29b97d4ff1324a3af3f2a639c09` ports client tool search
+  across Responses request replay, discovered declarations and unary/stream replies.
+  A constant deferred anchor precedes discoveries to retain the tools prefix.
+  Descriptor source/direct-declaration priorities and collision-safe names are
+  request-owned; returned references use only winning discovered definitions.
+  Tool-search arguments remain objects, truncated calls remain incomplete, and
+  custom calls retain their client payload form. Hosted search is not forwarded.
+  CTOX adapts the upstream mutable global switch to the caller's explicit client
+  declaration/history, which pins the same decision in both translator directions
+  without an ambient environment switch. Qualification is tracked in PR #735;
+  neither the accepted pin nor installed/live-provider acceptance is promoted.
+
+- Candidate upstream `02fc76b149a917d07db6c1f588f47341bb29c7be` adds request-local
+  recovery of declared caller-owned MCP tools wrapped in the actual virtual server,
+  including full `mcp__server__tool`, unprefixed full names and unique tool tails.
+  Buffered JSON/SSE and fragmented live streams use the same resolver. Unknown or
+  foreign names stay unchanged; ambiguous tails fail locally before continuity
+  publication and do not create provider-account cooldowns. The public reverse map
+  continues to contain only actual forward renames. Seven focused guards passed;
+  actual-executor stream/cooldown guards and the broader feature matrices are being
+  qualified in PR #734. The accepted pin remains unchanged, and full current-upstream
+  parity and installed provider acceptance remain incomplete.
+
+
 - The Grok client-version slice from v8.0.23, immutable upstream
   `d318bcc3afb9ea8782862f5e8cdb541afdc9dfa5`, keeps the reviewed 1.0.46
   release fallback and strict numeric 1.0.13 floor. CTOX does not bind a native

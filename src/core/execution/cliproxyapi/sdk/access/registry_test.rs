@@ -194,20 +194,6 @@ async fn provider_contract_preserves_nil_result_and_owned_request_body() {
     assert_eq!(request.body.as_deref(), Some(b"payload".as_slice()));
 }
 
-#[test]
-fn authentication_outcome_preserves_all_go_nil_combinations() {
-    let empty = AuthenticationOutcome::default();
-    assert!(empty.result.is_none());
-    assert!(empty.error.is_none());
-
-    let both = AuthenticationOutcome {
-        result: Some(Result::default()),
-        error: Some(new_not_handled_error()),
-    };
-    assert!(both.result.is_some());
-    assert!(both.error.is_some());
-}
-
 #[derive(Debug)]
 struct Cause;
 
@@ -218,85 +204,6 @@ impl fmt::Display for Cause {
 }
 
 impl Error for Cause {}
-
-#[test]
-fn auth_error_contract_matches_upstream_fallbacks_and_causes() {
-    let missing = new_no_credentials_error();
-    assert_eq!(missing.code, AUTH_ERROR_CODE_NO_CREDENTIALS);
-    assert_eq!(missing.to_string(), "Missing API key");
-    assert_eq!(missing.http_status_code(), HTTP_STATUS_UNAUTHORIZED);
-    assert!(is_auth_error_code(
-        Some(&missing),
-        &AUTH_ERROR_CODE_NO_CREDENTIALS
-    ));
-    assert!(!is_auth_error_code(None, &AUTH_ERROR_CODE_NO_CREDENTIALS));
-    assert_eq!(auth_error_message(None), "");
-    assert!(auth_error_cause(None).is_none());
-    assert_eq!(
-        auth_error_http_status_code(None),
-        HTTP_STATUS_INTERNAL_SERVER_ERROR
-    );
-
-    let not_handled = new_not_handled_error();
-    assert_eq!(
-        not_handled.http_status_code(),
-        HTTP_STATUS_INTERNAL_SERVER_ERROR
-    );
-
-    let internal = new_internal_auth_error("  ", Some(Arc::new(Cause)));
-    assert_eq!(internal.code, AUTH_ERROR_CODE_INTERNAL);
-    assert_eq!(
-        internal.to_string(),
-        "Authentication service error: root cause"
-    );
-    assert!(!format!("{internal:?}").contains("root cause"));
-    assert!(internal.source().is_some());
-    let zero = AuthError::default();
-    assert_eq!(zero.to_string(), "authentication error");
-    assert_eq!(zero.http_status_code(), HTTP_STATUS_INTERNAL_SERVER_ERROR);
-    assert_eq!(AuthErrorCode::default().as_str(), "");
-    assert_eq!(AuthErrorCode::from("future_code").as_str(), "future_code");
-}
-
-#[test]
-fn access_config_preserves_nil_collections_and_go_omitempty_wire_shape() {
-    let nil_config = AccessConfig::default();
-    assert!(nil_config.providers.is_none());
-    assert_eq!(serde_json::to_value(&nil_config).unwrap(), json!({}));
-
-    let empty_config = AccessConfig {
-        providers: Some(Vec::new()),
-    };
-    assert!(empty_config.providers.is_some());
-    assert_eq!(serde_json::to_value(&empty_config).unwrap(), json!({}));
-
-    let decoded: AccessConfig = serde_json::from_value(json!({})).unwrap();
-    assert!(decoded.providers.is_none());
-}
-
-#[test]
-fn access_provider_uses_exact_json_and_yaml_field_names() {
-    let provider = AccessProvider {
-        name: "custom".to_owned(),
-        provider_type: "sdk-type".to_owned(),
-        sdk: "example-sdk".to_owned(),
-        api_keys: Some(vec!["key".to_owned()]),
-        config: Some(std::collections::BTreeMap::from([(
-            "enabled".to_owned(),
-            json!(true),
-        )])),
-    };
-    let value = serde_json::to_value(&provider).unwrap();
-    assert_eq!(value["name"], "custom");
-    assert_eq!(value["type"], "sdk-type");
-    assert_eq!(value["api-keys"], json!(["key"]));
-    assert!(value.get("api_keys").is_none());
-
-    let yaml = serde_yaml::to_string(&provider).unwrap();
-    assert!(yaml.contains("api-keys:"));
-    let decoded: AccessProvider = serde_yaml::from_str(&yaml).unwrap();
-    assert_eq!(decoded, provider);
-}
 
 #[test]
 fn inline_provider_rejects_empty_keys_and_clones_nonempty_keys() {

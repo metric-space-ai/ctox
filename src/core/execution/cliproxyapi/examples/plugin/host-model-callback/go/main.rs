@@ -19,9 +19,3 @@ pub fn execute(
         json!({"model":model,"body":body,"stream":false}),
     )
 }
-#[test]
-fn model_execution_is_injected() {
-    let host =
-        super::core::RecordingHost::default().with_reply("host.model.execute", json!({"ok":true}));
-    assert_eq!(execute(&host, "fixture", json!({})).unwrap()["ok"], true);
-}

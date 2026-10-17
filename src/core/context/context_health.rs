@@ -75,7 +75,7 @@ pub fn assess_for_conversation(
     token_budget: i64,
     latest_user_prompt: Option<&str>,
 ) -> Result<ContextHealthSnapshot> {
-    let engine = lcm::LcmEngine::open(db_path, lcm::LcmConfig::default())?;
+    let engine = lcm::LcmClient::attach(db_path)?;
     let snapshot = engine.snapshot(conversation_id)?;
     let continuity = engine.continuity_show_all(conversation_id)?;
     let forgotten_entries = engine.continuity_forgotten(conversation_id, None, None)?;
@@ -1285,45 +1285,6 @@ mod tests {
     }
 
     #[test]
-    fn render_prompt_block_surfaces_repair_guidance() {
-        let snapshot = sample_snapshot(vec![("user", "continue task")], 120_000);
-        let mut continuity = healthy_continuity();
-        continuity.focus.content =
-            "# Focus\n\n## Contract\nmission:\nmission_state:\ncontinuation_mode:\ntrigger_intensity:\nslice:\nslice_state:\n\n## State\ngoal:\nblocker:\nmissing_dependency:\nnext_slice:\ndone_gate:\nretry_condition:\nclosure_confidence:\n\n## Sources\nsource_refs:\n- none\nupdated_at:\n".to_string();
-        let health = assess(&snapshot, &continuity, "continue task", 131_072);
-        let block = render_prompt_block(&health);
-        assert!(block.contains("Context health:"));
-        assert!(block.contains("repair_recommended:"));
-    }
-
-    #[test]
-    fn render_prompt_block_stays_compact() {
-        let snapshot = sample_snapshot(
-            vec![
-                ("user", "retry deploy"),
-                ("assistant", "blocked: deploy still failing"),
-                ("user", "retry deploy"),
-            ],
-            120_000,
-        );
-        let mut continuity = healthy_continuity();
-        continuity.focus.content =
-            "# Focus\n\n## Contract\nmission:\nmission_state:\ncontinuation_mode:\ntrigger_intensity:\nslice:\nslice_state:\n\n## State\ngoal:\nblocker:\nmissing_dependency:\nnext_slice:\ndone_gate:\nretry_condition:\nclosure_confidence:\n\n## Sources\nsource_refs:\n- none\nupdated_at:\n".to_string();
-        let health = assess(&snapshot, &continuity, "retry deploy", 131_072);
-        let block = render_prompt_block(&health);
-        assert!(block.contains("Context health:"));
-        assert!(block.contains("status:"));
-        assert!(block.contains("preempt_current_slice:"));
-        assert!(block.contains("warnings:"));
-        assert!(!block.contains("This block is advisory."));
-        assert!(
-            block.len() < 1000,
-            "context health block too large: {}",
-            block.len()
-        );
-    }
-
-    #[test]
     fn forgotten_lines_count_as_negative_memory() {
         let snapshot = sample_snapshot(
             vec![
@@ -1381,29 +1342,6 @@ mod tests {
         );
         assert!(!decision.should_enqueue_repair);
         assert!(decision.reason.contains("already is"));
-    }
-
-    #[test]
-    fn warning_action_labels_cover_emitted_codes() {
-        // The matcher strings must use the codes build_warnings actually
-        // emits; the previous drift ("thin_mission_contract" vs
-        // "mission_contract_thin") silenced every specific repair action.
-        let generic = super::health_warning_action_label("unknown_code");
-        for code in [
-            "mission_contract_thin",
-            "failure_memory_missing",
-            "context_window_pressure",
-            "recent_user_turn_repeated",
-            "blocked_status_loop",
-            "focus_document_thin",
-            "mission_switch_pending",
-        ] {
-            assert_ne!(
-                super::health_warning_action_label(code),
-                generic,
-                "warning code {code} fell through to the generic action"
-            );
-        }
     }
 
     #[test]

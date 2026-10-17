@@ -1,0 +1,493 @@
+{
+ "app": "news",
+ "width": 1280,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "News",
+   "win": {
+    "x": 0,
+    "w": 1280,
+    "h": 748
+   },
+   "mode": "",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Thema anlegen",
+    "button:Themen importieren",
+    "button:Themen exportieren",
+    "button:Als Liste anzeigen",
+    "button:Filter",
+    "nav:Aktiv (6)",
+    "nav:Pausiert (0)",
+    "button:ON Onboarding neue Mitarbeiten",
+    "button:Gestern",
+    "button:RÜ Rahmenvertrag über Wartung ",
+    "button:KV Kundentermin Vorbereitung M",
+    "button:BV Budgetplanung Vertrieb Süd ",
+    "button:QQ Quartalsbericht Q3 2026 Man",
+    "button:AW Angebot Wartungsvertrag Hal",
+    "button:Spaltenbreite anpassen",
+    "button:Ausgabe jetzt erzeugen",
+    "button:Thema konfigurieren",
+    "nav:Alle (1)",
+    "nav:Modelle (0)",
+    "nav:Tools (0)",
+    "nav:Forschung (0)",
+    "nav:Debatten (0)",
+    "button:Mehr anzeigen",
+    "button:Gemerkt",
+    "button:Link kopieren",
+    "button:Kundentermin 3"
+   ],
+   "shot": "news/1280-01-open.png"
+  },
+  {
+   "step": "nav Aktiv (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/1280-02-nav_Aktiv_6_.png"
+  },
+  {
+   "step": "nav Pausiert (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/1280-03-nav_Pausiert_0_.png"
+  },
+  {
+   "step": "nav Alle (1)",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/1280-04-nav_Alle_1_.png"
+  },
+  {
+   "step": "nav Modelle (0)",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/1280-05-nav_Modelle_0_.png"
+  },
+  {
+   "step": "nav Tools (0)",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/1280-06-nav_Tools_0_.png"
+  },
+  {
+   "step": "nav Forschung (0)",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/1280-07-nav_Forschung_0_.png"
+  },
+  {
+   "step": "nav Debatten (0)",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/1280-08-nav_Debatten_0_.png"
+  },
+  {
+   "step": "zurück zu Reiter Aktiv (6)",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/1280-09-zur_ck_zu_Reiter_Aktiv_6_.png"
+  },
+  {
+   "step": "button Thema anlegen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-10-button_Thema_anlegen.png"
+  },
+  {
+   "step": "formular 2 Felder → Speichern",
+   "changed": true,
+   "ops": [
+    "put news_topics/topic_e9d505b3-ee36-432f-b017-af23b4b7e9b6 local=ok result=accepted {\"id\":\"topic_e9d505b3-ee36-432f-b017-af23b4b7e9b6\",\"title\":\"Rundgang Test\",\"prompt\":\"Rundgang Test\",\"cadence\":\"daily\",\"run_time\":\"07:00\",\"we"
+   ],
+   "zone": [
+    "clear news.topic.invalid",
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "submit",
+   "shot": "news/1280-11-formular_2_Felder_Speichern.png"
+  },
+  {
+   "step": "nav Aktiv (7)",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav"
+  },
+  {
+   "step": "nav Alle (0)",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "news/1280-12-nav_Alle_0_.png"
+  },
+  {
+   "step": "button Themen importieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Themen exportieren",
+   "changed": 0,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button"
+  },
+  {
+   "step": "button Als Liste anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-13-button_Als_Liste_anzeigen.png"
+  },
+  {
+   "step": "button Als Karten anzeigen",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-14-button_Als_Karten_anzeigen.png"
+  },
+  {
+   "step": "button Filter",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-15-button_Filter.png"
+  },
+  {
+   "step": "button RT Rundgang Test Täglich 07:00",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-16-button_RT_Rundgang_Test_T_glich_07_00.png"
+  },
+  {
+   "step": "button ON Onboarding neue Mitarbeitende Manuell",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-17-button_ON_Onboarding_neue_Mitarbeitende_.png"
+  },
+  {
+   "step": "button Gestern",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-18-button_Gestern.png"
+  },
+  {
+   "step": "button RÜ Rahmenvertrag über Wartung und Instandhaltung der Produkt",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-19-button_R_Rahmenvertrag_ber_Wartung_und_I.png"
+  },
+  {
+   "step": "button Mo 12.10.",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-20-button_Mo_12.10..png"
+  },
+  {
+   "step": "button KV Kundentermin Vorbereitung Manuell",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "{\"level\":\"info\",\"code\":\"news.issue.running\",\"text\":\"Ausgabe wird erstellt\",\"ref\":\"issue-003\"}",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-21-button_KV_Kundentermin_Vorbereitung_Manu.png"
+  },
+  {
+   "step": "button So 11.10.",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "{\"level\":\"info\",\"code\":\"news.issue.running\",\"text\":\"Ausgabe wird erstellt\",\"ref\":\"issue-003\"}",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-22-button_So_11.10..png"
+  },
+  {
+   "step": "button BV Budgetplanung Vertrieb Süd Manuell",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-23-button_BV_Budgetplanung_Vertrieb_S_d_Man.png"
+  },
+  {
+   "step": "button Sa 10.10.",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-24-button_Sa_10.10..png"
+  },
+  {
+   "step": "button QQ Quartalsbericht Q3 2026 Manuell",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-25-button_QQ_Quartalsbericht_Q3_2026_Manuel.png"
+  },
+  {
+   "step": "button Fr 09.10.",
+   "changed": 2,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "clear news.issue.failed"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-26-button_Fr_09.10..png"
+  },
+  {
+   "step": "button AW Angebot Wartungsvertrag Halle 4 Manuell",
+   "changed": true,
+   "ops": [],
+   "zone": [
+    "clear news.issue.running",
+    "{\"level\":\"error\",\"code\":\"news.issue.failed\",\"text\":\"Ausgabe fehlgeschlagen\",\"ref\":\"issue-006\"}"
+   ],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "news/1280-27-button_AW_Angebot_Wartungsvertrag_Halle_.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 690,
+   "shot": "news/1280-28-suche_ohne_Treffer.png",
+   "textAfter": 354
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "news/1280-29-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "put",
+   "coll": "news_topics",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "news",
+  "News"
+ ]
+}

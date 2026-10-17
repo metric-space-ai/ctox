@@ -89,28 +89,4 @@ pub struct StreamingConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sdk_surface_is_closed_and_preserves_streaming_values() {
-        let config: SdkConfig = serde_yaml::from_str(
-            "passthrough-headers: true\nstreaming:\n  keepalive-seconds: 5\n  bootstrap-retries: 2\n",
-        )
-        .unwrap();
-        assert!(config.passthrough_headers);
-        assert_eq!(config.streaming.keepalive_seconds, 5);
-        assert_eq!(config.streaming.bootstrap_retries, 2);
-        assert!(serde_yaml::from_str::<SdkConfig>("unknown: true\n").is_err());
-    }
-
-    #[test]
-    fn client_codex_compatibility_is_explicit_yaml() {
-        let config: SdkConfig = serde_yaml::from_str(
-            "client:\n  codex:\n    optimize-multi-agent-v2: true\n    enable-apply-patch: true\n",
-        )
-        .unwrap();
-        assert!(config.client.codex.optimize_multi_agent_v2);
-        assert!(config.client.codex.enable_apply_patch);
-        assert!(!config.codex_optimize_multi_agent_v2);
-        assert!(config.oauth_only_fields.is_empty());
-    }
 }

@@ -20,7 +20,7 @@
      reply classification, sender health).
    ========================================================================== */
 
-.outbound-module {
+[data-app="outbound"] .outbound-module {
   --outbound-info: var(--accent);
   --outbound-info-ink: var(--accent);
   --outbound-purple: var(--warning);
@@ -33,18 +33,18 @@
 }
 
 /* Small text utility used across cells, lists and detail panes. */
-.outbound-muted {
+[data-app="outbound"] .outbound-muted {
   color: var(--muted);
   font-size: 12px;
   line-height: 1.4;
 }
 
-.outbound-muted-placeholder {
+[data-app="outbound"] .outbound-muted-placeholder {
   font-style: italic;
   padding: 8px 0;
 }
 
-.outbound-row-actions {
+[data-app="outbound"] .outbound-row-actions {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -52,17 +52,17 @@
 }
 
 /* Explicit workspace tracks keep the primary workbench off the resizer track. */
-.outbound-left {
+[data-app="outbound"] .outbound-left {
   grid-column: 1;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   container-type: inline-size;
 }
 
-.outbound-module > .ctox-column-resizer {
+[data-app="outbound"] .outbound-module > .ctox-column-resizer {
   grid-column: 2;
 }
 
-.outbound-center {
+[data-app="outbound"] .outbound-center {
   grid-column: 3;
   grid-template-rows: auto minmax(0, 1fr);
 }
@@ -72,11 +72,11 @@
    row high (Shell V2 block at the end of this file). Both panes keep their
    grid tracks: the left strip swallows the view switch, the center strip
    shares the second track with the workbench. */
-.outbound-pane-toolbelt {
+[data-app="outbound"] .outbound-pane-toolbelt {
   min-width: 0;
 }
 
-.outbound-center-stack {
+[data-app="outbound"] .outbound-center-stack {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
@@ -86,29 +86,29 @@
 
 /* The center strip keeps the inset and the closing hairline the pane header
    used to give it; the left strip ends in .ctox-view-switch, which has both. */
-.outbound-center-stack > .outbound-pane-toolbelt {
+[data-app="outbound"] .outbound-center-stack > .outbound-pane-toolbelt {
   padding: 0 14px 10px;
   border-bottom: 1px solid var(--hairline, var(--line));
 }
 
-.outbound-center-tools {
-  flex-wrap: nowrap;
-  overflow-x: auto;
-  scrollbar-width: none;
+/* Werkzeuge brechen in die nächste Zeile um, statt unsichtbar seitlich zu scrollen (Geometrie G1). */
+[data-app="outbound"] .outbound-center-tools {
+  flex-wrap: wrap;
+  row-gap: 6px;
 }
 
-.outbound-center-tools::-webkit-scrollbar {
+[data-app="outbound"] .outbound-center-tools::-webkit-scrollbar {
   display: none;
 }
 
-.outbound-campaign-list {
+[data-app="outbound"] .outbound-campaign-list {
   display: grid;
   align-content: start;
   gap: 6px;
   padding: 6px;
 }
 
-.outbound-campaign-item {
+[data-app="outbound"] .outbound-campaign-item {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -121,7 +121,7 @@
   background: var(--surface);
 }
 
-.outbound-campaign-item::before {
+[data-app="outbound"] .outbound-campaign-item::before {
   content: "";
   position: absolute;
   inset: 0 auto 0 0;
@@ -129,19 +129,19 @@
   background: transparent;
 }
 
-.outbound-campaign-item:hover {
+[data-app="outbound"] .outbound-campaign-item:hover {
   background: var(--surface-2);
 }
 
-.outbound-campaign-item.is-selected {
+[data-app="outbound"] .outbound-campaign-item.is-selected {
   background: var(--accent-soft);
 }
 
-.outbound-campaign-item.is-selected::before {
+[data-app="outbound"] .outbound-campaign-item.is-selected::before {
   background: var(--accent);
 }
 
-.outbound-campaign-select {
+[data-app="outbound"] .outbound-campaign-select {
   display: grid;
   gap: 3px;
   min-width: 0;
@@ -152,57 +152,56 @@
   text-align: left;
 }
 
-.outbound-campaign-select strong,
-.outbound-campaign-select span {
+/* Campaign-Name und Metazeile brechen um statt abgeschnitten zu werden (Geometrie G4). */
+[data-app="outbound"] .outbound-campaign-select strong,
+[data-app="outbound"] .outbound-campaign-select span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
-.outbound-campaign-select strong {
+[data-app="outbound"] .outbound-campaign-select strong {
   color: var(--text-strong);
   font-size: 13px;
   font-weight: 700;
 }
 
-.outbound-campaign-select span {
+[data-app="outbound"] .outbound-campaign-select span {
   color: var(--muted);
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
 }
 
-.outbound-campaign-actions {
+[data-app="outbound"] .outbound-campaign-actions {
   display: flex;
   align-items: center;
   gap: 1px;
 }
 
-.outbound-campaign-actions .ctox-pane-icon {
+[data-app="outbound"] .outbound-campaign-actions .ctox-pane-icon {
   width: 26px;
   height: 26px;
 }
 
-.outbound-campaign-list.is-list .outbound-campaign-item {
+[data-app="outbound"] .outbound-campaign-list.is-list .outbound-campaign-item {
   padding-block: 6px;
   border-radius: 0;
 }
 
-.outbound-campaign-list.is-list .outbound-campaign-item + .outbound-campaign-item {
+[data-app="outbound"] .outbound-campaign-list.is-list .outbound-campaign-item + .outbound-campaign-item {
   border-top: 1px solid var(--line);
 }
 
-.outbound-campaign-edit {
+[data-app="outbound"] .outbound-campaign-edit {
   display: grid;
   gap: 8px;
 }
 
-.outbound-campaign-edit-grid {
+[data-app="outbound"] .outbound-campaign-edit-grid {
   display: grid;
   gap: 7px;
 }
 
-.outbound-campaign-briefing small {
+[data-app="outbound"] .outbound-campaign-briefing small {
   color: var(--muted);
   font-size: 10px;
   line-height: 1.3;
@@ -210,36 +209,39 @@
   letter-spacing: normal;
 }
 
-.outbound-campaign-edit-actions {
+[data-app="outbound"] .outbound-campaign-edit-actions {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
 }
 
-.outbound-workbench-mode-switch,
-.outbound-funnel-tabs {
+/* Reiterleisten brechen um, statt seitlich zu scrollen (Geometrie G1); die Kit-Regel
+   min-width: max-content der .ctox-pane-tabs wird hier aufgehoben. */
+[data-app="outbound"] .outbound-workbench-mode-switch,
+[data-app="outbound"] .outbound-funnel-tabs {
   min-width: 0;
-  overflow-x: auto;
+  max-width: 100%;
+  flex-wrap: wrap;
 }
 
-.outbound-workbench-mode-switch {
+[data-app="outbound"] .outbound-workbench-mode-switch {
   margin-top: 8px;
 }
 
-.outbound-workbench-mode-switch .ctox-pane-tab,
-.outbound-funnel-tabs .ctox-pane-tab {
+[data-app="outbound"] .outbound-workbench-mode-switch .ctox-pane-tab,
+[data-app="outbound"] .outbound-funnel-tabs .ctox-pane-tab {
   flex: 1 0 auto;
   white-space: nowrap;
 }
 
-.outbound-outreach-host {
+[data-app="outbound"] .outbound-outreach-host {
   overflow: hidden;
 }
 
 /* ----------------------------------------------------------------------------
    Center pane — header tools, research activity, split workbench
    -------------------------------------------------------------------------- */
-.outbound-center-content {
+[data-app="outbound"] .outbound-center-content {
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -252,7 +254,7 @@
 }
 
 /* custom: checkbox toggle label in the pane tools row. */
-.outbound-toggle-label {
+[data-app="outbound"] .outbound-toggle-label {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -265,19 +267,19 @@
   white-space: nowrap;
 }
 
-.outbound-toggle-label input {
+[data-app="outbound"] .outbound-toggle-label input {
   accent-color: var(--accent);
 }
 
 /* custom: hidden-companies button with an accent count pill. */
-.outbound-hidden-toggle {
+[data-app="outbound"] .outbound-hidden-toggle {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   white-space: nowrap;
 }
 
-.outbound-hidden-toggle span:last-child {
+[data-app="outbound"] .outbound-hidden-toggle span:last-child {
   min-width: 22px;
   padding: 1px 6px;
   border-radius: 999px;
@@ -288,8 +290,13 @@
   text-align: center;
 }
 
+/* Textdiät E: Zähler nur ab 1 – leere Pille ausblenden. */
+[data-app="outbound"] .outbound-hidden-toggle span:last-child:empty {
+  display: none;
+}
+
 /* custom: live CTOX research pill with pulsing status dot. */
-.outbound-active-research {
+[data-app="outbound"] .outbound-active-research {
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -302,18 +309,19 @@
   color: var(--accent);
 }
 
-.outbound-active-research.warn {
+[data-app="outbound"] .outbound-active-research.warn {
   border-color: color-mix(in srgb, var(--danger) 48%, var(--line));
   background: color-mix(in srgb, var(--danger) 10%, var(--surface));
   color: var(--danger);
 }
 
-.outbound-active-research.waiting {
-  color: var(--muted);
+[data-app="outbound"] .outbound-active-research.waiting {
+  /* DARK: auf dem Wartehintergrund lag --muted bei 4,1. */
+  color: color-mix(in srgb, var(--text) 30%, var(--muted));
 }
 
-.outbound-active-research span,
-.outbound-inline-status i {
+[data-app="outbound"] .outbound-active-research span,
+[data-app="outbound"] .outbound-inline-status i {
   width: 7px;
   height: 7px;
   flex: 0 0 auto;
@@ -322,7 +330,7 @@
   animation: outbound-status-pulse 1.45s ease-out infinite;
 }
 
-.outbound-active-research b {
+[data-app="outbound"] .outbound-active-research b {
   min-width: 0;
   overflow: hidden;
   font-size: 11px;
@@ -347,17 +355,17 @@
 /* custom: research activity strip above the table — running agent work with
    per-state count chips and the latest activity items. Collapsed by default;
    users expand on demand. */
-.outbound-research-activity {
+[data-app="outbound"] .outbound-research-activity {
   border: 1px solid var(--hairline, var(--line));
   border-radius: var(--panel-radius);
   background: color-mix(in srgb, var(--accent) 8%, var(--surface));
 }
 
-.outbound-research-activity.warn {
+[data-app="outbound"] .outbound-research-activity.warn {
   background: color-mix(in srgb, var(--danger) 9%, var(--surface));
 }
 
-.outbound-research-activity > summary {
+[data-app="outbound"] .outbound-research-activity > summary {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
@@ -368,20 +376,20 @@
   user-select: none;
 }
 
-.outbound-research-activity > summary::-webkit-details-marker {
+[data-app="outbound"] .outbound-research-activity > summary::-webkit-details-marker {
   display: none;
 }
 
-.outbound-research-activity > summary::marker {
+[data-app="outbound"] .outbound-research-activity > summary::marker {
   display: none;
   content: '';
 }
 
-.outbound-research-activity-head {
+[data-app="outbound"] .outbound-research-activity-head {
   min-width: 0;
 }
 
-.outbound-research-activity-head span {
+[data-app="outbound"] .outbound-research-activity-head span {
   display: block;
   color: var(--muted);
   font-size: 10px;
@@ -390,7 +398,7 @@
   text-transform: uppercase;
 }
 
-.outbound-research-activity-head strong {
+[data-app="outbound"] .outbound-research-activity-head strong {
   display: block;
   margin-top: 2px;
   overflow: hidden;
@@ -401,14 +409,14 @@
   white-space: nowrap;
 }
 
-.outbound-research-activity-counts {
+[data-app="outbound"] .outbound-research-activity-counts {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
 }
 
-.outbound-research-activity-counts span {
+[data-app="outbound"] .outbound-research-activity-counts span {
   min-height: 24px;
   padding: 3px 8px;
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
@@ -420,17 +428,17 @@
   white-space: nowrap;
 }
 
-.outbound-research-activity-counts span.warn {
+[data-app="outbound"] .outbound-research-activity-counts span.warn {
   border-color: color-mix(in srgb, var(--danger) 34%, transparent);
   background: color-mix(in srgb, var(--danger) 10%, var(--surface));
   color: var(--danger);
 }
 
-.outbound-research-activity-counts b {
+[data-app="outbound"] .outbound-research-activity-counts b {
   color: var(--text);
 }
 
-.outbound-research-activity-list {
+[data-app="outbound"] .outbound-research-activity-list {
   display: flex;
   gap: 6px;
   margin: 0;
@@ -439,7 +447,7 @@
   list-style: none;
 }
 
-.outbound-research-activity-list li {
+[data-app="outbound"] .outbound-research-activity-list li {
   min-width: 140px;
   max-width: 260px;
   padding: 5px 7px;
@@ -448,27 +456,27 @@
   background: color-mix(in srgb, var(--surface-2) 58%, transparent);
 }
 
-.outbound-research-activity-list li.failed,
-.outbound-research-activity-list li.blocked,
-.outbound-research-activity-list li.cancelled {
+[data-app="outbound"] .outbound-research-activity-list li.failed,
+[data-app="outbound"] .outbound-research-activity-list li.blocked,
+[data-app="outbound"] .outbound-research-activity-list li.cancelled {
   border-color: color-mix(in srgb, var(--danger) 34%, transparent);
 }
 
-.outbound-research-activity-list li b,
-.outbound-research-activity-list li span {
+[data-app="outbound"] .outbound-research-activity-list li b,
+[data-app="outbound"] .outbound-research-activity-list li span {
   display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.outbound-research-activity-list li b {
+[data-app="outbound"] .outbound-research-activity-list li b {
   color: var(--text);
   font-size: 11px;
   line-height: 1.15;
 }
 
-.outbound-research-activity-list li span {
+[data-app="outbound"] .outbound-research-activity-list li span {
   margin-top: 2px;
   color: var(--muted);
   font-size: 10px;
@@ -478,7 +486,7 @@
 /* custom: inner table/detail split. The kit resizer is declarative and
    cannot model this conditional, JS-driven split (module JS owns drag,
    ratio persistence and the is-detail-hidden collapse). */
-.outbound-split-workbench {
+[data-app="outbound"] .outbound-split-workbench {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 10px minmax(320px, 420px);
   align-content: stretch;
@@ -490,22 +498,22 @@
   overscroll-behavior: contain;
 }
 
-.outbound-split-workbench.is-detail-hidden {
+[data-app="outbound"] .outbound-split-workbench.is-detail-hidden {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.outbound-split-workbench.is-detail-hidden > .outbound-center-resizer,
-.outbound-split-workbench.is-detail-hidden > .outbound-right {
+[data-app="outbound"] .outbound-split-workbench.is-detail-hidden > .outbound-center-resizer,
+[data-app="outbound"] .outbound-split-workbench.is-detail-hidden > .outbound-right {
   display: none;
 }
 
-.outbound-split-workbench > .outbound-unified-workbench,
-.outbound-split-workbench > .outbound-right {
+[data-app="outbound"] .outbound-split-workbench > .outbound-unified-workbench,
+[data-app="outbound"] .outbound-split-workbench > .outbound-right {
   min-width: 0;
   min-height: 0;
 }
 
-.outbound-center-resizer {
+[data-app="outbound"] .outbound-center-resizer {
   min-width: 12px;
   cursor: col-resize;
   display: grid;
@@ -516,7 +524,7 @@
   touch-action: none;
 }
 
-.outbound-center-resizer::before {
+[data-app="outbound"] .outbound-center-resizer::before {
   content: "";
   width: 3px;
   height: 44px;
@@ -524,12 +532,12 @@
   background: color-mix(in srgb, var(--muted) 54%, transparent);
 }
 
-.outbound-center-resizer:hover::before,
-.outbound-center-resizer.is-active::before {
+[data-app="outbound"] .outbound-center-resizer:hover::before,
+[data-app="outbound"] .outbound-center-resizer.is-active::before {
   background: var(--accent);
 }
 
-.outbound-unified-workbench {
+[data-app="outbound"] .outbound-unified-workbench {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -540,7 +548,7 @@
   border-radius: var(--panel-radius);
 }
 
-.outbound-table-scroll-unified {
+[data-app="outbound"] .outbound-table-scroll-unified {
   position: relative;
   flex: 1;
   min-width: 0;
@@ -553,7 +561,7 @@
 
 /* custom: empty state floats above the (empty) CRM grid so the table
    headers stay visible. */
-.outbound-table-empty-overlay {
+[data-app="outbound"] .outbound-table-empty-overlay {
   position: absolute;
   inset: 66px 0 0;
   z-index: 1;
@@ -564,21 +572,21 @@
   pointer-events: none;
 }
 
-.outbound-table-empty-overlay .ctox-empty {
+[data-app="outbound"] .outbound-table-empty-overlay .ctox-empty {
   min-height: 0;
   max-width: 520px;
   margin: 0 auto;
 }
 
-.outbound-table-empty-overlay .ctox-button {
+[data-app="outbound"] .outbound-table-empty-overlay .ctox-button {
   pointer-events: auto;
 }
 
-.outbound-table-empty-overlay .ctox-empty span {
+[data-app="outbound"] .outbound-table-empty-overlay .ctox-empty span {
   max-width: 62ch;
 }
 
-.outbound-table-empty {
+[data-app="outbound"] .outbound-table-empty {
   padding: 0;
   text-align: center;
   color: var(--muted);
@@ -590,7 +598,7 @@
    hiding in compact view. The kit table is a report table; this is a
    spreadsheet-like workbench, so it keeps its own cell chrome.
    -------------------------------------------------------------------------- */
-.crm-table {
+[data-app="outbound"] .crm-table {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
@@ -599,10 +607,12 @@
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--panel-radius);
-  overflow: hidden;
+  /* clip, not hidden: hidden would make the table the sticky scroll box and the
+     column heads would scroll away inside .outbound-table-scroll-unified. */
+  overflow: clip;
 }
 
-.crm-table thead th {
+[data-app="outbound"] .crm-table thead th {
   position: sticky;
   top: 0;
   z-index: 10;
@@ -617,7 +627,7 @@
   text-align: left;
 }
 
-.crm-table tbody td {
+[data-app="outbound"] .crm-table tbody td {
   border-bottom: 1px solid var(--line);
   border-right: 1px solid var(--line);
   padding: 10px 12px;
@@ -628,37 +638,37 @@
   box-sizing: border-box;
 }
 
-.crm-table tbody tr:hover td {
+[data-app="outbound"] .crm-table tbody tr:hover td {
   background: color-mix(in srgb, var(--text) 2%, transparent);
 }
 
-.crm-table tbody tr.is-selected td,
-.crm-table tbody tr[aria-selected="true"] td {
+[data-app="outbound"] .crm-table tbody tr.is-selected td,
+[data-app="outbound"] .crm-table tbody tr[aria-selected="true"] td {
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
 }
 
 /* Column width hints matching the leadgen layout. */
-.col-company { width: 280px; }
-.col-name { width: 190px; }
-.col-contact { width: 250px; }
-.col-role { width: 190px; }
-.col-dept { width: 160px; }
-.col-loc { width: 160px; }
-.col-status { width: 160px; }
-.col-tags { width: 190px; }
-.col-msgtype { width: 190px; }
-.col-message { width: 32vw; }
-.col-notetype { width: 190px; }
-.col-note { width: 300px; }
+[data-app="outbound"] .col-company { width: 280px; }
+[data-app="outbound"] .col-name { width: 190px; }
+[data-app="outbound"] .col-contact { width: 250px; }
+[data-app="outbound"] .col-role { width: 190px; }
+[data-app="outbound"] .col-dept { width: 160px; }
+[data-app="outbound"] .col-loc { width: 160px; }
+[data-app="outbound"] .col-status { width: 160px; }
+[data-app="outbound"] .col-tags { width: 190px; }
+[data-app="outbound"] .col-msgtype { width: 190px; }
+[data-app="outbound"] .col-message { width: 32vw; }
+[data-app="outbound"] .col-notetype { width: 190px; }
+[data-app="outbound"] .col-note { width: 300px; }
 
 /* Column head: kit sort button + compact per-column filter input. */
-.outbound-table-column-head {
+[data-app="outbound"] .outbound-table-column-head {
   display: grid;
   gap: 4px;
   min-width: 0;
 }
 
-.outbound-table-column-head .ctox-table-sort {
+[data-app="outbound"] .outbound-table-column-head .ctox-table-sort {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   width: 100%;
@@ -667,66 +677,67 @@
   text-transform: uppercase;
 }
 
-.outbound-table-column-head .ctox-table-sort:disabled {
+[data-app="outbound"] .outbound-table-column-head .ctox-table-sort:disabled {
   cursor: default;
 }
 
-.outbound-table-column-head .ctox-table-sort span {
+[data-app="outbound"] .outbound-table-column-head .ctox-table-sort span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.outbound-table-column-head .ctox-table-sort i {
-  color: color-mix(in srgb, var(--muted) 70%, transparent);
+[data-app="outbound"] .outbound-table-column-head .ctox-table-sort i {
+  /* DARK: volle --muted-Stärke (70 % ergab 2,7–3,0). */
+  color: var(--muted);
   font-style: normal;
   font-size: 10px;
   line-height: 1;
 }
 
-.outbound-table-column-head .ctox-input {
+[data-app="outbound"] .outbound-table-column-head .ctox-input {
   height: 22px;
   min-height: 22px;
   padding: 0 6px;
   font-size: 11px;
 }
 
-.outbound-table-filter-placeholder {
+[data-app="outbound"] .outbound-table-filter-placeholder {
   display: block;
   height: 22px;
 }
 
 /* Company cell */
-.company-cell {
+[data-app="outbound"] .company-cell {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.company-name-title {
+[data-app="outbound"] .company-name-title {
   font-weight: 800;
   font-size: 14.5px;
   color: var(--text);
   text-decoration: none;
 }
 
-.company-name-title:hover {
+[data-app="outbound"] .company-name-title:hover {
   text-decoration: underline;
 }
 
-.company-domain-link {
+[data-app="outbound"] .company-domain-link {
   color: var(--accent);
   font-weight: 600;
   text-decoration: none;
   font-size: 12.5px;
 }
 
-.company-domain-link:hover {
+[data-app="outbound"] .company-domain-link:hover {
   text-decoration: underline;
 }
 
-.company-exclude-badge {
+[data-app="outbound"] .company-exclude-badge {
   font-size: 10.5px;
   font-weight: 800;
   background: color-mix(in srgb, var(--warning) 15%, transparent);
@@ -738,7 +749,7 @@
 }
 
 /* Cell building blocks */
-.outbound-cell-meta {
+[data-app="outbound"] .outbound-cell-meta {
   margin-top: 4px;
   display: flex;
   flex-direction: column;
@@ -747,32 +758,39 @@
   color: var(--muted);
 }
 
-.outbound-cell-actions {
+[data-app="outbound"] .outbound-cell-actions {
   margin-top: 8px;
   display: flex;
+  align-items: center;
   gap: 4px;
   flex-wrap: wrap;
 }
 
-.outbound-cell-action {
+/* OUTRES: „…“-Knopf je Firmenzeile (eine Hauptaktion + Menü), Größe wie die Kampagnen-Symbole. */
+[data-app="outbound"] .outbound-cell-actions .outbound-more-button {
+  width: 26px;
+  height: 26px;
+}
+
+[data-app="outbound"] .outbound-cell-action {
   width: 100%;
 }
 
-.outbound-cell-generate {
+[data-app="outbound"] .outbound-cell-generate {
   margin-top: 8px;
 }
 
-.outbound-cell-empty {
+[data-app="outbound"] .outbound-cell-empty {
   color: var(--muted);
   opacity: 0.5;
 }
 
-.outbound-loading-hint {
+[data-app="outbound"] .outbound-loading-hint {
   margin-top: 2px;
   font-size: 11px;
 }
 
-.name-picker {
+[data-app="outbound"] .name-picker {
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -780,14 +798,14 @@
   min-width: 120px;
 }
 
-.person-picker-row {
+[data-app="outbound"] .person-picker-row {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   width: 100%;
 }
 
-.person-name-btn {
+[data-app="outbound"] .person-name-btn {
   all: unset;
   flex: 1;
   display: inline-block;
@@ -805,40 +823,40 @@
   box-sizing: border-box;
 }
 
-.person-name-btn:hover {
+[data-app="outbound"] .person-name-btn:hover {
   background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
   border-color: color-mix(in srgb, var(--accent) 30%, transparent);
 }
 
-.person-name-btn[aria-current="true"] {
+[data-app="outbound"] .person-name-btn[aria-current="true"] {
   background: color-mix(in srgb, var(--accent) 15%, var(--surface-2));
   border-color: color-mix(in srgb, var(--accent) 34%, transparent);
   color: var(--text) !important;
 }
 
-.contact-stack {
+[data-app="outbound"] .contact-stack {
   display: flex;
   flex-direction: column;
   gap: 4px;
   font-size: 12.5px;
 }
 
-.contact-stack a {
+[data-app="outbound"] .contact-stack a {
   color: var(--accent);
   text-decoration: none;
   word-break: break-all;
   font-weight: 600;
 }
 
-.contact-stack a:hover {
+[data-app="outbound"] .contact-stack a:hover {
   text-decoration: underline;
 }
 
-.contact-stack span {
+[data-app="outbound"] .contact-stack span {
   color: var(--muted);
 }
 
-.chip-row {
+[data-app="outbound"] .chip-row {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
@@ -846,13 +864,13 @@
 
 /* In-cell message / note tab stacks (vertical, not the kit's horizontal
    segmented tabs). */
-.msg-tabs, .note-tabs {
+[data-app="outbound"] .msg-tabs, [data-app="outbound"] .note-tabs {
   display: flex;
   flex-direction: column;
   gap: 5px;
 }
 
-.msg-tab, .note-tab {
+[data-app="outbound"] .msg-tab, [data-app="outbound"] .note-tab {
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--control-radius);
@@ -868,17 +886,17 @@
   max-width: 100%;
 }
 
-.msg-tab:hover, .note-tab:hover {
+[data-app="outbound"] .msg-tab:hover, [data-app="outbound"] .note-tab:hover {
   background: color-mix(in srgb, var(--text) 6%, var(--surface-2));
 }
 
-.msg-tab[aria-selected="true"], .note-tab[aria-selected="true"] {
+[data-app="outbound"] .msg-tab[aria-selected="true"], [data-app="outbound"] .note-tab[aria-selected="true"] {
   background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
   border-color: color-mix(in srgb, var(--accent) 34%, transparent);
   color: var(--text-strong);
 }
 
-.msg-content, .note-content {
+[data-app="outbound"] .msg-content, [data-app="outbound"] .note-content {
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--control-radius);
@@ -889,11 +907,11 @@
   cursor: pointer;
 }
 
-.msg-content:hover, .note-content:hover {
+[data-app="outbound"] .msg-content:hover, [data-app="outbound"] .note-content:hover {
   border-color: color-mix(in srgb, var(--line) 50%, var(--accent));
 }
 
-.msg-text, .note-text {
+[data-app="outbound"] .msg-text, [data-app="outbound"] .note-text {
   margin: 0;
   white-space: pre-wrap;
   word-wrap: break-word;
@@ -902,20 +920,20 @@
   color: var(--text);
 }
 
-.note-tab-wrap {
+[data-app="outbound"] .note-tab-wrap {
   display: flex;
   align-items: center;
   gap: 3px;
   width: 100%;
 }
 
-.note-tab-wrap .note-tab {
+[data-app="outbound"] .note-tab-wrap .note-tab {
   flex: 1;
   min-width: 0;
 }
 
 /* Dynamic inline editor inside cells */
-.inline-editor {
+[data-app="outbound"] .inline-editor {
   width: 100%;
   box-sizing: border-box;
   font-family: inherit;
@@ -928,29 +946,29 @@
   padding: 5px 8px;
 }
 
-.inline-editor:focus {
+[data-app="outbound"] .inline-editor:focus {
   outline: 2px solid color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 /* Inline research status dot inside primary cells */
-.outbound-inline-status {
+[data-app="outbound"] .outbound-inline-status {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   color: var(--muted);
 }
 
-.outbound-inline-status.is-running {
+[data-app="outbound"] .outbound-inline-status.is-running {
   color: var(--accent);
 }
 
-.outbound-inline-status.warn {
+[data-app="outbound"] .outbound-inline-status.warn {
   color: var(--warning);
 }
 
 /* Hover-peeking micro-animations */
-.crm-table tbody tr.is-peeking-msg .msg-content,
-.crm-table tbody tr.is-peeking-note .note-content {
+[data-app="outbound"] .crm-table tbody tr.is-peeking-msg .msg-content,
+[data-app="outbound"] .crm-table tbody tr.is-peeking-note .note-content {
   border-color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, var(--surface-2));
   transform: scale(1.01);
@@ -958,19 +976,19 @@
 }
 
 /* Compact view column hiding (JS toggles [data-view="compact"]). */
-.outbound-unified-workbench[data-view="compact"] th.col-role,
-.outbound-unified-workbench[data-view="compact"] td.col-role,
-.outbound-unified-workbench[data-view="compact"] th.col-dept,
-.outbound-unified-workbench[data-view="compact"] td.col-dept,
-.outbound-unified-workbench[data-view="compact"] th.col-tags,
-.outbound-unified-workbench[data-view="compact"] td.col-tags,
-.outbound-unified-workbench[data-view="compact"] th.col-loc,
-.outbound-unified-workbench[data-view="compact"] td.col-loc {
+[data-app="outbound"] .outbound-unified-workbench[data-view="compact"] th.col-role,
+[data-app="outbound"] .outbound-unified-workbench[data-view="compact"] td.col-role,
+[data-app="outbound"] .outbound-unified-workbench[data-view="compact"] th.col-dept,
+[data-app="outbound"] .outbound-unified-workbench[data-view="compact"] td.col-dept,
+[data-app="outbound"] .outbound-unified-workbench[data-view="compact"] th.col-tags,
+[data-app="outbound"] .outbound-unified-workbench[data-view="compact"] td.col-tags,
+[data-app="outbound"] .outbound-unified-workbench[data-view="compact"] th.col-loc,
+[data-app="outbound"] .outbound-unified-workbench[data-view="compact"] td.col-loc {
   display: none !important;
 }
 
 /* Outreach generation loading row */
-.outbound-message-loading {
+[data-app="outbound"] .outbound-message-loading {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -984,7 +1002,7 @@
   animation: outbound-pulse 2s infinite ease-in-out;
 }
 
-.outbound-spinner {
+[data-app="outbound"] .outbound-spinner {
   width: 16px;
   height: 16px;
   border: 2px solid color-mix(in srgb, var(--accent) 20%, transparent);
@@ -994,7 +1012,7 @@
   flex-shrink: 0;
 }
 
-.outbound-spinner--lg {
+[data-app="outbound"] .outbound-spinner--lg {
   width: 32px;
   height: 32px;
   border-width: 3px;
@@ -1010,7 +1028,7 @@
   100% { border-color: color-mix(in srgb, var(--accent) 20%, transparent); }
 }
 
-.outbound-mailserver-loading {
+[data-app="outbound"] .outbound-mailserver-loading {
   padding: 40px;
   display: flex;
   flex-direction: column;
@@ -1024,25 +1042,25 @@
    Detail pane (right side of the inner split) — kit pane + field labels;
    only block rhythm is custom.
    -------------------------------------------------------------------------- */
-.outbound-detail {
+[data-app="outbound"] .outbound-detail {
   padding: 10px;
 }
 
-.outbound-detail-block {
+[data-app="outbound"] .outbound-detail-block {
   padding: 10px 0;
   border-bottom: 1px solid color-mix(in srgb, var(--line) 76%, transparent);
 }
 
-.outbound-detail-block:last-child {
+[data-app="outbound"] .outbound-detail-block:last-child {
   border-bottom: 0;
 }
 
-.outbound-detail [data-context-record-type="outbound_research_run"].is-selected {
+[data-app="outbound"] .outbound-detail [data-context-record-type="outbound_research_run"].is-selected {
   border-left: 1px solid var(--shell-v2-local-accent, currentColor);
   padding-left: 10px;
 }
 
-.outbound-evidence {
+[data-app="outbound"] .outbound-evidence {
   margin: 8px 0 0;
   padding-left: 17px;
   color: var(--muted);
@@ -1055,8 +1073,8 @@
    their own shell. Header typography is the kit kicker/title, footer buttons
    and fields are kit classes.
    -------------------------------------------------------------------------- */
-.outbound-automation-drawer,
-.outbound-research-drawer {
+[data-app="outbound"] .outbound-automation-drawer,
+[data-app="outbound"] .outbound-research-drawer {
   position: absolute;
   inset: 0;
   z-index: 80;
@@ -1065,16 +1083,16 @@
   pointer-events: none;
 }
 
-.outbound-automation-backdrop,
-.outbound-research-backdrop {
+[data-app="outbound"] .outbound-automation-backdrop,
+[data-app="outbound"] .outbound-research-backdrop {
   position: absolute;
   inset: 0;
   background: color-mix(in srgb, var(--bg) 48%, transparent);
   pointer-events: auto;
 }
 
-.outbound-automation-panel,
-.outbound-research-panel {
+[data-app="outbound"] .outbound-automation-panel,
+[data-app="outbound"] .outbound-research-panel {
   position: relative;
   width: 100%;
   max-height: min(76vh, 680px);
@@ -1085,14 +1103,14 @@
   pointer-events: auto;
 }
 
-.outbound-automation-panel {
+[data-app="outbound"] .outbound-automation-panel {
   max-height: min(54vh, 420px);
 }
 
-.outbound-automation-header,
-.outbound-automation-footer,
-.outbound-research-header,
-.outbound-research-footer {
+[data-app="outbound"] .outbound-automation-header,
+[data-app="outbound"] .outbound-automation-footer,
+[data-app="outbound"] .outbound-research-header,
+[data-app="outbound"] .outbound-research-footer {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1100,39 +1118,39 @@
   padding: 12px 14px;
 }
 
-.outbound-automation-header,
-.outbound-research-header {
+[data-app="outbound"] .outbound-automation-header,
+[data-app="outbound"] .outbound-research-header {
   border-bottom: 1px solid var(--line);
 }
 
-.outbound-automation-header p {
+[data-app="outbound"] .outbound-automation-header p {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.3;
 }
 
-.outbound-automation-body,
-.outbound-research-body {
+[data-app="outbound"] .outbound-automation-body,
+[data-app="outbound"] .outbound-research-body {
   min-height: 0;
   overflow: auto;
   padding: 12px 14px;
 }
 
-.outbound-automation-body {
+[data-app="outbound"] .outbound-automation-body {
   display: grid;
   gap: 12px;
 }
 
 /* custom: automation stat tiles (scope summary before starting a run). */
-.outbound-automation-body dl {
+[data-app="outbound"] .outbound-automation-body dl {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
   margin: 0;
 }
 
-.outbound-automation-body dl > div {
+[data-app="outbound"] .outbound-automation-body dl > div {
   min-width: 0;
   padding: 8px;
   border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
@@ -1140,7 +1158,7 @@
   background: color-mix(in srgb, var(--surface-2) 58%, transparent);
 }
 
-.outbound-automation-body dt {
+[data-app="outbound"] .outbound-automation-body dt {
   color: var(--muted);
   font-size: 10px;
   font-weight: 820;
@@ -1148,7 +1166,7 @@
   text-transform: uppercase;
 }
 
-.outbound-automation-body dd {
+[data-app="outbound"] .outbound-automation-body dd {
   margin: 3px 0 0;
   overflow: hidden;
   color: var(--text);
@@ -1159,17 +1177,17 @@
   white-space: nowrap;
 }
 
-.outbound-automation-body > .ctox-compact-field {
+[data-app="outbound"] .outbound-automation-body > .ctox-compact-field {
   max-width: 260px;
 }
 
-.outbound-automation-footer,
-.outbound-research-footer {
+[data-app="outbound"] .outbound-automation-footer,
+[data-app="outbound"] .outbound-research-footer {
   border-top: 1px solid var(--line);
 }
 
 /* custom: strip holding the kit segmented drawer tabs. */
-.outbound-drawer-tabs {
+[data-app="outbound"] .outbound-drawer-tabs {
   display: flex;
   padding: 10px 14px;
   border-bottom: 1px solid var(--line);
@@ -1177,26 +1195,26 @@
 }
 
 /* Research settings — tab bodies */
-.outbound-research-toolbar {
+[data-app="outbound"] .outbound-research-toolbar {
   display: flex;
   gap: 6px;
   margin-bottom: 10px;
 }
 
-.outbound-prompts-settings-form {
+[data-app="outbound"] .outbound-prompts-settings-form {
   display: flex;
   flex-direction: column;
   gap: 16px;
   padding: 4px 0;
 }
 
-.outbound-settings-section {
+[data-app="outbound"] .outbound-settings-section {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
 
-.outbound-settings-section h4 {
+[data-app="outbound"] .outbound-settings-section h4 {
   margin: 0;
   font-size: 12px;
   text-transform: uppercase;
@@ -1205,16 +1223,16 @@
   font-weight: 700;
 }
 
-.outbound-settings-section--divided {
+[data-app="outbound"] .outbound-settings-section--divided {
   border-top: 1px solid var(--line);
   padding-top: 24px;
 }
 
-.outbound-settings-desc {
+[data-app="outbound"] .outbound-settings-desc {
   margin: 0 0 8px;
 }
 
-.outbound-prompt-variables-grid {
+[data-app="outbound"] .outbound-prompt-variables-grid {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -1222,30 +1240,30 @@
 
 /* custom: label+control stack used by prompt/skillbook/approval forms;
    label text and controls themselves are kit classes. */
-.outbound-field-wrap {
+[data-app="outbound"] .outbound-field-wrap {
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
 
-.outbound-field-wrap .code-font {
+[data-app="outbound"] .outbound-field-wrap .code-font {
   font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.4;
 }
 
-.outbound-prompt-details {
+[data-app="outbound"] .outbound-prompt-details {
   border: 1px solid var(--line);
   border-radius: var(--control-radius);
   background: color-mix(in srgb, var(--surface-2) 20%, transparent);
   overflow: hidden;
 }
 
-.outbound-prompt-details[open] {
+[data-app="outbound"] .outbound-prompt-details[open] {
   background: color-mix(in srgb, var(--surface-2) 40%, transparent);
 }
 
-.outbound-prompt-details summary {
+[data-app="outbound"] .outbound-prompt-details summary {
   padding: 10px 12px;
   font-size: 12px;
   font-weight: 600;
@@ -1255,11 +1273,11 @@
   outline: none;
 }
 
-.outbound-prompt-details summary:hover {
+[data-app="outbound"] .outbound-prompt-details summary:hover {
   color: var(--text);
 }
 
-.outbound-details-content {
+[data-app="outbound"] .outbound-details-content {
   padding: 12px;
   border-top: 1px solid var(--line);
   display: flex;
@@ -1267,18 +1285,18 @@
   gap: 12px;
 }
 
-.outbound-research-notes {
+[data-app="outbound"] .outbound-research-notes {
   margin-top: 12px;
 }
 
 /* custom: column-settings editor — dual checkbox + label + prompt rows. */
-.outbound-column-settings-grid {
+[data-app="outbound"] .outbound-column-settings-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
 
-.outbound-column-settings {
+[data-app="outbound"] .outbound-column-settings {
   display: grid;
   gap: 8px;
   min-width: 0;
@@ -1288,14 +1306,14 @@
   background: color-mix(in srgb, var(--surface-2) 42%, transparent);
 }
 
-.outbound-custom-research-head {
+[data-app="outbound"] .outbound-custom-research-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.outbound-custom-research-head strong {
+[data-app="outbound"] .outbound-custom-research-head strong {
   display: block;
   margin-top: 2px;
   color: var(--text);
@@ -1303,7 +1321,7 @@
   line-height: 1.15;
 }
 
-.outbound-column-settings-labels {
+[data-app="outbound"] .outbound-column-settings-labels {
   display: grid;
   grid-template-columns: 24px minmax(126px, 0.72fr) minmax(160px, 1.28fr) 26px;
   gap: 6px;
@@ -1315,7 +1333,7 @@
   text-transform: uppercase;
 }
 
-.outbound-column-settings-views {
+[data-app="outbound"] .outbound-column-settings-views {
   display: flex;
   gap: 8px;
   align-items: center;
@@ -1326,13 +1344,13 @@
   letter-spacing: 0.5px;
 }
 
-.outbound-column-settings-list {
+[data-app="outbound"] .outbound-column-settings-list {
   display: grid;
   gap: 6px;
   min-width: 0;
 }
 
-.outbound-column-setting-row {
+[data-app="outbound"] .outbound-column-setting-row {
   display: grid;
   grid-template-columns: 24px minmax(126px, 0.72fr) minmax(160px, 1.28fr) 26px;
   gap: 6px;
@@ -1344,19 +1362,19 @@
   background: var(--surface);
 }
 
-.outbound-column-setting-row .ctox-input {
+[data-app="outbound"] .outbound-column-setting-row .ctox-input {
   min-height: 28px;
   height: 28px;
   font-size: 11px;
 }
 
-.outbound-column-setting-toggle {
+[data-app="outbound"] .outbound-column-setting-toggle {
   display: inline-flex;
   place-items: center;
   margin: 0;
 }
 
-.outbound-column-setting-toggle input {
+[data-app="outbound"] .outbound-column-setting-toggle input {
   width: 15px;
   height: 15px;
   margin: 0;
@@ -1364,30 +1382,30 @@
   accent-color: var(--accent);
 }
 
-.outbound-custom-field-form {
+[data-app="outbound"] .outbound-custom-field-form {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
 }
 
 /* custom: research sources editor rows (URL/secret fields are kit inputs). */
-.outbound-research-sources-settings {
+[data-app="outbound"] .outbound-research-sources-settings {
   display: grid;
   gap: 12px;
 }
 
-.outbound-source-policy-summary {
+[data-app="outbound"] .outbound-source-policy-summary {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.outbound-research-source-list {
+[data-app="outbound"] .outbound-research-source-list {
   display: grid;
   gap: 8px;
 }
 
-.outbound-research-source-row {
+[data-app="outbound"] .outbound-research-source-row {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto minmax(140px, 0.3fr) auto auto;
   gap: 10px;
@@ -1399,27 +1417,27 @@
   background: var(--surface);
 }
 
-.outbound-source-enabled {
+[data-app="outbound"] .outbound-source-enabled {
   display: grid;
   place-items: center;
   padding-top: 4px;
 }
 
-.outbound-source-enabled input {
+[data-app="outbound"] .outbound-source-enabled input {
   width: 15px;
   height: 15px;
   margin: 0;
   accent-color: var(--accent);
 }
 
-.outbound-research-source-main {
+[data-app="outbound"] .outbound-research-source-main {
   display: grid;
   gap: 6px;
   min-width: 0;
 }
 
-.outbound-research-source-title strong,
-.outbound-research-source-title span {
+[data-app="outbound"] .outbound-research-source-title strong,
+[data-app="outbound"] .outbound-research-source-title span {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -1427,30 +1445,30 @@
   white-space: nowrap;
 }
 
-.outbound-research-source-title strong {
+[data-app="outbound"] .outbound-research-source-title strong {
   color: var(--text);
   font-size: 12.5px;
 }
 
-.outbound-research-source-title span,
-.outbound-research-source-meta {
+[data-app="outbound"] .outbound-research-source-title span,
+[data-app="outbound"] .outbound-research-source-meta {
   color: var(--muted);
   font-size: 11px;
 }
 
-.outbound-research-source-meta {
+[data-app="outbound"] .outbound-research-source-meta {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.outbound-source-field {
+[data-app="outbound"] .outbound-source-field {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
-.outbound-source-credential-toggle {
+[data-app="outbound"] .outbound-source-credential-toggle {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1460,28 +1478,28 @@
   white-space: nowrap;
 }
 
-.outbound-source-credential-toggle input {
+[data-app="outbound"] .outbound-source-credential-toggle input {
   accent-color: var(--accent);
 }
 
-.outbound-research-source-actions {
+[data-app="outbound"] .outbound-research-source-actions {
   display: flex;
   gap: 4px;
   flex-wrap: wrap;
 }
 
-.outbound-research-source-add {
+[data-app="outbound"] .outbound-research-source-add {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 0.6fr) auto;
   gap: 8px;
 }
 
 @container business-app-window (max-width: 1024px) {
-  .outbound-column-settings-grid {
+  [data-app="outbound"] .outbound-column-settings-grid {
     grid-template-columns: 1fr;
   }
 
-  .outbound-research-source-row {
+  [data-app="outbound"] .outbound-research-source-row {
     grid-template-columns: auto minmax(0, 1fr) auto;
   }
 }
@@ -1489,20 +1507,20 @@
 /* ----------------------------------------------------------------------------
    custom: mailserver domains & DNS record cards.
    -------------------------------------------------------------------------- */
-.outbound-mailserver-settings,
-.outbound-mailserver-add-user-form {
+[data-app="outbound"] .outbound-mailserver-settings,
+[data-app="outbound"] .outbound-mailserver-add-user-form {
   display: flex;
   flex-direction: column;
   gap: 16px;
 }
 
-.outbound-mailserver-error {
+[data-app="outbound"] .outbound-mailserver-error {
   margin-bottom: 16px;
 }
 
-.outbound-mailserver-domain-card,
-.outbound-mailserver-add-domain-form,
-.outbound-mailserver-add-user-form {
+[data-app="outbound"] .outbound-mailserver-domain-card,
+[data-app="outbound"] .outbound-mailserver-add-domain-form,
+[data-app="outbound"] .outbound-mailserver-add-user-form {
   background: color-mix(in srgb, var(--text) 2%, transparent);
   border: 1px solid var(--line);
   border-radius: var(--panel-radius);
@@ -1510,32 +1528,32 @@
   margin-bottom: 12px;
 }
 
-.outbound-mailserver-domain-head,
-.outbound-dns-record-head {
+[data-app="outbound"] .outbound-mailserver-domain-head,
+[data-app="outbound"] .outbound-dns-record-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
 }
 
-.outbound-mailserver-domain-head {
+[data-app="outbound"] .outbound-mailserver-domain-head {
   margin-bottom: 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--text) 5%, transparent);
   padding-bottom: 8px;
 }
 
-.outbound-mailserver-domain-title {
+[data-app="outbound"] .outbound-mailserver-domain-title {
   margin: 0;
   font-size: 14px;
   color: var(--text);
   font-weight: 700;
 }
 
-.outbound-dns-guide {
+[data-app="outbound"] .outbound-dns-guide {
   cursor: pointer;
 }
 
-.outbound-dns-guide summary {
+[data-app="outbound"] .outbound-dns-guide summary {
   font-size: 13px;
   color: var(--accent);
   font-weight: 600;
@@ -1543,35 +1561,35 @@
   margin-bottom: 8px;
 }
 
-.outbound-dns-records {
+[data-app="outbound"] .outbound-dns-records {
   padding-top: 10px;
   display: grid;
   gap: 10px;
 }
 
-.outbound-dns-record-card {
+[data-app="outbound"] .outbound-dns-record-card {
   background: var(--surface-2);
   border: 1px solid var(--line);
   border-radius: var(--control-radius);
   padding: 10px;
 }
 
-.outbound-dns-record-head {
+[data-app="outbound"] .outbound-dns-record-head {
   margin-bottom: 4px;
 }
 
-.outbound-dns-record-head strong {
+[data-app="outbound"] .outbound-dns-record-head strong {
   font-size: 11px;
   color: var(--muted);
 }
 
-.outbound-dns-record-host {
+[data-app="outbound"] .outbound-dns-record-host {
   font-size: 10px;
   color: var(--muted);
   font-family: var(--font-mono);
 }
 
-.outbound-dns-record-code {
+[data-app="outbound"] .outbound-dns-record-code {
   display: block;
   word-break: break-all;
   font-size: 11px;
@@ -1585,33 +1603,33 @@
   margin-bottom: 6px;
 }
 
-.outbound-mailserver-form-row {
+[data-app="outbound"] .outbound-mailserver-form-row {
   display: flex;
   gap: 8px;
 }
 
-.outbound-mailserver-form-row.is-grid {
+[data-app="outbound"] .outbound-mailserver-form-row.is-grid {
   display: grid;
   grid-template-columns: 1.2fr 1fr;
 }
 
-.outbound-mailserver-form-row .ctox-input:first-child {
+[data-app="outbound"] .outbound-mailserver-form-row .ctox-input:first-child {
   flex: 1;
 }
 
-.outbound-mailserver-form-actions {
+[data-app="outbound"] .outbound-mailserver-form-actions {
   display: flex;
   justify-content: flex-end;
 }
 
-.outbound-mailserver-users-wrap {
+[data-app="outbound"] .outbound-mailserver-users-wrap {
   margin-top: 8px;
 }
 
 /* ----------------------------------------------------------------------------
    custom: hidden-companies popover (fixed overlay panel).
    -------------------------------------------------------------------------- */
-.hidden-company-panel {
+[data-app="outbound"] .hidden-company-panel {
   position: fixed;
   z-index: 9999;
   right: 20px;
@@ -1631,7 +1649,7 @@
   gap: 12px;
 }
 
-.hidden-company-header {
+[data-app="outbound"] .hidden-company-header {
   font-size: 14px;
   font-weight: 800;
   display: flex;
@@ -1641,7 +1659,7 @@
   padding-bottom: 8px;
 }
 
-.hidden-company-list {
+[data-app="outbound"] .hidden-company-list {
   border: 1px solid var(--line);
   border-radius: var(--control-radius);
   background: var(--surface-2);
@@ -1653,7 +1671,7 @@
   gap: 8px;
 }
 
-.hidden-company-row {
+[data-app="outbound"] .hidden-company-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1664,11 +1682,11 @@
   border-bottom: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
 }
 
-.hidden-company-row:last-child {
+[data-app="outbound"] .hidden-company-row:last-child {
   border-bottom: none;
 }
 
-.hidden-company-name {
+[data-app="outbound"] .hidden-company-name {
   font-size: 11px;
   font-weight: 700;
   color: var(--text);
@@ -1676,7 +1694,7 @@
   flex: 1;
 }
 
-.hidden-company-actions {
+[data-app="outbound"] .hidden-company-actions {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
@@ -1685,7 +1703,7 @@
 /* ----------------------------------------------------------------------------
    custom: status/tag multi-select overlay anchored to a CRM grid cell.
    -------------------------------------------------------------------------- */
-.multi-editor-overlay {
+[data-app="outbound"] .multi-editor-overlay {
   position: fixed;
   z-index: 10000;
   background: var(--surface-2);
@@ -1701,14 +1719,14 @@
   gap: 8px;
 }
 
-.multi-editor-title {
+[data-app="outbound"] .multi-editor-title {
   font-weight: 800;
   font-size: 11px;
   color: var(--text);
   text-transform: uppercase;
 }
 
-.multi-editor-list {
+[data-app="outbound"] .multi-editor-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -1720,7 +1738,7 @@
   background: var(--surface);
 }
 
-.multi-editor-list label {
+[data-app="outbound"] .multi-editor-list label {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1730,18 +1748,18 @@
   user-select: none;
 }
 
-.multi-editor-list input {
+[data-app="outbound"] .multi-editor-list input {
   cursor: pointer;
   accent-color: var(--accent);
 }
 
-.multi-editor-addrow {
+[data-app="outbound"] .multi-editor-addrow {
   display: flex;
   gap: 4px;
   align-items: center;
 }
 
-.multi-editor-addrow .ctox-input {
+[data-app="outbound"] .multi-editor-addrow .ctox-input {
   flex: 1;
   min-width: 0;
   min-height: 26px;
@@ -1749,7 +1767,7 @@
   font-size: 11px;
 }
 
-.multi-editor-actions {
+[data-app="outbound"] .multi-editor-actions {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
@@ -1760,7 +1778,7 @@
    colors are custom; tabs, tables, badges, buttons, fields, cards and the
    sender modal are kit classes.
    -------------------------------------------------------------------------- */
-.outbound-outreach {
+[data-app="outbound"] .outbound-outreach {
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -1769,34 +1787,34 @@
   overflow-y: auto;
 }
 
-.outbound-outreach-head {
+[data-app="outbound"] .outbound-outreach-head {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
 }
 
-.outbound-outreach-head p {
+[data-app="outbound"] .outbound-outreach-head p {
   margin: 4px 0 0;
   color: var(--muted);
   font-size: 12px;
 }
 
-.outbound-outreach-head-actions {
+[data-app="outbound"] .outbound-outreach-head-actions {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
 }
 
 /* custom: error banner layout inside the kit danger callout. */
-.outbound-outreach-error {
+[data-app="outbound"] .outbound-outreach-error {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
 }
 
-.outbound-outreach-error button {
+[data-app="outbound"] .outbound-outreach-error button {
   background: transparent;
   border: none;
   color: inherit;
@@ -1805,12 +1823,15 @@
 }
 
 /* Outreach view tabs: kit segmented tabs, allowed to wrap; count pill stays. */
-.outbound-outreach-tabs {
+[data-app="outbound"] .outbound-outreach-tabs {
   display: flex;
   flex-wrap: wrap;
+  /* Rundgang RUND2: die Kit-Reiter tragen min-width: max-content (shared/base.css) – ohne Rücknahme bricht die
+     Leiste nie um und schob „Skills & Vorlagen“ rechts aus dem Fenster (seitlicher Scroll 967 > 906 px bei 1280). */
+  min-width: 0;
 }
 
-.outbound-outreach-tab em {
+[data-app="outbound"] .outbound-outreach-tab em {
   background: color-mix(in srgb, var(--line) 80%, transparent);
   color: var(--text);
   border-radius: 999px;
@@ -1819,7 +1840,7 @@
   font-style: normal;
 }
 
-.outbound-outreach-actions-cell {
+[data-app="outbound"] .outbound-outreach-actions-cell {
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
@@ -1827,28 +1848,28 @@
 }
 
 /* custom: engagement split view (list + detail). */
-.outbound-outreach-split {
+[data-app="outbound"] .outbound-outreach-split {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);
   gap: 16px;
   min-height: 0;
 }
 
-.outbound-outreach-list {
+[data-app="outbound"] .outbound-outreach-list {
   list-style: none;
   padding: 0;
   margin: 0;
 }
 
 /* custom: list item content rhythm on top of the kit list item. */
-.outbound-outreach-list-item {
+[data-app="outbound"] .outbound-outreach-list-item {
   display: flex;
   flex-direction: column;
   gap: 4px;
   align-items: flex-start;
 }
 
-.outbound-outreach-list-item em {
+[data-app="outbound"] .outbound-outreach-list-item em {
   color: var(--muted);
   font-size: 11px;
   font-style: normal;
@@ -1859,24 +1880,24 @@
 }
 
 /* Engagement status colors on top of the kit badge. */
-.ctox-badge.outbound-outreach-status-reply_received,
-.ctox-badge.outbound-outreach-status-meeting_booked {
+[data-app="outbound"] .ctox-badge.outbound-outreach-status-reply_received,
+[data-app="outbound"] .ctox-badge.outbound-outreach-status-meeting_booked {
   background: var(--success-soft);
   color: var(--success);
 }
 
-.ctox-badge.outbound-outreach-status-paused {
+[data-app="outbound"] .ctox-badge.outbound-outreach-status-paused {
   background: var(--warning-soft);
   color: var(--warning);
 }
 
-.ctox-badge.outbound-outreach-status-awaiting_approval {
+[data-app="outbound"] .ctox-badge.outbound-outreach-status-awaiting_approval {
   background: color-mix(in srgb, var(--outbound-info) 14%, var(--surface));
   color: var(--outbound-info-ink);
 }
 
 /* custom: engagement detail panel. */
-.outbound-outreach-detail {
+[data-app="outbound"] .outbound-outreach-detail {
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -1886,18 +1907,18 @@
   min-width: 0;
 }
 
-.outbound-outreach-detail-head {
+[data-app="outbound"] .outbound-outreach-detail-head {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
 }
 
-.outbound-outreach-detail-head small {
+[data-app="outbound"] .outbound-outreach-detail-head small {
   color: var(--muted);
 }
 
-.outbound-outreach-detail-meta {
+[data-app="outbound"] .outbound-outreach-detail-meta {
   display: flex;
   flex-direction: column;
   align-items: flex-end;
@@ -1906,27 +1927,23 @@
   color: var(--muted);
 }
 
-.outbound-outreach-conv-link {
+[data-app="outbound"] .outbound-outreach-conv-link {
   color: var(--accent);
 }
 
-.outbound-outreach-detail-next p {
+[data-app="outbound"] .outbound-outreach-detail-next p {
   margin: 0 0 8px;
   color: var(--text);
 }
 
-.outbound-outreach-detail-actions {
+[data-app="outbound"] .outbound-outreach-detail-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
 }
 
-.outbound-outreach-sequence-warning {
-  margin-bottom: 4px;
-}
-
 /* custom: busy indicator while an approval action runs. */
-.outbound-outreach-busy {
+[data-app="outbound"] .outbound-outreach-busy {
   margin: 0 12px 12px;
   padding: 8px;
   background: color-mix(in srgb, var(--outbound-info) 10%, transparent);
@@ -1937,29 +1954,29 @@
 }
 
 /* Channel + reply classification colors on top of the kit badge. */
-.ctox-badge.outbound-outreach-channel-email { background: color-mix(in srgb, var(--outbound-info) 20%, transparent); color: var(--outbound-info-ink); }
-.ctox-badge.outbound-outreach-channel-physical_letter { background: var(--warning-soft); color: var(--warning); }
-.ctox-badge.outbound-outreach-reply-positive { background: var(--success-soft); color: var(--success); }
-.ctox-badge.outbound-outreach-reply-negative { background: var(--danger-soft); color: var(--danger); }
-.ctox-badge.outbound-outreach-reply-objection { background: var(--warning-soft); color: var(--warning); }
-.ctox-badge.outbound-outreach-reply-out_of_office { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--text); }
-.ctox-badge.outbound-outreach-reply-referral { background: color-mix(in srgb, var(--outbound-purple) 20%, transparent); color: var(--outbound-purple-ink); }
-.ctox-badge.outbound-outreach-reply-unsubscribe { background: var(--danger-soft); color: var(--danger); }
-.ctox-badge.outbound-outreach-reply-unclear { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--text); }
+[data-app="outbound"] .ctox-badge.outbound-outreach-channel-email { background: color-mix(in srgb, var(--outbound-info) 20%, transparent); color: var(--outbound-info-ink); }
+[data-app="outbound"] .ctox-badge.outbound-outreach-channel-physical_letter { background: var(--warning-soft); color: var(--warning); }
+[data-app="outbound"] .ctox-badge.outbound-outreach-reply-positive { background: var(--success-soft); color: var(--success); }
+[data-app="outbound"] .ctox-badge.outbound-outreach-reply-negative { background: var(--danger-soft); color: var(--danger); }
+[data-app="outbound"] .ctox-badge.outbound-outreach-reply-objection { background: var(--warning-soft); color: var(--warning); }
+[data-app="outbound"] .ctox-badge.outbound-outreach-reply-out_of_office { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--text); }
+[data-app="outbound"] .ctox-badge.outbound-outreach-reply-referral { background: color-mix(in srgb, var(--outbound-purple) 20%, transparent); color: var(--outbound-purple-ink); }
+[data-app="outbound"] .ctox-badge.outbound-outreach-reply-unsubscribe { background: var(--danger-soft); color: var(--danger); }
+[data-app="outbound"] .ctox-badge.outbound-outreach-reply-unclear { background: color-mix(in srgb, var(--muted) 20%, transparent); color: var(--text); }
 
-.outbound-outreach-mailbox {
+[data-app="outbound"] .outbound-outreach-mailbox {
   display: inline-block;
   margin-left: 8px;
   font-size: 11px;
   color: var(--muted);
 }
 
-.outbound-outreach-mailbox.is-missing {
+[data-app="outbound"] .outbound-outreach-mailbox.is-missing {
   color: var(--warning);
 }
 
 /* custom: ready-to-send queue rows. */
-.outbound-outreach-ready {
+[data-app="outbound"] .outbound-outreach-ready {
   list-style: none;
   padding: 0;
   margin: 0;
@@ -1968,7 +1985,7 @@
   gap: 8px;
 }
 
-.outbound-outreach-ready-item {
+[data-app="outbound"] .outbound-outreach-ready-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -1978,24 +1995,24 @@
   background: color-mix(in srgb, var(--line) 15%, transparent);
 }
 
-.outbound-outreach-ready-item small {
+[data-app="outbound"] .outbound-outreach-ready-item small {
   display: block;
   color: var(--muted);
 }
 
-.outbound-outreach-ready-blocked {
+[data-app="outbound"] .outbound-outreach-ready-blocked {
   background: color-mix(in srgb, var(--warning) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--warning) 40%, transparent);
 }
 
-.ctox-badge.outbound-outreach-badge-blocked {
+[data-app="outbound"] .ctox-badge.outbound-outreach-badge-blocked {
   margin-top: 4px;
   background: var(--warning-soft);
   color: var(--warning);
 }
 
 /* custom: reply cards. */
-.outbound-outreach-replies {
+[data-app="outbound"] .outbound-outreach-replies {
   list-style: none;
   padding: 0;
   margin: 0;
@@ -2004,7 +2021,7 @@
   gap: 10px;
 }
 
-.outbound-outreach-reply {
+[data-app="outbound"] .outbound-outreach-reply {
   padding: 12px;
   border-radius: var(--panel-radius);
   background: color-mix(in srgb, var(--line) 10%, transparent);
@@ -2014,23 +2031,23 @@
   gap: 8px;
 }
 
-.outbound-outreach-reply header {
+[data-app="outbound"] .outbound-outreach-reply header {
   display: flex;
   justify-content: space-between;
   gap: 8px;
 }
 
-.outbound-outreach-reply header small {
+[data-app="outbound"] .outbound-outreach-reply header small {
   display: block;
   color: var(--muted);
 }
 
-.outbound-outreach-reply p {
+[data-app="outbound"] .outbound-outreach-reply p {
   margin: 0;
 }
 
 /* custom: engagement timeline with per-event accent borders. */
-.outbound-outreach-timeline {
+[data-app="outbound"] .outbound-outreach-timeline {
   list-style: none;
   padding: 0;
   margin: 0;
@@ -2040,7 +2057,7 @@
   font-size: 12px;
 }
 
-.outbound-outreach-timeline-item {
+[data-app="outbound"] .outbound-outreach-timeline-item {
   padding: 6px 10px;
   border: 1px solid color-mix(in srgb, var(--line) 40%, transparent);
   border-radius: var(--control-radius);
@@ -2049,24 +2066,24 @@
   gap: 2px;
 }
 
-.outbound-outreach-timeline-draft { border-color: color-mix(in srgb, var(--muted) 34%, var(--line)); }
-.outbound-outreach-timeline-awaiting { border-color: color-mix(in srgb, var(--outbound-info) 34%, var(--line)); }
-.outbound-outreach-timeline-approved { border-color: color-mix(in srgb, var(--success) 34%, var(--line)); }
-.outbound-outreach-timeline-queued { border-color: color-mix(in srgb, var(--outbound-purple) 34%, var(--line)); }
-.outbound-outreach-timeline-sent { border-color: color-mix(in srgb, var(--success) 34%, var(--line)); }
-.outbound-outreach-timeline-cancelled { border-color: color-mix(in srgb, var(--danger) 34%, var(--line)); }
-.outbound-outreach-timeline-blocked { border-color: color-mix(in srgb, var(--warning) 34%, var(--line)); }
-.outbound-outreach-timeline-approval { border-color: color-mix(in srgb, var(--outbound-indigo) 34%, var(--line)); }
-.outbound-outreach-timeline-stopped { border-color: color-mix(in srgb, var(--danger) 34%, var(--line)); }
+[data-app="outbound"] .outbound-outreach-timeline-draft { border-color: color-mix(in srgb, var(--muted) 34%, var(--line)); }
+[data-app="outbound"] .outbound-outreach-timeline-awaiting { border-color: color-mix(in srgb, var(--outbound-info) 34%, var(--line)); }
+[data-app="outbound"] .outbound-outreach-timeline-approved { border-color: color-mix(in srgb, var(--success) 34%, var(--line)); }
+[data-app="outbound"] .outbound-outreach-timeline-queued { border-color: color-mix(in srgb, var(--outbound-purple) 34%, var(--line)); }
+[data-app="outbound"] .outbound-outreach-timeline-sent { border-color: color-mix(in srgb, var(--success) 34%, var(--line)); }
+[data-app="outbound"] .outbound-outreach-timeline-cancelled { border-color: color-mix(in srgb, var(--danger) 34%, var(--line)); }
+[data-app="outbound"] .outbound-outreach-timeline-blocked { border-color: color-mix(in srgb, var(--warning) 34%, var(--line)); }
+[data-app="outbound"] .outbound-outreach-timeline-approval { border-color: color-mix(in srgb, var(--outbound-indigo) 34%, var(--line)); }
+[data-app="outbound"] .outbound-outreach-timeline-stopped { border-color: color-mix(in srgb, var(--danger) 34%, var(--line)); }
 
-.outbound-outreach-timeline-reply {
+[data-app="outbound"] .outbound-outreach-timeline-reply {
   border-color: color-mix(in srgb, var(--outbound-purple) 34%, var(--line));
   border-left-color: var(--warning);
   background: color-mix(in srgb, var(--warning) 10%, transparent);
 }
 
 /* custom: reply context note above an approval draft. */
-.outbound-outreach-reply-context {
+[data-app="outbound"] .outbound-outreach-reply-context {
   background: color-mix(in srgb, var(--outbound-indigo) 15%, transparent);
   border: 1px solid color-mix(in srgb, var(--outbound-indigo) 40%, var(--line));
   padding: 6px 10px;
@@ -2080,7 +2097,7 @@
 }
 
 /* custom: proposed meeting slots. */
-.outbound-outreach-slots ul {
+[data-app="outbound"] .outbound-outreach-slots ul {
   list-style: none;
   padding: 0;
   margin: 8px 0;
@@ -2089,19 +2106,19 @@
   gap: 6px;
 }
 
-.outbound-outreach-slots li {
+[data-app="outbound"] .outbound-outreach-slots li {
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 8px;
 }
 
-.outbound-outreach-slots li.is-unavailable span {
+[data-app="outbound"] .outbound-outreach-slots li.is-unavailable span {
   color: var(--muted);
   text-decoration: line-through;
 }
 
-.outbound-outreach-skillbook details summary {
+[data-app="outbound"] .outbound-outreach-skillbook details summary {
   cursor: pointer;
   font-size: 12px;
   color: var(--muted);
@@ -2109,19 +2126,19 @@
 
 /* custom: skillbook / letter template settings stack; the cards themselves
    are kit cards. */
-.outbound-outreach-settings {
+[data-app="outbound"] .outbound-outreach-settings {
   display: grid;
   gap: 12px;
 }
 
-.outbound-outreach-settings > header {
+[data-app="outbound"] .outbound-outreach-settings > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.outbound-outreach-settings > header h4 {
+[data-app="outbound"] .outbound-outreach-settings > header h4 {
   margin: 0;
   font-size: 13px;
 }
@@ -2129,9 +2146,9 @@
 /* custom: skillbook / letter template / approval cards are kit cards, but
    their headers carry record names (not section labels), so they keep normal
    title typography instead of the kit card's uppercase section label. */
-.outbound-outreach-approval > header,
-.outbound-outreach-skillbook-card > header,
-.outbound-outreach-template-card > header {
+[data-app="outbound"] .outbound-outreach-approval > header,
+[data-app="outbound"] .outbound-outreach-skillbook-card > header,
+[data-app="outbound"] .outbound-outreach-template-card > header {
   color: var(--text);
   font-size: 12.5px;
   font-weight: 700;
@@ -2139,23 +2156,23 @@
   text-transform: none;
 }
 
-.outbound-outreach-approval > header small,
-.outbound-outreach-skillbook-card > header small,
-.outbound-outreach-template-card > header small {
+[data-app="outbound"] .outbound-outreach-approval > header small,
+[data-app="outbound"] .outbound-outreach-skillbook-card > header small,
+[data-app="outbound"] .outbound-outreach-template-card > header small {
   display: block;
   color: var(--muted);
   font-size: 11px;
   font-weight: 400;
 }
 
-.outbound-outreach-approval .ctox-card-body,
-.outbound-outreach-skillbook-card .ctox-card-body,
-.outbound-outreach-template-card .ctox-card-body {
+[data-app="outbound"] .outbound-outreach-approval .ctox-card-body,
+[data-app="outbound"] .outbound-outreach-skillbook-card .ctox-card-body,
+[data-app="outbound"] .outbound-outreach-template-card .ctox-card-body {
   display: grid;
   gap: 8px;
 }
 
-.outbound-card-footer {
+[data-app="outbound"] .outbound-card-footer {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
@@ -2163,7 +2180,7 @@
 }
 
 /* custom: sender pick rows inside the kit modal (health state colors). */
-.outbound-outreach-sender-list {
+[data-app="outbound"] .outbound-outreach-sender-list {
   list-style: none;
   padding: 0;
   margin: 0;
@@ -2172,7 +2189,7 @@
   gap: 6px;
 }
 
-.outbound-outreach-sender-pick {
+[data-app="outbound"] .outbound-outreach-sender-pick {
   width: 100%;
   text-align: left;
   padding: 10px 12px;
@@ -2187,38 +2204,38 @@
   font: inherit;
 }
 
-.outbound-outreach-sender-pick:hover {
+[data-app="outbound"] .outbound-outreach-sender-pick:hover {
   background: var(--kit-fill-strong);
 }
 
-.outbound-outreach-sender-pick small {
+[data-app="outbound"] .outbound-outreach-sender-pick small {
   color: var(--muted);
 }
 
-.outbound-outreach-sender-pick.is-blocked,
-.outbound-outreach-sender-pick.is-limit { border-color: var(--danger); color: var(--danger); }
-.outbound-outreach-sender-pick.is-warn { border-color: var(--warning); color: var(--warning); }
-.outbound-outreach-sender-pick.is-ready { border-color: var(--success); }
+[data-app="outbound"] .outbound-outreach-sender-pick.is-blocked,
+[data-app="outbound"] .outbound-outreach-sender-pick.is-limit { border-color: var(--danger); color: var(--danger); }
+[data-app="outbound"] .outbound-outreach-sender-pick.is-warn { border-color: var(--warning); color: var(--warning); }
+[data-app="outbound"] .outbound-outreach-sender-pick.is-ready { border-color: var(--success); }
 
 /* ----------------------------------------------------------------------------
    Narrow window: the kit collapses the frame to one column and hides the
    resizer; the left pane only needs a height cap.
    -------------------------------------------------------------------------- */
 @container business-app-window (max-width: 768px) {
-  .outbound-module {
+  [data-app="outbound"] .outbound-module {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(180px, 42vh) minmax(360px, 1fr);
     overflow: auto;
   }
 
-  .outbound-left,
-  .outbound-center {
+  [data-app="outbound"] .outbound-left,
+  [data-app="outbound"] .outbound-center {
     grid-column: 1;
     height: auto;
   }
 
-  .outbound-left { grid-row: 1; }
-  .outbound-center { grid-row: 2; }
+  [data-app="outbound"] .outbound-left { grid-row: 1; }
+  [data-app="outbound"] .outbound-center { grid-row: 2; }
 }
 
 /* ----------------------------------------------------------------------------
@@ -2229,76 +2246,76 @@
    its own container (.outbound-table-scroll-unified) — never the page.
    -------------------------------------------------------------------------- */
 @container business-app-window (max-width: 768px) {
-  .outbound-split-workbench,
-  .outbound-split-workbench.is-detail-hidden {
+  [data-app="outbound"] .outbound-split-workbench,
+  [data-app="outbound"] .outbound-split-workbench.is-detail-hidden {
     grid-template-columns: minmax(0, 1fr);
     grid-auto-rows: auto;
     overflow-y: auto;
   }
 
-  .outbound-split-workbench > .outbound-center-resizer {
+  [data-app="outbound"] .outbound-split-workbench > .outbound-center-resizer {
     display: none !important;
   }
 
-  .outbound-split-workbench > .outbound-unified-workbench {
+  [data-app="outbound"] .outbound-split-workbench > .outbound-unified-workbench {
     min-height: 320px;
   }
 
-  .outbound-split-workbench > .outbound-right {
+  [data-app="outbound"] .outbound-split-workbench > .outbound-right {
     border-top: 1px solid var(--line);
   }
 
-  .outbound-split-workbench.is-detail-hidden > .outbound-right {
+  [data-app="outbound"] .outbound-split-workbench.is-detail-hidden > .outbound-right {
     display: none;
   }
 
   /* The activity chip cards would clip — let the strip scroll horizontally. */
-  .outbound-research-activity-list {
+  [data-app="outbound"] .outbound-research-activity-list {
     overflow-x: auto;
   }
 
   /* Drawer stat tiles: 4 → 2 columns. */
-  .outbound-automation-body dl {
+  [data-app="outbound"] .outbound-automation-body dl {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .outbound-automation-body > .ctox-compact-field {
+  [data-app="outbound"] .outbound-automation-body > .ctox-compact-field {
     max-width: none;
   }
 
   /* Column-settings rows carry their track definition inline (JS template),
      so the narrow track set needs !important; the 56px lead column only
      holds a 15px checkbox. */
-  .outbound-column-settings-labels,
-  .outbound-column-setting-row {
+  [data-app="outbound"] .outbound-column-settings-labels,
+  [data-app="outbound"] .outbound-column-setting-row {
     grid-template-columns: 32px minmax(0, 0.72fr) minmax(0, 1.28fr) 26px !important;
   }
 
-  .outbound-column-settings-grid {
+  [data-app="outbound"] .outbound-column-settings-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .outbound-custom-field-form,
-  .outbound-research-source-add,
-  .outbound-mailserver-form-row.is-grid {
+  [data-app="outbound"] .outbound-custom-field-form,
+  [data-app="outbound"] .outbound-research-source-add,
+  [data-app="outbound"] .outbound-mailserver-form-row.is-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .outbound-mailserver-form-row {
+  [data-app="outbound"] .outbound-mailserver-form-row {
     flex-wrap: wrap;
   }
 
   /* Engagement list + detail stack vertically. */
-  .outbound-outreach-split {
+  [data-app="outbound"] .outbound-outreach-split {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .outbound-outreach-detail-meta {
+  [data-app="outbound"] .outbound-outreach-detail-meta {
     align-items: flex-start;
   }
 
   /* Fixed overlays must never exceed the phone viewport. */
-  .hidden-company-panel {
+  [data-app="outbound"] .hidden-company-panel {
     top: auto;
     right: 12px;
     bottom: 12px;
@@ -2307,7 +2324,7 @@
     max-width: none;
   }
 
-  .multi-editor-overlay {
+  [data-app="outbound"] .multi-editor-overlay {
     min-width: 0;
     max-width: calc(100vw - 24px);
   }
@@ -2318,39 +2335,39 @@
    heights (22–28px filter inputs, 26px icon buttons, tab pills). Checkboxes
    stay visual-size but gain wrapper padding. */
 @media (pointer: coarse) {
-  .outbound-module button,
-  .outbound-module input:not([type="checkbox"]):not([type="radio"]),
-  .outbound-module select,
-  .outbound-module textarea,
-  .outbound-module summary,
-  [data-campaign-editor-modal] button,
-  [data-campaign-editor-modal] input:not([type="checkbox"]):not([type="radio"]),
-  [data-campaign-editor-modal] select,
-  [data-campaign-editor-modal] textarea {
+  [data-app="outbound"] .outbound-module button,
+  [data-app="outbound"] .outbound-module input:not([type="checkbox"]):not([type="radio"]),
+  [data-app="outbound"] .outbound-module select,
+  [data-app="outbound"] .outbound-module textarea,
+  [data-app="outbound"] .outbound-module summary,
+  [data-app="outbound"] [data-campaign-editor-modal] button,
+  [data-app="outbound"] [data-campaign-editor-modal] input:not([type="checkbox"]):not([type="radio"]),
+  [data-app="outbound"] [data-campaign-editor-modal] select,
+  [data-app="outbound"] [data-campaign-editor-modal] textarea {
     min-height: 44px;
   }
 
-  .outbound-module .ctox-pane-icon,
-  [data-campaign-editor-modal] .ctox-pane-icon {
+  [data-app="outbound"] .outbound-module .ctox-pane-icon,
+  [data-app="outbound"] [data-campaign-editor-modal] .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .outbound-module .ctox-pane-tab {
+  [data-app="outbound"] .outbound-module .ctox-pane-tab {
     min-height: 44px;
   }
 
-  .outbound-column-setting-toggle,
-  .outbound-source-enabled {
+  [data-app="outbound"] .outbound-column-setting-toggle,
+  [data-app="outbound"] .outbound-source-enabled {
     min-width: 44px;
     min-height: 44px;
     padding-top: 0;
   }
 
-  .outbound-column-setting-toggle input,
-  .outbound-source-enabled input,
-  .outbound-source-credential-toggle input,
-  .outbound-toggle-label input {
+  [data-app="outbound"] .outbound-column-setting-toggle input,
+  [data-app="outbound"] .outbound-source-enabled input,
+  [data-app="outbound"] .outbound-source-credential-toggle input,
+  [data-app="outbound"] .outbound-toggle-label input {
     width: 22px;
     height: 22px;
   }
@@ -2370,85 +2387,150 @@
    The icon is by definition exactly two header rows high, so pane rows 1 and 2
    both stay clear of it. Reference implementation: modules/knowledge.
    -------------------------------------------------------------------------- */
-.shell-window[data-shell-contract="v2"] .outbound-module {
+[data-app="outbound"] .outbound-module {
   padding: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .outbound-module > .ctox-pane {
+[data-app="outbound"] .outbound-module > .ctox-pane {
   border: 0;
   border-radius: 0;
 }
 
-/* 1. Both headers of the top row are exactly one shell header row high. */
-.shell-window[data-shell-contract="v2"] .outbound-module > .ctox-pane > .ctox-pane-header {
+/* 1. Both headers of the top row are at least one shell header row high.
+   VIS3: a long title ("Campaigns & Sequenzen", "Projektplan Relaunch
+   Kundenportal") wraps at word boundaries like the frame kit, so the header
+   grows with it instead of clipping the second line under row 2. */
+[data-app="outbound"] .outbound-module > .ctox-pane > .ctox-pane-header {
   box-sizing: border-box;
   display: flex;
   align-items: center;
-  height: var(--shell-v2-header-row-size, 37px);
   min-height: var(--shell-v2-header-row-size, 37px);
-  padding-block: 0;
+  padding-block: 4px;
 }
 
-.shell-window[data-shell-contract="v2"] .outbound-module > .ctox-pane > .ctox-pane-header > .ctox-pane-title-row {
+[data-app="outbound"] .outbound-module > .ctox-pane > .ctox-pane-header > .ctox-pane-title-row {
   flex: 1 1 auto;
   min-width: 0;
-  height: 100%;
 }
 
-/* Kicker and title share the single row. The title carries the shell's version
-   menu, so it keeps min-width: 0 plus ellipsis and the kicker yields first. */
-.shell-window[data-shell-contract="v2"] .outbound-module > .ctox-pane > .ctox-pane-header .ctox-pane-titles {
+/* Kicker and title share the row; when they do not fit side by side the title
+   moves to its own line and wraps there (no ellipsis, no clipping). */
+[data-app="outbound"] .outbound-module > .ctox-pane > .ctox-pane-header .ctox-pane-titles {
   flex: 1 1 auto;
   min-width: 0;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: 0 8px;
   padding-top: 0;
-  overflow: hidden;
 }
 
-.shell-window[data-shell-contract="v2"] .outbound-module > .ctox-pane > .ctox-pane-header .ctox-pane-kicker {
+[data-app="outbound"] .outbound-module > .ctox-pane > .ctox-pane-header .ctox-pane-kicker {
   flex: 0 1 auto;
 }
 
-.shell-window[data-shell-contract="v2"] .outbound-module > .ctox-pane > .ctox-pane-header .ctox-pane-title {
+[data-app="outbound"] .outbound-module > .ctox-pane > .ctox-pane-header .ctox-pane-title {
   flex: 1 1 auto;
-  min-width: 0;
   margin-top: 0;
   line-height: 1.1;
 }
 
 /* The action block never claims the title's width. */
-.shell-window[data-shell-contract="v2"] .outbound-module > .ctox-pane > .ctox-pane-header .ctox-pane-actions {
+[data-app="outbound"] .outbound-module > .ctox-pane > .ctox-pane-header .ctox-pane-actions {
   flex: 0 0 auto;
 }
 
 /* 2. Icon zone: 80px icon + 14px gutter on the first header. */
-.shell-window[data-shell-contract="v2"] .outbound-module > .outbound-left > .ctox-pane-header {
+[data-app="outbound"] .outbound-module > .outbound-left > .ctox-pane-header {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
 }
 
 /* 3. Control zone: 74px controls, 70px reserved on the last header. */
-.shell-window[data-shell-contract="v2"] .outbound-module > .outbound-center > .ctox-pane-header {
-  padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
+[data-app="outbound"] .outbound-module > .outbound-center > .ctox-pane-header {
+  padding-right: var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size, 37px) * 2));
 }
 
 /* Row 2 still lies under the icon; the icon ends after two header rows, so
    row 2 must not fall below one. */
-.shell-window[data-shell-contract="v2"] .outbound-module .outbound-pane-toolbelt {
+[data-app="outbound"] .outbound-module .outbound-pane-toolbelt {
   min-height: var(--shell-v2-header-row-size, 37px);
 }
 
 /* Only the first row of the strip still lies beside the icon; the filter tray
    and the view switch below it keep the kit's own 12px inset. */
-.shell-window[data-shell-contract="v2"] .outbound-module > .outbound-left > .outbound-pane-toolbelt > :first-child {
+[data-app="outbound"] .outbound-module > .outbound-left > .outbound-pane-toolbelt > :first-child {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
 }
 
 /* One column: the left header is then the only header in the top row and has
    to clear the window controls as well. */
 @container business-app-window (max-width: 768px) {
-  .shell-window[data-shell-contract="v2"] .outbound-module > .outbound-left > .ctox-pane-header {
-    padding-right: calc(var(--shell-v2-header-row-size, 37px) * 2);
+  [data-app="outbound"] .outbound-module > .outbound-left > .ctox-pane-header {
+    padding-right: var(--shell-v2-control-inset, calc(var(--shell-v2-header-row-size, 37px) * 2));
   }
+}
+
+/* v4-Port (UD1): Research-Zusammenfassung im schmalen Fenster untereinander statt Titel neben 4 Zählern
+   (420px: Titel wurde auf eine Spalte von ~20px gequetscht). */
+@container business-app-window (max-width: 768px) {
+  [data-app="outbound"] .outbound-research-activity > summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  [data-app="outbound"] .outbound-research-activity-counts {
+    justify-content: flex-start;
+  }
+}
+
+/* v4-Port (UD1): Freigabe-Karte war ohne Feldlayout (Label, Eingabe und Textfeld standen in einer Zeile, Textfeld
+   ~160px breit). Felder untereinander, volle Breite – gleiche Grammatik wie die Skillbook-/Vorlagenkarten. */
+[data-app="outbound"] .outbound-outreach-approval {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+}
+
+[data-app="outbound"] .outbound-outreach-approval > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+[data-app="outbound"] .outbound-outreach-approval > label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+[data-app="outbound"] .outbound-outreach-approval > label > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+[data-app="outbound"] .outbound-outreach-approval > label > input,
+[data-app="outbound"] .outbound-outreach-approval > label > textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  font: inherit;
+}
+
+[data-app="outbound"] .outbound-outreach-approval > footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+/* Textdiät R2 (15.10.): Listen-Fuß ohne Inhalt (Zählerwiederholung entfernt) nimmt keinen Platz ein. */
+[data-app="outbound"] .ctox-pane-footer:has(> [data-pg-footer]:empty) { display: none; }
+
+/* Textdiät R2 (15.10.): schmale Fenster – Spaltentitel einzeilig mit Ellipse statt Wort-/Silbenbruch
+   (420: „Kunden / konten“, „Kampagnen / & Sequenzen“). Voller Titel bleibt im title-Attribut bzw. im Fenster. */
+@container business-app-window (max-width: 768px) {
+  [data-app="outbound"] .ctox-pane-titles { min-width: 0; }
+  [data-app="outbound"] .ctox-pane-title { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; hyphens: manual; overflow-wrap: normal; }
 }

@@ -668,14 +668,6 @@ impl ThreadManager {
         AgentControl::new(Arc::downgrade(&self.state))
     }
 
-    #[cfg(test)]
-    pub(crate) fn captured_ops(&self) -> Vec<(ThreadId, Op)> {
-        self.state
-            .ops_log
-            .as_ref()
-            .and_then(|ops_log| ops_log.lock().ok().map(|log| log.clone()))
-            .unwrap_or_default()
-    }
 }
 
 impl ThreadManagerState {

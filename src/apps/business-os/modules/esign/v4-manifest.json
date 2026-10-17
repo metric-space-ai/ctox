@@ -1,0 +1,31 @@
+{
+  "_basis": {
+    "command_rights": "modules/esign/V4-HANDLERS.md Abweichung 2 (Rollenprüfung chef/admin bleibt Kern-Policy, is_ats_mutating_command)",
+    "foreign_collections": "Strang FIX7 (v4/tools/textdiaet/FIX7.md): Neue Anfrage wählt Dokument aus documents/desktop_files und Unterzeichner aus customer_contacts/applications (nur lesen, Namen statt IDs)"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "command_rights": {
+    "ats.*": {
+      "assigned_users": false,
+      "roles": [
+        "admin",
+        "chef"
+      ]
+    }
+  },
+  "foreign_collections": {
+    "applications": [
+      "read"
+    ],
+    "customer_contacts": [
+      "read"
+    ],
+    "desktop_files": [
+      "read"
+    ],
+    "documents": [
+      "read"
+    ]
+  }
+}

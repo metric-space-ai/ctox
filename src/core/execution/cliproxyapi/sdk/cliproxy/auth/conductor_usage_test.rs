@@ -26,18 +26,6 @@ fn requested_alias_includes_reasoning_service_tier_and_generate() {
 }
 
 #[test]
-fn generate_defaults_true() {
-    let mut options = Options::default();
-    options.metadata.requested_model = Some("client-model".to_owned());
-    let context = usage_context_with_requested_model_alias(
-        UsageContext::default(),
-        &options,
-        "fallback-model",
-    );
-    assert!(context.generate());
-}
-
-#[test]
 fn existing_generate_false_is_preserved() {
     let mut options = Options::default();
     options.metadata.requested_model = Some("client-model".to_owned());

@@ -56,8 +56,7 @@ struct Args {
 fn det_fill(v: &mut [f32], seed: f32) {
     let norm = (v.len() as f32).sqrt();
     for (i, s) in v.iter_mut().enumerate() {
-        *s = ((i as f32 * 0.013 + seed).sin() * 0.5
-            + (i as f32 * 0.007 + seed * 2.0).cos() * 0.25)
+        *s = ((i as f32 * 0.013 + seed).sin() * 0.5 + (i as f32 * 0.007 + seed * 2.0).cos() * 0.25)
             / norm;
     }
 }
@@ -82,9 +81,7 @@ fn main() -> Result<()> {
     unsafe { cuInit(0) };
     ensure_current_context(args.cuda_device).map_err(|e| anyhow!("ctx: {e}"))?;
     let kernels = porter().map_err(|e| anyhow!("porter(): {e}"))?;
-    println!(
-        "[attn] hidden={h} n_heads={nh} n_kv_heads={nkv} head_dim={hd} seq={s}"
-    );
+    println!("[attn] hidden={h} n_heads={nh} n_kv_heads={nkv} head_dim={hd} seq={s}");
 
     let n_x = (h * s) as usize;
     let n_wq = (h * q_dim) as usize;
@@ -115,11 +112,11 @@ fn main() -> Result<()> {
     let t_out = gctx.new_tensor_f32([h, s, 1, 1], "out");
     gctx.realize().map_err(|e| anyhow!(e))?;
 
-    gctx.upload_f32(t_x, &h_x).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wq, &h_wq).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wk, &h_wk).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wv, &h_wv).map_err(|e| anyhow!(e))?;
-    gctx.upload_f32(t_wo, &h_wo).map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_x, &h_x) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wq, &h_wq) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wk, &h_wk) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wv, &h_wv) }.map_err(|e| anyhow!(e))?;
+    unsafe { gctx.upload_f32(t_wo, &h_wo) }.map_err(|e| anyhow!(e))?;
 
     let stream = CUstream(std::ptr::null_mut());
     let exec = ExecCtx::new(kernels, stream);
@@ -127,8 +124,8 @@ fn main() -> Result<()> {
     let t_start = std::time::Instant::now();
 
     // 1. rms_norm (Rust)
-    let rt_x = gctx.as_rust_tensor(t_x);
-    let rt_xn = gctx.as_rust_tensor(t_xn);
+    let rt_x = unsafe { gctx.as_rust_tensor(t_x) };
+    let rt_xn = unsafe { gctx.as_rust_tensor(t_xn) };
     rms_norm(&exec, &rt_x, &rt_xn, 1e-6).map_err(|e| anyhow!(e))?;
     unsafe { cuStreamSynchronize(stream) };
 
@@ -152,16 +149,8 @@ fn main() -> Result<()> {
             let v_p = sys::ggml_cont(gc, sys::ggml_permute(gc, v_3d, 0, 2, 1, 3));
 
             // FA with no mask (null), scale=1/sqrt(head_dim), max_bias=0, softcap=0.
-            let attn = sys::ggml_flash_attn_ext(
-                gc,
-                q_p,
-                k_p,
-                v_p,
-                std::ptr::null_mut(),
-                scale,
-                0.0,
-                0.0,
-            );
+            let attn =
+                sys::ggml_flash_attn_ext(gc, q_p, k_p, v_p, std::ptr::null_mut(), scale, 0.0, 0.0);
 
             // Permute back to (q_dim, seq) layout and project to hidden.
             let attn_flat = sys::ggml_cont_2d(gc, attn, q_dim, s);
@@ -170,15 +159,15 @@ fn main() -> Result<()> {
         .map_err(|e| anyhow!(e))?;
 
     // 6. residual (Rust)
-    let rt_attn = gctx.as_rust_tensor(t_attn);
-    let rt_out = gctx.as_rust_tensor(t_out);
+    let rt_attn = unsafe { gctx.as_rust_tensor(t_attn) };
+    let rt_out = unsafe { gctx.as_rust_tensor(t_out) };
     add(&exec, &rt_x, &rt_attn, &rt_out).map_err(|e| anyhow!(e))?;
     unsafe { cuStreamSynchronize(stream) };
 
     let hybrid_us = t_start.elapsed().as_micros();
     println!("[attn] hybrid: {hybrid_us} µs");
 
-    let h_got = gctx.download_f32(t_out, n_x).map_err(|e| anyhow!(e))?;
+    let h_got = unsafe { gctx.download_f32(t_out, n_x) }.map_err(|e| anyhow!(e))?;
 
     // ═══ Reference — same graph, all ggml ══════════════════════
     let mut gref = GgmlBackendCtx::new(backend).map_err(|e| anyhow!(e))?;
@@ -188,11 +177,11 @@ fn main() -> Result<()> {
     let r_wv = gref.new_tensor_f32([h, kv_dim, 1, 1], "r_Wv");
     let r_wo = gref.new_tensor_f32([q_dim, h, 1, 1], "r_Wo");
     gref.realize().map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_x, &h_x).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wq, &h_wq).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wk, &h_wk).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wv, &h_wv).map_err(|e| anyhow!(e))?;
-    gref.upload_f32(r_wo, &h_wo).map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_x, &h_x) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wq, &h_wq) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wk, &h_wk) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wv, &h_wv) }.map_err(|e| anyhow!(e))?;
+    unsafe { gref.upload_f32(r_wo, &h_wo) }.map_err(|e| anyhow!(e))?;
 
     let t_start = std::time::Instant::now();
     let r_out = gref
@@ -207,23 +196,15 @@ fn main() -> Result<()> {
             let qp = sys::ggml_cont(gc, sys::ggml_permute(gc, q3, 0, 2, 1, 3));
             let kp = sys::ggml_cont(gc, sys::ggml_permute(gc, k3, 0, 2, 1, 3));
             let vp = sys::ggml_cont(gc, sys::ggml_permute(gc, v3, 0, 2, 1, 3));
-            let fa = sys::ggml_flash_attn_ext(
-                gc,
-                qp,
-                kp,
-                vp,
-                std::ptr::null_mut(),
-                scale,
-                0.0,
-                0.0,
-            );
+            let fa =
+                sys::ggml_flash_attn_ext(gc, qp, kp, vp, std::ptr::null_mut(), scale, 0.0, 0.0);
             let flat = sys::ggml_cont_2d(gc, fa, q_dim, s);
             let proj = sys::ggml_mul_mat(gc, r_wo, flat);
             sys::ggml_add(gc, r_x, proj)
         })
         .map_err(|e| anyhow!(e))?;
     let ref_us = t_start.elapsed().as_micros();
-    let h_ref = gref.download_f32(r_out, n_x).map_err(|e| anyhow!(e))?;
+    let h_ref = unsafe { gref.download_f32(r_out, n_x) }.map_err(|e| anyhow!(e))?;
     println!("[attn] ggml reference: {ref_us} µs");
 
     let mut max_abs = 0.0_f32;

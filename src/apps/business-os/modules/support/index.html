@@ -14,7 +14,7 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-i18n="kicker">Support Desk</span>
+          <!-- v4-allow: label -->
           <h2 class="ctox-pane-title" data-i18n="queueTitle">Warteschlangen</h2>
         </div>
         <div class="ctox-pane-actions">
@@ -37,6 +37,7 @@
         <div class="ctox-filter-row">
           <select class="ctox-select" data-pg-filter data-pg-name="status" data-pg-default="open" aria-label="Status filtern">
             <option value="open">Offen</option>
+            <!-- v4-allow: label -->
             <option value="waiting">Wartet</option>
             <option value="resolved">Gelöst</option>
             <option value="all">Alle Status</option>
@@ -60,6 +61,7 @@
         </div>
       </div>
     </header>
+    <!-- v4-allow: label -->
     <nav class="ctox-view-switch" aria-label="Warteschlangen">
       <div class="ctox-pane-tabs">
         <button type="button" class="ctox-pane-tab is-active" role="tab" data-pg-band="open" aria-selected="true"><span data-i18n="allOpen">Offen</span><span class="view-count" data-pg-count="open"></span></button>
@@ -82,8 +84,7 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-i18n="conversationKicker">Konversation</span>
-          <h2 class="ctox-pane-title" data-support-title data-i18n="emptyTitle">Keine Support-Konversation ausgewählt</h2>
+          <h2 class="ctox-pane-title" data-support-title></h2>
         </div>
         <div class="ctox-pane-actions">
           <button class="ctox-pane-icon support-context-toggle" type="button" data-support-toggle-context aria-expanded="false" data-i18n-title="openContext" title="Kontext öffnen" aria-label="Kontext öffnen">

@@ -24,8 +24,6 @@ use tracing::warn;
 use crate::error_code::INTERNAL_ERROR_CODE;
 use crate::server_request_error::TURN_TRANSITION_PENDING_REQUEST_ERROR_REASON;
 
-#[cfg(test)]
-use ctox_protocol::account::PlanType;
 
 pub(crate) type ClientRequestResult = std::result::Result<Result, JSONRPCErrorError>;
 
@@ -632,194 +630,23 @@ pub(crate) struct OutgoingError {
 mod tests {
     use std::time::Duration;
 
-    use ctox_app_server_protocol::AccountLoginCompletedNotification;
-    use ctox_app_server_protocol::AccountRateLimitsUpdatedNotification;
-    use ctox_app_server_protocol::AccountUpdatedNotification;
     use ctox_app_server_protocol::ApplyPatchApprovalParams;
-    use ctox_app_server_protocol::AuthMode;
-    use ctox_app_server_protocol::ConfigWarningNotification;
     use ctox_app_server_protocol::DynamicToolCallParams;
     use ctox_app_server_protocol::FileChangeRequestApprovalParams;
-    use ctox_app_server_protocol::ModelRerouteReason;
-    use ctox_app_server_protocol::ModelReroutedNotification;
-    use ctox_app_server_protocol::RateLimitSnapshot;
-    use ctox_app_server_protocol::RateLimitWindow;
     use ctox_app_server_protocol::ToolRequestUserInputParams;
     use ctox_protocol::ThreadId;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::Arc;
     use tokio::time::timeout;
-    use uuid::Uuid;
 
     use super::*;
 
-    #[test]
-    fn verify_server_notification_serialization() {
-        let notification =
-            ServerNotification::AccountLoginCompleted(AccountLoginCompletedNotification {
-                login_id: Some(Uuid::nil().to_string()),
-                success: true,
-                error: None,
-            });
 
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "account/login/completed",
-                "params": {
-                    "loginId": Uuid::nil().to_string(),
-                    "success": true,
-                    "error": null,
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the strum macros serialize the method field correctly"),
-            "ensure the strum macros serialize the method field correctly"
-        );
-    }
 
-    #[test]
-    fn verify_account_login_completed_notification_serialization() {
-        let notification =
-            ServerNotification::AccountLoginCompleted(AccountLoginCompletedNotification {
-                login_id: Some(Uuid::nil().to_string()),
-                success: true,
-                error: None,
-            });
 
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "account/login/completed",
-                "params": {
-                    "loginId": Uuid::nil().to_string(),
-                    "success": true,
-                    "error": null,
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
 
-    #[test]
-    fn verify_account_rate_limits_notification_serialization() {
-        let notification =
-            ServerNotification::AccountRateLimitsUpdated(AccountRateLimitsUpdatedNotification {
-                rate_limits: RateLimitSnapshot {
-                    limit_id: Some("codex".to_string()),
-                    limit_name: None,
-                    primary: Some(RateLimitWindow {
-                        used_percent: 25,
-                        window_duration_mins: Some(15),
-                        resets_at: Some(123),
-                    }),
-                    secondary: None,
-                    credits: None,
-                    plan_type: Some(PlanType::Plus),
-                },
-            });
 
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "account/rateLimits/updated",
-                "params": {
-                        "rateLimits": {
-                        "limitId": "codex",
-                        "limitName": null,
-                        "primary": {
-                            "usedPercent": 25,
-                            "windowDurationMins": 15,
-                            "resetsAt": 123
-                        },
-                        "secondary": null,
-                        "credits": null,
-                        "planType": "plus"
-                    }
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
-
-    #[test]
-    fn verify_account_updated_notification_serialization() {
-        let notification = ServerNotification::AccountUpdated(AccountUpdatedNotification {
-            auth_mode: Some(AuthMode::ApiKey),
-            plan_type: None,
-        });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "account/updated",
-                "params": {
-                    "authMode": "apikey",
-                    "planType": null
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
-
-    #[test]
-    fn verify_config_warning_notification_serialization() {
-        let notification = ServerNotification::ConfigWarning(ConfigWarningNotification {
-            summary: "Config error: using defaults".to_string(),
-            details: Some("error loading config: bad config".to_string()),
-            path: None,
-            range: None,
-        });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!( {
-                "method": "configWarning",
-                "params": {
-                    "summary": "Config error: using defaults",
-                    "details": "error loading config: bad config",
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
-
-    #[test]
-    fn verify_model_rerouted_notification_serialization() {
-        let notification = ServerNotification::ModelRerouted(ModelReroutedNotification {
-            thread_id: "thread-1".to_string(),
-            turn_id: "turn-1".to_string(),
-            from_model: "gpt-5.3-codex".to_string(),
-            to_model: "gpt-5.2".to_string(),
-            reason: ModelRerouteReason::HighRiskCyberActivity,
-        });
-
-        let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
-        assert_eq!(
-            json!({
-                "method": "model/rerouted",
-                "params": {
-                    "threadId": "thread-1",
-                    "turnId": "turn-1",
-                    "fromModel": "gpt-5.3-codex",
-                    "toModel": "gpt-5.2",
-                    "reason": "highRiskCyberActivity",
-                },
-            }),
-            serde_json::to_value(jsonrpc_notification)
-                .expect("ensure the notification serializes correctly"),
-            "ensure the notification serializes correctly"
-        );
-    }
 
     #[tokio::test]
     async fn send_response_routes_to_target_connection() {

@@ -60,6 +60,76 @@ impl Default for RxStorageSqliteSettings {
 
 pub type SharedSqliteConnection = Arc<Mutex<Connection>>;
 
+/// A job's result crosses the owner boundary; SQLite handles never do.
+pub type SqliteJobValue = Box<dyn std::any::Any + Send>;
+pub type SqliteOwnerJob = Box<dyn FnOnce(&Connection) -> RxResult<SqliteJobValue> + Send + 'static>;
+pub type SqliteOwnerWriteJob =
+    Box<dyn FnOnce(&rusqlite::Transaction<'_>) -> RxResult<SqliteJobValue> + Send + 'static>;
+pub type SqliteJobTicket = tokio::sync::oneshot::Receiver<RxResult<SqliteJobValue>>;
+
+/// Injection seam for the daemon's one writer and bounded snapshot read pool.
+/// Admission is bounded; writes execute in one transaction, including triggers.
+/// Success means committed. Reads execute inside one pinned WAL snapshot.
+/// Callbacks must not re-enter the owner or allow SQLite handles to escape.
+pub trait SqliteOwnerJobs: Send + Sync {
+    /// Resolve the ACTIVE P3-06 generation inside the writer transaction. A
+    /// collection is never inferred from its name or silently registered here.
+    fn collection_table(
+        &self,
+        _tx: &rusqlite::Transaction<'_>,
+        _collection: &str,
+        _version: i32,
+    ) -> RxResult<String> {
+        Err(owner_job_error(
+            "collection has no active schema registration",
+        ))
+    }
+
+    fn read(&self, job: SqliteOwnerJob) -> RxResult<SqliteJobTicket>;
+    /// A stream keeps one snapshot across bounded consumer callbacks. The
+    /// daemon may assign a longer typed execution budget than for point reads;
+    /// it still uses the same four-reader pool and bounded admission.
+    fn read_stream(&self, job: SqliteOwnerJob) -> RxResult<SqliteJobTicket> {
+        self.read(job)
+    }
+    fn write(&self, job: SqliteOwnerWriteJob) -> RxResult<SqliteJobTicket>;
+    /// Install the P3-05 log binding in the same owner transaction as DDL.
+    fn install_change_log(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        table: &str,
+        collection: &str,
+        version: i32,
+    ) -> RxResult<()>;
+    /// Backfill at most 500 pre-v4 rows; None means complete. The returned
+    /// primary-key cursor must advance. Concurrent trigger writes win.
+    fn backfill_change_log(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        table: &str,
+        after: Option<&str>,
+    ) -> RxResult<Option<String>>;
+    /// Watch the committed global log head, not a second notification counter.
+    fn subscribe_commits(&self) -> tokio::sync::watch::Receiver<u64>;
+}
+
+pub(crate) async fn owner_result<T: Send + 'static>(ticket: SqliteJobTicket) -> RxResult<T> {
+    let value = ticket
+        .await
+        .map_err(|_| owner_job_error("owner closed"))??;
+    value
+        .downcast::<T>()
+        .map(|value| *value)
+        .map_err(|_| owner_job_error("owner returned an incompatible job result"))
+}
+
+pub(crate) fn owner_job_error(message: &str) -> RxError {
+    new_rx_error(
+        "SQLITE_OWNER",
+        Some(serde_json::json!({ "message": message })),
+    )
+}
+
 pub(crate) type SqliteReaderCache = Arc<Mutex<Option<SharedSqliteConnection>>>;
 pub(crate) const SQLITE_POINT_READER_COUNT: usize = 4;
 
@@ -67,11 +137,13 @@ type SqliteFileWatcher = (RecommendedWatcher, Receiver<notify::Result<notify::Ev
 type SqliteFileWatcherFactory = fn(&Path) -> Option<SqliteFileWatcher>;
 
 /// Storage factory holding a shared SQLite connection.
+#[derive(Clone)]
 pub struct RxStorageSqlite {
     pub name: String,
     pub settings: RxStorageSqliteSettings,
-    pub connection: Mutex<Option<SharedSqliteConnection>>,
-    external_poll_key: Mutex<Option<String>>,
+    pub connection: Arc<Mutex<Option<SharedSqliteConnection>>>,
+    pub(crate) owner: Option<Arc<dyn SqliteOwnerJobs>>,
+    external_poll_key: Arc<ExternalPollLease>,
     file_watcher_factory: SqliteFileWatcherFactory,
     // A collection is a table, not a separate SQLite database. Share a bounded
     // set of schema caches across its short reads instead of opening one per
@@ -79,7 +151,7 @@ pub struct RxStorageSqlite {
     // continue to use dedicated connections and cannot occupy these slots.
     point_readers: [SqliteReaderCache; SQLITE_POINT_READER_COUNT],
     change_feed_reader: SqliteReaderCache,
-    next_point_reader: AtomicUsize,
+    next_point_reader: Arc<AtomicUsize>,
 }
 
 impl RxStorageSqlite {
@@ -87,13 +159,24 @@ impl RxStorageSqlite {
         Arc::new(Self {
             name: "sqlite".to_string(),
             settings,
-            connection: Mutex::new(None),
-            external_poll_key: Mutex::new(None),
+            connection: Arc::new(Mutex::new(None)),
+            owner: None,
+            external_poll_key: Arc::new(ExternalPollLease(Mutex::new(None))),
             file_watcher_factory: sqlite_file_watcher,
             point_readers: std::array::from_fn(|_| Arc::new(Mutex::new(None))),
             change_feed_reader: Arc::new(Mutex::new(None)),
-            next_point_reader: AtomicUsize::new(0),
+            next_point_reader: Arc::new(AtomicUsize::new(0)),
         })
+    }
+
+    /// Attach the registered daemon owner without opening another connection.
+    pub fn with_owner(
+        settings: RxStorageSqliteSettings,
+        owner: Arc<dyn SqliteOwnerJobs>,
+    ) -> Arc<Self> {
+        let mut storage = Self::new(settings);
+        Arc::get_mut(&mut storage).expect("new storage").owner = Some(owner);
+        storage
     }
 
     #[cfg(test)]
@@ -115,6 +198,11 @@ impl RxStorageSqlite {
     }
 
     pub fn connection(&self) -> RxResult<SharedSqliteConnection> {
+        if self.owner.is_some() {
+            return Err(owner_job_error(
+                "raw connection access is unavailable on an owned store",
+            ));
+        }
         let mut connection_slot = self.connection.lock();
         if let Some(existing) = connection_slot.as_ref() {
             return Ok(Arc::clone(existing));
@@ -169,9 +257,16 @@ impl RxStorageSqlite {
     }
 }
 
-impl Drop for RxStorageSqlite {
+struct ExternalPollLease(Mutex<Option<String>>);
+impl std::ops::Deref for ExternalPollLease {
+    type Target = Mutex<Option<String>>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl Drop for ExternalPollLease {
     fn drop(&mut self) {
-        if let Some(database_key) = self.external_poll_key.lock().take() {
+        if let Some(database_key) = self.0.lock().take() {
             release_external_database_poll(&database_key);
         }
     }

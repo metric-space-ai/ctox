@@ -4,6 +4,63 @@ use rusqlite::{Connection, Transaction, TransactionBehavior};
 use std::ops::Deref;
 use std::time::{Duration, Instant};
 
+/// Owner metrics are emitted after the commit acknowledgement, outside SQLite.
+pub(super) async fn owner_write<T: Send + 'static>(
+    writer: &ctox_store::writer::WriterHandle,
+    operation: &'static str,
+    options: ctox_store::JobOptions,
+    callback: impl FnOnce(&Transaction<'_>) -> Result<T, ctox_store::StoreError> + Send + 'static,
+) -> Result<T, ctox_store::StoreError> {
+    let submitted = Instant::now();
+    let timing = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let measured = timing.clone();
+    let result = match writer.submit(ctox_store::WriteJob::new(options, move |tx| {
+        let wait = submitted.elapsed();
+        let acquired = Instant::now();
+        let result = callback(tx);
+        *measured.lock().unwrap_or_else(|p| p.into_inner()) = Some((wait, acquired.elapsed()));
+        result
+    })) {
+        Ok(handle) => handle.await,
+        Err(error) => Err(error),
+    };
+    let timing = timing.lock().unwrap_or_else(|p| p.into_inner());
+    let (wait, hold) = timing.unwrap_or((submitted.elapsed(), Duration::ZERO));
+    if wait >= Duration::from_millis(50) || hold >= Duration::from_millis(50) {
+        eprintln!("[ctox sqlite writer] operation={operation} database={} queue_wait_us={} callback_us={} ack_us={} outcome={}",
+            writer.db_id().path().display(), wait.as_micros(), hold.as_micros(), submitted.elapsed().as_micros(),
+            if result.is_ok() { "commit" } else { "owner_failed" });
+    }
+    result
+}
+
+/// For admitted synchronous compatibility work, never a Tokio async worker.
+pub(super) fn owner_write_blocking<T: Send + 'static>(
+    writer: &ctox_store::writer::WriterHandle,
+    operation: &'static str,
+    options: ctox_store::JobOptions,
+    callback: impl FnOnce(&Transaction<'_>) -> Result<T, ctox_store::StoreError> + Send + 'static,
+) -> Result<T, ctox_store::StoreError> {
+    let submitted = Instant::now();
+    let timing = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let measured = timing.clone();
+    let result = writer
+        .submit(ctox_store::WriteJob::new(options, move |tx| {
+            let wait = submitted.elapsed();
+            let acquired = Instant::now();
+            let result = callback(tx);
+            *measured.lock().unwrap_or_else(|p| p.into_inner()) = Some((wait, acquired.elapsed()));
+            result
+        }))
+        .and_then(ctox_store::JobHandle::blocking_wait);
+    let timing = timing.lock().unwrap_or_else(|p| p.into_inner());
+    let (wait, hold) = timing.unwrap_or((submitted.elapsed(), Duration::ZERO));
+    if wait >= Duration::from_millis(50) || hold >= Duration::from_millis(50) {
+        eprintln!("[ctox sqlite writer] operation={operation} database={} queue_wait_us={} callback_us={} ack_us={} outcome={}",writer.db_id().path().display(),wait.as_micros(),hold.as_micros(),submitted.elapsed().as_micros(),if result.is_ok(){"commit"}else{"owner_failed"});
+    }
+    result
+}
+
 pub(crate) struct SqliteWriteTransaction<'conn> {
     transaction: Option<Transaction<'conn>>,
     operation: &'static str,

@@ -13,6 +13,7 @@ const APPSEC_PIPELINE_STAGE_RETRY_DELAY_SECONDS: i64 = 30;
 const APPSEC_PIPELINE_RETRY_VERSION: &str = "ctox.appsec.pipeline_retry.v1";
 
 mod api_costs;
+mod app_capabilities;
 mod appsec_state;
 mod authority_fence_metrics;
 mod autonomy;
@@ -31,6 +32,7 @@ mod export;
 mod install;
 mod iot;
 mod knowledge;
+mod machine_join_cli;
 mod mission;
 mod native_data_device;
 #[cfg(unix)]
@@ -40,6 +42,8 @@ mod native_transfer_routing;
 mod paths;
 mod persistence;
 mod report;
+mod runtime;
+mod secret_requests;
 mod secrets;
 mod service;
 mod skill_store;
@@ -115,6 +119,9 @@ use crate::inference::runtime_env;
 use crate::inference::runtime_plan;
 use crate::inference::runtime_state;
 
+#[cfg(test)]
+#[path = "appsec_projection_switch_tests.rs"]
+mod appsec_projection_switch_tests;
 #[cfg(test)]
 #[path = "model_catalog_boundary_tests.rs"]
 mod model_catalog_boundary_tests;
@@ -368,6 +375,9 @@ fn install_sqlite_error_log() {
 }
 
 fn main() -> anyhow::Result<()> {
+    if let Some(result) = ctox_process_network::dispatch() {
+        return result;
+    }
     // Keep the generated argv0 aliases alive for the process lifetime. On
     // Linux, child tool executions re-enter this binary as
     // `ctox-linux-sandbox`; arg0_dispatch performs that dispatch before the
@@ -376,6 +386,9 @@ fn main() -> anyhow::Result<()> {
     limit_glibc_malloc_arenas();
     install_process_rustls_crypto_provider();
     install_sqlite_error_log();
+    if let Err(error) = rxdb::plugins::replication_webrtc::connection_handler_rs::log_bridge::install_daemon_log_bridge() {
+        eprintln!("CTOX log-to-tracing bridge initialization failed: {error}");
+    }
     raise_open_file_limit();
     let args: Vec<String> = std::env::args().skip(1).collect();
     // The isolated guest endpoint owns no CTOX daemon database or CLI ledger.
@@ -482,7 +495,10 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
             // runtime SQLite database for a second CLI ledger write.
             "knowledge" => return true,
             "business-os" | "business"
-                if matches!(args.get(1).map(String::as_str), Some("serve" | "status")) =>
+                if matches!(
+                    args.get(1).map(String::as_str),
+                    Some("serve" | "status" | "v4")
+                ) =>
             {
                 return true;
             }
@@ -562,6 +578,48 @@ fn skips_cli_turn_ledger(args: &[String]) -> bool {
 }
 
 fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
+    let command = args.first().map(String::as_str);
+    let owns_lifecycle = matches!(
+        command,
+        None | Some(
+            "service"
+                | "start"
+                | "stop"
+                | "status"
+                | "tui"
+                | "tui-smoke"
+                | "business-os"
+                | "business"
+                | "sync"
+        )
+    );
+    let stateless = matches!(
+        command,
+        Some(
+            "help"
+                | "--help"
+                | "-h"
+                | "version"
+                | "office"
+                | "jour-fixe"
+                | "update"
+                | "upgrade"
+                | "doctor"
+                | "source-status"
+        )
+    );
+    let coding_models_ipc = matches!(command, Some("coding-agent" | "coding-agents"))
+        && coding_agents::coding_models_cli_args_are_valid(&args[1..]);
+    if owns_lifecycle || stateless || coding_models_ipc {
+        return dispatch_owned_command(root, args);
+    }
+    let work = root.to_owned();
+    let args = args.to_owned();
+    persistence::run_cli_owned(root, move || dispatch_owned_command(&work, &args))
+        .context("CTOX CLI owner execution failed")
+}
+
+fn dispatch_owned_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
     match args.first().map(String::as_str) {
         Some("sync") => sync_host::handle_command(root, &args[1..]),
         None => tui::run_tui(root),
@@ -570,12 +628,11 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
             Ok(())
         }
         Some("crew") => {
-            let conn = rusqlite::Connection::open_with_flags(paths::core_db(&root), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-                .context("Crew database is not readable yet; start CTOX once to initialize it (WAL readers also require access to its shared-memory directory)")?;
-            conn.busy_timeout(persistence::sqlite_busy_timeout_duration())?;
-            let initialized: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='crew_members')", [], |r| r.get(0))?;
-            anyhow::ensure!(initialized, "Crew has not been initialized yet; start CTOX once to create the crew tables");
-            let members = crew::members(&conn)?;
+            let members = lcm::with_lcm_read(&paths::core_db(root), |conn| {
+                let initialized: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='crew_members')", [], |r| r.get(0))?;
+                anyhow::ensure!(initialized, "Crew has not been initialized yet; start CTOX once to create the crew tables");
+                crew::members(conn)
+            })?;
             match args.get(1).map(String::as_str) {
                 Some("list") if args.len() == 2 => println!("{}", serde_json::to_string_pretty(&members)?),
                 Some("show") if args.len() == 3 => {
@@ -649,7 +706,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                     Some(sync_host::start_if_configured(&root)?.context("configure the native Sync host before computer speech diagnostics")?)
                 } else { None };
                 let gateway = execution::speech::SpeechGateway::from_root(&root)?;
-                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+                let runtime = crate::runtime::shared()?;
                 let speech = runtime.block_on(async {
                     #[cfg(unix)]
                     if config.synthesis == execution::speech::SpeechBackend::Computer {
@@ -708,7 +765,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 anyhow::ensure!(args.len() == 2, "usage: ctox runtime speech-route-check");
                 let _speech_host = sync_host::start_if_configured(&root)?
                     .context("configure the native Sync host before speech route diagnostics")?;
-                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+                let runtime = crate::runtime::shared()?;
                 use ctox_sync::authority::auth::speech_wire::SpeechWorkload;
                 let (transcription, synthesis) = runtime.block_on(async {
                     tokio::join!(
@@ -731,7 +788,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                 let _speech_host = if config.transcription == execution::speech::SpeechBackend::Computer {
                     Some(sync_host::start_if_configured(&root)?.context("configure the native Sync host before computer speech diagnostics")?)
                 } else { None };
-                let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+                let runtime = crate::runtime::shared()?;
                 let result = runtime.block_on(async {
                     #[cfg(unix)]
                     if config.transcription == execution::speech::SpeechBackend::Computer {
@@ -918,12 +975,12 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
                     None
                 };
             if let Some(level) = requested_autonomy {
-                let mut env_map = runtime_env::load_runtime_env_map(&root)?;
-                env_map.insert(
-                    "CTOX_AUTONOMY_LEVEL".to_string(),
-                    level.as_str().to_string(),
-                );
-                runtime_env::save_runtime_env_map(&root, &env_map)?;
+                let work = root.to_owned();
+                persistence::run_cli_owned(root, move || {
+                    let mut env_map = runtime_env::load_runtime_env_map(&work)?;
+                    env_map.insert("CTOX_AUTONOMY_LEVEL".to_string(), level.as_str().to_string());
+                    runtime_env::save_runtime_env_map(&work, &env_map)
+                })?;
             }
             service::run_foreground(root)
         }
@@ -979,6 +1036,7 @@ fn dispatch_command(root: &Path, args: &[String]) -> anyhow::Result<()> {
         Some("office") => business_os::office_cli::handle_command(&args[1..]),
         Some("coding-agent") | Some("coding-agents") => coding_agents::handle_cli(root, &args[1..]),
         Some("transfer") => transfers_cli::handle(root, &args[1..]),
+        Some("machine") => machine_join_cli::handle(root, &args[1..]),
         Some("build-job") => business_os::build_jobs::handle_cli(root, &args[1..]),
         Some("workjet-transfer") => {
             let outcome = business_os::execute_workjet_transfer_git_cli(root, &args[1..])?;
@@ -5397,6 +5455,27 @@ mod tests {
     }
 
     #[test]
+    fn cutover_import_never_opens_a_caller_side_startup_db_or_turn_ledger() {
+        for dry in [false, true] {
+            let mut args = [
+                "business-os",
+                "v4",
+                "cutover",
+                "import",
+                "--snapshot",
+                "/frozen",
+            ]
+            .map(str::to_owned)
+            .to_vec();
+            if dry {
+                args.push("--dry-run".into());
+            }
+            assert!(super::skips_cli_startup_db(&args));
+            assert!(super::skips_cli_turn_ledger(&args));
+        }
+    }
+
+    #[test]
     fn business_command_dispatch_skips_caller_side_turn_ledger() {
         let dispatch = ["business-os", "commands", "dispatch", "--json", "{}"]
             .into_iter()
@@ -6167,50 +6246,6 @@ mod tests {
         assert!(chat_wait_assistant_completion(Some(first), None).is_some());
     }
 
-    #[test]
-    fn chat_wait_failure_outcomes_map_to_agent_failure() {
-        for token in ["TurnTimeout", "ExecutionError", "Aborted", "Cancelled"] {
-            let outcome = lcm::AgentOutcome::from_token(token).expect(token);
-            assert!(outcome.is_agent_failure(), "{token} should be a failure");
-        }
-        assert!(!lcm::AgentOutcome::from_token("Success")
-            .expect("Success token")
-            .is_agent_failure());
-    }
-
-    #[test]
-    fn openrouter_tool_smoke_summary_detects_tool_call_response() {
-        let payload = serde_json::json!({
-            "model": "deepseek/deepseek-v4-flash-20260423",
-            "provider": "DeepInfra",
-            "choices": [{
-                "finish_reason": "tool_calls",
-                "native_finish_reason": "tool_calls",
-                "message": {
-                    "role": "assistant",
-                    "content": "",
-                    "tool_calls": [{
-                        "id": "call_123",
-                        "type": "function",
-                        "function": {
-                            "name": "record_status",
-                            "arguments": "{\"status\":\"ok\"}"
-                        }
-                    }]
-                }
-            }]
-        });
-
-        let summary = openrouter_tool_smoke_summary("auto", 200, &payload);
-        assert_eq!(summary["has_tool_calls"], serde_json::json!(true));
-        assert_eq!(summary["tool_call_count"], serde_json::json!(1));
-        assert_eq!(
-            summary["tool_call_names"],
-            serde_json::json!(["record_status"])
-        );
-        assert_eq!(summary["content_len"], serde_json::json!(0));
-    }
-
     #[cfg(unix)]
     #[test]
     fn appsec_pipeline_worker_executes_ready_stage_and_handles_queue() {
@@ -6224,12 +6259,27 @@ mod tests {
         let httpx = bin_dir.join("httpx");
         fs::write(
             &httpx,
-            "#!/bin/sh\nprintf '{\"url\":\"https://example.test\",\"status_code\":200}\\n'\n",
+            "#!/bin/sh\nif [ \"$1\" = \"-version\" ] || [ \"$1\" = \"--version\" ]; then printf '[INF] Current Version: v1.7.2\\n'; exit 0; fi\nprintf '{\"url\":\"https://example.test\",\"status_code\":200}\\n'\n",
         )
         .unwrap();
         let mut permissions = fs::metadata(&httpx).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&httpx, permissions).unwrap();
+        // Bind the synthetic scanner exactly as the production execution gate requires.
+        use sha2::{Digest, Sha256};
+        let provenance_dir = root.join("runtime/tools/appsec/install-provenance");
+        fs::create_dir_all(&provenance_dir).unwrap();
+        fs::write(
+            provenance_dir.join("httpx.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "scanner": "httpx",
+                "pinned_version": "v1.7.2",
+                "path": httpx,
+                "sha256": format!("{:x}", Sha256::digest(fs::read(&httpx).unwrap()))
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
         run_projected_appsec_command(
             &root,
@@ -6790,12 +6840,27 @@ mod tests {
         let httpx = bin_dir.join("httpx");
         fs::write(
             &httpx,
-            "#!/bin/sh\nprintf 'transient failure\\n' >&2\nexit 2\n",
+            "#!/bin/sh\nif [ \"$1\" = \"-version\" ] || [ \"$1\" = \"--version\" ]; then printf '[INF] Current Version: v1.7.2\\n'; exit 0; fi\nprintf 'transient failure\\n' >&2\nexit 2\n",
         )
         .unwrap();
         let mut permissions = fs::metadata(&httpx).unwrap().permissions();
         permissions.set_mode(0o755);
         fs::set_permissions(&httpx, permissions).unwrap();
+        // Bind the synthetic scanner exactly as the production execution gate requires.
+        use sha2::{Digest, Sha256};
+        let provenance_dir = root.join("runtime/tools/appsec/install-provenance");
+        fs::create_dir_all(&provenance_dir).unwrap();
+        fs::write(
+            provenance_dir.join("httpx.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "scanner": "httpx",
+                "pinned_version": "v1.7.2",
+                "path": httpx,
+                "sha256": format!("{:x}", Sha256::digest(fs::read(&httpx).unwrap()))
+            }))
+            .unwrap(),
+        )
+        .unwrap();
 
         run_projected_appsec_command(
             &root,

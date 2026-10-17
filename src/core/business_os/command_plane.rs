@@ -2,6 +2,8 @@
 // License: Apache-2.0
 
 use super::app_runtime;
+#[path = "app_platform/mod.rs"]
+pub(crate) mod app_platform;
 use super::control_command_types::ActiveExternalSqlControlCommand;
 use super::domain_effect::{self, DomainEffectAdmission};
 use super::policy::{
@@ -53,6 +55,12 @@ pub(super) use domain_effect_recovery::recover_applied_domain_effect_for_intake;
 #[cfg(test)]
 #[path = "command_plane_domain_effect_tests.rs"]
 mod domain_effect_tests;
+
+#[path = "command_plane_v4_routes.rs"]
+mod v4_routes;
+pub(crate) use v4_routes::{
+    execute as execute_v4_registered_command, execute_core as execute_v4_core_registered_command,
+};
 
 const BUSINESS_COMMAND_REPLAY_RECEIPT_CONTRACT: &str = "ctox-business-command-replay-receipt-v1";
 const COMMAND_TIMING_PROBE_FIELD: &str = "command_timing_probe";
@@ -286,7 +294,18 @@ mod crew_identity_tests;
 #[path = "guest_command_tests.rs"]
 mod guest_command_tests;
 
-pub(super) const EXACT_CONTROL_TYPES: [&str; 145] = [
+pub(super) const EXACT_CONTROL_TYPES: [&str; 162] = [
+    "ctox.secret.request.list",
+    "ctox.secret.request.fulfill",
+    "ctox.secret.request.decline",
+    "ctox.workjet.remote_worker.admit",
+    "ctox.maintenance.restart",
+    "instance.providers.models.check",
+    "ctox.crew.execution.list",
+    "ctox.crew.execution.claim",
+    "ctox.crew.execution.plan.update",
+    "ctox.crew.execution.report",
+    "ctox.task.create",
     "news.topic.schedule",
     "news.source.auth_assist",
     "ctox.crew.member.create",
@@ -296,6 +315,7 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 145] = [
     "ctox.crew.learning.update",
     "ctox.crew.learning.delete",
     "ctox.crew.assign",
+    "ctox.plan.step.retry",
     "ctox.queue.release",
     "ctox.queue.block",
     "ctox.queue.retry",
@@ -307,6 +327,11 @@ pub(super) const EXACT_CONTROL_TYPES: [&str; 145] = [
     "ctox.app.action.run",
     "ctox.app_store.install",
     "ctox.app_store.uninstall",
+    "ctox.machine.enroll.begin",
+    "ctox.machine.enroll.cancel",
+    "ctox.machine.enroll.step",
+    "ctox.machine.heartbeat",
+    "ctox.device.unbind",
     "ctox.business_os.audit.list",
     "ctox.business_os.audit.retention",
     "ctox.business_os.audit.retention_policy.set",
@@ -817,6 +842,34 @@ pub(super) fn accept_rxdb_business_command_with_guest_runtime(
     origin: CommandOrigin,
     guest_runtime: super::guest_commands::GuestRuntimeInjection,
 ) -> anyhow::Result<Value> {
+    accept_rxdb_business_command_with_runtimes(root, document, origin, guest_runtime, None)
+}
+
+/// Called by the canonical store owner on its blocking command worker. The
+/// existing WriterHandle must be injected; this entry never opens a store or
+/// writes legacy command/projection tables for ctox.app.*.
+pub(crate) fn accept_rxdb_business_command_with_app_platform(
+    root: &Path,
+    document: Value,
+    origin: CommandOrigin,
+    platform: &app_platform::Platform,
+) -> anyhow::Result<Value> {
+    accept_rxdb_business_command_with_runtimes(
+        root,
+        document,
+        origin,
+        super::guest_commands::GuestRuntimeInjection::Unregistered,
+        Some(platform),
+    )
+}
+
+fn accept_rxdb_business_command_with_runtimes(
+    root: &Path,
+    document: Value,
+    origin: CommandOrigin,
+    guest_runtime: super::guest_commands::GuestRuntimeInjection,
+    platform: Option<&app_platform::Platform>,
+) -> anyhow::Result<Value> {
     let command_id = document
         .get("command_id")
         .or_else(|| document.get("id"))
@@ -853,6 +906,31 @@ pub(super) fn accept_rxdb_business_command_with_guest_runtime(
     // the claim intent, business_commands, business_records, process events
     // and the RxDB projection all store this command.
     super::store::detach_secret_intake_value(&command_id, &mut command);
+    if app_platform::handles(&command.command_type) {
+        let platform = platform.context("canonical app-platform owner is not attached")?;
+        let session = rxdb_authenticated_session(root, &command)?;
+        let result = platform
+            .execute(
+                policy_actor_from_session(&session),
+                app_platform::CommandDocument {
+                    id: command_id.clone(),
+                    app_id: document
+                        .get("app_id")
+                        .and_then(Value::as_str)
+                        .filter(|id| !id.is_empty())
+                        .context("platform command app_id is required")?
+                        .to_owned(),
+                    module: command.module.clone(),
+                    command_type: command.command_type.clone(),
+                    payload: command.payload.clone(),
+                },
+                u64::try_from(now_ms()).context("platform timestamp overflow")?,
+            )?
+            .blocking_wait()?;
+        return Ok(serde_json::json!({"id":command_id,"command_id":command_id,
+            "status":if result["status"] == "preparing" {"running"} else if matches!(result["status"].as_str(),Some("rejected"|"failed")) {"failed"} else {"completed"},
+            "result":result}));
+    }
     let legacy_replay = (matches!(command.origin, CommandOrigin::ReplicatedPeer)
         && super::external_sql_sync::is_external_sql_command(&command.command_type))
     .then(|| command.clone());
@@ -1247,7 +1325,11 @@ enum CentralCommandPolicyRequirement {
 impl CentralCommandPolicyRequirement {
     fn for_command(command: &BusinessCommand) -> Option<Self> {
         let command_type = command.command_type.as_str();
-        let fixed = if command_type == "ctox.workjet.computer.ssh_key.ensure" {
+        let fixed = if command_type == "ctox.task.create" {
+            Some(CommandPolicyRequirement::workspace(
+                BusinessOsPermission::CtoxTaskCreate,
+            ))
+        } else if command_type == "ctox.workjet.computer.ssh_key.ensure" {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::SecretsManage,
             ))
@@ -1271,7 +1353,10 @@ impl CentralCommandPolicyRequirement {
                 BusinessOsPermission::CrewManage,
                 super::policy::BusinessOsScope::record(command_type),
             ))
-        } else if matches!(command_type, "ctox.queue.capacity" | "ctox.queue.pause") {
+        } else if matches!(
+            command_type,
+            "ctox.queue.capacity" | "ctox.queue.pause" | "ctox.plan.step.retry"
+        ) {
             Some(CommandPolicyRequirement::workspace(
                 BusinessOsPermission::CtoxTaskManage,
             ))
@@ -1675,6 +1760,15 @@ fn dispatch_business_command(
     authorized_session: Option<&BusinessOsSession>,
 ) -> anyhow::Result<BusinessCommandDispatchOutcome> {
     match command.command_type.as_str() {
+        "ctox.crew.execution.list"
+        | "ctox.crew.execution.claim"
+        | "ctox.crew.execution.plan.update"
+        | "ctox.crew.execution.report"
+        | "ctox.task.create" => {
+            // New OS primitives are invoked only by the retained V4 adapter.
+            // Legacy control admission has no P9 invocation fence.
+            anyhow::bail!("forbidden: native execution authority required")
+        }
         "ctox.crew.member.create"
         | "ctox.crew.member.update"
         | "ctox.crew.memory.update"
@@ -1699,7 +1793,8 @@ fn dispatch_business_command(
         | "ctox.queue.retry"
         | "ctox.queue.capacity"
         | "ctox.queue.pause"
-        | "ctox.queue.abort_turn" => {
+        | "ctox.queue.abort_turn"
+        | "ctox.plan.step.retry" => {
             let session = authorized_dispatch_session(authorized_session, &command.command_type)?;
             // Finish the durable control claim and replicate its outcome. The
             // target queue task is not an execution task of this control command.
@@ -1740,6 +1835,15 @@ fn dispatch_business_command(
         | "ctox.app.access.revoke"
         | "ctox.app_store.install"
         | "ctox.app_store.uninstall" => handle_app_lifecycle_command(root, command_id, command)
+            .map(BusinessCommandDispatchOutcome::Returned),
+        // §16.41 one-click machine join: core-owned enrollment state.
+        "ctox.machine.enroll.begin"
+        | "ctox.machine.enroll.cancel"
+        | "ctox.machine.enroll.step"
+        | "ctox.machine.heartbeat" => super::machine_enrollment::handle_command(root, command)
+            .map(BusinessCommandDispatchOutcome::Returned),
+        // §16.43: explicit admin unbind of a device-proof edge, never automatic.
+        "ctox.device.unbind" => super::devices::handle_command(root, command)
             .map(BusinessCommandDispatchOutcome::Returned),
         "web_stack.person_research" => super::person_research_command::start(root, command.clone())
             .map(BusinessCommandDispatchOutcome::Returned),
@@ -2119,6 +2223,12 @@ fn dispatch_business_command(
                 )),
             }
         }
+        "ctox.secret.request.list"
+        | "ctox.secret.request.fulfill"
+        | "ctox.secret.request.decline" => {
+            super::store_secret_request_commands::handle_secret_request_command(root, command)
+                .map(BusinessCommandDispatchOutcome::Returned)
+        }
         "ctox.secret.list"
         | "ctox.secret.put"
         | "ctox.secret.delete"
@@ -2425,7 +2535,17 @@ fn dispatch_business_command(
                 return super::decision_hub::handle_command(root, command_id, command)
                     .map(BusinessCommandDispatchOutcome::Returned);
             }
-            let accepted = record_command(root, command.clone())?;
+            let accepted = match record_command(root, command.clone()) {
+                Ok(accepted) => accepted,
+                Err(error) => {
+                    if let Some(outcome) =
+                        super::store::chat_blob_failure_outcome(command_id, &error)
+                    {
+                        return Ok(BusinessCommandDispatchOutcome::Returned(outcome));
+                    }
+                    return Err(error);
+                }
+            };
             Ok(BusinessCommandDispatchOutcome::Returned(
                 serde_json::to_value(accepted)?,
             ))

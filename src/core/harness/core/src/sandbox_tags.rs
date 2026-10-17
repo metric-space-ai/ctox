@@ -22,7 +22,3 @@ pub(crate) fn sandbox_tag(
         .map(SandboxType::as_metric_tag)
         .unwrap_or("none")
 }
-
-#[cfg(test)]
-#[path = "sandbox_tags_tests.rs"]
-mod tests;

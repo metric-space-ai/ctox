@@ -12,13 +12,9 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-t="kicker">Katalog</span>
           <h2 class="ctox-pane-title" data-t="title">App Store</h2>
         </div>
         <div class="ctox-pane-actions">
-          <button type="button" class="ctox-pane-icon" data-toggle-sidebar-extras aria-label="Quellen-Info anzeigen" title="Quellen-Info" data-t-title="sidebarExtrasTitle" data-t-aria="sidebarExtrasAria" aria-pressed="false">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="6" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="18" r="1"/></svg>
-          </button>
         </div>
       </div>
     </header>
@@ -29,7 +25,7 @@
              the parenthesized count (zeros included) — no badge pills. -->
         <nav class="ctox-list store-category-list" data-scope-list>
           <button class="ctox-list-item category-btn active is-selected" data-scope="marketplace">
-            <span class="cat-icon">GH</span>
+            <span class="cat-icon">M</span>
             <span class="cat-main">
               <span class="cat-label" data-t="scopeMarketplace">Marketplace</span>
               <span class="cat-meta" data-scope-count>(0)</span>
@@ -71,16 +67,6 @@
             </span>
           </button>
         </nav>
-
-        <!-- Situational source info (collapsed by default): where marketplace
-             apps come from. The install/create/refresh ACTIONS live as icons
-             in the catalog pane header. -->
-        <div class="store-sidebar-extras" data-sidebar-extras hidden>
-          <div class="ctox-callout store-info-box">
-            <h4 data-t="infoTitle">GitHub Discovery</h4>
-            <p data-t="infoBody">Marketplace apps are loaded from <code>metric-space-ai/ctox</code>. Each app uses its own <code>modules/&lt;id&gt;/module.json</code> contract.</p>
-          </div>
-        </div>
       </div>
     </div>
     <footer class="store-footer"><span data-pg-footer></span></footer>
@@ -92,8 +78,7 @@
     <header class="ctox-pane-header ctox-pane-band">
       <div class="ctox-pane-title-row">
         <div class="ctox-pane-titles">
-          <span class="ctox-pane-kicker" data-t="discoverKicker">Entdecken</span>
-          <h2 class="ctox-pane-title" data-visible-category-title>GitHub Marketplace</h2>
+          <h2 class="ctox-pane-title" data-visible-category-title>Marketplace</h2>
         </div>
         <!-- Standing catalog actions are collected header icons (create + the
              two import paths + export + GitHub discovery refresh) — never text buttons
@@ -104,7 +89,6 @@
           <button type="button" class="ctox-pane-icon" data-action="install-github" aria-label="App aus einem eigenen GitHub-Repository installieren (externe Quelle)" title="App aus einem eigenen GitHub-Repository installieren (externe Quelle)" data-t-title="installGithubTitle" data-t-aria="installGithubTitle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M12 15l-4-4M12 15l4-4M5 19h14"/></svg></button>
           <button type="button" class="ctox-pane-icon" data-action="install-zip" aria-label="App aus einer hochgeladenen .zip-Datei installieren (externe Quelle)" title="App aus einer hochgeladenen .zip-Datei installieren (externe Quelle)" data-t-title="installZipTitle" data-t-aria="installZipTitle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15V4M12 4 8 8M12 4l4 4M5 19h14"/></svg></button>
           <button type="button" class="ctox-pane-icon" data-export-catalog aria-label="Sichtbare Katalogliste exportieren" title="Sichtbare Katalogliste exportieren" data-t-title="exportCatalog" data-t-aria="exportCatalog"></button>
-          <button type="button" class="ctox-pane-icon" data-refresh-marketplace aria-label="GitHub aktualisieren" title="GitHub aktualisieren" data-t-title="refreshMarketplace" data-t-aria="refreshMarketplace"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v4h-4"/></svg></button>
         </div>
       </div>
       <!-- Row 2: filter section — search + the single view toggle + collapsed
@@ -147,24 +131,16 @@
     </nav>
 
     <div class="ctox-pane-body store-well">
-      <div class="ctox-callout store-message" data-store-message hidden></div>
-
       <!-- Shelf rendering: WebGL retail boxes; scroll on the well drives the shelf. -->
       <div class="store-shelf-stage" data-shelf-stage>
         <canvas class="store-shelf-canvas" data-shelf-canvas aria-label="App-Pakete als Regal" role="img"></canvas>
         <div class="store-shelf-scroll" data-shelf-scroll>
           <div class="store-shelf-track" data-shelf-track></div>
         </div>
-        <p class="store-shelf-hint" data-shelf-hint>Scrollen zum Entdecken · Hülle auswählen</p>
       </div>
 
       <!-- List rendering (canonical compact counterpart). -->
       <div class="store-card-grid" data-apps-grid hidden></div>
-
-      <div class="store-loading-overlay" data-loading-spinner hidden>
-        <span class="store-loading-dot"></span>
-        <span data-loading-text data-t="loadingText">GitHub Discovery wird synchronisiert.</span>
-      </div>
 
       <!-- Detail: box flies into pose (shelf) / plain panel (list); real actions live here. -->
       <aside class="store-detail" data-detail-drawer hidden aria-label="App Details">
@@ -172,7 +148,6 @@
           <div class="store-detail-title-row">
             <div class="app-logo-large" data-detail-icon>?</div>
             <div class="store-detail-heading">
-              <span class="ctox-pane-kicker" data-t="drawerKicker">Catalog</span>
               <h3 class="store-detail-title" data-detail-title data-t="drawerNoSelection">Keine App ausgewählt</h3>
               <div class="store-detail-badges">
                 <span class="ctox-badge" data-detail-version>-</span>
@@ -195,10 +170,9 @@
           </dl>
           <figure class="store-detail-capture" data-detail-capture hidden>
             <img alt="" data-detail-capture-img loading="lazy">
-            <figcaption data-detail-capture-caption>Reale Produktaufnahme · aktueller Build</figcaption>
           </figure>
           <div class="store-readme-section">
-            <h4 data-t="readmeTitle">Module Contract</h4>
+            <h4 data-t="readmeTitle">Beschreibung</h4>
             <article class="markdown-document" data-readme-content></article>
           </div>
         </div>

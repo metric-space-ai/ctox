@@ -1,34 +1,20 @@
-const BUILD = '20260830-kundenpipeline-decision-hub-v1';
+const BUILD = '20260830-kundenpipeline-decision-hub-v1'; // Kennung im client_context (keine Cache-Buster-Rolle)
 const MODULE_ID = 'kundenpipeline';
 const DECISIONS = 'kundenpipeline_entscheidungen';
 const VORGAENGE = 'kundenpipeline_vorgaenge';
 const PROJECTS = 'kundenpipeline_projekte';
 
 const state = {
-  ctx: null,
+  api: null,
+  root: null,
   decisions: [],
   vorgaenge: [],
   projekte: [],
   selectedId: '',
   filter: 'open',
   search: '',
-  loading: false,
-  error: '',
-  commandStatus: '',
-  commandError: false,
-  cleanup: [],
+  commands: new Map(),
 };
-
-function plainRecord(record) {
-  return typeof record?.toJSON === 'function' ? record.toJSON() : record;
-}
-
-async function readCollection(name) {
-  const collection = state.ctx?.db?.collection?.(name);
-  if (!collection?.find) return [];
-  const result = await collection.find().exec();
-  return (Array.isArray(result) ? result : []).map(plainRecord).filter(Boolean);
-}
 
 export function normalizeDecision(decision = {}) {
   const question = decision.frage_json?.question || decision.question || '';
@@ -100,24 +86,9 @@ export function decisionCommand(decision, optionId, { comment = '', channel = 'd
   };
 }
 
-function commandId() {
-  return typeof globalThis.crypto?.randomUUID === 'function'
-    ? `cmd_${globalThis.crypto.randomUUID()}`
-    : `cmd_kundenpipeline_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-}
-
 async function loadMarkup() {
   const response = await fetch(new URL('./index.html', import.meta.url));
   return response.text();
-}
-
-async function ensureStyles() {
-  if (document.querySelector('link[data-kundenpipeline-style]')) return;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
-  link.dataset.kundenpipelineStyle = 'true';
-  link.href = new URL('./index.css', import.meta.url).href;
-  document.head.append(link);
 }
 
 function escapeHtml(value) {
@@ -133,7 +104,8 @@ function formatDate(value) {
   const timestamp = Number(value || 0);
   if (!timestamp) return '—';
   try {
-    return new Intl.DateTimeFormat(state.ctx?.locale === 'en' ? 'en-GB' : 'de-DE', {
+    const locale = String(state.api?.shell.locale.get() || '').toLowerCase().startsWith('en') ? 'en-GB' : 'de-DE';
+    return new Intl.DateTimeFormat(locale, {
       dateStyle: 'medium', timeStyle: 'short',
     }).format(new Date(timestamp));
   } catch {
@@ -165,30 +137,22 @@ function selectedVorgang(decision) {
   return state.vorgaenge.find((item) => item.id === decision.vorgang_id) || null;
 }
 
-function readiness(name) {
-  return state.ctx?.sync?.collectionReadiness?.call(state.ctx.sync, name) || null;
-}
-
-function isLoadingEmpty() {
-  return state.loading || [DECISIONS, VORGAENGE].some((name) => readiness(name)?.ready === false);
-}
-
 function renderList(root) {
   const visible = filterDecisions(state.decisions, { filter: state.filter, search: state.search });
   root.querySelector('[data-count="open"]').textContent = String(filterDecisions(state.decisions).length);
   root.querySelector('[data-count="all"]').textContent = String(state.decisions.filter((item) => item.is_deleted !== true).length);
   const list = root.querySelector('[data-decision-list]');
   if (!visible.length) {
-    list.innerHTML = `<div class="kundenpipeline-empty">${isLoadingEmpty() ? 'Entscheidungen werden synchronisiert …' : 'Keine passenden Entscheidungen.'}</div>`;
+    // Leere Liste rendert nichts (PORTING.md R11): kein Lade-, Synchronisierungs- oder Leertext.
+    list.innerHTML = '';
   } else {
     list.innerHTML = visible.map((decision) => `
       <button type="button" class="kundenpipeline-decision-card${decision.id === state.selectedId ? ' is-selected' : ''}" data-decision-id="${escapeHtml(decision.id)}" aria-pressed="${decision.id === state.selectedId}">
         <span class="kundenpipeline-card-meta"><span class="kundenpipeline-type">${escapeHtml(typeLabel(decision.typ))}</span><span class="kundenpipeline-status ${decision.status === 'offen' && !decision.expired ? 'is-open' : 'is-resolved'}">${escapeHtml(statusLabel(decision))}</span></span>
         <span class="kundenpipeline-card-title">${escapeHtml(decision.title)}</span>
-        <span class="kundenpipeline-card-foot"><span>${escapeHtml(decision.question || decision.vorgang_id || 'Kein Kontext')}</span><span>${escapeHtml(formatDate(decision.created_at_ms))}</span></span>
+        <span class="kundenpipeline-card-foot"><span>${escapeHtml(decision.question || '')}</span><span>${escapeHtml(formatDate(decision.created_at_ms))}</span></span>
       </button>`).join('');
   }
-  root.querySelector('[data-list-status]').textContent = state.error || `${visible.length} von ${state.decisions.length} Entscheidungen`;
 }
 
 function renderDetail(root) {
@@ -196,10 +160,11 @@ function renderDetail(root) {
   const body = root.querySelector('[data-detail-body]');
   const actionBody = root.querySelector('[data-action-body]');
   if (!decision) {
-    root.querySelector('[data-detail-kicker]').textContent = 'Keine Auswahl';
-    root.querySelector('[data-detail-title]').textContent = 'Entscheidung auswählen';
-    body.innerHTML = '<div class="kundenpipeline-empty">Wähle eine offene Entscheidung aus.</div>';
-    actionBody.innerHTML = '<div class="kundenpipeline-empty">Wähle eine Entscheidung, um die verfügbaren Optionen zu sehen.</div>';
+    // Ohne Auswahl bleiben Detail und Aktionen leer (R11).
+    root.querySelector('[data-detail-kicker]').textContent = '';
+    root.querySelector('[data-detail-title]').textContent = '';
+    body.innerHTML = '';
+    actionBody.innerHTML = '';
     return;
   }
   const vorgang = selectedVorgang(decision);
@@ -213,11 +178,11 @@ function renderDetail(root) {
     <div class="kundenpipeline-detail-body">
       <section class="kundenpipeline-section">
         <span class="kundenpipeline-status ${decision.status === 'offen' && !decision.expired ? 'is-open' : 'is-resolved'}">${escapeHtml(statusLabel(decision))}</span>
-        <h3 class="kundenpipeline-question">${escapeHtml(frage || 'Keine Frage hinterlegt.')}</h3>
+        ${frage ? `<h3 class="kundenpipeline-question">${escapeHtml(frage)}</h3>` : ''}
         ${decision.context ? `<p class="kundenpipeline-copy">${escapeHtml(decision.context)}</p>` : ''}
       </section>
       <dl class="kundenpipeline-fact-grid">
-        <div class="kundenpipeline-fact"><dt>Vorgang</dt><dd>${escapeHtml(vorgang?.title || decision.vorgang_id || 'Agent-Eskalation')}</dd></div>
+        <div class="kundenpipeline-fact"><dt>Vorgang</dt><dd>${escapeHtml(vorgang?.title || '—')}</dd></div>
         <div class="kundenpipeline-fact"><dt>Kunde</dt><dd>${escapeHtml(vorgang?.kunde_name || '—')}</dd></div>
         <div class="kundenpipeline-fact"><dt>Quelle</dt><dd>${escapeHtml(source.authority || vorgang?.quelle_json?.kanal || 'CTOX')}</dd></div>
         <div class="kundenpipeline-fact"><dt>Aktualisiert</dt><dd>${escapeHtml(formatDate(decision.updated_at_ms))}</dd></div>
@@ -234,23 +199,19 @@ function renderActions(root, decision, vorgang) {
   const options = decision.typ === 'agent_escalation'
     ? decision.options
     : [
-        { wert: 'annehmen', label: 'Annehmen', description: 'Die Entscheidung übernehmen und die serverseitige Folgeaktion ausführen.' },
-        { wert: 'ablehnen', label: 'Ablehnen', description: 'Die Entscheidung schließen, ohne eine Folgeaktion auszuführen.' },
+        { wert: 'annehmen', label: 'Annehmen', description: 'Entscheidung übernehmen und Folgeaktion ausführen' },
+        { wert: 'ablehnen', label: 'Ablehnen', description: 'Entscheidung ohne Folgeaktion schließen' },
       ];
   const canResolve = decision.status === 'offen' && !decision.expired;
   actionBody.innerHTML = `
     <section class="kundenpipeline-section">
-      <h3>${decision.typ === 'agent_escalation' ? 'Option wählen' : 'Entscheidung treffen'}</h3>
-      <p class="kundenpipeline-copy">${escapeHtml(vorgang?.kunde_name ? `Vorgang für ${vorgang.kunde_name}` : 'Der Command wird serverseitig policy-geprüft.')}</p>
       <div class="kundenpipeline-action-list">
         ${canResolve && options.length ? options.map((option) => `
-          <button type="button" class="kundenpipeline-action" data-decision-option="${escapeHtml(option.wert || option.id || '')}">
+          <button type="button" class="kundenpipeline-action" data-decision-option="${escapeHtml(option.wert || option.id || '')}"${option.description ? ` title="${escapeHtml(option.description)}"` : ''}>
             <strong>${escapeHtml(option.label || option.wert || option.id || 'Option')}</strong>
-            ${option.description ? `<span>${escapeHtml(option.description)}</span>` : ''}
-          </button>`).join('') : '<p class="kundenpipeline-empty">Für diese Entscheidung sind keine Aktionen mehr verfügbar.</p>'}
+          </button>`).join('') : ''}
       </div>
-    </section>
-    <div class="kundenpipeline-command-status${state.commandError ? ' is-error' : ''}" role="status" aria-live="polite">${escapeHtml(state.commandStatus || '')}</div>`;
+    </section>`;
 }
 
 function render(root) {
@@ -263,59 +224,45 @@ function render(root) {
   renderDetail(root);
 }
 
-async function refresh(root) {
-  state.loading = state.decisions.length === 0;
-  state.error = '';
-  render(root);
-  try {
-    const [decisions, vorgaenge, projekte] = await Promise.all([
-      readCollection(DECISIONS),
-      readCollection(VORGAENGE),
-      readCollection(PROJECTS),
-    ]);
-    state.decisions = decisions.filter((item) => item.is_deleted !== true);
-    state.vorgaenge = vorgaenge.filter((item) => item.is_deleted !== true);
-    state.projekte = projekte.filter((item) => item.is_deleted !== true);
-    if (!state.selectedId || !state.decisions.some((item) => item.id === state.selectedId)) {
-      state.selectedId = filterDecisions(state.decisions)[0]?.id || state.decisions[0]?.id || '';
-    }
-  } catch (error) {
-    state.error = `Laden fehlgeschlagen: ${error?.message || error}`;
-  } finally {
-    state.loading = false;
-    render(root);
+// Ein Live-Abo je Collection ersetzt die 10-s-Neuladeschleife und den Aktualisieren-Knopf.
+function applyRows(root) {
+  if (!state.selectedId || !state.decisions.some((item) => item.id === state.selectedId)) {
+    state.selectedId = filterDecisions(state.decisions)[0]?.id || state.decisions[0]?.id || '';
   }
+  render(root);
 }
 
-async function dispatchDecision(root, decision, optionId) {
-  if (!state.ctx?.commandBus?.dispatch) {
-    state.commandError = true;
-    state.commandStatus = 'CTOX Command Bus ist nicht verfügbar.';
-    render(root);
+// Befehl über api.command, nie warten (R5). Status live in die Zustandszone: failed → Fehler, done → räumen.
+function dispatchDecision(root, decision, optionId) {
+  const api = state.api;
+  if (!api) return;
+  const envelope = decisionCommand(decision, optionId);
+  const code = `kundenpipeline.command.${envelope.command_type}`;
+  let handle;
+  try {
+    handle = api.command(envelope.command_type, {
+      ...envelope.payload,
+      record_id: envelope.record_id,
+      client_context: envelope.client_context,
+    });
+  } catch (error) {
+    api.status.report({ level: 'error', code, text: `Aktion fehlgeschlagen: ${error?.message || error}` });
     return;
   }
-  state.commandError = false;
-  state.commandStatus = 'Wird an CTOX übergeben …';
-  render(root);
-  try {
-    const outcome = await state.ctx.commandBus.dispatch({
-      ...decisionCommand(decision, optionId),
-      id: commandId(),
-    });
-    state.commandStatus = outcome?.status === 'rejected' || outcome?.ok === false
-      ? 'Die Aktion wurde abgelehnt.'
-      : 'Entscheidung gespeichert.';
-    state.commandError = outcome?.status === 'rejected' || outcome?.ok === false;
-    await refresh(root);
-  } catch (error) {
-    state.commandError = true;
-    state.commandStatus = `Aktion fehlgeschlagen: ${error?.message || error}`;
-    render(root);
-  }
+  handle.local.catch((error) => api.status.report({ level: 'error', code, text: `Aktion fehlgeschlagen: ${error?.message || error}`, ref: handle.id }));
+  const off = handle.status.subscribe((st) => {
+    if (st?.status === 'failed') {
+      api.status.report({ level: 'error', code, text: st.error ? `Die Aktion wurde abgelehnt: ${st.error}` : 'Die Aktion wurde abgelehnt.', ref: handle.id });
+    } else if (st?.status === 'done') {
+      api.status.clear(code);
+    } else return;
+    off?.();
+    state.commands.delete(handle.id);
+  });
+  state.commands.set(handle.id, off);
 }
 
 function wire(root) {
-  root.querySelector('[data-refresh]')?.addEventListener('click', () => refresh(root));
   root.querySelector('[data-search]')?.addEventListener('input', (event) => {
     state.search = event.target.value;
     render(root);
@@ -330,8 +277,6 @@ function wire(root) {
     const button = event.target.closest('[data-decision-id]');
     if (!button) return;
     state.selectedId = button.dataset.decisionId || '';
-    state.commandStatus = '';
-    state.commandError = false;
     render(root);
   });
   root.querySelector('[data-action-body]')?.addEventListener('click', (event) => {
@@ -349,41 +294,58 @@ function wire(root) {
   });
 }
 
-export async function mount(ctx = {}) {
-  state.ctx = ctx;
-  state.decisions = [];
-  state.vorgaenge = [];
-  state.projekte = [];
-  state.selectedId = '';
-  state.filter = 'open';
-  state.search = '';
-  state.commandStatus = '';
-  state.commandError = false;
-  state.error = '';
-  state.cleanup.splice(0).forEach((cleanup) => cleanup?.());
-  await ensureStyles();
-  ctx.host.innerHTML = await loadMarkup();
-  ctx.left?.replaceChildren?.();
-  ctx.right?.replaceChildren?.();
-  const root = ctx.host.querySelector('[data-kundenpipeline-root]');
-  if (!root) return () => {};
+const COLLECTIONS = Object.freeze([['decisions', DECISIONS], ['vorgaenge', VORGAENGE], ['projekte', PROJECTS]]);
+
+export async function mount(host, api, { restored } = {}) {
+  const disposers = [];
+  const commands = new Map();
+  Object.assign(state, { api, root: host, decisions: [], vorgaenge: [], projekte: [], selectedId: '', filter: 'open', search: '', commands });
+  if (!host.dataset.app) host.dataset.app = api.app?.id || MODULE_ID;
+  // CSS lädt die Shell aus dem Manifest (R10); Markup relativ ohne Cache-Buster.
+  host.innerHTML = await loadMarkup();
+  api.shell.setTitle('Decision Hub');
+  const root = host.querySelector('[data-kundenpipeline-root]');
+  if (!root) return { unmount() { host.replaceChildren(); } };
+  if (restored && typeof restored === 'object' && restored.v === 1) {
+    if (typeof restored.selectedId === 'string') state.selectedId = restored.selectedId;
+    if (restored.filter === 'open' || restored.filter === 'all') state.filter = restored.filter;
+    if (typeof restored.search === 'string') state.search = restored.search;
+    const search = root.querySelector('[data-search]');
+    if (search) search.value = state.search;
+    if (restored.actionsVisible === true) root.classList.remove('is-actions-hidden');
+  }
   wire(root);
-  const readinessUnsubs = [DECISIONS, VORGAENGE, PROJECTS]
-    .map((name) => {
-      try {
-        return ctx.sync?.subscribeCollectionReadiness?.(name, () => render(root));
-      } catch {
-        return null;
+  render(root);
+  let pendingScroll = restored?.v === 1 && Number.isFinite(restored.listScrollTop) ? restored.listScrollTop : null;
+  for (const [key, name] of COLLECTIONS) {
+    disposers.push(api.query(name, {}).subscribe((rows) => {
+      state[key] = (Array.isArray(rows) ? rows : []).filter((item) => item.is_deleted !== true);
+      applyRows(root);
+      if (pendingScroll != null && state.decisions.length) {
+        const list = root.querySelector('[data-decision-list]');
+        if (list) list.scrollTop = pendingScroll;
+        pendingScroll = null;
       }
-    })
-    .filter((unsubscribe) => typeof unsubscribe === 'function');
-  state.cleanup.push(() => readinessUnsubs.forEach((unsubscribe) => unsubscribe()));
-  const timer = window.setInterval(() => refresh(root), 10000);
-  state.cleanup.push(() => window.clearInterval(timer));
-  await refresh(root);
-  return () => {
-    state.cleanup.splice(0).forEach((cleanup) => cleanup?.());
-    root.replaceChildren();
+    }));
+  }
+  return {
+    unmount() {
+      for (const off of disposers.splice(0)) { try { off(); } catch {} }
+      for (const off of commands.values()) { try { off(); } catch {} }
+      commands.clear();
+      host.replaceChildren();
+      if (state.api === api) { state.api = null; state.root = null; }
+    },
+    snapshot() {
+      return {
+        v: 1,
+        selectedId: state.selectedId,
+        filter: state.filter,
+        search: root.querySelector('[data-search]')?.value || state.search,
+        actionsVisible: !root.classList.contains('is-actions-hidden'),
+        listScrollTop: root.querySelector('[data-decision-list]')?.scrollTop || 0,
+      };
+    },
   };
 }
 

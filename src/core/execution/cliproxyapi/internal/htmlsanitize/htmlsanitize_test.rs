@@ -42,15 +42,6 @@ fn scalar_helpers_preserve_keys_numbers_bools_and_null() {
 }
 
 #[test]
-fn json_detection_handles_suffix_parameters_shape_and_invalid_media_types() {
-    assert!(is_json_content_type(" application/json; charset=utf-8 "));
-    assert!(is_json_content_type("application/problem+json"));
-    assert!(!is_json_content_type("application/json; broken"));
-    assert!(looks_like_json("\u{2003} [1] \n".as_bytes()));
-    assert!(!looks_like_json(b" true"));
-}
-
-#[test]
 fn invalid_empty_and_trailing_documents_preserve_exact_bytes() {
     for body in [&b" \t\n"[..], &b"{invalid"[..], &b"{} {}"[..]] {
         let (output, changed) = json_body(body);

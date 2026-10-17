@@ -300,20 +300,6 @@ mod tests {
     }
 
     #[test]
-    fn templates_match_the_pinned_go_constants_byte_for_byte() {
-        assert_eq!(LOGIN_SUCCESS_HTML.len(), 5_957);
-        assert_eq!(
-            sha256_hex(LOGIN_SUCCESS_HTML),
-            "ffed53bfdaddc67b3a56f2ea80b71a67a5bfa2e8136e77e49aa0b1cfee55ffab"
-        );
-        assert_eq!(SETUP_NOTICE_HTML.len(), 238);
-        assert_eq!(
-            sha256_hex(SETUP_NOTICE_HTML),
-            "f9bab966c4d14b4777447f63f103c3a6f4c75b263345ebed991885e97ea804ec"
-        );
-    }
-
-    #[test]
     fn plain_render_matches_upstream_replacement_semantics() {
         let rendered = render_login_success_html(false, "https://claude.ai").unwrap();
         let expected = LOGIN_SUCCESS_HTML

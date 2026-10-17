@@ -1,0 +1,7097 @@
+{
+ "at": "2026-10-15T13:50:44.710Z",
+ "variant": "frame",
+ "stub": "/Users/michaelwelsch/.local/state/shell-v4/stub-pins/cff5ba5",
+ "widths": [
+  1280,
+  900,
+  420
+ ],
+ "ported": [
+  "app-store",
+  "appsec-pentest",
+  "browser",
+  "buchhaltung",
+  "calendar",
+  "coding-agents",
+  "consent",
+  "creator",
+  "credentials",
+  "ctox",
+  "customers",
+  "cv-print-builder",
+  "desktop",
+  "documents",
+  "esign",
+  "explorer",
+  "file-viewer",
+  "importer",
+  "intake",
+  "interviews",
+  "invoices",
+  "iot",
+  "knowledge",
+  "kundenpipeline",
+  "mail",
+  "matching",
+  "nachweise",
+  "news",
+  "notes",
+  "outbound",
+  "placements",
+  "reports",
+  "research",
+  "shiftflow",
+  "spreadsheets",
+  "submissions",
+  "support",
+  "threads",
+  "tickets"
+ ],
+ "skipped": [
+  {
+   "id": "app-store",
+   "reason": "Scan 5 Stellen (> 1)"
+  },
+  {
+   "id": "conversations",
+   "reason": "kein mount(root, api) (kein mount-Export); Scan 102"
+  }
+ ],
+ "results": [
+  {
+   "app": "app-store",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"app-store\"] → section#desk_win_7ccjltfb1pgo.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 138,
+    "visibleElements": 73,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 198,
+    "scrollTop": 0,
+    "title": "App Store",
+    "titleCalls": [
+     "App Store"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/app-store@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×19",
+     "--muted×15",
+     "--surface×11",
+     "--text×8",
+     "--warning×8",
+     "--control-radius×7",
+     "--accent×6",
+     "--panel-radius×5"
+    ],
+    "undefinedTokenCount": 21
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "app-store/1280.png"
+  },
+  {
+   "app": "app-store",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"app-store\"] → section#desk_win_1xermoyuzwcpu.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 138,
+    "visibleElements": 73,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 198,
+    "scrollTop": 0,
+    "title": "App Store",
+    "titleCalls": [
+     "App Store"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/app-store@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×19",
+     "--muted×15",
+     "--surface×11",
+     "--text×8",
+     "--warning×8",
+     "--control-radius×7",
+     "--accent×6",
+     "--panel-radius×5"
+    ],
+    "undefinedTokenCount": 21
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "app-store/900.png"
+  },
+  {
+   "app": "app-store",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"app-store\"] → section#desk_win_8yfnaa1crvli7.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 138,
+    "visibleElements": 73,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 198,
+    "scrollTop": 0,
+    "title": "App Store",
+    "titleCalls": [
+     "App Store"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/app-store@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×19",
+     "--muted×15",
+     "--surface×11",
+     "--text×8",
+     "--warning×8",
+     "--control-radius×7",
+     "--accent×6",
+     "--panel-radius×5"
+    ],
+    "undefinedTokenCount": 21
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "app-store/420.png"
+  },
+  {
+   "app": "appsec-pentest",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 455,
+    "visibleElements": 109,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 985,
+    "scrollTop": 0,
+    "title": "Penetration Testing",
+    "titleCalls": [
+     "Penetration Testing"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/appsec-pentest@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×13",
+     "--line×9",
+     "--text×5",
+     "--accent×3",
+     "--surface-2×3",
+     "--panel-radius×2",
+     "--danger×2",
+     "--accent-soft×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "appsec-pentest/1280.png"
+  },
+  {
+   "app": "appsec-pentest",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 455,
+    "visibleElements": 109,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 985,
+    "scrollTop": 0,
+    "title": "Penetration Testing",
+    "titleCalls": [
+     "Penetration Testing"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/appsec-pentest@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×13",
+     "--line×9",
+     "--text×5",
+     "--accent×3",
+     "--surface-2×3",
+     "--panel-radius×2",
+     "--danger×2",
+     "--accent-soft×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "appsec-pentest/900.png"
+  },
+  {
+   "app": "appsec-pentest",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 455,
+    "visibleElements": 113,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 985,
+    "scrollTop": 0,
+    "title": "Penetration Testing",
+    "titleCalls": [
+     "Penetration Testing"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/appsec-pentest@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×13",
+     "--line×9",
+     "--text×5",
+     "--accent×3",
+     "--surface-2×3",
+     "--panel-radius×2",
+     "--danger×2",
+     "--accent-soft×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "appsec-pentest/420.png"
+  },
+  {
+   "app": "browser",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G3"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Lieferantenbewertung“"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"browser\"] → section#desk_win_k5sj7s1afuhxx.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 224,
+    "visibleElements": 105,
+    "root": {
+     "w": 1278,
+     "h": 687
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 941,
+    "scrollTop": 0,
+    "title": "Browser",
+    "titleCalls": [
+     "Browser"
+    ],
+    "zoneEntries": [
+     "app:browser.frame"
+    ],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/browser@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×9",
+     "--bg×5",
+     "--line×4",
+     "--text×4",
+     "--accent×4",
+     "--surface×3",
+     "--surface-2×3",
+     "--hairline×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "browser/1280.png"
+  },
+  {
+   "app": "browser",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G3"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Lieferantenbewertung“"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"browser\"] → section#desk_win_dnx4anfptdzn.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 224,
+    "visibleElements": 105,
+    "root": {
+     "w": 898,
+     "h": 687
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 941,
+    "scrollTop": 0,
+    "title": "Browser",
+    "titleCalls": [
+     "Browser"
+    ],
+    "zoneEntries": [
+     "app:browser.frame"
+    ],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/browser@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×9",
+     "--bg×5",
+     "--line×4",
+     "--text×4",
+     "--accent×4",
+     "--surface×3",
+     "--surface-2×3",
+     "--hairline×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "browser/900.png"
+  },
+  {
+   "app": "browser",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G3",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Lieferantenbewertung“"
+   ],
+   "G4": [
+    "3 abgeschnittene Texte (2 in Listen): Liste span.browser-session-meta „Ruhend · Persönlich · Fehler · 1 Tab · L“; Liste span.browser-session-title „Rahmenvertrag über Wartung und Instandha“; Text span.browser-tab-title „Kundentermin Vorbereitung“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"browser\"] → section#desk_win_vhipwe1nxfjm.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 224,
+    "visibleElements": 105,
+    "root": {
+     "w": 420,
+     "h": 757
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 941,
+    "scrollTop": 0,
+    "title": "Browser",
+    "titleCalls": [
+     "Browser"
+    ],
+    "zoneEntries": [
+     "app:browser.frame"
+    ],
+    "ellipsisCut": 3,
+    "appSheets": [
+     "/~a/browser@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×9",
+     "--bg×5",
+     "--line×4",
+     "--text×4",
+     "--accent×4",
+     "--surface×3",
+     "--surface-2×3",
+     "--hairline×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "browser/420.png"
+  },
+  {
+   "app": "buchhaltung",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"buchhaltung\"] → section#desk_win_1ekr7pd16g3c5e.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 916,
+    "visibleElements": 766,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 5203,
+    "scrollTop": 0,
+    "title": "Buchhaltung",
+    "titleCalls": [
+     "Buchhaltung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/buchhaltung@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [
+     "--line×21",
+     "--muted×13",
+     "--accent×11",
+     "--fs-sm×11",
+     "--surface-2×10",
+     "--font-mono×9",
+     "--text×8",
+     "--control-radius×6"
+    ],
+    "undefinedTokenCount": 28
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "buchhaltung/1280.png"
+  },
+  {
+   "app": "buchhaltung",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"buchhaltung\"] → section#desk_win_e423fg1uh86o0.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 916,
+    "visibleElements": 766,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 5203,
+    "scrollTop": 0,
+    "title": "Buchhaltung",
+    "titleCalls": [
+     "Buchhaltung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/buchhaltung@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [
+     "--line×21",
+     "--muted×13",
+     "--accent×11",
+     "--fs-sm×11",
+     "--surface-2×10",
+     "--font-mono×9",
+     "--text×8",
+     "--control-radius×6"
+    ],
+    "undefinedTokenCount": 28
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "buchhaltung/900.png"
+  },
+  {
+   "app": "buchhaltung",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [
+    "8 innere Container scrollen horizontal: div.fibu-scrollable-container.ctox-table-wrap 680>412; div.fibu-scrollable-container.ctox-table-wrap 680>412; div.fibu-scrollable-container.ctox-table-wrap 680>412; div.fibu-scrollable-container.ctox-table-wrap 680>412"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"buchhaltung\"] → section#desk_win_tav4oad9tlbo.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 916,
+    "visibleElements": 764,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 5203,
+    "scrollTop": 0,
+    "title": "Buchhaltung",
+    "titleCalls": [
+     "Buchhaltung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/buchhaltung@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [
+     "--line×21",
+     "--muted×13",
+     "--accent×11",
+     "--fs-sm×11",
+     "--surface-2×10",
+     "--font-mono×9",
+     "--text×8",
+     "--control-radius×6"
+    ],
+    "undefinedTokenCount": 28
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "buchhaltung/420.png"
+  },
+  {
+   "app": "calendar",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (2 in Listen): Liste h4.ec-event-title „Angebot Wartungsvertrag Halle 4“; Liste h4.ec-event-title „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"calendar\"] → section#desk_win_1a00axpiot4wv.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 385,
+    "visibleElements": 283,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 782,
+    "scrollTop": 0,
+    "title": "Kalender",
+    "titleCalls": [
+     "Kalender"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/calendar@1.0.0/index.css",
+     "/vendor/event-calendar/event-calendar.min.css"
+    ],
+    "undefinedTokens": [
+     "--ec-border-color×19",
+     "--line×12",
+     "--ec-bg-color×10",
+     "--surface×9",
+     "--ec-day-bg-color×9",
+     "--accent×7",
+     "--ec-slot-height×6",
+     "--ec-slot-label-periodicity×6"
+    ],
+    "undefinedTokenCount": 49
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "calendar/1280.png"
+  },
+  {
+   "app": "calendar",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "3 abgeschnittene Texte (3 in Listen): Liste h4.ec-event-title „Angebot Wartungsvertrag Halle 4“; Liste h4.ec-event-title „Budgetplanung Vertrieb Süd“; Liste h4.ec-event-title „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"calendar\"] → section#desk_win_1re3415127mkkz.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 385,
+    "visibleElements": 293,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 893,
+    "scrollTop": 0,
+    "title": "Kalender",
+    "titleCalls": [
+     "Kalender"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 3,
+    "appSheets": [
+     "/~a/calendar@1.0.0/index.css",
+     "/vendor/event-calendar/event-calendar.min.css"
+    ],
+    "undefinedTokens": [
+     "--ec-border-color×19",
+     "--line×12",
+     "--ec-bg-color×10",
+     "--surface×9",
+     "--ec-day-bg-color×9",
+     "--accent×7",
+     "--ec-slot-height×6",
+     "--ec-slot-label-periodicity×6"
+    ],
+    "undefinedTokenCount": 49
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "calendar/900.png"
+  },
+  {
+   "app": "calendar",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "3 abgeschnittene Texte (3 in Listen): Liste h4.ec-event-title „Angebot Wartungsvertrag Halle 4“; Liste h4.ec-event-title „Budgetplanung Vertrieb Süd“; Liste h4.ec-event-title „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"calendar\"] → section#desk_win_752ku6ci0bnm.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 385,
+    "visibleElements": 293,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 893,
+    "scrollTop": 0,
+    "title": "Kalender",
+    "titleCalls": [
+     "Kalender"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 3,
+    "appSheets": [
+     "/~a/calendar@1.0.0/index.css",
+     "/vendor/event-calendar/event-calendar.min.css"
+    ],
+    "undefinedTokens": [
+     "--ec-border-color×19",
+     "--line×12",
+     "--ec-bg-color×10",
+     "--surface×9",
+     "--ec-day-bg-color×9",
+     "--accent×7",
+     "--ec-slot-height×6",
+     "--ec-slot-label-periodicity×6"
+    ],
+    "undefinedTokenCount": 49
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "calendar/420.png"
+  },
+  {
+   "app": "coding-agents",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    150
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 139,
+    "visibleElements": 81,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 350,
+    "scrollTop": 0,
+    "title": "pi Coding Agent",
+    "titleCalls": [
+     "pi Coding Agent"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/coding-agents@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [
+     "--muted×16",
+     "--line×15",
+     "--surface×12",
+     "--accent×9",
+     "--text×7",
+     "--font-mono×6",
+     "--control-radius×5",
+     "--surface-2×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": null,
+   "errors": [
+    "HTTP 404 /~a/coding-agents/icon.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "pushErrors": [],
+   "shot": "coding-agents/1280.png"
+  },
+  {
+   "app": "coding-agents",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    150
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 139,
+    "visibleElements": 69,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 209,
+    "scrollTop": 0,
+    "title": "pi Coding Agent",
+    "titleCalls": [
+     "pi Coding Agent"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/coding-agents@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [
+     "--muted×16",
+     "--line×15",
+     "--surface×12",
+     "--accent×9",
+     "--text×7",
+     "--font-mono×6",
+     "--control-radius×5",
+     "--surface-2×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [
+    "HTTP 404 /~a/coding-agents/icon.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "pushErrors": [],
+   "shot": "coding-agents/900.png"
+  },
+  {
+   "app": "coding-agents",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    150
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 139,
+    "visibleElements": 67,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 209,
+    "scrollTop": 0,
+    "title": "pi Coding Agent",
+    "titleCalls": [
+     "pi Coding Agent"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/coding-agents@1.0.0/index.css",
+     "(inline)"
+    ],
+    "undefinedTokens": [
+     "--muted×16",
+     "--line×15",
+     "--surface×12",
+     "--accent×9",
+     "--text×7",
+     "--font-mono×6",
+     "--control-radius×5",
+     "--surface-2×3"
+    ],
+    "undefinedTokenCount": 12
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [
+    "HTTP 404 /~a/coding-agents/icon.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "pushErrors": [],
+   "shot": "coding-agents/420.png"
+  },
+  {
+   "app": "consent",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    260
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"consent\"] → section#desk_win_8wtkpm1hqli7j.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 113,
+    "visibleElements": 78,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 496,
+    "scrollTop": 0,
+    "title": "Einwilligungen",
+    "titleCalls": [
+     "Einwilligungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/consent@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×2",
+     "--bg×1",
+     "--surface×1",
+     "--surface-2×1",
+     "--line×1",
+     "--accent×1",
+     "--text-strong×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "consent/1280.png"
+  },
+  {
+   "app": "consent",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    260
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"consent\"] → section#desk_win_147kf3r9r3xw0.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 113,
+    "visibleElements": 78,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 496,
+    "scrollTop": 0,
+    "title": "Einwilligungen",
+    "titleCalls": [
+     "Einwilligungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/consent@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×2",
+     "--bg×1",
+     "--surface×1",
+     "--surface-2×1",
+     "--line×1",
+     "--accent×1",
+     "--text-strong×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "consent/900.png"
+  },
+  {
+   "app": "consent",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    260
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"consent\"] → section#desk_win_1cv9yt79jl3yw.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 113,
+    "visibleElements": 77,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 496,
+    "scrollTop": 0,
+    "title": "Einwilligungen",
+    "titleCalls": [
+     "Einwilligungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/consent@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×2",
+     "--bg×1",
+     "--surface×1",
+     "--surface-2×1",
+     "--line×1",
+     "--accent×1",
+     "--text-strong×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "consent/420.png"
+  },
+  {
+   "app": "creator",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"creator\"] → section#desk_win_imwhfmr073c.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 145,
+    "visibleElements": 79,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 694,
+    "scrollTop": 0,
+    "title": "App Creator",
+    "titleCalls": [
+     "App Creator"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/creator@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×6",
+     "--muted×4",
+     "--text×2",
+     "--accent×2",
+     "--focus-ring×1",
+     "--font-mono×1",
+     "--surface×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "creator/1280.png"
+  },
+  {
+   "app": "creator",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"creator\"] → section#desk_win_19bgmdg1ysn2fq.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 145,
+    "visibleElements": 79,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 694,
+    "scrollTop": 0,
+    "title": "App Creator",
+    "titleCalls": [
+     "App Creator"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/creator@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×6",
+     "--muted×4",
+     "--text×2",
+     "--accent×2",
+     "--focus-ring×1",
+     "--font-mono×1",
+     "--surface×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "creator/900.png"
+  },
+  {
+   "app": "creator",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"creator\"] → section#desk_win_1s520tdavvub7.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 145,
+    "visibleElements": 79,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 694,
+    "scrollTop": 0,
+    "title": "App Creator",
+    "titleCalls": [
+     "App Creator"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/creator@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×6",
+     "--muted×4",
+     "--text×2",
+     "--accent×2",
+     "--focus-ring×1",
+     "--font-mono×1",
+     "--surface×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "creator/420.png"
+  },
+  {
+   "app": "credentials",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"credentials\"] → section#desk_win_jwkboyi5x1yd.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 85,
+    "visibleElements": 54,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 308,
+    "scrollTop": 0,
+    "title": "Zugangsdaten",
+    "titleCalls": [
+     "Zugangsdaten"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/credentials@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×2",
+     "--text-strong×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "credentials/1280.png"
+  },
+  {
+   "app": "credentials",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"credentials\"] → section#desk_win_1d0fea57e3z1k.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 85,
+    "visibleElements": 54,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 308,
+    "scrollTop": 0,
+    "title": "Zugangsdaten",
+    "titleCalls": [
+     "Zugangsdaten"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/credentials@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×2",
+     "--text-strong×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "credentials/900.png"
+  },
+  {
+   "app": "credentials",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"credentials\"] → section#desk_win_13wnb1w5i5kq9.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 85,
+    "visibleElements": 53,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 308,
+    "scrollTop": 0,
+    "title": "Zugangsdaten",
+    "titleCalls": [
+     "Zugangsdaten"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/credentials@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×2",
+     "--text-strong×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "credentials/420.png"
+  },
+  {
+   "app": "ctox",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G3"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "2 Zustandstexte: „In Progress“ [en-pending-waiting] in span.ctox-task-meta-status"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"ctox\"] → section#desk_win_1pjx1hvxq6h0x.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 718,
+    "visibleElements": 367,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1527,
+    "scrollTop": 0,
+    "title": "Crew",
+    "titleCalls": [
+     "Crew"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "(inline)",
+     "/~a/ctox@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×63",
+     "--accent×45",
+     "--space-2×42",
+     "--line×40",
+     "--space-1×39",
+     "--space-3×32",
+     "--text×27",
+     "--lh-tight×21"
+    ],
+    "undefinedTokenCount": 36
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "ctox/1280.png"
+  },
+  {
+   "app": "ctox",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G3"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "2 Zustandstexte: „In Progress“ [en-pending-waiting] in span.ctox-task-meta-status"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"ctox\"] → section#desk_win_1m2yoibnv09zw.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 718,
+    "visibleElements": 367,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1526,
+    "scrollTop": 0,
+    "title": "Crew",
+    "titleCalls": [
+     "Crew"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "(inline)",
+     "/~a/ctox@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×63",
+     "--accent×45",
+     "--space-2×42",
+     "--line×40",
+     "--space-1×39",
+     "--space-3×32",
+     "--text×27",
+     "--lh-tight×21"
+    ],
+    "undefinedTokenCount": 36
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "ctox/900.png"
+  },
+  {
+   "app": "ctox",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G3",
+    "G4"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: div.ctox-flow-canvas 850>420"
+   ],
+   "G2": [],
+   "G3": [
+    "2 Zustandstexte: „In Progress“ [en-pending-waiting] in span.ctox-task-meta-status"
+   ],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste strong „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"ctox\"] → section#desk_win_1aqmxu15h5ib5.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 718,
+    "visibleElements": 366,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1526,
+    "scrollTop": 0,
+    "title": "Crew",
+    "titleCalls": [
+     "Crew"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "(inline)",
+     "/~a/ctox@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×63",
+     "--accent×45",
+     "--space-2×42",
+     "--line×40",
+     "--space-1×39",
+     "--space-3×32",
+     "--text×27",
+     "--lh-tight×21"
+    ],
+    "undefinedTokenCount": 36
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "ctox/420.png"
+  },
+  {
+   "app": "customers",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"customers\"] → section#desk_win_1sbdmqout0o0w.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 169,
+    "visibleElements": 113,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1071,
+    "scrollTop": 0,
+    "title": "Kunden",
+    "titleCalls": [
+     "Kunden"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/customers@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×15",
+     "--line×11",
+     "--text×6",
+     "--accent×5",
+     "--panel-radius×5",
+     "--surface×4",
+     "--surface-2×2",
+     "--danger×2"
+    ],
+    "undefinedTokenCount": 14
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "customers/1280.png"
+  },
+  {
+   "app": "customers",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"customers\"] → section#desk_win_2zu9elnsrym4.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 169,
+    "visibleElements": 113,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1071,
+    "scrollTop": 0,
+    "title": "Kunden",
+    "titleCalls": [
+     "Kunden"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/customers@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×15",
+     "--line×11",
+     "--text×6",
+     "--accent×5",
+     "--panel-radius×5",
+     "--surface×4",
+     "--surface-2×2",
+     "--danger×2"
+    ],
+    "undefinedTokenCount": 14
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "customers/900.png"
+  },
+  {
+   "app": "customers",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"customers\"] → section#desk_win_1yiuyuc7e7gz7.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 169,
+    "visibleElements": 112,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1071,
+    "scrollTop": 0,
+    "title": "Kunden",
+    "titleCalls": [
+     "Kunden"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/customers@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×15",
+     "--line×11",
+     "--text×6",
+     "--accent×5",
+     "--panel-radius×5",
+     "--surface×4",
+     "--surface-2×2",
+     "--danger×2"
+    ],
+    "undefinedTokenCount": 14
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "customers/420.png"
+  },
+  {
+   "app": "cv-print-builder",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"cv-print-builder\"] → section#desk_win_157wkulx719q.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 78,
+    "visibleElements": 40,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 88,
+    "scrollTop": 0,
+    "title": "CV Print Builder",
+    "titleCalls": [
+     "CV Print Builder"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/cv-print-builder@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×13",
+     "--accent×5",
+     "--muted×5",
+     "--panel-radius×4",
+     "--surface×4",
+     "--text×4",
+     "--accent-soft×3",
+     "--kit-hover×2"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "cv-print-builder/1280.png"
+  },
+  {
+   "app": "cv-print-builder",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"cv-print-builder\"] → section#desk_win_lqgd5d1akgu22.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 78,
+    "visibleElements": 40,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 88,
+    "scrollTop": 0,
+    "title": "CV Print Builder",
+    "titleCalls": [
+     "CV Print Builder"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/cv-print-builder@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×13",
+     "--accent×5",
+     "--muted×5",
+     "--panel-radius×4",
+     "--surface×4",
+     "--text×4",
+     "--accent-soft×3",
+     "--kit-hover×2"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "cv-print-builder/900.png"
+  },
+  {
+   "app": "cv-print-builder",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"cv-print-builder\"] → section#desk_win_crvh9j1dkag6f.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 78,
+    "visibleElements": 45,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 88,
+    "scrollTop": 0,
+    "title": "CV Print Builder",
+    "titleCalls": [
+     "CV Print Builder"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/cv-print-builder@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×13",
+     "--accent×5",
+     "--muted×5",
+     "--panel-radius×4",
+     "--surface×4",
+     "--text×4",
+     "--accent-soft×3",
+     "--kit-hover×2"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "cv-print-builder/420.png"
+  },
+  {
+   "app": "desktop",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G6"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1320
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [
+    "App-CSS nutzt @media mit Breite (Viewport statt Fenster): index.css: @media 767px"
+   ],
+   "notes": [],
+   "info": {
+    "elements": 7,
+    "visibleElements": 3,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 0,
+    "scrollTop": 0,
+    "title": "Desktop",
+    "titleCalls": [
+     "Desktop"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/desktop@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--accent×10",
+     "--line×8",
+     "--text×7",
+     "--surface×6",
+     "--shell-category-accent×5",
+     "--muted×4",
+     "--bg×3",
+     "--desktop-icon-padding×3"
+    ],
+    "undefinedTokenCount": 14
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "desktop/1280.png"
+  },
+  {
+   "app": "desktop",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G6"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1320
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [
+    "App-CSS nutzt @media mit Breite (Viewport statt Fenster): index.css: @media 767px"
+   ],
+   "notes": [],
+   "info": {
+    "elements": 7,
+    "visibleElements": 3,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 0,
+    "scrollTop": 0,
+    "title": "Desktop",
+    "titleCalls": [
+     "Desktop"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/desktop@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--accent×10",
+     "--line×8",
+     "--text×7",
+     "--surface×6",
+     "--shell-category-accent×5",
+     "--muted×4",
+     "--bg×3",
+     "--desktop-icon-padding×3"
+    ],
+    "undefinedTokenCount": 14
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "desktop/900.png"
+  },
+  {
+   "app": "desktop",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G6"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1320
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [
+    "App-CSS nutzt @media mit Breite (Viewport statt Fenster): index.css: @media 767px"
+   ],
+   "notes": [],
+   "info": {
+    "elements": 7,
+    "visibleElements": 3,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 0,
+    "scrollTop": 0,
+    "title": "Desktop",
+    "titleCalls": [
+     "Desktop"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/desktop@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--accent×10",
+     "--line×8",
+     "--text×7",
+     "--surface×6",
+     "--shell-category-accent×5",
+     "--muted×4",
+     "--bg×3",
+     "--desktop-icon-padding×3"
+    ],
+    "undefinedTokenCount": 14
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "desktop/420.png"
+  },
+  {
+   "app": "documents",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    560,
+    360
+   ],
+   "G1": [
+    "Fenster nach dem Öffnen wieder weg; Shell []; kernel.apps [{\"id\":\"documents\",\"state\":\"failed\",\"active_ver\":\"1.0.0\",\"error\":\"reported: CSS /~a/documents@1.0.0/index.css nicht ladbar\"}]; Zone [{\"app_id\":\"documents\",\"level\":\"error\",\"code\":\"app.activation_failed\",\"text\":\"Aktivierung documents@1.0.0 fehlgeschlagen: reported: CSS /~a/documents@1.0.0/index.css nicht ladbar\",\"ref\":\"1.0.0\",\"source\":\"kernel\",\"at\":1792072088226}]"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {},
+   "g6": null,
+   "errors": [
+    "console: Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME"
+   ],
+   "pushErrors": [],
+   "shot": "documents/1280.png"
+  },
+  {
+   "app": "documents",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G6"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    560,
+    360
+   ],
+   "G1": [
+    "Fenster nach dem Öffnen wieder weg; Shell []; kernel.apps [{\"id\":\"documents\",\"state\":\"failed\",\"active_ver\":\"1.0.0\",\"error\":\"reported: CSS /~a/documents@1.0.0/index.css nicht ladbar\"}]; Zone [{\"app_id\":\"documents\",\"level\":\"error\",\"code\":\"app.activation_failed\",\"text\":\"Aktivierung documents@1.0.0 fehlgeschlagen: reported: CSS /~a/documents@1.0.0/index.css nicht ladbar\",\"ref\":\"1.0.0\",\"source\":\"kernel\",\"at\":1792072089321}]"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [
+    "nicht messbar (Lauf fehlgeschlagen)"
+   ],
+   "notes": [],
+   "info": {},
+   "g6": null,
+   "errors": [
+    "console: Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME"
+   ],
+   "pushErrors": [],
+   "shot": "documents/900.png"
+  },
+  {
+   "app": "documents",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G6"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768,
+    560,
+    360
+   ],
+   "G1": [
+    "Fenster nach dem Öffnen wieder weg; Shell []; kernel.apps [{\"id\":\"documents\",\"state\":\"failed\",\"active_ver\":\"1.0.0\",\"error\":\"reported: CSS /~a/documents@1.0.0/index.css nicht ladbar\"}]; Zone [{\"app_id\":\"documents\",\"level\":\"error\",\"code\":\"app.activation_failed\",\"text\":\"Aktivierung documents@1.0.0 fehlgeschlagen: reported: CSS /~a/documents@1.0.0/index.css nicht ladbar\",\"ref\":\"1.0.0\",\"source\":\"kernel\",\"at\":1792072090373}]"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [
+    "nicht messbar (Lauf fehlgeschlagen)"
+   ],
+   "notes": [],
+   "info": {},
+   "g6": null,
+   "errors": [
+    "console: Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME"
+   ],
+   "pushErrors": [],
+   "shot": "documents/420.png"
+  },
+  {
+   "app": "esign",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"esign\"] → section#desk_win_1mu14kkkf9jd1.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 115,
+    "visibleElements": 80,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 611,
+    "scrollTop": 0,
+    "title": "E-Signatur",
+    "titleCalls": [
+     "E-Signatur"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/esign@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×6",
+     "--surface×3",
+     "--fs-sm×2",
+     "--fs-base×1",
+     "--line×1",
+     "--control-radius×1",
+     "--bg×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "esign/1280.png"
+  },
+  {
+   "app": "esign",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"esign\"] → section#desk_win_3yjxduu27a7x.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 115,
+    "visibleElements": 80,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 611,
+    "scrollTop": 0,
+    "title": "E-Signatur",
+    "titleCalls": [
+     "E-Signatur"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/esign@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×6",
+     "--surface×3",
+     "--fs-sm×2",
+     "--fs-base×1",
+     "--line×1",
+     "--control-radius×1",
+     "--bg×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "esign/900.png"
+  },
+  {
+   "app": "esign",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "3 abgeschnittene Texte (3 in Listen): Liste small.esign-shard-meta.esign-shard-meta--secondary „Aktualisiert 13.10.2026 · Läuft ab 26.10“; Liste small.esign-shard-meta.esign-shard-meta--secondary „Aktualisiert 10.10.2026 · Läuft ab 24.10“; Liste small.esign-shard-meta.esign-shard-meta--secondary „Aktualisiert 08.10.2026 · Läuft ab 22.10“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"esign\"] → section#desk_win_1sdk0npb9yg8k.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 115,
+    "visibleElements": 79,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 611,
+    "scrollTop": 0,
+    "title": "E-Signatur",
+    "titleCalls": [
+     "E-Signatur"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 3,
+    "appSheets": [
+     "/~a/esign@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×6",
+     "--surface×3",
+     "--fs-sm×2",
+     "--fs-base×1",
+     "--line×1",
+     "--control-radius×1",
+     "--bg×1"
+    ],
+    "undefinedTokenCount": 7
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "esign/420.png"
+  },
+  {
+   "app": "explorer",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 122,
+    "visibleElements": 114,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 547,
+    "scrollTop": 0,
+    "title": "Explorer",
+    "titleCalls": [
+     "Explorer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/explorer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×26",
+     "--surface×22",
+     "--accent×16",
+     "--text×12",
+     "--muted×11",
+     "--surface-2×9",
+     "--bg×7",
+     "--danger×3"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "explorer/1280.png"
+  },
+  {
+   "app": "explorer",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 122,
+    "visibleElements": 99,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 470,
+    "scrollTop": 0,
+    "title": "Explorer",
+    "titleCalls": [
+     "Explorer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/explorer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×26",
+     "--surface×22",
+     "--accent×16",
+     "--text×12",
+     "--muted×11",
+     "--surface-2×9",
+     "--bg×7",
+     "--danger×3"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "explorer/900.png"
+  },
+  {
+   "app": "explorer",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: aside.app-explorer-sidebar 1363>420"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 122,
+    "visibleElements": 92,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 442,
+    "scrollTop": 0,
+    "title": "Explorer",
+    "titleCalls": [
+     "Explorer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/explorer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×26",
+     "--surface×22",
+     "--accent×16",
+     "--text×12",
+     "--muted×11",
+     "--surface-2×9",
+     "--bg×7",
+     "--danger×3"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "explorer/420.png"
+  },
+  {
+   "app": "file-viewer",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 11,
+    "visibleElements": 10,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 5,
+    "scrollTop": 0,
+    "title": "Datei-Viewer",
+    "titleCalls": [
+     "Datei-Viewer",
+     "Datei-Viewer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/file-viewer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--surface×5",
+     "--line×3",
+     "--text×2",
+     "--surface-2×1",
+     "--muted×1",
+     "--bg×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "file-viewer/1280.png"
+  },
+  {
+   "app": "file-viewer",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 11,
+    "visibleElements": 10,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 5,
+    "scrollTop": 0,
+    "title": "Datei-Viewer",
+    "titleCalls": [
+     "Datei-Viewer",
+     "Datei-Viewer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/file-viewer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--surface×5",
+     "--line×3",
+     "--text×2",
+     "--surface-2×1",
+     "--muted×1",
+     "--bg×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "file-viewer/900.png"
+  },
+  {
+   "app": "file-viewer",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 11,
+    "visibleElements": 10,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 5,
+    "scrollTop": 0,
+    "title": "Datei-Viewer",
+    "titleCalls": [
+     "Datei-Viewer",
+     "Datei-Viewer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/file-viewer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--surface×5",
+     "--line×3",
+     "--text×2",
+     "--surface-2×1",
+     "--muted×1",
+     "--bg×1"
+    ],
+    "undefinedTokenCount": 6
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "file-viewer/420.png"
+  },
+  {
+   "app": "importer",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"importer\"] → section#desk_win_1h2vy7zzm12p0.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 109,
+    "visibleElements": 63,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 693,
+    "scrollTop": 0,
+    "title": "App Importer",
+    "titleCalls": [
+     "App Importer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/importer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--imp-accent×12",
+     "--surface×11",
+     "--border×11",
+     "--muted×11",
+     "--text×9",
+     "--imp-accent-soft×5",
+     "--app-accent-foreground×4",
+     "--imp-accent-strong×4"
+    ],
+    "undefinedTokenCount": 14
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "importer/1280.png"
+  },
+  {
+   "app": "importer",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"importer\"] → section#desk_win_ig9i5qr3dpzs.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 109,
+    "visibleElements": 63,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 693,
+    "scrollTop": 0,
+    "title": "App Importer",
+    "titleCalls": [
+     "App Importer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/importer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--imp-accent×12",
+     "--surface×11",
+     "--border×11",
+     "--muted×11",
+     "--text×9",
+     "--imp-accent-soft×5",
+     "--app-accent-foreground×4",
+     "--imp-accent-strong×4"
+    ],
+    "undefinedTokenCount": 14
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "importer/900.png"
+  },
+  {
+   "app": "importer",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"importer\"] → section#desk_win_vwg9kg19fkia2.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 109,
+    "visibleElements": 54,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 629,
+    "scrollTop": 0,
+    "title": "App Importer",
+    "titleCalls": [
+     "App Importer"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/importer@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--imp-accent×12",
+     "--surface×11",
+     "--border×11",
+     "--muted×11",
+     "--text×9",
+     "--imp-accent-soft×5",
+     "--app-accent-foreground×4",
+     "--imp-accent-strong×4"
+    ],
+    "undefinedTokenCount": 14
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "importer/420.png"
+  },
+  {
+   "app": "intake",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"intake\"] → section#desk_win_13g7ved1mfmuet.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 117,
+    "visibleElements": 76,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 470,
+    "scrollTop": 0,
+    "title": "Bewerbungseingang",
+    "titleCalls": [
+     "Bewerbungseingang"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/intake@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×4",
+     "--surface×2",
+     "--text-strong×1",
+     "--bg×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "intake/1280.png"
+  },
+  {
+   "app": "intake",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"intake\"] → section#desk_win_7ygtae4ubyy8.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 117,
+    "visibleElements": 76,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 470,
+    "scrollTop": 0,
+    "title": "Bewerbungseingang",
+    "titleCalls": [
+     "Bewerbungseingang"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/intake@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×4",
+     "--surface×2",
+     "--text-strong×1",
+     "--bg×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "intake/900.png"
+  },
+  {
+   "app": "intake",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"intake\"] → section#desk_win_1caxqlh1gf0ae2.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 117,
+    "visibleElements": 75,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 470,
+    "scrollTop": 0,
+    "title": "Bewerbungseingang",
+    "titleCalls": [
+     "Bewerbungseingang"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/intake@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×4",
+     "--surface×2",
+     "--text-strong×1",
+     "--bg×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "intake/420.png"
+  },
+  {
+   "app": "interviews",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"interviews\"] → section#desk_win_1n88mce1bygji2.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 131,
+    "visibleElements": 56,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 307,
+    "scrollTop": 0,
+    "title": "Interviews",
+    "titleCalls": [
+     "Interviews"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/interviews@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×5",
+     "--surface×3",
+     "--line×2",
+     "--text×2",
+     "--accent×2",
+     "--kit-hover×1",
+     "--accent-soft×1",
+     "--text-strong×1"
+    ],
+    "undefinedTokenCount": 13
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "interviews/1280.png"
+  },
+  {
+   "app": "interviews",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"interviews\"] → section#desk_win_xrf31uk24cw0.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 131,
+    "visibleElements": 56,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 307,
+    "scrollTop": 0,
+    "title": "Interviews",
+    "titleCalls": [
+     "Interviews"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/interviews@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×5",
+     "--surface×3",
+     "--line×2",
+     "--text×2",
+     "--accent×2",
+     "--kit-hover×1",
+     "--accent-soft×1",
+     "--text-strong×1"
+    ],
+    "undefinedTokenCount": 13
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "interviews/900.png"
+  },
+  {
+   "app": "interviews",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"interviews\"] → section#desk_win_2yebdz8mvat8.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 131,
+    "visibleElements": 56,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 307,
+    "scrollTop": 0,
+    "title": "Interviews",
+    "titleCalls": [
+     "Interviews"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/interviews@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×5",
+     "--surface×3",
+     "--line×2",
+     "--text×2",
+     "--accent×2",
+     "--kit-hover×1",
+     "--accent-soft×1",
+     "--text-strong×1"
+    ],
+    "undefinedTokenCount": 13
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "interviews/420.png"
+  },
+  {
+   "app": "invoices",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 108,
+    "visibleElements": 86,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 357,
+    "scrollTop": 0,
+    "title": "Rechnungen",
+    "titleCalls": [
+     "Rechnungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/invoices@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×3",
+     "--invoices-v2-control-inset×2",
+     "--bg×2",
+     "--surface×2",
+     "--text×1"
+    ],
+    "undefinedTokenCount": 5
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "invoices/1280.png"
+  },
+  {
+   "app": "invoices",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 108,
+    "visibleElements": 86,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 357,
+    "scrollTop": 0,
+    "title": "Rechnungen",
+    "titleCalls": [
+     "Rechnungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/invoices@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×3",
+     "--invoices-v2-control-inset×2",
+     "--bg×2",
+     "--surface×2",
+     "--text×1"
+    ],
+    "undefinedTokenCount": 5
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "invoices/900.png"
+  },
+  {
+   "app": "invoices",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 108,
+    "visibleElements": 85,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 357,
+    "scrollTop": 0,
+    "title": "Rechnungen",
+    "titleCalls": [
+     "Rechnungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/invoices@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×3",
+     "--invoices-v2-control-inset×2",
+     "--bg×2",
+     "--surface×2",
+     "--text×1"
+    ],
+    "undefinedTokenCount": 5
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "invoices/420.png"
+  },
+  {
+   "app": "iot",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"iot\"] → section#desk_win_qoyyz2vb3wu1.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 77,
+    "visibleElements": 53,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 116,
+    "scrollTop": 0,
+    "title": "IoT",
+    "titleCalls": [
+     "IoT"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/iot@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×12",
+     "--accent×10",
+     "--text×3",
+     "--surface×3",
+     "--line×3",
+     "--control-radius×2",
+     "--kit-hover×2",
+     "--accent-soft×2"
+    ],
+    "undefinedTokenCount": 14
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "iot/1280.png"
+  },
+  {
+   "app": "iot",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"iot\"] → section#desk_win_121kx051tpx594.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 77,
+    "visibleElements": 53,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 116,
+    "scrollTop": 0,
+    "title": "IoT",
+    "titleCalls": [
+     "IoT"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/iot@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×12",
+     "--accent×10",
+     "--text×3",
+     "--surface×3",
+     "--line×3",
+     "--control-radius×2",
+     "--kit-hover×2",
+     "--accent-soft×2"
+    ],
+    "undefinedTokenCount": 14
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "iot/900.png"
+  },
+  {
+   "app": "iot",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"iot\"] → section#desk_win_577ki61h4bdka.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 77,
+    "visibleElements": 55,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 116,
+    "scrollTop": 0,
+    "title": "IoT",
+    "titleCalls": [
+     "IoT"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/iot@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×12",
+     "--accent×10",
+     "--text×3",
+     "--surface×3",
+     "--line×3",
+     "--control-radius×2",
+     "--kit-hover×2",
+     "--accent-soft×2"
+    ],
+    "undefinedTokenCount": 14
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "iot/420.png"
+  },
+  {
+   "app": "knowledge",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (2 in Listen): Liste strong „Rahmenvertrag über Wartung und Instandha“; Liste small.bundle-meta „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 194,
+    "visibleElements": 106,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 796,
+    "scrollTop": 0,
+    "title": "Knowledge",
+    "titleCalls": [
+     "Knowledge"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/knowledge@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--knowledge-accent×24",
+     "--knowledge-surface×22",
+     "--knowledge-line×17",
+     "--knowledge-muted×16",
+     "--knowledge-control-radius×15",
+     "--knowledge-text×10",
+     "--fs-meta×7",
+     "--line×6"
+    ],
+    "undefinedTokenCount": 30
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "knowledge/1280.png"
+  },
+  {
+   "app": "knowledge",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (2 in Listen): Liste strong „Rahmenvertrag über Wartung und Instandha“; Liste small.bundle-meta „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 194,
+    "visibleElements": 106,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 796,
+    "scrollTop": 0,
+    "title": "Knowledge",
+    "titleCalls": [
+     "Knowledge"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/knowledge@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--knowledge-accent×24",
+     "--knowledge-surface×22",
+     "--knowledge-line×17",
+     "--knowledge-muted×16",
+     "--knowledge-control-radius×15",
+     "--knowledge-text×10",
+     "--fs-meta×7",
+     "--line×6"
+    ],
+    "undefinedTokenCount": 30
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "knowledge/900.png"
+  },
+  {
+   "app": "knowledge",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (2 in Listen): Liste strong „Rahmenvertrag über Wartung und Instandha“; Liste small.bundle-meta „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 194,
+    "visibleElements": 76,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 590,
+    "scrollTop": 0,
+    "title": "Knowledge",
+    "titleCalls": [
+     "Knowledge"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/knowledge@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--knowledge-accent×24",
+     "--knowledge-surface×22",
+     "--knowledge-line×17",
+     "--knowledge-muted×16",
+     "--knowledge-control-radius×15",
+     "--knowledge-text×10",
+     "--fs-meta×7",
+     "--line×6"
+    ],
+    "undefinedTokenCount": 30
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "knowledge/420.png"
+  },
+  {
+   "app": "kundenpipeline",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1180,
+    767
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 81,
+    "visibleElements": 79,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 510,
+    "scrollTop": 0,
+    "title": "Decision Hub",
+    "titleCalls": [
+     "Decision Hub"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/kundenpipeline@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×8",
+     "--line×6",
+     "--surface-2×4",
+     "--accent×4",
+     "--text×2"
+    ],
+    "undefinedTokenCount": 5
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "kundenpipeline/1280.png"
+  },
+  {
+   "app": "kundenpipeline",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1180,
+    767
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 81,
+    "visibleElements": 29,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 105,
+    "scrollTop": 0,
+    "title": "Decision Hub",
+    "titleCalls": [
+     "Decision Hub"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/kundenpipeline@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×8",
+     "--line×6",
+     "--surface-2×4",
+     "--accent×4",
+     "--text×2"
+    ],
+    "undefinedTokenCount": 5
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "kundenpipeline/900.png"
+  },
+  {
+   "app": "kundenpipeline",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1180,
+    767
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 81,
+    "visibleElements": 29,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 105,
+    "scrollTop": 0,
+    "title": "Decision Hub",
+    "titleCalls": [
+     "Decision Hub"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/kundenpipeline@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×8",
+     "--line×6",
+     "--surface-2×4",
+     "--accent×4",
+     "--text×2"
+    ],
+    "undefinedTokenCount": 5
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "kundenpipeline/420.png"
+  },
+  {
+   "app": "mail",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    620
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 410,
+    "visibleElements": 133,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 711,
+    "scrollTop": 0,
+    "title": "Mail",
+    "titleCalls": [
+     "Mail"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/mail@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×35",
+     "--line×30",
+     "--accent×27",
+     "--text×24",
+     "--surface×17",
+     "--danger×9",
+     "--surface-2×7",
+     "--control-radius×5"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "mail/1280.png"
+  },
+  {
+   "app": "mail",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    620
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste span.mail-record-subject „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 410,
+    "visibleElements": 133,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 711,
+    "scrollTop": 0,
+    "title": "Mail",
+    "titleCalls": [
+     "Mail"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/mail@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×35",
+     "--line×30",
+     "--accent×27",
+     "--text×24",
+     "--surface×17",
+     "--danger×9",
+     "--surface-2×7",
+     "--control-radius×5"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "mail/900.png"
+  },
+  {
+   "app": "mail",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768,
+    620
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste span.mail-record-subject „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 410,
+    "visibleElements": 78,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 405,
+    "scrollTop": 0,
+    "title": "Mail",
+    "titleCalls": [
+     "Mail"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/mail@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×35",
+     "--line×30",
+     "--accent×27",
+     "--text×24",
+     "--surface×17",
+     "--danger×9",
+     "--surface-2×7",
+     "--control-radius×5"
+    ],
+    "undefinedTokenCount": 11
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "mail/420.png"
+  },
+  {
+   "app": "matching",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 3 App-Selektoren treffen Elemente außerhalb root: [data-app=\"matching\"] → section#desk_win_14kdqrog7e58x.shell-window.is-focused (Fenster-Chrome); [data-app=\"matching\"] img → img[data-window-app-icon] (Fenster-Chrome); [data-app=\"matching\"] button → button.shell-window-control.shell-window-control--layout (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 226,
+    "visibleElements": 92,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 219,
+    "scrollTop": 0,
+    "title": "Matching",
+    "titleCalls": [
+     "Matching"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/matching@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×35",
+     "--accent×30",
+     "--muted×29",
+     "--text×24",
+     "--surface×17",
+     "--control-radius×11",
+     "--surface-2×11",
+     "--panel-shadow×8"
+    ],
+    "undefinedTokenCount": 19
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "matching/1280.png"
+  },
+  {
+   "app": "matching",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 3 App-Selektoren treffen Elemente außerhalb root: [data-app=\"matching\"] → section#desk_win_33l6pf1jk8txp.shell-window.is-focused (Fenster-Chrome); [data-app=\"matching\"] img → img[data-window-app-icon] (Fenster-Chrome); [data-app=\"matching\"] button → button.shell-window-control.shell-window-control--layout (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 226,
+    "visibleElements": 92,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 219,
+    "scrollTop": 0,
+    "title": "Matching",
+    "titleCalls": [
+     "Matching"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/matching@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×35",
+     "--accent×30",
+     "--muted×29",
+     "--text×24",
+     "--surface×17",
+     "--control-radius×11",
+     "--surface-2×11",
+     "--panel-shadow×8"
+    ],
+    "undefinedTokenCount": 19
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "matching/900.png"
+  },
+  {
+   "app": "matching",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    900,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 3 App-Selektoren treffen Elemente außerhalb root: [data-app=\"matching\"] → section#desk_win_10jth051v4eu5p.shell-window.is-mobile-sheet (Fenster-Chrome); [data-app=\"matching\"] img → img[data-window-app-icon] (Fenster-Chrome); [data-app=\"matching\"] button → button.shell-window-control.shell-window-control--layout (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 226,
+    "visibleElements": 91,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 219,
+    "scrollTop": 0,
+    "title": "Matching",
+    "titleCalls": [
+     "Matching"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/matching@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×35",
+     "--accent×30",
+     "--muted×29",
+     "--text×24",
+     "--surface×17",
+     "--control-radius×11",
+     "--surface-2×11",
+     "--panel-shadow×8"
+    ],
+    "undefinedTokenCount": 19
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "matching/420.png"
+  },
+  {
+   "app": "nachweise",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"nachweise\"] → section#desk_win_1vvcjmsaen4kt.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 156,
+    "visibleElements": 94,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 834,
+    "scrollTop": 0,
+    "title": "Nachweise",
+    "titleCalls": [
+     "Nachweise"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/nachweise@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×2",
+     "--accent×1",
+     "--text-strong×1",
+     "--text×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "nachweise/1280.png"
+  },
+  {
+   "app": "nachweise",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text p.nachweise-sub „Generischer Nachweis-/Zertifikats-Tresor“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"nachweise\"] → section#desk_win_tuxybt7zf4vl.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 156,
+    "visibleElements": 94,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 834,
+    "scrollTop": 0,
+    "title": "Nachweise",
+    "titleCalls": [
+     "Nachweise"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/nachweise@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×2",
+     "--accent×1",
+     "--text-strong×1",
+     "--text×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "nachweise/900.png"
+  },
+  {
+   "app": "nachweise",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text p.nachweise-sub „Generischer Nachweis-/Zertifikats-Tresor“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"nachweise\"] → section#desk_win_1i8qr5zcjem1h.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 156,
+    "visibleElements": 96,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 834,
+    "scrollTop": 0,
+    "title": "Nachweise",
+    "titleCalls": [
+     "Nachweise"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/nachweise@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×2",
+     "--accent×1",
+     "--text-strong×1",
+     "--text×1"
+    ],
+    "undefinedTokenCount": 4
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "nachweise/420.png"
+  },
+  {
+   "app": "news",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G3",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Ausgabe fehlgeschlagen: Lieferantenbewertung“"
+   ],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste strong „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 284,
+    "visibleElements": 155,
+    "root": {
+     "w": 1278,
+     "h": 687
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 566,
+    "scrollTop": 0,
+    "title": "News",
+    "titleCalls": [
+     "News"
+    ],
+    "zoneEntries": [
+     "app:news.issue.failed"
+    ],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/news@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--news-line×16",
+     "--news-muted×16",
+     "--accent×15",
+     "--news-text×12",
+     "--news-row×9",
+     "--surface×5",
+     "--news-bg×5",
+     "--news-hover×5"
+    ],
+    "undefinedTokenCount": 29
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "news/1280.png"
+  },
+  {
+   "app": "news",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G3",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Ausgabe fehlgeschlagen: Lieferantenbewertung“"
+   ],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste strong „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 284,
+    "visibleElements": 144,
+    "root": {
+     "w": 898,
+     "h": 687
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 542,
+    "scrollTop": 0,
+    "title": "News",
+    "titleCalls": [
+     "News"
+    ],
+    "zoneEntries": [
+     "app:news.issue.failed"
+    ],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/news@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--news-line×16",
+     "--news-muted×16",
+     "--accent×15",
+     "--news-text×12",
+     "--news-row×9",
+     "--surface×5",
+     "--news-bg×5",
+     "--news-hover×5"
+    ],
+    "undefinedTokenCount": 29
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "news/900.png"
+  },
+  {
+   "app": "news",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G3",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "Zustandszone sichtbar: „Ausgabe fehlgeschlagen: Lieferantenbewertung“"
+   ],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste strong „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 284,
+    "visibleElements": 74,
+    "root": {
+     "w": 420,
+     "h": 757
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 344,
+    "scrollTop": 0,
+    "title": "News",
+    "titleCalls": [
+     "News"
+    ],
+    "zoneEntries": [
+     "app:news.issue.failed"
+    ],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/news@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--news-line×16",
+     "--news-muted×16",
+     "--accent×15",
+     "--news-text×12",
+     "--news-row×9",
+     "--surface×5",
+     "--news-bg×5",
+     "--news-hover×5"
+    ],
+    "undefinedTokenCount": 29
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "news/420.png"
+  },
+  {
+   "app": "notes",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [
+    "root scrollt horizontal (1442 > 1278)",
+    "10 Elemente ragen aus root: div.nn-dropdown-menu 164px seitlich; button.nn-dropdown-item 159px seitlich; svg 64px seitlich; rect 56px seitlich; path 44px seitlich; span 151px seitlich",
+    "2 innere Container scrollen horizontal: div.nn-note-meta-left 282>237; div.nn-editor-toolbar 454>330"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 375,
+    "visibleElements": 267,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1517,
+    "scrollTop": 276,
+    "title": "Notizen",
+    "titleCalls": [
+     "Notizen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/notes@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--accent×26",
+     "--text×19",
+     "--line×17",
+     "--muted×16",
+     "--control-radius×11",
+     "--surface×6",
+     "--danger×6",
+     "--surface-2×5"
+    ],
+    "undefinedTokenCount": 21
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "notes/1280.png"
+  },
+  {
+   "app": "notes",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [
+    "root scrollt horizontal (1062 > 898)",
+    "10 Elemente ragen aus root: div.nn-dropdown-menu 164px seitlich; button.nn-dropdown-item 159px seitlich; svg 64px seitlich; rect 56px seitlich; path 44px seitlich; span 151px seitlich",
+    "2 innere Container scrollen horizontal: div.nn-note-meta-left 282>237; div.nn-editor-toolbar 454>330"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 375,
+    "visibleElements": 267,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1517,
+    "scrollTop": 276,
+    "title": "Notizen",
+    "titleCalls": [
+     "Notizen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/notes@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--accent×26",
+     "--text×19",
+     "--line×17",
+     "--muted×16",
+     "--control-radius×11",
+     "--surface×6",
+     "--danger×6",
+     "--surface-2×5"
+    ],
+    "undefinedTokenCount": 21
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "notes/900.png"
+  },
+  {
+   "app": "notes",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 375,
+    "visibleElements": 155,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 614,
+    "scrollTop": 0,
+    "title": "Notizen",
+    "titleCalls": [
+     "Notizen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/notes@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--accent×26",
+     "--text×19",
+     "--line×17",
+     "--muted×16",
+     "--control-radius×11",
+     "--surface×6",
+     "--danger×6",
+     "--surface-2×5"
+    ],
+    "undefinedTokenCount": 21
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "notes/420.png"
+  },
+  {
+   "app": "outbound",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G3"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: div.outbound-table-scroll-unified 1380>1254"
+   ],
+   "G2": [],
+   "G3": [
+    "4 Zustandstexte: „1 wartet“ [de-warten] in b; „CTOX arbeitet gerade nicht: 1 wartet“ [de-warten] in strong; „0 läuft“ [de-laeuft] in span; „1 wartet“ [de-warten] in span"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 373,
+    "visibleElements": 279,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1447,
+    "scrollTop": 0,
+    "title": "Outbound",
+    "titleCalls": [
+     "Outbound"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/outbound@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×56",
+     "--muted×41",
+     "--accent×36",
+     "--text×29",
+     "--surface-2×20",
+     "--surface×19",
+     "--control-radius×19",
+     "--warning×18"
+    ],
+    "undefinedTokenCount": 27
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "outbound/1280.png"
+  },
+  {
+   "app": "outbound",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G3"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: div.outbound-table-scroll-unified 1380>874"
+   ],
+   "G2": [],
+   "G3": [
+    "4 Zustandstexte: „1 wartet“ [de-warten] in b; „CTOX arbeitet gerade nicht: 1 wartet“ [de-warten] in strong; „0 läuft“ [de-laeuft] in span; „1 wartet“ [de-warten] in span"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 373,
+    "visibleElements": 279,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1447,
+    "scrollTop": 0,
+    "title": "Outbound",
+    "titleCalls": [
+     "Outbound"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/outbound@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×56",
+     "--muted×41",
+     "--accent×36",
+     "--text×29",
+     "--surface-2×20",
+     "--surface×19",
+     "--control-radius×19",
+     "--warning×18"
+    ],
+    "undefinedTokenCount": 27
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 5,
+    "viewportColumns": 5
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "outbound/900.png"
+  },
+  {
+   "app": "outbound",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G3",
+    "G4"
+   ],
+   "scanRest": [
+    "R17-schema:schema.js"
+   ],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: div.outbound-table-scroll-unified 1380>396"
+   ],
+   "G2": [],
+   "G3": [
+    "4 Zustandstexte: „1 wartet“ [de-warten] in b; „CTOX arbeitet gerade nicht: 1 wartet“ [de-warten] in strong; „0 läuft“ [de-laeuft] in span; „1 wartet“ [de-warten] in span"
+   ],
+   "G4": [
+    "2 abgeschnittene Texte (2 in Listen): Liste span „reply_received · Angebot Wartungsvertrag“; Liste strong „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 373,
+    "visibleElements": 279,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1447,
+    "scrollTop": 0,
+    "title": "Outbound",
+    "titleCalls": [
+     "Outbound"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/outbound@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--line×56",
+     "--muted×41",
+     "--accent×36",
+     "--text×29",
+     "--surface-2×20",
+     "--surface×19",
+     "--control-radius×19",
+     "--warning×18"
+    ],
+    "undefinedTokenCount": 27
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 5,
+    "viewportColumns": 5
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "outbound/420.png"
+  },
+  {
+   "app": "placements",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"placements\"] → section#desk_win_15yr90juvk86c.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 122,
+    "visibleElements": 80,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 699,
+    "scrollTop": 0,
+    "title": "Vermittlungen",
+    "titleCalls": [
+     "Vermittlungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/placements@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×3",
+     "--text×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "placements/1280.png"
+  },
+  {
+   "app": "placements",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"placements\"] → section#desk_win_1szdnns3d4amk.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 122,
+    "visibleElements": 80,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 699,
+    "scrollTop": 0,
+    "title": "Vermittlungen",
+    "titleCalls": [
+     "Vermittlungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/placements@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×3",
+     "--text×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "placements/900.png"
+  },
+  {
+   "app": "placements",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"placements\"] → section#desk_win_zn7eox1c62295.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 122,
+    "visibleElements": 79,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 699,
+    "scrollTop": 0,
+    "title": "Vermittlungen",
+    "titleCalls": [
+     "Vermittlungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/placements@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×3",
+     "--text×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "placements/420.png"
+  },
+  {
+   "app": "reports",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"reports\"] → section#desk_win_9vlbuc1l00wch.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 156,
+    "visibleElements": 110,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 924,
+    "scrollTop": 0,
+    "title": "Bugs & Features",
+    "titleCalls": [
+     "Bugs & Features"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/reports@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×4",
+     "--reports-feature×3",
+     "--accent×2",
+     "--accent-soft×1",
+     "--app-accent×1",
+     "--line×1",
+     "--panel-radius×1",
+     "--bg×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "reports/1280.png"
+  },
+  {
+   "app": "reports",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"reports\"] → section#desk_win_1oonqjevqln0r.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 156,
+    "visibleElements": 110,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 924,
+    "scrollTop": 0,
+    "title": "Bugs & Features",
+    "titleCalls": [
+     "Bugs & Features"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/reports@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×4",
+     "--reports-feature×3",
+     "--accent×2",
+     "--accent-soft×1",
+     "--app-accent×1",
+     "--line×1",
+     "--panel-radius×1",
+     "--bg×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "reports/900.png"
+  },
+  {
+   "app": "reports",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste strong.report-row-title „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"reports\"] → section#desk_win_1hz4z411vsdke1.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 156,
+    "visibleElements": 109,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 924,
+    "scrollTop": 0,
+    "title": "Bugs & Features",
+    "titleCalls": [
+     "Bugs & Features"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/reports@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×4",
+     "--reports-feature×3",
+     "--accent×2",
+     "--accent-soft×1",
+     "--app-accent×1",
+     "--line×1",
+     "--panel-radius×1",
+     "--bg×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "reports/420.png"
+  },
+  {
+   "app": "research",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G3"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1240,
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "1 Zustandstexte: „loading“ [en-loading] in strong"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 183,
+    "visibleElements": 178,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1136,
+    "scrollTop": 0,
+    "title": "Web Research",
+    "titleCalls": [
+     "Web Research"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/research@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--research-line×39",
+     "--research-muted×38",
+     "--research-accent×31",
+     "--research-surface×17",
+     "--research-surface-2×15",
+     "--research-text×15",
+     "--research-warn×12",
+     "--research-good×9"
+    ],
+    "undefinedTokenCount": 27
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "research/1280.png"
+  },
+  {
+   "app": "research",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G3"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1240,
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "1 Zustandstexte: „loading“ [en-loading] in strong"
+   ],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 183,
+    "visibleElements": 176,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1097,
+    "scrollTop": 0,
+    "title": "Web Research",
+    "titleCalls": [
+     "Web Research"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/research@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--research-line×39",
+     "--research-muted×38",
+     "--research-accent×31",
+     "--research-surface×17",
+     "--research-surface-2×15",
+     "--research-text×15",
+     "--research-warn×12",
+     "--research-good×9"
+    ],
+    "undefinedTokenCount": 27
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "research/900.png"
+  },
+  {
+   "app": "research",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G3",
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1240,
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [
+    "1 Zustandstexte: „loading“ [en-loading] in strong"
+   ],
+   "G4": [
+    "1 abgeschnittene Texte (1 in Listen): Liste strong „Rahmenvertrag über Wartung und Instandha“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 183,
+    "visibleElements": 169,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1003,
+    "scrollTop": 0,
+    "title": "Web Research",
+    "titleCalls": [
+     "Web Research"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/research@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--research-line×39",
+     "--research-muted×38",
+     "--research-accent×31",
+     "--research-surface×17",
+     "--research-surface-2×15",
+     "--research-text×15",
+     "--research-warn×12",
+     "--research-good×9"
+    ],
+    "undefinedTokenCount": 27
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "research/420.png"
+  },
+  {
+   "app": "shiftflow",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"shiftflow\"] → section#desk_win_1shmidu1wjxko4.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 273,
+    "visibleElements": 134,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 621,
+    "scrollTop": 0,
+    "title": "Einsatzplanung",
+    "titleCalls": [
+     "Einsatzplanung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/shiftflow@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--accent×20",
+     "--line×18",
+     "--muted×15",
+     "--text×15",
+     "--surface×11",
+     "--surface-2×6",
+     "--control-radius×4",
+     "--shiftflow-dept×3"
+    ],
+    "undefinedTokenCount": 18
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "shiftflow/1280.png"
+  },
+  {
+   "app": "shiftflow",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: div.shiftflow-scheduler-container.os-scrollbar 692>536"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"shiftflow\"] → section#desk_win_eg31cp1buhr88.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 273,
+    "visibleElements": 134,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 621,
+    "scrollTop": 0,
+    "title": "Einsatzplanung",
+    "titleCalls": [
+     "Einsatzplanung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/shiftflow@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--accent×20",
+     "--line×18",
+     "--muted×15",
+     "--text×15",
+     "--surface×11",
+     "--surface-2×6",
+     "--control-radius×4",
+     "--shiftflow-dept×3"
+    ],
+    "undefinedTokenCount": 18
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 2,
+    "viewportColumns": 2
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "shiftflow/900.png"
+  },
+  {
+   "app": "shiftflow",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [
+    "1 innere Container scrollen horizontal: div.shiftflow-scheduler-container.os-scrollbar 784>420"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"shiftflow\"] → section#desk_win_1ihkrw61pl43e8.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 273,
+    "visibleElements": 133,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 621,
+    "scrollTop": 0,
+    "title": "Einsatzplanung",
+    "titleCalls": [
+     "Einsatzplanung"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/shiftflow@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--accent×20",
+     "--line×18",
+     "--muted×15",
+     "--text×15",
+     "--surface×11",
+     "--surface-2×6",
+     "--control-radius×4",
+     "--shiftflow-dept×3"
+    ],
+    "undefinedTokenCount": 18
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "shiftflow/420.png"
+  },
+  {
+   "app": "spreadsheets",
+   "width": 1280,
+   "ok": false,
+   "fails": [
+    "G1"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [
+    "Fenster nach dem Öffnen wieder weg; Shell []; kernel.apps [{\"id\":\"spreadsheets\",\"state\":\"failed\",\"active_ver\":\"1.0.0\",\"error\":\"reported: CSS /~a/spreadsheets@1.0.0/index.css nicht ladbar\"}]; Zone [{\"app_id\":\"spreadsheets\",\"level\":\"error\",\"code\":\"app.activation_failed\",\"text\":\"Aktivierung spreadsheets@1.0.0 fehlgeschlagen: reported: CSS /~a/spreadsheets@1.0.0/index.css nicht ladbar\",\"ref\":\"1.0.0\",\"source\":\"kernel\",\"at\":1792072200871}]"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {},
+   "g6": null,
+   "errors": [
+    "console: Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME"
+   ],
+   "pushErrors": [],
+   "shot": "spreadsheets/1280.png"
+  },
+  {
+   "app": "spreadsheets",
+   "width": 900,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G6"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [
+    "Fenster nach dem Öffnen wieder weg; Shell []; kernel.apps [{\"id\":\"spreadsheets\",\"state\":\"failed\",\"active_ver\":\"1.0.0\",\"error\":\"reported: CSS /~a/spreadsheets@1.0.0/index.css nicht ladbar\"}]; Zone [{\"app_id\":\"spreadsheets\",\"level\":\"error\",\"code\":\"app.activation_failed\",\"text\":\"Aktivierung spreadsheets@1.0.0 fehlgeschlagen: reported: CSS /~a/spreadsheets@1.0.0/index.css nicht ladbar\",\"ref\":\"1.0.0\",\"source\":\"kernel\",\"at\":1792072201901}]"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [
+    "nicht messbar (Lauf fehlgeschlagen)"
+   ],
+   "notes": [],
+   "info": {},
+   "g6": null,
+   "errors": [
+    "console: Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME"
+   ],
+   "pushErrors": [],
+   "shot": "spreadsheets/900.png"
+  },
+  {
+   "app": "spreadsheets",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G1",
+    "G6"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [
+    "Fenster nach dem Öffnen wieder weg; Shell []; kernel.apps [{\"id\":\"spreadsheets\",\"state\":\"failed\",\"active_ver\":\"1.0.0\",\"error\":\"reported: CSS /~a/spreadsheets@1.0.0/index.css nicht ladbar\"}]; Zone [{\"app_id\":\"spreadsheets\",\"level\":\"error\",\"code\":\"app.activation_failed\",\"text\":\"Aktivierung spreadsheets@1.0.0 fehlgeschlagen: reported: CSS /~a/spreadsheets@1.0.0/index.css nicht ladbar\",\"ref\":\"1.0.0\",\"source\":\"kernel\",\"at\":1792072202921}]"
+   ],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [
+    "nicht messbar (Lauf fehlgeschlagen)"
+   ],
+   "notes": [],
+   "info": {},
+   "g6": null,
+   "errors": [
+    "console: Failed to load resource: net::ERR_UNKNOWN_URL_SCHEME"
+   ],
+   "pushErrors": [],
+   "shot": "spreadsheets/420.png"
+  },
+  {
+   "app": "submissions",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"submissions\"] → section#desk_win_uv2mhg1qtpm97.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 116,
+    "visibleElements": 77,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 539,
+    "scrollTop": 0,
+    "title": "Vorstellungen",
+    "titleCalls": [
+     "Vorstellungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/submissions@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×3",
+     "--text×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "submissions/1280.png"
+  },
+  {
+   "app": "submissions",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"submissions\"] → section#desk_win_vxzwevnejyjy.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 116,
+    "visibleElements": 77,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 539,
+    "scrollTop": 0,
+    "title": "Vorstellungen",
+    "titleCalls": [
+     "Vorstellungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/submissions@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×3",
+     "--text×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "submissions/900.png"
+  },
+  {
+   "app": "submissions",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"submissions\"] → section#desk_win_1byylgi186jz0j.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 116,
+    "visibleElements": 76,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 539,
+    "scrollTop": 0,
+    "title": "Vorstellungen",
+    "titleCalls": [
+     "Vorstellungen"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/submissions@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×3",
+     "--text×1"
+    ],
+    "undefinedTokenCount": 2
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "submissions/420.png"
+  },
+  {
+   "app": "support",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 234,
+    "visibleElements": 100,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1267,
+    "scrollTop": 0,
+    "title": "Support",
+    "titleCalls": [
+     "Support"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/support@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×7",
+     "--line×6",
+     "--ctox-left-width×3",
+     "--ctox-right-width×1",
+     "--control-radius×1",
+     "--surface-2×1",
+     "--accent×1",
+     "--warning×1"
+    ],
+    "undefinedTokenCount": 10
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "support/1280.png"
+  },
+  {
+   "app": "support",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 234,
+    "visibleElements": 100,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 1267,
+    "scrollTop": 0,
+    "title": "Support",
+    "titleCalls": [
+     "Support"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/support@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×7",
+     "--line×6",
+     "--ctox-left-width×3",
+     "--ctox-right-width×1",
+     "--control-radius×1",
+     "--surface-2×1",
+     "--accent×1",
+     "--warning×1"
+    ],
+    "undefinedTokenCount": 10
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "support/900.png"
+  },
+  {
+   "app": "support",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "2 abgeschnittene Texte (2 in Listen): Liste strong.support-row-title „Rückfrage zur Lieferzeit der Ersatzteile“; Liste strong.support-row-title „Zusammenfassung der Ergebnisse aus dem W“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 234,
+    "visibleElements": 99,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 1267,
+    "scrollTop": 0,
+    "title": "Support",
+    "titleCalls": [
+     "Support"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 2,
+    "appSheets": [
+     "/~a/support@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×7",
+     "--line×6",
+     "--ctox-left-width×3",
+     "--ctox-right-width×1",
+     "--control-radius×1",
+     "--surface-2×1",
+     "--accent×1",
+     "--warning×1"
+    ],
+    "undefinedTokenCount": 10
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "support/420.png"
+  },
+  {
+   "app": "threads",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"threads\"] → section#desk_win_1h46kh21wa7hu1.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 292,
+    "visibleElements": 99,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 775,
+    "scrollTop": 0,
+    "title": "Threads",
+    "titleCalls": [
+     "Threads"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/threads@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×13",
+     "--accent×13",
+     "--line×9",
+     "--fs-micro×7",
+     "--fs-meta×6",
+     "--surface×6",
+     "--control-radius×5",
+     "--text×5"
+    ],
+    "undefinedTokenCount": 15
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "threads/1280.png"
+  },
+  {
+   "app": "threads",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"threads\"] → section#desk_win_d9blw75px34t.shell-window.is-focused (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 292,
+    "visibleElements": 99,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 775,
+    "scrollTop": 0,
+    "title": "Threads",
+    "titleCalls": [
+     "Threads"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/threads@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×13",
+     "--accent×13",
+     "--line×9",
+     "--fs-micro×7",
+     "--fs-meta×6",
+     "--surface×6",
+     "--control-radius×5",
+     "--text×5"
+    ],
+    "undefinedTokenCount": 15
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "threads/900.png"
+  },
+  {
+   "app": "threads",
+   "width": 420,
+   "ok": false,
+   "fails": [
+    "G4"
+   ],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [
+    "1 abgeschnittene Texte (0 in Listen): Text span.threads-list-preview „Anna Schmidt: Rückfrage zur Lieferzeit d“"
+   ],
+   "G5": [],
+   "G6": [],
+   "notes": [
+    "G5-Beleg: 1 App-Selektoren treffen Elemente außerhalb root: [data-app=\"threads\"] → section#desk_win_1pbdnv41v5meal.shell-window.is-mobile-sheet (Fenster-Chrome)"
+   ],
+   "info": {
+    "elements": 292,
+    "visibleElements": 46,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 261,
+    "scrollTop": 0,
+    "title": "Threads",
+    "titleCalls": [
+     "Threads"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 1,
+    "appSheets": [
+     "/~a/threads@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×13",
+     "--accent×13",
+     "--line×9",
+     "--fs-micro×7",
+     "--fs-meta×6",
+     "--surface×6",
+     "--control-radius×5",
+     "--text×5"
+    ],
+    "undefinedTokenCount": 15
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 0,
+    "viewportColumns": 0
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "threads/420.png"
+  },
+  {
+   "app": "tickets",
+   "width": 1280,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 372,
+    "visibleElements": 281,
+    "root": {
+     "w": 1278,
+     "h": 710
+    },
+    "window": {
+     "w": 1280,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 983,
+    "scrollTop": 0,
+    "title": "Tickets",
+    "titleCalls": [
+     "Tickets"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/tickets@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×7",
+     "--tickets-v2-control-inset×3",
+     "--line×3",
+     "--accent×1",
+     "--accent-soft×1",
+     "--control-radius×1",
+     "--surface×1",
+     "--danger×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": null,
+   "errors": [],
+   "pushErrors": [],
+   "shot": "tickets/1280.png"
+  },
+  {
+   "app": "tickets",
+   "width": 900,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 372,
+    "visibleElements": 280,
+    "root": {
+     "w": 898,
+     "h": 710
+    },
+    "window": {
+     "w": 900,
+     "h": 748,
+     "mode": ""
+    },
+    "textChars": 983,
+    "scrollTop": 0,
+    "title": "Tickets",
+    "titleCalls": [
+     "Tickets"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/tickets@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×7",
+     "--tickets-v2-control-inset×3",
+     "--line×3",
+     "--accent×1",
+     "--accent-soft×1",
+     "--control-radius×1",
+     "--surface×1",
+     "--danger×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "tickets/900.png"
+  },
+  {
+   "app": "tickets",
+   "width": 420,
+   "ok": true,
+   "fails": [],
+   "scanRest": [],
+   "containerBreakpoints": [
+    1024,
+    768
+   ],
+   "G1": [],
+   "G2": [],
+   "G3": [],
+   "G4": [],
+   "G5": [],
+   "G6": [],
+   "notes": [],
+   "info": {
+    "elements": 372,
+    "visibleElements": 279,
+    "root": {
+     "w": 420,
+     "h": 780
+    },
+    "window": {
+     "w": 420,
+     "h": 816,
+     "mode": "mobile-sheet"
+    },
+    "textChars": 983,
+    "scrollTop": 0,
+    "title": "Tickets",
+    "titleCalls": [
+     "Tickets"
+    ],
+    "zoneEntries": [],
+    "ellipsisCut": 0,
+    "appSheets": [
+     "/~a/tickets@1.0.0/index.css"
+    ],
+    "undefinedTokens": [
+     "--muted×7",
+     "--tickets-v2-control-inset×3",
+     "--line×3",
+     "--accent×1",
+     "--accent-soft×1",
+     "--control-radius×1",
+     "--surface×1",
+     "--danger×1"
+    ],
+    "undefinedTokenCount": 8
+   },
+   "g6": {
+    "jaccard": 1,
+    "windowColumns": 1,
+    "viewportColumns": 1
+   },
+   "errors": [],
+   "pushErrors": [],
+   "shot": "tickets/420.png"
+  }
+ ]
+}

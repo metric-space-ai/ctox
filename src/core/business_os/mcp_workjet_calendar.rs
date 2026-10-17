@@ -120,7 +120,7 @@ pub(super) fn descriptors() -> Vec<BusinessOsMcpToolDescriptor> {
         "List registered calendars owned by or explicitly shared with the authenticated user. No credentials, instance mailbox fallback or caller identity. Unsupported providers are marked unavailable.",
         json!({"type":"object","additionalProperties":false,"properties":{}})),
         read_tool(EVENTS_TOOL,
-        "Read up to 100 events/recurring occurrences from one owned/shared registered EWS or Graph calendar over an ordered range of at most 400 days. Read-only; truncated is explicit. No arbitrary URL, credentials or caller identity. Uses ctox.workjet.calendar.v1 events.",
+        "Read up to 100 events/recurring occurrences from one owned/shared registered EWS, Graph or Google calendar over an ordered range of at most 400 days. Read-only; truncated is explicit. No arbitrary URL, credentials or caller identity. Uses ctox.workjet.calendar.v1 events.",
         json!({"type":"object","additionalProperties":false,"required":["account_id","start_ms","end_ms"],"properties":{
             "account_id":{"type":"string","minLength":1,"maxLength":256},"start_ms":{"type":"integer"},"end_ms":{"type":"integer"}}}))]
 }
@@ -142,7 +142,8 @@ fn authorized_accounts(
             .context("calendar trusted role missing")?,
     );
     let owner = super::super::workjet_identity::owner_from_connection(&conn, &context.actor)?;
-    let accounts = email_accounts::load_accounts(root)?;
+    let mut accounts = email_accounts::load_accounts(root)?;
+    accounts.extend(crate::communication::google_calendar::accounts(root)?);
     accounts
         .into_iter()
         .filter_map(|account| {
@@ -183,7 +184,7 @@ fn authorized_accounts(
         .collect()
 }
 fn supported(provider: &str) -> bool {
-    matches!(provider, "ews" | "owa" | "exchange" | "graph")
+    matches!(provider, "ews" | "owa" | "exchange" | "graph" | "google")
 }
 fn calendar_id(address: &str) -> String {
     format!("account:{:x}", Sha256::digest(address.as_bytes()))

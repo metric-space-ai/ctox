@@ -1,24 +1,35 @@
 #!/usr/bin/env node
+// E45: v4/schemas/*.collections.schema.json is the sole packaged schema source.
+// Module manifests only assert coverage. Native migration declarations and
+// source-executed parity fixtures are generated with the contract.
 import { access, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { buildNativeMigrations } from './business_os_v4_migrations.mjs';
+
+import { normalizeCollectionsSchema } from '../../../apps/business-os/v4/tools/manifest/gen-manifest.mjs';
 
 const OUTPUT_PATH = new URL('../../business_os/business_os_schema_contract.json', import.meta.url);
 const MODULES_ROOT = new URL('../../../apps/business-os/modules/', import.meta.url);
+const V4_ROOT = new URL('../../../apps/business-os/v4/schemas/', import.meta.url);
+const MIGRATIONS_PATH = new URL('../../business_os/business_os_schema_migrations.json', import.meta.url);
+const CORPUS_PATH = new URL('../tests/fixtures/business-os-v4-migrations.json', import.meta.url);
+const documents = [];
 
 async function buildContract() {
   const schemas = {};
   const modules = await discoverModules();
   const manifestCollections = [];
+  for (const name of (await readdir(V4_ROOT)).filter(name => name.endsWith('.collections.schema.json')).sort()) {
+    const url = new URL(name, V4_ROOT);
+    const raw = JSON.parse(await readFile(url, 'utf8'));
+    const document = normalizeCollectionsSchema(raw);
+    documents.push({ raw, url });
+    for (const [collection, schema] of Object.entries(document.collections)) {
+      if (Object.hasOwn(schemas, collection)) throw new Error('Duplicate v4 collection owner: ' + collection);
+      schemas[collection] = schema;
+    }
+  }
   for (const moduleInfo of modules) {
-    const mod = await importSchemaModule(moduleInfo.schemaUrl, moduleInfo.id);
-    for (const [collection, definition] of Object.entries(mod.collections || {})) {
-      const schema = definition?.schema || definition;
-      schemas[collection] = schemas[collection]
-        ? mergeSchemaDefinitions(collection, schemas[collection], schema)
-        : schema;
-    }
-    for (const collection of moduleInfo.collections) {
-      manifestCollections.push({ module: moduleInfo, collection });
-    }
+    for (const collection of moduleInfo.collections) manifestCollections.push({ module: moduleInfo, collection });
   }
 
   const missing = [];
@@ -34,131 +45,36 @@ async function buildContract() {
     );
   }
 
+  const reference = await readCommittedContract();
   const ordered = {};
   for (const key of Object.keys(schemas).sort()) {
-    ordered[key] = schemas[key];
+    ordered[key] = orderLike(schemas[key], reference[key]);
   }
   return `${JSON.stringify(ordered, null, 2)}\n`;
 }
 
-function mergeSchemaDefinitions(collection, current, incoming) {
-  const left = cloneJson(current);
-  const right = cloneJson(incoming);
-  for (const key of ['version', 'primaryKey', 'type']) {
-    if (left[key] !== undefined && right[key] !== undefined && JSON.stringify(left[key]) !== JSON.stringify(right[key])) {
-      throw new Error(
-        `Conflicting ${key} for duplicated Business OS collection ${collection}: `
-        + `${JSON.stringify(left[key])} vs ${JSON.stringify(right[key])}`,
-      );
-    }
+async function readCommittedContract() {
+  try {
+    const parsed = JSON.parse(await readFile(OUTPUT_PATH, 'utf8'));
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
   }
-
-  const merged = { ...left, ...right };
-  merged.properties = mergeProperties(left.properties, right.properties);
-  merged.required = mergeStringList(left.required, right.required);
-  merged.indexes = mergeIndexes(left.indexes, right.indexes);
-  merged.internalIndexes = mergeIndexes(left.internalIndexes, right.internalIndexes);
-  merged.encrypted = mergeStringList(left.encrypted, right.encrypted);
-
-  for (const key of ['additionalProperties', 'keyCompression']) {
-    if (left[key] !== undefined && right[key] !== undefined && left[key] !== right[key]) {
-      throw new Error(
-        `Conflicting ${key} for duplicated Business OS collection ${collection}: `
-        + `${JSON.stringify(left[key])} vs ${JSON.stringify(right[key])}`,
-      );
-    }
-    if (left[key] !== undefined) merged[key] = left[key];
-  }
-
-  return stripEmptyOptionalArrays(merged);
 }
 
-function mergeProperties(left = {}, right = {}) {
-  const merged = {};
-  for (const key of Object.keys(left || {})) merged[key] = cloneJson(left[key]);
-  for (const [key, value] of Object.entries(right || {})) {
-    if (!merged[key]) {
-      merged[key] = cloneJson(value);
-      continue;
-    }
-    merged[key] = mergePropertySchema(merged[key], value);
+// Reorders object keys like `reference` without adding, dropping or changing
+// any value: keys known to the reference first (in its order), then the rest.
+function orderLike(value, reference) {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => orderLike(item, Array.isArray(reference) ? reference[index] : undefined));
   }
-  return merged;
-}
-
-function mergePropertySchema(left, right) {
-  if (!left || typeof left !== 'object' || !right || typeof right !== 'object') {
-    return schemaScore(right) > schemaScore(left) ? cloneJson(right) : cloneJson(left);
-  }
-  if (left.type !== undefined && right.type !== undefined && JSON.stringify(left.type) !== JSON.stringify(right.type)) {
-    return schemaScore(right) > schemaScore(left) ? cloneJson(right) : cloneJson(left);
-  }
-  const merged = { ...cloneJson(left), ...cloneJson(right) };
-  if (left.properties || right.properties) {
-    merged.properties = mergeProperties(left.properties, right.properties);
-  }
-  if (left.items || right.items) {
-    merged.items = mergePropertySchema(left.items || {}, right.items || {});
-  }
-  if (left.required || right.required) {
-    merged.required = mergeStringList(left.required, right.required);
-  }
-  return schemaScore(merged) >= Math.max(schemaScore(left), schemaScore(right))
-    ? merged
-    : (schemaScore(right) > schemaScore(left) ? cloneJson(right) : cloneJson(left));
-}
-
-function mergeStringList(left = [], right = []) {
-  const merged = [];
-  for (const value of [...asArray(left), ...asArray(right)]) {
-    if (typeof value !== 'string' || merged.includes(value)) continue;
-    merged.push(value);
-  }
-  return merged;
-}
-
-function mergeIndexes(left = [], right = []) {
-  const merged = [];
-  const seen = new Set();
-  for (const index of [...asArray(left), ...asArray(right)]) {
-    const normalized = normalizeIndex(index);
-    if (!normalized.length) continue;
-    const key = JSON.stringify(normalized);
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(normalized.length === 1 ? normalized[0] : normalized);
-  }
-  return merged;
-}
-
-function normalizeIndex(index) {
-  if (typeof index === 'string') return [index];
-  if (Array.isArray(index)) return index.map((field) => String(field || '').trim()).filter(Boolean);
-  return [];
-}
-
-function asArray(value) {
-  return Array.isArray(value) ? value : [];
-}
-
-function stripEmptyOptionalArrays(schema) {
-  for (const key of ['required', 'indexes', 'internalIndexes', 'encrypted']) {
-    if (Array.isArray(schema[key]) && schema[key].length === 0) delete schema[key];
-  }
-  return schema;
-}
-
-function schemaScore(value) {
-  if (value == null) return 0;
-  if (Array.isArray(value)) return value.reduce((score, item) => score + schemaScore(item), 1);
-  if (typeof value !== 'object') return 1;
-  let score = Object.keys(value).length;
-  for (const child of Object.values(value)) score += schemaScore(child);
-  return score;
-}
-
-function cloneJson(value) {
-  return value == null ? value : JSON.parse(JSON.stringify(value));
+  if (!value || typeof value !== 'object') return value;
+  const ref = reference && typeof reference === 'object' && !Array.isArray(reference) ? reference : {};
+  const keys = [
+    ...Object.keys(ref).filter((key) => Object.hasOwn(value, key)),
+    ...Object.keys(value).filter((key) => !Object.hasOwn(ref, key)),
+  ];
+  return Object.fromEntries(keys.map((key) => [key, orderLike(value[key], ref[key])]));
 }
 
 async function discoverModules() {
@@ -176,44 +92,18 @@ async function discoverModules() {
     const collections = Array.isArray(manifest.collections)
       ? manifest.collections.map((name) => String(name || '').trim()).filter(Boolean)
       : [];
-    const schemaUrl = new URL('schema.js', dirUrl);
-    if (!(await fileExists(schemaUrl))) {
-      if (collections.length && !isInstalledOnlyRuntimeSchemaPath({ manifest, dirUrl })) {
-        throw new Error(`${entry}/module.json declares collections but ${schemaUrl.pathname} is missing.`);
-      }
-      continue;
-    }
     modules.push({
       id: entry,
       dirUrl,
       manifest,
       installScope,
       collections,
-      schemaUrl,
     });
   }
   if (!modules.length) {
     throw new Error(`No Business OS modules discovered under ${MODULES_ROOT.pathname}`);
   }
   return modules;
-}
-
-async function importSchemaModule(url, moduleId) {
-  // Real ESM import instead of the old strip-exports/Function() transform:
-  // module schema files may use any import/re-export pattern (full re-exports
-  // like modules/reports, partial cross-module imports like
-  // modules/conversations pulling the outbound-owned collections). The
-  // emitted contract content is unchanged — same exported objects either way.
-  let mod;
-  try {
-    mod = await import(url.href);
-  } catch (error) {
-    throw new Error(`Failed to import schema.js for ${moduleId}: ${error?.message || error}`);
-  }
-  return {
-    collections: mod.collections || {},
-    migrationStrategies: mod.migrationStrategies || {},
-  };
 }
 
 function isInstalledOnlyRuntimeSchemaPath(moduleInfo) {
@@ -233,6 +123,12 @@ async function fileExists(url) {
 }
 
 const next = await buildContract();
+const native = await buildNativeMigrations(documents, V4_ROOT);
+for (const [path, value] of [[MIGRATIONS_PATH, native.strategies], [CORPUS_PATH, native.corpus]]) {
+  const text = JSON.stringify(value, null, 2) + '\n';
+  if (process.argv.includes('--write')) await writeFile(path, text);
+  else if (await readFile(path, 'utf8').catch(() => '') !== text) throw new Error('Native v4 migration contract is stale: ' + path.pathname);
+}
 if (process.argv.includes('--write')) {
   await writeFile(OUTPUT_PATH, next);
   console.log(`wrote ${OUTPUT_PATH.pathname}`);

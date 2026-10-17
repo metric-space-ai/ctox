@@ -360,19 +360,14 @@ fn run_succeeded(status: &str) -> bool {
 /// Latest scrape run and latest successful run per target_key. Read-only;
 /// an unreadable registry yields an empty map (the adapter fallback applies).
 pub(crate) fn load_registry_runs(root: &Path) -> BTreeMap<String, RegistryRun> {
+    crate::lcm::with_lcm_read(&crate::paths::core_db(root), move |conn: &rusqlite::Connection| {
     let mut out = BTreeMap::new();
-    let Ok(conn) = rusqlite::Connection::open_with_flags(
-        crate::paths::core_db(root),
-        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-    ) else {
-        return out;
-    };
     let Ok(mut last) = conn.prepare(
         "SELECT t.target_key, r.status, r.started_at, r.result_json
          FROM scrape_target t JOIN scrape_run r ON r.target_id = t.target_id
          WHERE r.started_at = (SELECT MAX(started_at) FROM scrape_run WHERE target_id = t.target_id)",
     ) else {
-        return out;
+        return Ok(out);
     };
     let rows = last.query_map([], |row| {
         Ok((
@@ -423,7 +418,8 @@ pub(crate) fn load_registry_runs(root: &Path) -> BTreeMap<String, RegistryRun> {
             }
         }
     }
-    out
+    Ok(out)
+    }).unwrap_or_default()
 }
 
 /// Registry target key of an Outbound source: its declared target_key, else

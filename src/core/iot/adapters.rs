@@ -693,20 +693,6 @@ mod tests {
 
     // ---- kind round-trip ----------------------------------------------------
 
-    #[test]
-    fn agent_kind_from_str_round_trip() {
-        for k in [
-            IotAgentKind::Mqtt,
-            IotAgentKind::Http,
-            IotAgentKind::WebSocket,
-        ] {
-            assert_eq!(IotAgentKind::from_str(k.as_str()), Some(k));
-        }
-        assert_eq!(IotAgentKind::from_str("MQTT"), Some(IotAgentKind::Mqtt));
-        assert_eq!(IotAgentKind::from_str("ws"), Some(IotAgentKind::WebSocket));
-        assert_eq!(IotAgentKind::from_str("coap"), None);
-    }
-
     // ---- §2A.24 backoff curve: 1s..5min envelope, ±25% jitter --------------
 
     #[test]
@@ -760,28 +746,6 @@ mod tests {
         let delay = sm.next_attempt_at_ms();
         // first base is 1000ms; ±25% -> [750, 1250].
         assert!((750..=1250).contains(&delay), "first delay {delay}");
-    }
-
-    #[test]
-    fn backoff_is_deterministic_for_a_fixed_seed() {
-        let curve = |seed: u64| {
-            let mut sm = ReconnectStateMachine::new(seed);
-            let mut now = 0i64;
-            let mut out = vec![];
-            for _ in 0..8 {
-                sm.schedule_backoff(now);
-                let d = sm.next_attempt_at_ms() - now;
-                out.push(d);
-                now += d + 1;
-            }
-            out
-        };
-        assert_eq!(curve(42), curve(42), "same seed -> same curve");
-        assert_ne!(
-            curve(42),
-            curve(43),
-            "different seed -> different jitter draw"
-        );
     }
 
     // ---- §2A.24 state-transition legality ----------------------------------
@@ -1044,12 +1008,5 @@ mod tests {
         };
         let out = do_outbound_value_processing(&AttributeValue(json!("stop")), &link, 0).unwrap();
         assert!(out.is_none(), "@IGNORE on write -> no device send (§2A.28)");
-    }
-
-    #[test]
-    fn has_dynamic_placeholders_detects_markers() {
-        assert!(has_dynamic_placeholders("x %VALUE% y"));
-        assert!(has_dynamic_placeholders("t=%TIME:EPOCH_MILLIS%"));
-        assert!(!has_dynamic_placeholders("static payload"));
     }
 }

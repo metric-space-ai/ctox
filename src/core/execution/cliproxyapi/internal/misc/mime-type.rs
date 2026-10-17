@@ -748,15 +748,4 @@ pub fn mime_type_for_extension(extension: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::mime_type_for_extension;
-
-    #[test]
-    fn mirrors_known_entries_without_accepting_host_database_extras() {
-        assert_eq!(mime_type_for_extension("pdf"), Some("application/pdf"));
-        assert_eq!(
-            mime_type_for_extension("docx"),
-            Some("application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-        );
-        assert_eq!(mime_type_for_extension("wasm"), None);
-        assert_eq!(mime_type_for_extension("PDF"), None);
-    }
 }

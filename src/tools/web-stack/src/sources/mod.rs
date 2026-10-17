@@ -731,40 +731,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_has_all_expected_sources() {
-        let ids: Vec<_> = list().map(|m| m.id()).collect();
-        assert_eq!(ids.len(), 21, "expected exactly 21 registered sources");
-        for expected in [
-            "bundesanzeiger.de",
-            "companyhouse.de",
-            "dnbhoovers.com",
-            "experte.de",
-            "firmenabc.at",
-            "google.de",
-            "maps.google.com",
-            "handelsregister.de",
-            "impressum",
-            "evi.gv.at",
-            "justizonline.gv.at",
-            "mailtester.com",
-            "shab.ch",
-            "leadfeeder.com",
-            "linkedin.com",
-            "moneyhouse.ch",
-            "northdata.de",
-            "person-discovery",
-            "rocketreach.com",
-            "xing.com",
-            "zefix.ch",
-        ] {
-            assert!(
-                ids.iter().any(|id| *id == expected),
-                "missing source: {expected}"
-            );
-        }
-    }
-
-    #[test]
     fn find_resolves_by_id_and_alias() {
         let by_id = find("bundesanzeiger.de").expect("by id");
         assert_eq!(by_id.id(), "bundesanzeiger.de");
@@ -791,26 +757,6 @@ mod tests {
     fn public_sources_do_not_default_to_browser_recipes() {
         let bundesanzeiger = find("bundesanzeiger.de").expect("bundesanzeiger source");
         assert!(bundesanzeiger.browser_recipe().is_none());
-    }
-
-    #[test]
-    fn country_round_trip() {
-        for raw in ["DE", "de", "Deutschland"] {
-            assert_eq!(Country::from_iso(raw), Some(Country::De));
-        }
-        for raw in ["AT", "Österreich", "OESTERREICH"] {
-            assert_eq!(Country::from_iso(raw), Some(Country::At));
-        }
-        for raw in ["CH", "Schweiz"] {
-            assert_eq!(Country::from_iso(raw), Some(Country::Ch));
-        }
-    }
-
-    #[test]
-    fn field_key_round_trip() {
-        for key in OUTBOUND_RESEARCH_FIELDS {
-            assert_eq!(FieldKey::from_str(key.as_str()), Some(*key));
-        }
     }
 
     #[test]

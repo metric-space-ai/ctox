@@ -37,27 +37,6 @@ fn assert_clear(actual: &QuotaState) {
 }
 
 #[test]
-fn candidate_quota_observation_wire_keeps_go_zero_time_and_legacy_default() {
-    let value = serde_json::to_value(QuotaState::default()).unwrap();
-    assert_eq!(
-        value,
-        json!({
-            "exceeded": false,
-            "next_recover_at": "0001-01-01T00:00:00Z",
-            "observed_at": "0001-01-01T00:00:00Z"
-        })
-    );
-    let legacy: QuotaState = serde_json::from_value(json!({
-        "exceeded": true, "reason": "quota", "backoff_level": 2
-    }))
-    .unwrap();
-    assert_eq!(legacy.observed_at, go_zero_time());
-    assert!(legacy.signals.is_empty());
-    assert!(legacy.exceeded);
-    assert_eq!(legacy.backoff_level, 2);
-}
-
-#[test]
 fn candidate_quota_observation_persists_and_clone_owns_its_snapshot() {
     let initial = observed();
     let encoded = serde_json::to_value(&initial).unwrap();

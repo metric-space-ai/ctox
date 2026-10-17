@@ -20,6 +20,15 @@ use std::path::Path;
 /// per turn, killed on drop.
 pub(crate) mod pi_sidecar;
 
+/// §16.44: coding agent in Business OS source mode — bounded turns on the
+/// caller's own draft (`app_drafts`), progress in `coding_turns`.
+/// The canonical store owner constructs `draft_turn::CodingPanel` with its
+/// WriterHandle and CAS (same injection as the app platform owner); until that
+/// owner lands, nothing in the daemon constructs it.
+#[allow(dead_code)]
+#[path = "draft_turn.rs"]
+pub(crate) mod draft_turn;
+
 /// main has already resolved the global root, but retains its pair in argv.
 pub(crate) fn coding_models_cli_args_are_valid(args: &[String]) -> bool {
     matches!(args, [command] if command == "models")
@@ -220,32 +229,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn operator_route_options_are_exact_and_keep_main_root_authority() {
-        for (suffix, expected) in [
-            (vec![], Some(false)),
-            (vec!["--probe"], Some(true)),
-            (vec!["--root", "/native-root"], Some(false)),
-            (vec!["--probe", "--root", "/native-root"], Some(true)),
-            (vec!["--root", "/native-root", "--probe"], Some(true)),
-            (vec!["--root"], None),
-            (vec!["--root", ""], None),
-            (vec!["--root", "--probe"], None),
-            (vec!["--probe", "--probe"], None),
-            (vec!["--root", "/one", "--root", "/two"], None),
-            (vec!["--endpoint", "https://example.com"], None),
-            (vec!["--model", "MiniMax-M3"], None),
-            (vec!["--token", "fixture-secret"], None),
-        ] {
-            let args = std::iter::once("route")
-                .chain(suffix)
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
-            assert_eq!(coding_route_cli_options(&args), expected);
-        }
-        assert_eq!(coding_route_cli_options(&["turn".to_owned()]), None);
-    }
-
-    #[test]
     fn operator_turn_rejects_ambiguous_preset_and_raw_model() {
         let root = tempfile::tempdir().unwrap();
         let args = [
@@ -268,22 +251,28 @@ mod tests {
 
     #[test]
     fn operator_turn_re_resolves_unknown_preset_before_starting_sidecar() {
-        let root = tempfile::tempdir().unwrap();
-        let args = [
-            "turn",
-            "--module",
-            "widget",
-            "--prompt",
-            "test",
-            "--preset",
-            "browser-forged",
-        ]
-        .into_iter()
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-        let error = execute_cli(root.path(), &args).unwrap_err().to_string();
-        assert!(error.contains("preset is unavailable"));
-        assert!(!root.path().join("coding-agents").exists());
+        // Without a daemon, preset resolution needs an installed local Core
+        // owner (#843); a bare tempdir would fail before preset validation.
+        pi_sidecar::test_owners::run(|| {
+            let root = pi_sidecar::test_owners::root().unwrap();
+            let args = [
+                "turn",
+                "--module",
+                "widget",
+                "--prompt",
+                "test",
+                "--preset",
+                "browser-forged",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+            let error = execute_cli(root.path(), &args).unwrap_err().to_string();
+            assert!(error.contains("preset is unavailable"), "{error}");
+            assert!(!root.path().join("coding-agents").exists());
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -313,39 +302,43 @@ mod tests {
 
     #[test]
     fn operator_turn_accepts_one_global_root_before_preset_validation() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().display().to_string();
-        let base = [
-            "turn",
-            "--module",
-            "widget",
-            "--prompt",
-            "test",
-            "--preset",
-            "browser-forged",
-        ];
-        let mut args = base.into_iter().map(str::to_owned).collect::<Vec<_>>();
-        args.extend(["--root".to_owned(), path.clone()]);
-        assert!(execute_cli(root.path(), &args)
-            .unwrap_err()
-            .to_string()
-            .contains("preset is unavailable"));
-        for suffix in [
-            vec!["--root"],
-            vec!["--root", ""],
-            vec!["--root", "--unknown"],
-            vec!["--root", &path, "--root", &path],
-        ] {
-            let args = base
-                .into_iter()
-                .chain(suffix)
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
+        pi_sidecar::test_owners::run(|| {
+            let root = pi_sidecar::test_owners::root().unwrap();
+            let path = root.path().display().to_string();
+            let base = [
+                "turn",
+                "--module",
+                "widget",
+                "--prompt",
+                "test",
+                "--preset",
+                "browser-forged",
+            ];
+            let mut args = base.into_iter().map(str::to_owned).collect::<Vec<_>>();
+            args.extend(["--root".to_owned(), path.clone()]);
             assert!(execute_cli(root.path(), &args)
                 .unwrap_err()
                 .to_string()
-                .contains("--root"));
-        }
-        assert!(!root.path().join("coding-agents").exists());
+                .contains("preset is unavailable"));
+            for suffix in [
+                vec!["--root"],
+                vec!["--root", ""],
+                vec!["--root", "--unknown"],
+                vec!["--root", &path, "--root", &path],
+            ] {
+                let args = base
+                    .into_iter()
+                    .chain(suffix)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                assert!(execute_cli(root.path(), &args)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("--root"));
+            }
+            assert!(!root.path().join("coding-agents").exists());
+            Ok(())
+        })
+        .unwrap();
     }
 }

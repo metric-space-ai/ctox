@@ -1,0 +1,9 @@
+{
+  "app_id": "ohne-icon",
+  "title": "Ohne Icon",
+  "entry": "index.js",
+  "min_app_api": "4.0",
+  "capabilities_required": [],
+  "handlers": {},
+  "layout": { "category": "arbeit" }
+}

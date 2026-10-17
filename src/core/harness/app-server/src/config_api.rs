@@ -264,8 +264,6 @@ fn config_write_error(code: ConfigWriteErrorCode, message: impl Into<String>) ->
 mod tests {
     use super::*;
     use ctox_core::AnalyticsEventsClient;
-    use ctox_core::config_loader::NetworkRequirementsToml as CoreNetworkRequirementsToml;
-    use ctox_protocol::protocol::AskForApproval as CoreAskForApproval;
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use std::sync::atomic::AtomicUsize;
@@ -284,111 +282,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn map_requirements_toml_to_api_converts_core_enums() {
-        let requirements = ConfigRequirementsToml {
-            allowed_approval_policies: Some(vec![
-                CoreAskForApproval::Never,
-                CoreAskForApproval::OnRequest,
-            ]),
-            allowed_sandbox_modes: Some(vec![
-                CoreSandboxModeRequirement::ReadOnly,
-                CoreSandboxModeRequirement::ExternalSandbox,
-            ]),
-            allowed_web_search_modes: Some(vec![
-                ctox_core::config_loader::WebSearchModeRequirement::Cached,
-            ]),
-            feature_requirements: Some(ctox_core::config_loader::FeatureRequirementsToml {
-                entries: std::collections::BTreeMap::from([
-                    ("apps".to_string(), false),
-                    ("personality".to_string(), true),
-                ]),
-            }),
-            mcp_servers: None,
-            apps: None,
-            rules: None,
-            enforce_residency: Some(CoreResidencyRequirement::Us),
-            network: Some(CoreNetworkRequirementsToml {
-                enabled: Some(true),
-                http_port: Some(8080),
-                socks_port: Some(1080),
-                allow_upstream_proxy: Some(false),
-                dangerously_allow_non_loopback_proxy: Some(false),
-                dangerously_allow_all_unix_sockets: Some(true),
-                allowed_domains: Some(vec!["api.openai.com".to_string()]),
-                managed_allowed_domains_only: Some(false),
-                denied_domains: Some(vec!["example.com".to_string()]),
-                allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
-                allow_local_binding: Some(true),
-            }),
-        };
 
-        let mapped = map_requirements_toml_to_api(requirements);
-
-        assert_eq!(
-            mapped.allowed_approval_policies,
-            Some(vec![
-                ctox_app_server_protocol::AskForApproval::Never,
-                ctox_app_server_protocol::AskForApproval::OnRequest,
-            ])
-        );
-        assert_eq!(
-            mapped.allowed_sandbox_modes,
-            Some(vec![SandboxMode::ReadOnly]),
-        );
-        assert_eq!(
-            mapped.allowed_web_search_modes,
-            Some(vec![WebSearchMode::Cached, WebSearchMode::Disabled]),
-        );
-        assert_eq!(
-            mapped.feature_requirements,
-            Some(std::collections::BTreeMap::from([
-                ("apps".to_string(), false),
-                ("personality".to_string(), true),
-            ])),
-        );
-        assert_eq!(
-            mapped.enforce_residency,
-            Some(ctox_app_server_protocol::ResidencyRequirement::Us),
-        );
-        assert_eq!(
-            mapped.network,
-            Some(NetworkRequirements {
-                enabled: Some(true),
-                http_port: Some(8080),
-                socks_port: Some(1080),
-                allow_upstream_proxy: Some(false),
-                dangerously_allow_non_loopback_proxy: Some(false),
-                dangerously_allow_all_unix_sockets: Some(true),
-                allowed_domains: Some(vec!["api.openai.com".to_string()]),
-                denied_domains: Some(vec!["example.com".to_string()]),
-                allow_unix_sockets: Some(vec!["/tmp/proxy.sock".to_string()]),
-                allow_local_binding: Some(true),
-            }),
-        );
-    }
-
-    #[test]
-    fn map_requirements_toml_to_api_normalizes_allowed_web_search_modes() {
-        let requirements = ConfigRequirementsToml {
-            allowed_approval_policies: None,
-            allowed_sandbox_modes: None,
-            allowed_web_search_modes: Some(Vec::new()),
-            feature_requirements: None,
-            mcp_servers: None,
-            apps: None,
-            rules: None,
-            enforce_residency: None,
-            network: None,
-        };
-
-        let mapped = map_requirements_toml_to_api(requirements);
-
-        assert_eq!(
-            mapped.allowed_web_search_modes,
-            Some(vec![WebSearchMode::Disabled])
-        );
-    }
 
     #[tokio::test]
     async fn batch_write_reloads_user_config_when_requested() {

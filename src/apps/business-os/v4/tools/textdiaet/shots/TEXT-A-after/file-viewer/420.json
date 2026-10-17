@@ -1,0 +1,29 @@
+{
+ "app": "file-viewer",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "Datei-Viewer",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 816
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [],
+   "shot": "file-viewer/420-01-open.png"
+  }
+ ],
+ "opsAll": [],
+ "pushErrors": [],
+ "titles": [
+  "file-viewer",
+  "Datei-Viewer",
+  "Datei-Viewer"
+ ]
+}

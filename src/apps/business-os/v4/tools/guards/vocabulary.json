@@ -1,0 +1,195 @@
+{
+  "version": 1,
+  "description": "Zustandsvokabular der Business-OS-Shell und Apps (Ist-Aufnahme 15.10.2026, analysis/A1 c, A2 c, B 4c, C1, C2). Jeder Treffer ausserhalb von api.status.report(...) ist ein Fund fuer die Loeschliste (Entwurf §7/§11). Geprueft werden nur String-Literale, Template-Texte, HTML-Text und JSON-Werte; Kommentare sind ausgeblendet; Literale ohne Leerzeichen in Schluesselform (z. B. 'syncing', 'sync.loading', 'loadingModule') gelten als i18n-Schluessel bzw. Zustandscodes und zaehlen nicht. Neue Fundstuecke hier ergaenzen.",
+  "entries": [
+    {
+      "id": "de-synchronisier",
+      "lang": "de",
+      "pattern": "synchronisier",
+      "flags": "i",
+      "comment": "„Daten werden synchronisiert.“ (ehemals shared/list-state.js, gelöscht Strang DEL1 15.10.2026), „Inhalte werden synchronisiert“, „Apps werden synchronisiert...“, „Synchronisierung“, „noch nicht synchronisiert“ (react-settings)"
+    },
+    {
+      "id": "de-geladen",
+      "lang": "de",
+      "pattern": "\\b(?:wird|werden)\\s+(?:\\S+\\s+){0,2}?geladen\\b",
+      "flags": "i",
+      "comment": "„Workspace wird geladen“, „Modul-Workspace wird geladen.“, „Versionen werden geladen“, „Status wird geladen…“, „Versionshistorie wird autorisiert geladen…“"
+    },
+    {
+      "id": "de-laedt",
+      "lang": "de",
+      "pattern": "(?<![\\p{L}])l(?:ä|ae)dt(?![\\p{L}])",
+      "flags": "iu",
+      "comment": "„lädt…“, „Lädt“ (C1-Heuristik: lädt)"
+    },
+    {
+      "id": "de-vorbereitet",
+      "lang": "de",
+      "pattern": "\\b(?:wird|werden)\\s+(?:\\S+\\s+){0,1}?vorbereitet",
+      "flags": "i",
+      "comment": "„Business OS Datenspeicher wird noch vorbereitet.“, „Workspace wird vorbereitet...“, „Import wird vorbereitet...“, „Datenspeicher · Wird vorbereitet.“"
+    },
+    {
+      "id": "de-fortschritt-wird",
+      "lang": "de",
+      "pattern": "\\b(?:wird|werden)\\s+(?:gerade\\s+|noch\\s+|erneut\\s+|neu\\s+)?(?:aktualisiert|gestartet|geprüft|überprüft|geöffnet|gespeichert|übermittelt|gesendet|optimiert|registriert|aufgebaut|wiederhergestellt|angefordert|abgeglichen|verbunden|hergestellt|geändert|gelesen|neu\\s+geladen)\\b",
+      "flags": "iu",
+      "comment": "Fortschrittssaetze: „CTOX wird aktualisiert.“, „System wird gestartet...“, „Update wird geprüft“, „Verbindung wird hergestellt...“, „Passwort wird geändert...“, „Verbindung wird gelesen.“, „wird mit CTOX abgeglichen“ (Negativ-Abnahme 5)"
+    },
+    {
+      "id": "de-nicht-rechtzeitig",
+      "lang": "de",
+      "pattern": "nicht\\s+rechtzeitig",
+      "flags": "i",
+      "comment": "„… nicht rechtzeitig geladen“ (Kundeninstanz 15.10., Negativ-Abnahme 2)"
+    },
+    {
+      "id": "de-unbestaetigt",
+      "lang": "de",
+      "pattern": "unbestätigt|noch\\s+nicht\\s+bestätigt|Bestätigung\\s+ausstehend|nicht\\s+bestätigt",
+      "flags": "iu",
+      "comment": "Pille „Stand unbestätigt“ (collection-freshness.js:44, Negativ-Abnahme 5), „angezeigter Stand noch nicht bestätigt“, „Bestätigung ausstehend“"
+    },
+    {
+      "id": "de-abgleich",
+      "lang": "de",
+      "pattern": "abgeglichen|Datenabgleich|Datenstand\\s+bestätigt",
+      "flags": "iu",
+      "comment": "„Daten werden abgeglichen: …“, „Kein Datenabgleich für diese Ansicht“, „Datenstand bestätigt“, „Gespeicherter Stand vom … wird mit CTOX abgeglichen“"
+    },
+    {
+      "id": "de-nicht-verfuegbar",
+      "lang": "de",
+      "pattern": "nicht\\s+(?:mehr\\s+)?verfügbar|derzeit\\s+nicht\\s+verfügbar|nicht\\s+erreichbar",
+      "flags": "iu",
+      "comment": "„CTOX Status ist gerade nicht verfügbar.“, „CTOX Direktkanal ist nicht verfügbar.“, „Freigabe ist derzeit nicht verfügbar.“, „Die Crew ist gerade nicht erreichbar.“"
+    },
+    {
+      "id": "de-nicht-bereit",
+      "lang": "de",
+      "pattern": "(?:noch\\s+)?nicht\\s+bereit|ist\\s+bereit\\b|Bereit\\s+zur\\s+Aktivierung",
+      "flags": "i",
+      "comment": "„Business OS Datenspeicher ist noch nicht bereit.“, „Die Crew ist noch nicht bereit.“, „Instanz ist bereit“, „Workspace ist bereit.“"
+    },
+    {
+      "id": "de-verbindung",
+      "lang": "de",
+      "pattern": "Verbindung\\s+(?:verloren|unterbrochen|fehlgeschlagen|wird)|neu\\s+verbunden|(?:Noch\\s+)?nicht\\s+verbunden|verbinde(?:…|\\.\\.\\.)|Datenverbindung",
+      "flags": "i",
+      "comment": "„Datenverbindung wird neu verbunden“, „Verbindung verloren“, „Verbindung unterbrochen. Annahme durch CTOX noch nicht bestätigt.“, „Noch nicht verbunden“, „Scan erkannt — verbinde…“"
+    },
+    {
+      "id": "de-warten",
+      "lang": "de",
+      "pattern": "\\bwarte(?:t|n)?\\s+auf\\b|\\bWartet\\b|Bitte\\s+warten|In\\s+Warteschlange|Warteschlange",
+      "flags": "i",
+      "comment": "„⏳ Warte auf Scan…“, „Wartet — blockiert, …“, „In Warteschlange...“, „… wartet auf {c1, c2} …“"
+    },
+    {
+      "id": "de-laeuft",
+      "lang": "de",
+      "pattern": "(?<![\\p{L}])läuft(?![\\p{L}])(?!\\s+ab\\b)|Vorgang\\s+läuft",
+      "flags": "iu",
+      "comment": "„Update läuft“, „Wiederherstellung läuft…“, „Prüfung läuft“, Taskleisten-Pille „Läuft“"
+    },
+    {
+      "id": "de-ausstehend",
+      "lang": "de",
+      "pattern": "steh(?:t|en)\\s+noch\\s+aus|ausstehend",
+      "flags": "i",
+      "comment": "„Die Rückmeldung steht noch aus.“ (command-bus.js:1488)"
+    },
+    {
+      "id": "de-verzoegert",
+      "lang": "de",
+      "pattern": "verzögert|dauert\\s+länger|Neuer\\s+Versuch|versucht\\s+es\\s+erneut|Zeitüberschreitung",
+      "flags": "iu",
+      "comment": "„Ausführung verzögert“, „Das Speichern dauert länger als sonst. Neuer Versuch läuft...“, „Die Crew versucht es erneut.“, „Netzwerk-Zeitüberschreitung beim Start“"
+    },
+    {
+      "id": "de-veraltet-offline",
+      "lang": "both",
+      "pattern": "(?<![\\w-])(?:(?<![\\p{L}])Offline(?![\\p{L}])|veraltet|out\\s+of\\s+date)(?![\\w-])",
+      "flags": "iu",
+      "comment": "„Offline: angezeigte Daten können veraltet sein“ / „Offline: displayed data may be out of date“ (collection-freshness.js)"
+    },
+    {
+      "id": "de-schreibgeschuetzt",
+      "lang": "both",
+      "pattern": "(?<![\\w-])(?:schreibgeschützt|read-only)(?![\\w-])",
+      "flags": "iu",
+      "comment": "„… bleibt vorübergehend schreibgeschützt.“, „Apps bleiben bis zum Abschluss schreibgeschützt.“"
+    },
+    {
+      "id": "both-replikation-recovery",
+      "lang": "both",
+      "pattern": "(?<![\\w-])(?:Replikation|replication|Reconnect\\w*|Recovery)(?![\\w-])",
+      "flags": "i",
+      "comment": "„CTOX-Dienst aktiv · Replikation wird verbunden“, „… im Reconnect“, „reconnect repair is scheduled“, „Recovery-Export“, „Recovery-Shell“ (Wegfall Advanced Status)"
+    },
+    {
+      "id": "both-update-status",
+      "lang": "both",
+      "pattern": "(?<![\\w-])(?:Update\\s+verfügbar|Update\\s+available|Upgrade\\s+unterbrochen|Neustart\\s+erforderlich|Rollback\\s+aktiv)(?![\\w-])",
+      "flags": "iu",
+      "comment": "„Update verfügbar“, „Upgrade unterbrochen“, shell-release-status.js STATUS_COPY"
+    },
+    {
+      "id": "en-loading",
+      "lang": "en",
+      "pattern": "(?<![\\w-])(?:Loading)(?![\\w-])(?!\\s*=)",
+      "flags": "i",
+      "comment": "„Loading workspace“, „Loading module workspace.“, „Loading system configuration...“ – nicht als HTML-Attribut loading=\"lazy\""
+    },
+    {
+      "id": "en-sync",
+      "lang": "en",
+      "pattern": "(?<![\\w-])(?:Sync(?:ing|ed|hronizing|hronized|hronization)|sync\\s+(?:failed|pending|paused|error|will\\s+reopen))(?![\\w-])",
+      "flags": "i",
+      "comment": "„Syncing content“, „Content synced“, „Syncing apps...“, „Sync failed: …“, „sync will reopen …“"
+    },
+    {
+      "id": "en-not-ready",
+      "lang": "en",
+      "pattern": "(?<![\\w-])(?:not\\s+(?:yet\\s+)?ready|did\\s+not\\s+become\\s+ready|is\\s+not\\s+ready)(?![\\w-])",
+      "flags": "i",
+      "comment": "„Business OS command bus is not ready.“, „… did not become ready before the command deadline.“"
+    },
+    {
+      "id": "en-unavailable",
+      "lang": "en",
+      "pattern": "(?<![\\w-])(?:unavailable|not\\s+available)(?![\\w-])",
+      "flags": "i",
+      "comment": "„CTOX service is unavailable right now.“, „CTOX device control is unavailable.“, „Source is not available for this app.“"
+    },
+    {
+      "id": "en-connecting",
+      "lang": "en",
+      "pattern": "(?<![\\w-])(?:(?:Re)?connecting|connection\\s+(?:lost|failed|interrupted))(?![\\w-])",
+      "flags": "i",
+      "comment": "„Connecting sync peers“, Punkt-Titel „Connecting“, „reconnecting replication“"
+    },
+    {
+      "id": "en-unconfirmed",
+      "lang": "en",
+      "pattern": "(?<![\\w-])(?:Unconfirmed|not\\s+yet\\s+confirmed|Data\\s+confirmed)(?![\\w-])",
+      "flags": "i",
+      "comment": "„Unconfirmed“, „Syncing data: displayed state is not yet confirmed“, „Data confirmed“ (collection-freshness.js)"
+    },
+    {
+      "id": "en-pending-waiting",
+      "lang": "en",
+      "pattern": "(?<![\\w-])(?:pending\\s+write|Waiting|wait(?:ing)?\\s+for|in\\s+progress|Retrying|try\\s+again|timed\\s+out)(?![\\w-])",
+      "flags": "i",
+      "comment": "„{n} pending write(s)“, „app collection readiness timed out after 30 seconds“, „Please try again“"
+    },
+    {
+      "id": "en-progress-verb",
+      "lang": "en",
+      "pattern": "(?<![\\w-])(?:(?:Preparing|Starting|Checking|Opening|Optimizing|Registering|Restarting|Rolling\\s+back))(?![\\w-])",
+      "flags": "",
+      "comment": "Fortschrittssaetze (gross geschrieben, Satzanfang): „Preparing workspace...“, „Starting realtime sync...“, „Checking update“, „Opening crew...“, „Rolling back version...“"
+    }
+  ]
+}

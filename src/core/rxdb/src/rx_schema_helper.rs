@@ -312,7 +312,7 @@ pub fn rx_meta_schema() -> JsonSchema {
         properties,
         required: vec!["lwt".to_string()],
         // Additional properties allowed (upstream `additionalProperties: true`).
-        additional_properties: Some(true),
+        additional_properties: Some(true.into()),
         ..Default::default()
     }
 }
@@ -366,7 +366,7 @@ pub fn default_checkpoint_schema() -> JsonSchema {
         schema_type: Some("object".into()),
         properties,
         required: vec!["id".to_string(), "lwt".to_string()],
-        additional_properties: Some(false),
+        additional_properties: Some(false.into()),
         ..Default::default()
     }
 }

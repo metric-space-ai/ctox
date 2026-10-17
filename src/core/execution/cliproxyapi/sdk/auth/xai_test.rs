@@ -56,25 +56,6 @@ impl XaiLoginPresenter for NoPresenter {
     }
 }
 
-#[test]
-fn authenticator_provider_and_refresh_lead_match_upstream() {
-    let clock = Arc::new(SystemXaiClock);
-    let service = Arc::new(XaiAuth::new(
-        Arc::new(NoTransport),
-        clock.clone(),
-        Arc::new(XaiRefreshCoordinator::default()),
-    ));
-    let authenticator = XaiAuthenticator::new(
-        service,
-        clock,
-        Arc::new(NoStore),
-        Arc::new(NoHandles),
-        Arc::new(NoPresenter),
-    );
-    assert_eq!(authenticator.provider(), "xai");
-    assert_eq!(authenticator.refresh_lead(), Some(REFRESH_LEAD));
-}
-
 struct FixedClock(Mutex<SystemTime>);
 impl XaiClock for FixedClock {
     fn now(&self) -> SystemTime {

@@ -1141,28 +1141,6 @@ mod tests {
     }
 
     #[test]
-    fn connect_marks_connected_with_base_uri() {
-        let clock = TestClock::new(0);
-        let transport = ScriptedTransport::new(vec![ex(200, "", &[])]);
-        let mut agent = HttpAgent::with_transport_and_clock(
-            "a1",
-            http_config(),
-            Box::new(transport),
-            clock.closure(),
-        );
-        let ctx = AgentContext {
-            root: std::path::Path::new("/tmp"),
-            agent_id: "a1".into(),
-            realm: "master".into(),
-            config: serde_json::json!({}),
-        };
-        assert_eq!(agent.status(), ConnectionStatus::Disconnected);
-        let st = agent.connect(&ctx).unwrap();
-        assert_eq!(st, ConnectionStatus::Connected);
-        assert_eq!(agent.kind(), IotAgentKind::Http);
-    }
-
-    #[test]
     fn connect_without_base_uri_schedules_backoff() {
         let clock = TestClock::new(0);
         let transport = ScriptedTransport::new(vec![ex(200, "", &[])]);

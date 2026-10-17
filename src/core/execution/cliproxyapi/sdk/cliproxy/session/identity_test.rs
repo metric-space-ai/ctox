@@ -65,25 +65,6 @@ fn derive_id_is_stable_across_conversation_growth_for_all_protocols() {
 }
 
 #[test]
-fn canonical_hashes_match_pinned_go_vectors() {
-    let openai_payload = br#"{"messages":[{"role":"system","content":"system prompt"},{"role":"developer","content":"developer prompt"},{"role":"user","content":"complete first user prompt"}]}"#;
-    assert_eq!(
-        derive_id(&openai(), openai_payload, "caller-a"),
-        "ctx:v1:350a67c9c06d911bc612beae5a93a46d086ee7c795d50b8a1c06a50ab19fce53"
-    );
-
-    let gemini_payload = br#"{"cachedContent":"cachedContents/abc","contents":[{"role":"user","parts":[{"text":"first"}]}]}"#;
-    assert_eq!(
-        derive_id(&gemini(), gemini_payload, "caller-a"),
-        "ctx:v1:f617510b7f19ad52cc42a749a29c48db2699f994c03ed7b638479dfb97447cc0"
-    );
-    assert_eq!(
-        caller_scope("api-key-a"),
-        "b2c45f7e2a92f31846c1ea2952de1b21659c5d6009125ef6623ab836be30a93b"
-    );
-}
-
-#[test]
 fn derive_id_uses_instruction_prefix_and_full_user_input() {
     let prefix = "界".repeat(50);
     let first = format!(

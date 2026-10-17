@@ -4,7 +4,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { __appStoreTestHooks as hooks } from './index.js';
+// v4: index.js importiert `ctox:shared/…` (SW-Umschreibung); der Loader bildet sie in Node nach.
+import './tests/ctox-shared-loader.mjs';
+
+const { __appStoreTestHooks: hooks } = await import('./index.js');
 
 const source = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), 'index.js'), 'utf8');
 const moduleDir = dirname(fileURLToPath(import.meta.url));
@@ -13,18 +16,10 @@ const html = readFileSync(resolve(moduleDir, 'index.html'), 'utf8');
 const presentationSource = `${css}\n${html}`;
 const forbiddenSurfacePattern = new RegExp(['ctox-pane--gla' + 'ss', 'Prem' + 'ium', 'gla' + 'ss'].join('|'), 'i');
 
-const permissionState = ({ role = 'user', userId = 'user-1', governance = {} } = {}) => ({
-  ctx: {
-    session: {
-      user: {
-        id: userId,
-        role,
-      },
-    },
-  },
-  catalog: {
-    governance,
-  },
+// v4 (R9): Rechte-Spiegel aus api.actor {id, role, permissions}. Was v3 als Governance-Grant oder Founder-Zuweisung
+// las, kommt in 4.0 als Rechte-Name in api.actor.permissions (ohne Modul-Scope, V4-PORT.md OFFEN-6).
+const permissionState = ({ role = 'user', userId = 'user-1', permissions = [] } = {}) => ({
+  actor: { id: userId, role, permissions },
 });
 
 test('creator navigation carries App Store return context', () => {
@@ -38,51 +33,55 @@ test('creator navigation carries App Store return context', () => {
   );
 });
 
-test('marketplace sync labels explain loading and stale counts', () => {
-  assert.equal(hooks.appCountLabel(0, 'marketplace', 'loading'), '0 Apps · Sync');
-  assert.match(
-    hooks.marketplaceStateLabel({
-      status: 'idle',
-      installedCount: 20,
-    }),
-    /Installed: 20/
-  );
-  assert.equal(
-    hooks.marketplaceStateLabel({
-      status: 'ready',
-      message: '',
-      discoveredCount: 19,
-      availableCount: 1,
-      installedCount: 20,
-    }),
-    '19 Katalog-Apps projiziert. 1 noch nicht lokal vorhanden. 20 installierte Apps lokal gezählt.'
-  );
-  assert.match(
-    hooks.marketplaceStateLabel({
-      status: 'stale',
-      message: 'rate limited',
-      marketplaceCount: 18,
-      installedCount: 17,
-    }),
-    /Zeige letzten Stand: rate limited/
-  );
+test('Zählerzeile trägt keinen Sync-Zustand (R11: Zustand nur in der Zustandszone)', () => {
+  assert.equal(hooks.appCountLabel(0, 'marketplace', 'loading'), '0 Apps');
+  assert.equal(hooks.appCountLabel(5), '5 Apps');
+  assert.equal(hooks.marketplaceStateLabel, undefined);
 });
 
-test('marketplace discovery is explicit and not an automatic mount side effect', () => {
-  assert.match(source, /data-refresh-marketplace/);
-  assert.match(source, /refreshMarketplace\(\{ force: true \}\)/);
-  assert.doesNotMatch(source, /render\(\);\s*refreshMarketplace\(\);/);
-  assert.match(source, /Aktualisierung startet nur manuell/);
-  // Eine Katalogquelle: keine Browser-seitige GitHub-Discovery mehr.
+test('Katalog kommt live aus den Plattform-Collections, ohne Nachladeknopf und ohne Browser-Discovery', () => {
+  assert.match(source, /api\.query\(collection, \{ sort: \[\{ id: 'asc' \}\] \}\)\.subscribe/);
+  assert.match(source, /live\('business_apps', 'platformApps'\)/);
+  assert.match(source, /live\('business_app_versions', 'platformVersions'\)/);
+  // §16.29: Marketplace und Vorlagen lesen den Release-Katalog app_catalog.
+  assert.match(source, /live\('app_catalog', 'platformCatalog'\)/);
+  assert.doesNotMatch(source, /data-refresh-marketplace|refreshMarketplace|business_module_catalog/);
+  assert.doesNotMatch(html, /data-refresh-marketplace/);
+  // Eine Katalogquelle: keine Browser-seitige GitHub-Discovery.
   assert.doesNotMatch(source, /api\.github\.com/);
   assert.doesNotMatch(source, /raw\.githubusercontent\.com/);
 });
 
-test('marketplace installs preserve GitHub provenance for first-party verification', () => {
-  assert.match(source, /source_kind: item\.repo \? 'github' : 'url'/);
-  assert.match(source, /repo: item\.repo \|\| ''/);
-  assert.match(source, /git_ref: item\.repo \? CTOX_BRANCH : ''/);
-  assert.match(source, /subpath: item\.repo \? item\.source_path : ''/);
+test('§16.29: Katalog-Befehle tragen app_id + base_app_ver, keine v3-Felder mehr', () => {
+  // Installieren aus app_catalog = ctox.app.update mit base_app_ver null; Update/Rollback/Freigabe/Entfernen/Veröffentlichen
+  // über ctox.app.* mit der vom Client gesehenen aktiven Version als Basis.
+  assert.match(source, /payload: \{ app_id: appId, base_app_ver: base, \.\.\.extra \}/);
+  for (const type of ['ctox.app.update', 'ctox.app.rollback', 'ctox.app.release', 'ctox.app.remove', 'ctox.app.publish']) {
+    assert.ok(source.includes(`'${type}'`), type);
+  }
+  assert.doesNotMatch(source, /ctox\.module\.update'|ctox\.module\.rollback_version|ctox\.module\.release|ctox\.app_store\.uninstall|expected_baseline_sha256/);
+  // GitHub-/Zip-Quellen bleiben eigene Installationswege (externe Quelle, nicht app_catalog).
+  assert.match(source, /source_kind: 'github',\s*repo,/);
+});
+
+test('Updates nur bei höherer main-Version und nicht lokal angepasster App', () => {
+  const rows = [
+    { app_id: 'x', app_ver: '5', source: 'instance' },
+    { app_id: 'x', app_ver: '4', source: 'main' },
+  ];
+  assert.deepEqual(hooks.newerMainRelease(rows, '3'), { app_ver: '4', source: 'main', published_at: '' });
+  assert.equal(hooks.newerMainRelease(rows, '4'), null, 'gleiche Version ist kein Update');
+  assert.equal(hooks.newerMainRelease([{ app_id: 'x', app_ver: '9', source: 'instance' }], '3'), null, 'instance ist kein Update');
+  const installed = { id: 'x', kind: 'installed', status: 'installed', installed_version: 'Installiert: 1.0.0', available_version: 'Katalog: lokal' };
+  assert.equal(hooks.itemHasUpdate(installed), false, 'abweichende Anzeigezeilen allein sind kein Update (v3-Fehler)');
+  assert.equal(hooks.itemHasUpdate({ ...installed, update_available: true, modification_status: 'clean' }), true);
+  const customized = { ...installed, title: 'X', update_available: true, modification_status: 'modified', raw: { catalog_release: { app_ver: '4' } } };
+  assert.equal(hooks.itemHasUpdate(customized), false, 'angepasst → nicht im Band „Updates“');
+  assert.match(hooks.customizedUpdateBadgeHtml(customized), /data-update-customized="4"[^>]*>Update 4 · angepasst</);
+  assert.equal(hooks.customizedUpdateBadgeHtml({ ...customized, modification_status: 'clean', raw: {} }), '');
+  assert.equal(hooks.isTemplateEntry({ layout: { category: 'Vorlagen' } }), true);
+  assert.equal(hooks.isTemplateEntry({ layout: { template: true } }), true);
+  assert.equal(hooks.isTemplateEntry({ layout: { category: 'Sales' } }), false);
 });
 
 test('scope matching keeps card badges and category counters aligned', () => {
@@ -110,6 +109,7 @@ test('JSON export serializes the visible catalog or installed list', () => {
       status: 'installed',
       installed_version: '1.0.0',
       available_version: '1.1.0',
+      update_available: true,
       developer: 'CTOX',
       license: 'AGPL-3.0-only',
       source: 'catalog',
@@ -142,14 +142,10 @@ test('canonical catalog item prefers installed local records over duplicate GitH
   assert.equal(hooks.chooseCanonicalCatalogItem(marketplace, local), local);
 });
 
-test('empty states distinguish sync loading from search misses', () => {
-  assert.equal(hooks.emptyCatalogTitle('marketplace', '', 'loading'), 'Katalog wird aktualisiert');
-  assert.equal(hooks.emptyCatalogTitle('all', 'zz-no-hit', 'ready'), 'Keine Apps gefunden');
-  assert.match(
-    hooks.emptyCatalogBody('marketplace', '', 'loading'),
-    /aus der Server-Projektion neu geladen/
-  );
-  assert.match(hooks.emptyCatalogBody('all', 'zz-no-hit', 'ready'), /zz-no-hit/);
+test('leere Liste rendert keinen Zustandstext (R11)', () => {
+  assert.equal(hooks.emptyCatalogTitle, undefined);
+  assert.equal(hooks.emptyCatalogBody, undefined);
+  assert.doesNotMatch(html, /data-loading-spinner|data-store-message|store-empty-state/);
 });
 
 test('external GitHub action exposes an explicit external-link marker', () => {
@@ -157,13 +153,10 @@ test('external GitHub action exposes an explicit external-link marker', () => {
   assert.match(hooks.externalLinkIcon(), /aria-hidden="true"/);
 });
 
-test('zip upload keeps desktop chunks scoped and batched', () => {
-  assert.match(source, /const DEMAND_ONLY_SYNC_COLLECTIONS = new Set/);
-  assert.match(source, /'desktop_file_chunks'/);
-  assert.match(source, /sync\.leaseCollection\(collection,\s*reason\)/);
-  assert.match(source, /releaseSyncLeases\(syncHandles\.leases\)/);
-  assert.match(source, /bulkUpsert\(docs\)/);
-  assert.doesNotMatch(source, /startCollection\?\.\('desktop_file_chunks'\)/);
+test('Zip-Upload geht über api.files.put, nicht über Chunk-Collections', () => {
+  assert.match(source, /state\.api\.files\.put\(file, \{ id: fileId/);
+  assert.match(source, /source_kind: 'zip',\s*file_id: fileId,\s*file_ref: fileRef/);
+  assert.doesNotMatch(source, /desktop_file_chunks|leaseCollection|bulkUpsert|startCollection/);
 });
 
 test('managed app actions do not expose fake upgrades', () => {
@@ -213,36 +206,7 @@ test('managed app actions require projected permissions in addition to metadata'
   const granted = hooks.actionButtonsForManagedItem(managed, permissionState({
     role: 'user',
     userId: 'ops',
-    governance: {
-      permission_model: {
-        explicit_grants: [
-          {
-            subject_type: 'user',
-            subject_id: 'ops',
-            permission: 'apps.install',
-            scope_type: 'module',
-            scope_id: 'inventory',
-            active: true,
-          },
-          {
-            subject_type: 'user',
-            subject_id: 'ops',
-            permission: 'apps.modify',
-            scope_type: 'module',
-            scope_id: 'inventory',
-            active: true,
-          },
-          {
-            subject_type: 'user',
-            subject_id: 'ops',
-            permission: 'apps.uninstall',
-            scope_type: 'module',
-            scope_id: 'inventory',
-            active: true,
-          },
-        ],
-      },
-    },
+    permissions: ['apps.install', 'apps.modify', 'apps.uninstall'],
   }));
   assert.match(granted, /Aktualisieren/);
   assert.match(granted, /Bearbeiten/);
@@ -272,36 +236,7 @@ test('managed app actions recompute when governance grants refresh', () => {
   const afterRefresh = hooks.actionButtonsForManagedItem(managed, permissionState({
     role: 'user',
     userId: 'ops',
-    governance: {
-      permission_model: {
-        explicit_grants: [
-          {
-            subject_type: 'user',
-            subject_id: 'ops',
-            permission: 'apps.install',
-            scope_type: 'module',
-            scope_id: 'inventory',
-            active: true,
-          },
-          {
-            subject_type: 'user',
-            subject_id: 'ops',
-            permission: 'apps.modify',
-            scope_type: 'module',
-            scope_id: 'inventory',
-            active: true,
-          },
-          {
-            subject_type: 'user',
-            subject_id: 'ops',
-            permission: 'apps.uninstall',
-            scope_type: 'module',
-            scope_id: 'inventory',
-            active: true,
-          },
-        ],
-      },
-    },
+    permissions: ['apps.install', 'apps.modify', 'apps.uninstall'],
   }));
   assert.match(afterRefresh, /data-card-action="update"/);
   assert.match(afterRefresh, /data-card-action="edit"/);
@@ -334,20 +269,7 @@ test('release wizard action requires apps.release and builds evidence-only paylo
   const grantedState = permissionState({
     role: 'user',
     userId: 'ops',
-    governance: {
-      permission_model: {
-        explicit_grants: [
-          {
-            subject_type: 'user',
-            subject_id: 'ops',
-            permission: 'apps.release',
-            scope_type: 'module',
-            scope_id: 'inventory',
-            active: true,
-          },
-        ],
-      },
-    },
+    permissions: ['apps.release'],
   });
   const granted = hooks.actionButtonsForManagedItem(releaseApp, grantedState);
   assert.match(granted, /data-card-action="release"/);
@@ -382,19 +304,17 @@ test('release wizard action requires apps.release and builds evidence-only paylo
 });
 
 test('app store context modify uses selected app permission and target', () => {
-  const assignedFounder = permissionState({
-    role: 'founder',
-    userId: 'founder-a',
-    governance: {
-      founders: {
-        inventory: [{ user_id: 'founder-a', active: true }],
-      },
-    },
-  });
+  // 4.0 kennt keine Founder-Zuweisung je Modul im Actor-Spiegel (OFFEN-6): Recht `apps.source.edit` steht für die App,
+  // ohne Recht bleibt die Änderung gesperrt. Ziel des Befehls bleibt die ausgewählte App.
+  const assignedFounder = permissionState({ role: 'founder', userId: 'founder-a', permissions: ['apps.source.edit'] });
+  const plainFounder = permissionState({ role: 'founder', userId: 'founder-a' });
   assert.equal(hooks.canModifyAppStoreAppForModule(assignedFounder, { id: 'inventory' }), true);
-  assert.equal(hooks.canModifyAppStoreAppForModule(assignedFounder, { id: 'billing' }), false);
+  assert.equal(hooks.canModifyAppStoreAppForModule(plainFounder, { id: 'billing' }), false);
 
-  const detail = hooks.appStoreContextChatDetail(
+  // SKL-D: der tote Test-Haken appStoreContextChatDetail ist entfernt; „App ändern“ sendet jetzt der Baustein
+  // ctox:shared/context-chat.js (ctox.app.modify.request, Rechteprüfung im ctox-Handler). Geprüft bleibt der
+  // Sichtbereich, den der App Store für die ausgewählte App zeigt.
+  const scope = hooks.buildAppStoreAgentScopeView(
     assignedFounder,
     {
       app_id: 'inventory',
@@ -402,61 +322,26 @@ test('app store context modify uses selected app permission and target', () => {
       record_type: 'app',
       label: 'Inventory',
       app_title: 'Inventory',
-      app_version: 'v0.9.0',
-      app_visibility: 'private',
-      app_visibility_label: 'Privat',
-      data_access: {
-        summary: 'Freigegeben: Inventory Items',
-        granted_collections: ['inventory_items'],
-      },
+      data_access: { summary: 'Freigegeben: Inventory Items', granted_collections: ['inventory_items'] },
       column: 'grid',
       active_scope: 'installed',
     },
-    'Bitte Formular verbessern',
     'app'
   );
-  assert.equal(detail.command_type, 'ctox.business_os.app.modify');
-  assert.equal(detail.record_id, 'inventory');
-  assert.equal(detail.payload.module_id, 'inventory');
-  assert.equal(detail.payload.app_id, 'inventory');
-  assert.equal(detail.client_context.module_id, 'inventory');
-  assert.equal(detail.client_context.app_id, 'inventory');
-  assert.equal(detail.client_context.actor.id, 'founder-a');
-  assert.equal(detail.client_context.visible_scope.app.module_id, 'inventory');
-  assert.equal(detail.client_context.visible_scope.app.can_modify, true);
-  assert.equal(detail.client_context.visible_scope.data.summary, 'Freigegeben: Inventory Items');
-  assert.deepEqual(
-    detail.client_context.visible_scope.rows.map((row) => row.label),
-    ['Nutzer', 'App', 'Auswahl', 'Daten', 'Externe Aktionen']
-  );
-  assert.notEqual(detail.record_id, 'app-store');
-
-  const deniedDetail = hooks.appStoreContextChatDetail(
-    assignedFounder,
-    {
-      app_id: 'billing',
-      record_id: 'billing',
-      record_type: 'app',
-      label: 'Billing',
-      column: 'grid',
-    },
-    'Bitte fremde App ändern',
-    'app'
-  );
-  assert.equal(deniedDetail.command_type, 'business_os.chat.task');
-  assert.equal(deniedDetail.payload.mode, 'data');
-  assert.equal(deniedDetail.client_context.module_id, 'billing');
-  assert.equal(deniedDetail.client_context.visible_scope.app.can_modify, false);
+  assert.equal(scope.actor.id, 'founder-a');
+  assert.equal(scope.app.module_id, 'inventory');
+  assert.equal(scope.app.can_modify, true);
+  assert.equal(scope.data.summary, 'Freigegeben: Inventory Items');
+  assert.deepEqual(scope.rows.map((row) => row.label), ['Nutzer', 'App', 'Auswahl', 'Daten', 'Externe Aktionen']);
+  const deniedScope = hooks.buildAppStoreAgentScopeView(plainFounder, { app_id: 'billing', record_id: 'billing', record_type: 'app', label: 'Billing', column: 'grid' }, 'app');
+  assert.equal(deniedScope.app.module_id, 'billing');
+  assert.equal(deniedScope.app.can_modify, false);
 });
 
 test('app store lifecycle keeps 0.x apps private and 1.0.0 apps team-visible', () => {
-  const governance = {
-    founders: {
-      inventory: [{ user_id: 'founder-a', active: true }],
-    },
-  };
-  const team = permissionState({ role: 'user', userId: 'team-a', governance });
-  const founder = permissionState({ role: 'founder', userId: 'founder-a', governance });
+  // v3: Founder-Zuweisung; 4.0: Recht `apps.view` im Actor-Spiegel (OFFEN-6).
+  const team = permissionState({ role: 'user', userId: 'team-a' });
+  const founder = permissionState({ role: 'founder', userId: 'founder-a', permissions: ['apps.view'] });
   const privateApp = {
     id: 'inventory',
     version: '0.1.0',
@@ -615,9 +500,8 @@ test('install operations render card-local progress and terminal status', () => 
   assert.match(progress, /card-btn-progress-track/);
   assert.match(progress, /disabled/);
 
-  const message = hooks.operationMessageHtml({ kind: 'success', text: 'Outbound installed.' });
-  assert.match(message, /data-kind="success"/);
-  assert.match(message, /Outbound installed\./);
+  // Endmeldungen stehen nicht mehr in der Karte, sondern in der Zustandszone (R5/R11).
+  assert.equal(hooks.operationMessageHtml({ kind: 'success', text: 'Outbound installed.' }), '');
 });
 
 test('origin labels are humanized for the timeline', () => {
@@ -643,7 +527,7 @@ test('presentation layer stays compact and shell-native', () => {
   assert.match(css, /@container business-app-window \(max-width: 768px\)/);
   assert.match(css, /@container business-app-window \(max-width: 768px\)/);
   assert.match(css, /\.app-version-row[\s\S]*border-radius: var\(--panel-radius\)/);
-  assert.match(css, /\.store-loading-overlay[\s\S]*border-radius: var\(--panel-radius\)/);
+  assert.doesNotMatch(css, /\.store-loading-overlay|\.store-message|\.store-empty-state/);
   assert.match(css, /\.app-release-data-row[\s\S]*border-radius: var\(--panel-radius\)/);
 });
 
@@ -685,7 +569,8 @@ test('center column carries the canonical grammar and the shelf contract', () =>
   assert.doesNotMatch(html, /data-apps-count/);
   // Shelf: vendored three-based library loaded lazily with a list fallback;
   // scroll rides the pane well, never the window.
-  assert.match(js, /import\('\.\.\/\.\.\/vendor\/store-shelf\/store-shelf\.mjs\?v=[^']+'\)/);
+  assert.match(js, /import\('\.\/vendor\/store-shelf\/store-shelf\.mjs'\)/);
+  assert.doesNotMatch(js, new RegExp('store-shelf\\.mjs\\?' + 'v='));
   assert.match(js, /shelfUnavailable/);
   assert.match(js, /const REDUCED_MOTION_QUERY = '\(prefers-reduced-motion: reduce\)'/);
   assert.match(js, /const shelfMode = shouldUseShelf\(cardsMode, state\.shelfUnavailable, prefersReducedMotion\(\)\)/);
@@ -729,17 +614,18 @@ test('chrome is shell-grammar plus header icons, never module-owned wiring', () 
   assert.match(html, /class="ctox-pane-icon" data-action="install-github"/);
   assert.match(html, /class="ctox-pane-icon" data-action="install-zip"/);
   assert.match(html, /class="ctox-pane-icon" data-export-catalog[^>]*aria-label="[^"]+"[^>]*title="[^"]+"/);
-  assert.match(html, /class="ctox-pane-icon" data-refresh-marketplace/);
-  assert.match(js, /function actionIcon\(name\)[\s\S]*getActionIcon\?\.\(name\)/);
+  // Kein Nachladeknopf mehr (Live-Abo, R4/R12); Icons app-lokal (4.0 hat keine Icon-API, OFFEN-D).
+  assert.doesNotMatch(html, /data-refresh-marketplace/);
+  assert.match(js, /function actionIcon\(name\)/);
+  assert.doesNotMatch(js, /getActionIcon/);
   assert.match(js, /new Blob\(\[JSON\.stringify\(payload, null, 2\)\]/);
   assert.doesNotMatch(html, /btn-create-scratch|btn-install-github|btn-install-zip/);
   assert.doesNotMatch(html, /store-action-btn|store-refresh-btn/);
   assert.doesNotMatch(css, /\.store-action-btn|\.store-refresh-btn/);
-  // No standing sync-state line: discovery state rides on the refresh icon's
-  // tooltip (marketplaceStateLabel) and folds into the one-line footer.
+  // Keine stehende Sync-Zeile und kein Sync-Tooltip (R11).
   assert.doesNotMatch(html, /data-marketplace-state/);
   assert.doesNotMatch(css, /\.store-sync-state/);
-  assert.match(js, /els\.refresh\.title = marketplaceStateLabel\(\{/);
+  assert.doesNotMatch(js, /marketplaceStateLabel/);
   // Scope shards are pure selectors: title + ONE meta line with the
   // parenthesized count (zeros included) — no badge-pill chrome in the nav.
   const nav = html.slice(html.indexOf('data-scope-list'), html.indexOf('</nav>'));
@@ -764,19 +650,19 @@ test('chrome is shell-grammar plus header icons, never module-owned wiring', () 
   assert.match(js, /contextRecordId/);
   assert.match(js, /contextRecordType/);
   assert.match(js, /contextLabel/);
-  // Markup and stylesheet inherit the JS cache-buster (loadModuleMarkup
-  // contract, same as ctox/coding-agents/knowledge/threads).
+  // Markup relativ ohne Cache-Buster (R10, SW liefert versioniert); CSS lädt die Shell aus dem Manifest.
   assert.match(js, /async function loadModuleMarkup\(\)/);
-  assert.match(js, /\?v=\$\{version\}/);
-  assert.match(js, /link\.dataset\.appStoreStyle = 'true'/);
+  assert.match(js, /fetch\(new URL\('\.\/index\.html', import\.meta\.url\)\)/);
+  assert.doesNotMatch(js, new RegExp('\\?' + 'v=\\$\\{|appStoreStyle|ensureStyles'));
   // No localStorage; the sessionStorage creator-return handoff is the
   // established inter-app channel (knowledge uses the same for cross-module
   // focus handoffs) and stays.
   assert.doesNotMatch(js, /localStorage/);
 });
 
-test('v2 overlays stay inside the app window and icons survive shell recovery', () => {
-  assert.match(source, /\(els\.root \|\| state\.ctx\?\.host\)\?\.append\(overlay\)/);
+test('v2 overlays stay inside the app window and icons stay app-local', () => {
+  assert.match(source, /els\.root\?\.append\(overlay\)/);
+  assert.doesNotMatch(source, /state\.ctx/);
   assert.doesNotMatch(source, /document\.body\.append\(overlay\)/);
   assert.match(source, /function actionIcon\(name\)/);
   assert.match(source, /const paths = \{[\s\S]*close:/);

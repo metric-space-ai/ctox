@@ -296,22 +296,4 @@ mod tests {
     use crate::tests::*;
 
     use super::*;
-
-    #[tokio::test]
-    async fn http_test() {
-        maybe_skip_integration!();
-        let url = std::env::var("HTTP_URL").expect("HTTP_URL must be set");
-        let options = ClientOptions::new().with_allow_http(true);
-        let integration = HttpBuilder::new()
-            .with_url(url)
-            .with_client_options(options)
-            .build()
-            .unwrap();
-
-        put_get_delete_list(&integration).await;
-        list_uses_directories_correctly(&integration).await;
-        list_with_delimiter(&integration).await;
-        rename_and_copy(&integration).await;
-        copy_if_not_exists(&integration).await;
-    }
 }

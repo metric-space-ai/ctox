@@ -1,0 +1,147 @@
+{
+  "startedAt": "2026-10-15T12:18:39.417Z",
+  "reps": 20,
+  "scenarios": {
+    "a-stub-remount-zwei-tabs": {
+      "pass": true,
+      "summary": "20 Remounts gegen createStubKernel (latencyMs 20): Veröffentlichen (sim.publishAppVersion im Leiter A) → mounted in B p50 10.2 ms / p95 22.1 ms, in A p50 10.2 / p95 21.8 ms; Abweichungen Wert/Fokus/Auswahl/Scroll: 0.",
+      "data": {
+        "publishToMountedMs": {
+          "tabB_reader": {
+            "n": 20,
+            "p50": 10.2,
+            "p95": 22.1,
+            "min": 8.5,
+            "max": 28.2
+          },
+          "tabA_leader": {
+            "n": 20,
+            "p50": 10.2,
+            "p95": 21.8,
+            "min": 8.1,
+            "max": 28
+          }
+        },
+        "rawB": [
+          16.6,
+          20.5,
+          9.7,
+          9.8,
+          9.6,
+          8.8,
+          10.2,
+          22.1,
+          9.6,
+          8.5,
+          10.2,
+          11.1,
+          9.5,
+          9.4,
+          18.5,
+          16.2,
+          11.4,
+          28.2,
+          12.1,
+          10.6
+        ],
+        "mismatches": [],
+        "errors": []
+      }
+    },
+    "c-stub-rueckfall": {
+      "pass": true,
+      "summary": "v3-Inhalt als Stub-Version 99 → Rückfall auf 21 nach 9022.6 ms (≤ 10 s: true); Zone: „Version 99 startet nicht (mount() nicht binnen 9 s fertig); 21 läuft weiter“; Eingaben erhalten: true; reportFailed zugestellt 2×; Zeiger danach (A/B zurück: true/true): {\"activated_ver\":\"21\",\"target_ver\":\"99\",\"state\":\"failed\",\"error\":\"reported: mount() nicht binnen 9 s fertig\"}; kernel.apps activated_ver 21; neues Fenster B 21/mounted, A 21/mounted.",
+      "data": {
+        "rollbackMs": 9022.6,
+        "zone": {
+          "level": "error",
+          "text": "Version 99 startet nicht (mount() nicht binnen 9 s fertig); 21 läuft weiter",
+          "entries": [
+            {
+              "level": "error",
+              "code": "shell.rollback",
+              "text": "Version 99 startet nicht (mount() nicht binnen 9 s fertig); 21 läuft weiter"
+            }
+          ]
+        },
+        "activationAfter": {
+          "key": "activation:formular",
+          "app_id": "formular",
+          "activated_ver": "21",
+          "target_ver": "99",
+          "state": "failed",
+          "error": "reported: mount() nicht binnen 9 s fertig",
+          "updated_at": 1792066731492,
+          "previous_ver": "21",
+          "good_vers": [
+            "13",
+            "14",
+            "15",
+            "16",
+            "17",
+            "18",
+            "19",
+            "20",
+            "21"
+          ],
+          "at_seq": 44
+        },
+        "pointerBack": {
+          "A": true,
+          "B": true
+        },
+        "reports": [
+          {
+            "appId": "formular",
+            "ver": "99",
+            "reason": "mount() nicht binnen 9 s fertig",
+            "delivered": true,
+            "at": 1792066731486,
+            "activated_ver": "21"
+          },
+          {
+            "appId": "formular",
+            "ver": "99",
+            "reason": "mount() nicht binnen 9 s fertig",
+            "delivered": true,
+            "at": 1792066731489,
+            "activated_ver": "21"
+          }
+        ],
+        "newWindow": {
+          "B": {
+            "ver": "21",
+            "state": "mounted"
+          },
+          "A": {
+            "ver": "21",
+            "state": "mounted"
+          }
+        },
+        "appRow": {
+          "activated_ver": "21",
+          "state": "failed",
+          "layout": {
+            "icon_asset": null,
+            "icon_svg": null,
+            "category": "Labor",
+            "frame_palette": null,
+            "default_width": null,
+            "default_height": null,
+            "min_width": null,
+            "min_height": null,
+            "presentation": null
+          },
+          "styles": [
+            "index.css"
+          ]
+        },
+        "errors": []
+      }
+    }
+  },
+  "initialPublish": {
+    "t0": 1792066720179.7,
+    "done": "activated"
+  }
+}

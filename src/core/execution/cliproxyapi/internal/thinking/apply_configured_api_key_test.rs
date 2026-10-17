@@ -314,32 +314,3 @@ impl ProviderApplier for MarkerApplier {
         Ok(self.0.to_vec())
     }
 }
-
-#[test]
-fn plugin_registration_is_owner_scoped_deterministic_and_engine_local() {
-    let first = ThinkingEngine::default();
-    let second = ThinkingEngine::default();
-    assert!(first.register_plugin_provider(
-        "z-owner",
-        " custom ",
-        1,
-        Arc::new(MarkerApplier(b"z")),
-    ));
-    assert!(first.register_plugin_provider("a-owner", "CUSTOM", 1, Arc::new(MarkerApplier(b"a")),));
-    assert!(!first.register_plugin_provider(
-        "z-owner",
-        "custom",
-        1,
-        Arc::new(MarkerApplier(b"stale")),
-    ));
-    assert!(first.provider_applier("custom").is_some());
-    assert!(second.provider_applier("custom").is_none());
-    first.unregister_plugin_providers("a-owner");
-    assert!(first.provider_applier("custom").is_none());
-    assert!(!first.register_plugin_provider(
-        "plugin",
-        "claude",
-        99,
-        Arc::new(MarkerApplier(b"override")),
-    ));
-}

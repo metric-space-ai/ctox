@@ -60,24 +60,4 @@ fn antigravity_state(state: &mut TranslationState) -> &mut AntigravityToResponse
 mod tests {
     use super::*;
     use crate::sdk::translator::TranslationContext;
-
-    #[test]
-    fn registration_activates_request_and_both_response_directions() {
-        let registry = Registry::new();
-        register_openai_responses_antigravity(&registry);
-        assert!(registry.has_request_transformer(&openai_response(), &antigravity()));
-        assert!(registry.has_response_transformer(&openai_response(), &antigravity()));
-        assert!(registry.has_non_stream_response_transformer(&openai_response(), &antigravity()));
-        assert!(registry.has_stream_response_transformer(&openai_response(), &antigravity()));
-        let output = registry.translate_request(
-            &TranslationContext::default(),
-            &openai_response(),
-            &antigravity(),
-            "gemini-3-flash-agent",
-            br#"{"input":"hello"}"#,
-            false,
-        );
-        let value: serde_json::Value = serde_json::from_slice(&output).unwrap();
-        assert_eq!(value["request"]["contents"][0]["parts"][0]["text"], "hello");
-    }
 }

@@ -122,39 +122,8 @@ impl ModelsCacheManager {
         fs::write(&self.cache_path, json).await
     }
 
-    #[cfg(test)]
-    /// Set the cache TTL.
-    pub(crate) fn set_ttl(&mut self, ttl: Duration) {
-        self.cache_ttl = ttl;
-    }
 
-    #[cfg(test)]
-    /// Manipulate cache file for testing. Allows setting a custom fetched_at timestamp.
-    pub(crate) async fn manipulate_cache_for_test<F>(&self, f: F) -> io::Result<()>
-    where
-        F: FnOnce(&mut DateTime<Utc>),
-    {
-        let mut cache = match self.load().await? {
-            Some(cache) => cache,
-            None => return Err(io::Error::new(ErrorKind::NotFound, "cache not found")),
-        };
-        f(&mut cache.fetched_at);
-        self.save_internal(&cache).await
-    }
 
-    #[cfg(test)]
-    /// Mutate the full cache contents for testing.
-    pub(crate) async fn mutate_cache_for_test<F>(&self, f: F) -> io::Result<()>
-    where
-        F: FnOnce(&mut ModelsCache),
-    {
-        let mut cache = match self.load().await? {
-            Some(cache) => cache,
-            None => return Err(io::Error::new(ErrorKind::NotFound, "cache not found")),
-        };
-        f(&mut cache);
-        self.save_internal(&cache).await
-    }
 }
 
 /// Serialized snapshot of models and metadata cached on disk.

@@ -1,0 +1,126 @@
+{
+ "app": "cv-print-builder",
+ "width": 420,
+ "steps": [
+  {
+   "step": "öffnen",
+   "ops": [],
+   "title": "CV Print Builder",
+   "win": {
+    "x": 0,
+    "w": 420,
+    "h": 812
+   },
+   "mode": "sheet",
+   "issues": [],
+   "errors": [],
+   "zoneText": "",
+   "cands": [
+    "button:Zurück zur Liste",
+    "button:Analysieren",
+    "button:Bühne ausblenden",
+    "nav:Original"
+   ],
+   "shot": "cv-print-builder/420-01-open.png"
+  },
+  {
+   "step": "nav Original",
+   "changed": true,
+   "ops": [
+    "patch document_versions/version-001 local=ok result=accepted {\"model_json\":{\"workflow\":{\"view_mode\":\"original\",\"updated_at_ms\":1792129494964}},\"diagnostics\":[],\"updated_at_ms\":1792129494964}",
+    "patch documents/document-001 local=ok result=accepted {\"title\":\"Neuer CV\",\"status\":\"uploaded\",\"diagnostics_count\":0,\"display_cache\":{\"candidate_name\":\"Neuer CV\",\"phase\":\"uploaded\",\"template\":\"mi"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "cv-print-builder/420-02-nav_Original.png"
+  },
+  {
+   "step": "zurück zu Reiter Original",
+   "changed": 2,
+   "ops": [
+    "patch document_versions/version-001 local=ok result=accepted {\"model_json\":{\"workflow\":{\"view_mode\":\"original\",\"updated_at_ms\":1792129495473}},\"diagnostics\":[],\"updated_at_ms\":1792129495473}",
+    "patch documents/document-001 local=ok result=accepted {\"title\":\"Neuer CV\",\"status\":\"uploaded\",\"diagnostics_count\":0,\"display_cache\":{\"candidate_name\":\"Neuer CV\",\"phase\":\"uploaded\",\"template\":\"mi"
+   ],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "nav",
+   "shot": "cv-print-builder/420-03-zur_ck_zu_Reiter_Original.png"
+  },
+  {
+   "step": "button Zurück zur Liste",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "button",
+   "shot": "cv-print-builder/420-04-button_Zur_ck_zur_Liste.png"
+  },
+  {
+   "step": "suche ohne Treffer",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "textBefore": 315,
+   "shot": "cv-print-builder/420-05-suche_ohne_Treffer.png",
+   "textAfter": 63
+  },
+  {
+   "step": "suche geleert",
+   "changed": true,
+   "ops": [],
+   "zone": [],
+   "dialogs": [],
+   "errors": [],
+   "issues": [],
+   "open": true,
+   "kind": "search",
+   "shot": "cv-print-builder/420-06-suche_geleert.png"
+  }
+ ],
+ "opsAll": [
+  {
+   "m": "patch",
+   "coll": "document_versions",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "documents",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "document_versions",
+   "local": "ok",
+   "result": "accepted"
+  },
+  {
+   "m": "patch",
+   "coll": "documents",
+   "local": "ok",
+   "result": "accepted"
+  }
+ ],
+ "pushErrors": [],
+ "titles": [
+  "cv-print-builder",
+  "CV Print Builder"
+ ]
+}

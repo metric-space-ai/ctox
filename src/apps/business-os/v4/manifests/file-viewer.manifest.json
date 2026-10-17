@@ -1,0 +1,142 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/file-viewer/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/file-viewer/index.html",
+  "_rust_basis": "~0,05k: `store.rs` `materialize_desktop_file_command` (`:4336`, 52); Routing `command_plane.rs`, `rxdb_peer.rs`, `desktop_files.rs` (je 2–4 Treffer).",
+  "_source_dir": "src/apps/business-os/modules/file-viewer",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "file-viewer",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {},
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {},
+  "files": {
+    "V4-PORT.md": "9219a3016d1821e35fdd8aea05139e04b4c106ff398801a72d5dc2b65a944781",
+    "assets/icon.png": "ffda97708c2ca183344238069657b9c006205dd6252b7a765456b6a03bc83004",
+    "assets/icon@512.png": "78311622fe7fd9a6a63f09f39ed7cc87da3cc25c7a8449f770211b8c2d6169f8",
+    "collections.schema.json": "badf4c8bdc48c6f8d81e90e93458f78dd73ede008def2a8db9303775a4b5bc00",
+    "icon.svg": "f3fcd5ed6f275c05107b188362651d200fa4755055653d0e9293ec1165607175",
+    "index.css": "65bf7a0f76c66fec0880e45d232921635f909d26519ab3310e4182b954a99bd7",
+    "index.html": "e920090136eda9027a4440ee7fcab8558dde6ef3e4e8363e002dff79aa823a1e",
+    "index.js": "d317fbc0b33e6c8cfde443dc2ab03175fe863113cd85776291ef7bf5d5b305f1",
+    "locales/de.json": "f2bb509fc0032beac2af6ad2e6f75948ea150e5fb3bdfd61cec5a2636ec8a71d",
+    "locales/en.json": "1fe8a9a00a3bfbbb69266df810be650774a224430355b00ced62f7b2df5d576f",
+    "module.json": "8bdfc6afde77f936a194ace763531285696a9f7e60e87ab59ef9466920ab7060",
+    "v4-manifest.json": "a83522ac5501c93cc30ec44e3b60412f321b3acceec08e6c9c69c566f3d4d473"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "declaration_basis": "modules/file-viewer/V4-PORT.md OFFEN 4 („keine App-Collection mehr“); desktop_files read: E30 – files.get(ref) einer Explorer-/Desktop-Datei ist nur über eine lesbare desktop_files-Zeile berechtigt (FIXT-2, 16.10.2026)",
+        "sources": [
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "desktop_files": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "declaration_basis": "modules/file-viewer/V4-PORT.md OFFEN 4 („keine App-Collection mehr“); desktop_files read: E30 – files.get(ref) einer Explorer-/Desktop-Datei ist nur über eine lesbare desktop_files-Zeile berechtigt (FIXT-2, 16.10.2026)",
+        "sources": [
+          "module.json.collections",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "desktop"
+    },
+    "files": {
+      "_evidence": {
+        "code_read": [
+          "index.js:5",
+          "index.js:108",
+          "index.js:134"
+        ],
+        "code_write": [],
+        "declaration_basis": "modules/file-viewer/V4-PORT.md OFFEN 4 („keine App-Collection mehr“); desktop_files read: E30 – files.get(ref) einer Explorer-/Desktop-Datei ist nur über eine lesbare desktop_files-Zeile berechtigt (FIXT-2, 16.10.2026)",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_replaced": {
+      "icon_asset": "shared/assets/workjet-icons/grok-shell-v1/file-viewer.png"
+    },
+    "_icon_asset_source": "shared/assets/workjet-icons/grok-shell-v1/file-viewer.png (shared/grok-shell-icon-selection.js, sha256 78311622fe7f…, 512 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "category": "Workspace",
+    "default_height": 560,
+    "default_width": 760,
+    "icon_asset": "assets/icon.png",
+    "icon_asset_srcset": "assets/icon.png 1x, assets/icon@512.png 2x",
+    "icon_svg": "<svg width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" class=\"svg-icon svg-file-viewer\" xmlns=\"http://www.w3.org/2000/svg\"><defs><linearGradient id=\"grad-file-viewer\" x1=\"0%\" y1=\"0%\" x2=\"100%\" y2=\"100%\"><stop offset=\"0%\" stop-color=\"#f59e0b\" /><stop offset=\"100%\" stop-color=\"#8b5cf6\" /></linearGradient></defs><path d=\"M6 3h8l4 4v14H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z\" fill=\"url(#grad-file-viewer)\" fill-opacity=\"0.12\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M14 3v5h4\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"2\" stroke-linejoin=\"round\"></path><path d=\"M8 14s1.5-2 4-2 4 2 4 2-1.5 2-4 2-4-2-4-2Z\" stroke=\"url(#grad-file-viewer)\" stroke-width=\"1.7\" stroke-linejoin=\"round\"></path><circle cx=\"12\" cy=\"14\" r=\"1\" fill=\"url(#grad-file-viewer)\"></circle></svg>",
+    "min_height": 480,
+    "min_width": 520,
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 560,
+        "width": 760
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 520
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "b01da96469022e3620cb2d1d3ae5d7b90158aaf5e67d6c9516d6c27eb885f936",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "Datei-Viewer",
+  "triggers": [],
+  "version": "1.0.0"
+}

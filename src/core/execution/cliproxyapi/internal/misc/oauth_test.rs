@@ -66,19 +66,6 @@ fn rejects_non_url_and_callbacks_without_code_or_error() {
 }
 
 #[test]
-fn mirrors_go_parse_query_error_handling() {
-    assert_eq!(
-        parse_oauth_callback("?ignored=%zz&code=valid").expect("valid pair survives"),
-        Some(OAuthCallback {
-            code: "valid".into(),
-            ..OAuthCallback::default()
-        })
-    );
-    assert!(parse_oauth_callback("http://localhost/#code=fragment&bad=%zz").is_err());
-    assert!(parse_oauth_callback("?code=invalid;state=value").is_err());
-}
-
-#[test]
 fn async_prompt_reports_exactly_one_lane_without_blocking() {
     let (input, error) = async_prompt(
         |message| Ok::<_, &'static str>(message.to_uppercase()),

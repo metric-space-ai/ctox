@@ -1734,3 +1734,13 @@
   color: var(--muted);
   font-size: 10px;
 }
+
+/* Icon + Wort (workjet#801): Knöpfe mit sichtbarem Kurzwort wachsen mit dem Text. */
+.ctox-pane-icon.has-label {
+  width: auto;
+  gap: 6px;
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+}

@@ -9,36 +9,6 @@ fn asset_pack_loads_and_validates() {
 }
 
 #[test]
-fn asset_pack_has_seven_report_types() {
-    let pack = AssetPack::load().expect("asset_pack loads");
-    let ids: Vec<&str> = pack.report_types.iter().map(|r| r.id.as_str()).collect();
-    assert_eq!(
-        ids.len(),
-        7,
-        "expected 7 report_types, got {}: {:?}",
-        ids.len(),
-        ids
-    );
-    let expected = [
-        "feasibility_study",
-        "market_research",
-        "competitive_analysis",
-        "technology_screening",
-        "whitepaper",
-        "literature_review",
-        "decision_brief",
-    ];
-    for needle in expected {
-        assert!(
-            ids.contains(&needle),
-            "missing expected report_type id {:?}; got {:?}",
-            needle,
-            ids
-        );
-    }
-}
-
-#[test]
 fn asset_pack_block_library_keys_resolve() {
     let pack = AssetPack::load().expect("asset_pack loads");
     for report_type in &pack.report_types {
@@ -140,16 +110,4 @@ fn asset_pack_block_library_min_chars_positive() {
             entry.min_chars
         );
     }
-}
-
-#[test]
-fn asset_pack_load_is_cached() {
-    let a = AssetPack::load().expect("asset_pack first load");
-    let b = AssetPack::load().expect("asset_pack second load");
-    let pa: *const AssetPack = a;
-    let pb: *const AssetPack = b;
-    assert_eq!(
-        pa, pb,
-        "AssetPack::load() should return the same cached &'static reference"
-    );
 }

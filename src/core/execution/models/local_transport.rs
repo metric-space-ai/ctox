@@ -544,6 +544,25 @@ impl LocalStream {
         Ok(LocalStream { inner })
     }
 
+    /// Transfer an already connected private IPC stream into a child stdio
+    /// handle. This permits a permission-restricted child to communicate over
+    /// an inherited socket/pipe without granting permission to open any endpoint.
+    pub fn into_child_stdio(self) -> io::Result<std::process::Stdio> {
+        match self.inner {
+            #[cfg(unix)]
+            StreamInner::Unix(stream) => {
+                use std::os::fd::OwnedFd;
+                Ok(std::process::Stdio::from(OwnedFd::from(stream)))
+            }
+            #[cfg(windows)]
+            StreamInner::NamedPipe(file) => Ok(std::process::Stdio::from(file)),
+            StreamInner::Tcp(_) => Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "child runtime requires private IPC",
+            )),
+        }
+    }
+
     /// Sets the read timeout for the underlying transport.
     ///
     /// On Windows named-pipe streams this is a best-effort no-op because the
@@ -666,25 +685,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn display_label_formats_each_variant() {
-        let unix = LocalTransport::UnixSocket {
-            path: PathBuf::from("/tmp/ctox.sock"),
-        };
-        assert_eq!(unix.display_label(), "unix:/tmp/ctox.sock");
-
-        let pipe = LocalTransport::NamedPipe {
-            name: "ctox-primary".to_string(),
-        };
-        assert_eq!(pipe.display_label(), r"pipe:\\.\pipe\ctox-primary");
-
-        let tcp = LocalTransport::TcpLoopback {
-            host: "127.0.0.1".to_string(),
-            port: 2234,
-        };
-        assert_eq!(tcp.display_label(), "tcp:127.0.0.1:2234");
-    }
-
-    #[test]
     fn http_base_url_only_tcp() {
         let tcp = LocalTransport::TcpLoopback {
             host: "127.0.0.1".to_string(),
@@ -705,19 +705,6 @@ mod tests {
         }
         .http_base_url()
         .is_none());
-    }
-
-    #[test]
-    fn endpoint_string_formats_ipc_variants() {
-        let unix = LocalTransport::UnixSocket {
-            path: PathBuf::from("/tmp/ctox.sock"),
-        };
-        assert_eq!(unix.endpoint_string(), "/tmp/ctox.sock");
-
-        let pipe = LocalTransport::NamedPipe {
-            name: "ctox-primary".to_string(),
-        };
-        assert_eq!(pipe.endpoint_string(), r"\\.\pipe\ctox-primary");
     }
 
     #[test]

@@ -2,10 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, release/v2]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    branches: [main]
+    branches: [main, release/v2]
 
 env:
   CARGO_TERM_COLOR: always
@@ -299,11 +299,8 @@ jobs:
           node --check src/apps/business-os/scripts/assert-production-release-docs.mjs
           node --check src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
           node --check src/apps/business-os/scripts/audit-business-os-content.mjs
-          node src/apps/business-os/scripts/assert-rxdb-only.mjs
           node src/apps/business-os/scripts/generate-module-registry.mjs --check
           node src/apps/business-os/scripts/assert-module-collection-allowlists.mjs
-          node src/apps/business-os/scripts/assert-module-conformance.mjs
-          node src/apps/business-os/scripts/assert-command-consumer-inventory.mjs
           node src/apps/business-os/scripts/assert-production-release-docs.mjs
           node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs --self-test
           node src/apps/business-os/scripts/assert-security-privacy-signoff.mjs
@@ -339,6 +336,23 @@ jobs:
           # data-plane ratchet guards). The three explicit smoke invocations
           # above stay for the release-evidence contract.
           COMMAND_PLANE_BASELINE_PATH=runtime/build/command-plane/ci-baseline.json node src/apps/business-os/rxdb/tests/run-all.mjs --require-wire-daemon
+
+      # Line selection (E37): V2 checks on release/v2, their v4 counterparts on every other line.
+      - name: Business OS RxDB-only contract (V2 line)
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && (github.base_ref || github.ref_name) == 'release/v2'
+        run: |
+          node src/apps/business-os/scripts/assert-rxdb-only.mjs
+          node src/apps/business-os/scripts/assert-module-conformance.mjs
+          node src/apps/business-os/scripts/assert-command-consumer-inventory.mjs
+      - name: Business OS RxDB-only contract (v4 line)
+        if: matrix.target == 'x86_64-unknown-linux-gnu' && (github.base_ref || github.ref_name) != 'release/v2'
+        run: |
+          node --check src/apps/business-os/scripts/assert-rxdb-only.v4.mjs
+          node --check src/apps/business-os/scripts/assert-module-conformance.v4.mjs
+          node --check src/apps/business-os/scripts/assert-command-consumer-inventory.v4.mjs
+          node src/apps/business-os/scripts/assert-rxdb-only.v4.mjs
+          node src/apps/business-os/scripts/assert-module-conformance.v4.mjs
+          node src/apps/business-os/scripts/assert-command-consumer-inventory.v4.mjs
 
       - name: Upload command-plane baseline
         if: matrix.target == 'x86_64-unknown-linux-gnu'
@@ -490,12 +504,48 @@ jobs:
           path: runtime/build/deployment-audit/windows-secret-store-acceptance.json
           if-no-files-found: error
 
+      - name: Prepare nonempty Harness test gate
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/ctox-filtered-harness-test" <<'HARNESS_TEST_RUNNER'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec bash "${GITHUB_WORKSPACE:?}/scripts/sync-v4/gate-harness.sh" "$@"
+          HARNESS_TEST_RUNNER
+          chmod +x "$RUNNER_TEMP/ctox-filtered-harness-test"
+
       - name: Harness core tests
         if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: cargo test --locked --manifest-path src/core/harness/Cargo.toml -p ctox-core compact_controller --quiet
+        shell: bash
+        run: |
+          "$RUNNER_TEMP/ctox-filtered-harness-test" ctox-core compact_controller
 
       - name: Harness spawn liveness proof
         if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
         run: |
-          cargo test --locked --manifest-path src/core/harness/Cargo.toml -p ctox-core harness_subagent_spawn_model_is_bounded_and_leaf_only --quiet
+          set -euo pipefail
+          "$RUNNER_TEMP/ctox-filtered-harness-test" ctox-core harness_subagent_spawn_model_forbids_free_subagents
           cargo run --locked -- process-mining spawn-liveness
+
+      - name: Harness interrupt terminal ownership
+        if: matrix.target == 'x86_64-unknown-linux-gnu'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for test_name in \
+            exact_turn_interrupt_and_completion_have_one_atomic_terminal_winner \
+            exact_turn_interrupt_receipt_waits_for_its_own_stop \
+            exact_turn_interrupt_rejects_delayed_request_after_replacement \
+            exact_turn_interrupt_rejects_unknown_empty_and_finished_turns \
+            exact_turn_interrupt_removes_cancelled_and_failed_receipts \
+            exact_turn_interrupt_session_exit_rejects_unprocessed_request \
+            abort_regular_task_emits_turn_aborted_only
+          do
+            "$RUNNER_TEMP/ctox-filtered-harness-test" ctox-core "$test_name"
+          done
+          "$RUNNER_TEMP/ctox-filtered-harness-test" ctox-app-server exact_turn_interrupt_rpc_preserves_identity_and_successor
+          "$RUNNER_TEMP/ctox-filtered-harness-test" ctox-app-server test_handle_turn_interrupted_emits_interrupted_with_error
+          "$RUNNER_TEMP/ctox-filtered-harness-test" ctox-app-server-protocol late_turn_complete_does_not_close_active_turn

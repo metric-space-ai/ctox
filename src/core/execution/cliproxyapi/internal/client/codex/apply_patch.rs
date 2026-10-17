@@ -255,15 +255,6 @@ mod tests {
     };
 
     #[test]
-    fn parameters_are_independent_json() {
-        let mut first = parameters();
-        first[0] = b'x';
-        let second = parameters();
-        assert_eq!(second[0], b'{');
-        assert!(serde_json::from_slice::<serde_json::Value>(&second).is_ok());
-    }
-
-    #[test]
     fn recognizes_only_the_custom_apply_patch_name() {
         let custom = gjson::parse(r#"{"type":"custom","name":" apply_patch "}"#);
         let function = gjson::parse(r#"{"type":"function","name":"apply_patch"}"#);

@@ -8,26 +8,29 @@
 
 /* Root: the kit workspace fills the module window; an optional module-global
    error strip sits in the second row (toggled via [hidden]). */
-.invoices-shell {
+[data-app="invoices"] .invoices-shell {
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
   height: 100%;
   min-height: 0;
 }
 
-.invoices-module { --ctox-left-width: 320px; }
+[data-app="invoices"] .invoices-module { --ctox-left-width: 344px; }
 
 /* Explicit column pins so the main pane never slides onto the resizer track
    when the kit hides resizers on narrow windows. Left rail rows:
    auto [band] minmax(0,1fr) [well] auto [footer]. */
-.invoices-rail { grid-column: 1; grid-template-rows: auto auto minmax(0, 1fr) auto; }
-.invoices-module > [data-resizer="left"] { grid-column: 2; }
-.invoices-main { grid-column: 3; grid-template-rows: auto minmax(0, 1fr); }
+[data-app="invoices"] .invoices-rail { grid-column: 1; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+[data-app="invoices"] .invoices-module > [data-resizer="left"] { grid-column: 2; }
+[data-app="invoices"] .invoices-main { grid-column: 3; grid-template-rows: auto minmax(0, 1fr); }
+/* The detail pane is its own size container: the line table follows the pane width, not the window. With the rail
+   beside it, the pane at a 900px window is ~530px wide and the 7-column table no longer fits (Geometrie G1). */
+[data-app="invoices"] .invoices-main { container: invoices-pane / inline-size; }
 
 /* Shard / compact selector rows (both are the kit .ctox-list-item). Selection
    is an in-place is-selected flip — the kit paints the accent fill + bar. */
-.invoices-row { display: grid; gap: 4px; cursor: pointer; }
-.invoices-row--list {
+[data-app="invoices"] .invoices-row { display: grid; gap: 4px; cursor: pointer; }
+[data-app="invoices"] .invoices-row--list {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -35,22 +38,22 @@
   padding-top: 6px;
   padding-bottom: 6px;
 }
-.invoices-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.invoices-row-title {
+[data-app="invoices"] .invoices-row-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+[data-app="invoices"] .invoices-row-title {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-weight: 600;
 }
-.invoices-row-meta { color: var(--muted); font-size: 11px; }
+[data-app="invoices"] .invoices-row-meta { color: var(--muted); font-size: 11px; }
 
 /* custom: padded content body — kit .ctox-pane-scroll is intentionally
    unpadded so panes choose their own content rhythm. */
-.invoices-pane-scroll { padding: 14px; }
+[data-app="invoices"] .invoices-pane-scroll { padding: 14px; }
 
 /* Vertical content stack for editor / detail bodies. */
-.invoices-stack {
+[data-app="invoices"] .invoices-stack {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -59,11 +62,11 @@
 
 /* custom: dense inline-editing grid — cell inputs sit tighter than standalone
    kit inputs so a full invoice line fits the main pane. */
-.invoices-lines-table .ctox-input {
+[data-app="invoices"] .invoices-lines-table .ctox-input {
   min-height: 28px;
   font-size: 12.5px;
 }
-.invoices-lines-table td.is-num .ctox-input {
+[data-app="invoices"] .invoices-lines-table td.is-num .ctox-input {
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -71,49 +74,49 @@
 /* custom: totals strip under the editable lines grid. The class is also a JS
    hook: totals are recomputed in place via document.querySelector on line
    edits without a full re-render. */
-.invoices-totals {
+[data-app="invoices"] .invoices-totals {
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
   color: var(--muted);
   font-size: 13px;
 }
-.invoices-totals strong {
+[data-app="invoices"] .invoices-totals strong {
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 
 /* Editor action row (save draft / post + validation callout). */
-.invoices-actions {
+[data-app="invoices"] .invoices-actions {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
-.invoices-actions .ctox-callout { flex-basis: 100%; }
-.invoices-issues { margin: 0; padding-left: 18px; }
+[data-app="invoices"] .invoices-actions .ctox-callout { flex-basis: 100%; }
+[data-app="invoices"] .invoices-issues { margin: 0; padding-left: 18px; }
 
 /* Detail tab panels (journal / XRechnung / payments / dunning). */
-.invoices-tab {
+[data-app="invoices"] .invoices-tab {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
 }
-.invoices-tab .ctox-table-wrap,
-.invoices-tab .ctox-pre,
-.invoices-detail .ctox-table-wrap {
+[data-app="invoices"] .invoices-tab .ctox-table-wrap,
+[data-app="invoices"] .invoices-tab .ctox-pre,
+[data-app="invoices"] .invoices-detail .ctox-table-wrap {
   align-self: stretch;
   width: 100%;
 }
 
 /* Payment allocation form. */
-.invoices-payment-form {
+[data-app="invoices"] .invoices-payment-form {
   display: grid;
   gap: 8px;
   max-width: 320px;
 }
-.invoices-hint {
+[data-app="invoices"] .invoices-hint {
   margin: 0;
   color: var(--muted);
   font-size: 12px;
@@ -121,13 +124,6 @@
 
 /* custom: module-global command-error strip pinned under the workspace — not
    tied to one pane, so the kit's pane-level surfaces do not apply. */
-.invoices-error-banner {
-  padding: 8px 14px;
-  border-top: 1px solid color-mix(in srgb, var(--danger) 45%, var(--line));
-  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
-  color: var(--danger);
-  font-size: 12px;
-}
 
 /* ---------------------------------------------------------------------------
    Shell V2 window contract (docs/business-os-shell-v2-contract.md).
@@ -141,7 +137,7 @@
    References: modules/tickets, modules/knowledge. Geometry only.
    ------------------------------------------------------------------------- */
 
-.shell-window[data-shell-contract="v2"] .invoices-module {
+[data-app="invoices"] .invoices-module {
   /* The window control is exactly two header rows wide and high. */
   --invoices-v2-control-inset: calc(var(--shell-v2-header-row-size, 37px) * 2);
   padding: 0;
@@ -149,40 +145,42 @@
 
 /* The v2 frame already draws the window edge; pane borders would push the
    first header row one pixel out of the shell band. */
-.shell-window[data-shell-contract="v2"] .invoices-module .ctox-pane {
+[data-app="invoices"] .invoices-module .ctox-pane {
   border: 0;
   border-radius: 0;
 }
 
 /* Both heads start flush at the top; the band's own padding moves onto the
    individual rows so row 1 is exactly one shell header row tall. */
-.shell-window[data-shell-contract="v2"] .invoices-module .ctox-pane-header.ctox-pane-band {
+[data-app="invoices"] .invoices-module .ctox-pane-header.ctox-pane-band {
   padding-top: 0;
   padding-bottom: 0;
 }
 
-.shell-window[data-shell-contract="v2"] .invoices-module .ctox-pane-title-row {
+/* The title row is one shell header row tall and grows with a wrapping title (VIS4 / G4: no ellipsis); pane-heads.js
+   grows the sibling head along so both heads still end on one line (G7). */
+[data-app="invoices"] .invoices-module .ctox-pane-title-row {
   box-sizing: border-box;
   min-width: 0;
   min-height: var(--shell-v2-header-row-size, 37px);
-  height: var(--shell-v2-header-row-size, 37px);
+  height: auto;
 }
 
 /* FIRST head of the top row: keep the 80px icon zone free. The head's own
    inset already indents the title row, filterbar and tray, so those drop
    their local horizontal padding. */
-.shell-window[data-shell-contract="v2"] .invoices-module .invoices-rail > .ctox-pane-header {
+[data-app="invoices"] .invoices-module .invoices-rail > .ctox-pane-header {
   padding-left: calc(var(--shell-v2-icon-size, 80px) + 14px);
 }
 
-.shell-window[data-shell-contract="v2"] .invoices-module .invoices-rail .ctox-filterbar,
-.shell-window[data-shell-contract="v2"] .invoices-module .invoices-rail .ctox-filter-tray {
+[data-app="invoices"] .invoices-module .invoices-rail .ctox-filterbar,
+[data-app="invoices"] .invoices-module .invoices-rail .ctox-filter-tray {
   padding-inline: 0;
 }
 
 /* Second row of the rail head: the filterbar is exactly one shell header row,
    so title row + filterbar together fill the two-row band (2 x 37px). */
-.shell-window[data-shell-contract="v2"] .invoices-module .invoices-rail > .ctox-pane-header > .ctox-filterbar {
+[data-app="invoices"] .invoices-module .invoices-rail > .ctox-pane-header > .ctox-filterbar {
   box-sizing: border-box;
   min-height: var(--shell-v2-header-row-size, 37px);
   height: var(--shell-v2-header-row-size, 37px);
@@ -190,7 +188,7 @@
 }
 
 /* LAST head of the top row: keep the 74x74 window control free. */
-.shell-window[data-shell-contract="v2"] .invoices-module .invoices-main > .ctox-pane-header {
+[data-app="invoices"] .invoices-module .invoices-main > .ctox-pane-header {
   padding-right: var(--invoices-v2-control-inset);
 }
 
@@ -198,7 +196,7 @@
    included). It matches the rail head's two-row height so all heads of the
    top row measure identically. content-box: two content rows plus the kit's
    1px band border, exactly like the rail head's natural flow. */
-.shell-window[data-shell-contract="v2"] .invoices-module .invoices-main > .ctox-pane-header {
+[data-app="invoices"] .invoices-module .invoices-main > .ctox-pane-header {
   box-sizing: content-box;
   min-height: calc(var(--shell-v2-header-row-size, 37px) * 2);
 }
@@ -206,48 +204,63 @@
 /* The title slot is load-bearing: the shell mounts its version menu on the
    first `.ctox-pane-header .ctox-pane-title`. It must never be crushed, and
    the action block beside it must not claim the free space. */
-.shell-window[data-shell-contract="v2"] .invoices-module .ctox-pane-titles {
+[data-app="invoices"] .invoices-module .ctox-pane-titles {
   flex: 1 1 auto;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: 2px 8px;
   min-width: 0;
   padding-top: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
-.shell-window[data-shell-contract="v2"] .invoices-module .ctox-pane-title {
+/* Long record titles („RE-2026-1040 · Müller Maschinenbau GmbH“) wrap at word boundaries instead of an ellipsis;
+   if the line beside the kicker is too short, the title moves under the kicker (flex-wrap above). */
+[data-app="invoices"] .invoices-module .ctox-pane-title {
+  flex: 0 1 auto;
+  max-width: 100%;
   min-width: 0;
   margin-top: 0;
-  line-height: 1.1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.2;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: normal;
+  hyphens: manual;
 }
 
-.shell-window[data-shell-contract="v2"] .invoices-module .ctox-pane-actions {
+[data-app="invoices"] .invoices-module .ctox-pane-actions {
   flex: 0 0 auto;
 }
 
 /* Header controls stay inside the 37px row (the coarse-pointer 44px rule
    below must not inflate the reserved header band). */
-.shell-window[data-shell-contract="v2"] .invoices-module .ctox-pane-title-row .ctox-pane-icon,
-.shell-window[data-shell-contract="v2"] .invoices-module .ctox-filterbar .ctox-pane-icon,
-.shell-window[data-shell-contract="v2"] .invoices-module .ctox-filterbar .ctox-sort-dir {
+[data-app="invoices"] .invoices-module .ctox-pane-title-row .ctox-pane-icon,
+[data-app="invoices"] .invoices-module .ctox-filterbar .ctox-pane-icon,
+[data-app="invoices"] .invoices-module .ctox-filterbar .ctox-sort-dir {
   width: 30px;
   min-width: 30px;
   height: 30px;
   min-height: 30px;
 }
 
-.shell-window[data-shell-contract="v2"] .invoices-module .ctox-filterbar .ctox-pane-search {
+[data-app="invoices"] .invoices-module .ctox-filterbar .ctox-pane-search {
   min-height: 30px;
   height: 30px;
+  /* Schmale Fenster: das Suchfeld nimmt den freien Platz der Leiste und wird nie auf ein Zeichen gequetscht. */
+  flex: 1 1 8rem;
+  min-width: 8rem;
+}
+
+[data-app="invoices"] .invoices-module .ctox-filterbar {
+  width: 100%;
+  min-width: 0;
 }
 
 /* Pane bodies below the static heads take the remaining pane height; the
    empty state renders on the kit's .ctox-empty step. */
-.shell-window[data-shell-contract="v2"] .invoices-module .invoices-main > .ctox-pane-body {
+[data-app="invoices"] .invoices-module .invoices-main > .ctox-pane-body {
   display: grid;
   grid-template-rows: minmax(0, 1fr);
   min-height: 0;
@@ -255,12 +268,11 @@
 
 /* Narrow windows: stack the two panes and drop the resizer. 768px is the
    shell's own two-to-one column breakpoint; a window is not a screen, so the
-   query measures the window container. All wide tables (editable lines,
-   journal, payments, dunning) already sit in kit .ctox-table-wrap containers
-   that scroll horizontally inside the pane; the editable lines grid keeps a
-   usable minimum width so its columns never crush below thumb size. */
+   query measures the window container. Journal, payments and dunning tables
+   sit in kit .ctox-table-wrap containers that scroll inside the pane; the
+   invoice lines become stacked cards (FIX10, block below). */
 @container business-app-window (max-width: 768px) {
-  .invoices-module {
+  [data-app="invoices"] .invoices-module {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(200px, 40vh) minmax(320px, 1fr);
     height: auto;
@@ -268,69 +280,164 @@
     overflow-y: auto;
     gap: 8px;
   }
-  .invoices-module > [data-resizer] { display: none !important; }
-  .invoices-rail { grid-column: 1; }
-  .invoices-main { grid-column: 1; }
+  [data-app="invoices"] .invoices-module > [data-resizer] { display: none !important; }
+  [data-app="invoices"] .invoices-rail { grid-column: 1; }
+  [data-app="invoices"] .invoices-main { grid-column: 1; }
 
-  .invoices-lines-table {
-    min-width: 620px;
-  }
-
-  .invoices-payment-form {
+  [data-app="invoices"] .invoices-payment-form {
     max-width: none;
   }
 
   /* Stacked: the rail head is now the only head of the top row, so it carries
      BOTH reservations — icon zone left, window control right. The centre head
      has moved out of the top row and releases the control inset. */
-  .shell-window[data-shell-contract="v2"] .invoices-module .invoices-rail > .ctox-pane-header {
+  [data-app="invoices"] .invoices-module .invoices-rail > .ctox-pane-header {
     padding-right: var(--invoices-v2-control-inset);
   }
 
-  .shell-window[data-shell-contract="v2"] .invoices-module .invoices-main > .ctox-pane-header {
+  [data-app="invoices"] .invoices-module .invoices-main > .ctox-pane-header {
     padding-right: 14px;
   }
+
+  /* G4 @420: between icon zone and window control only a few letters of „Rechnungen“ were left beside the head
+     actions. The title row wraps: the title keeps a full line, the actions move into a second line below it, and
+     the head grows (pattern modules/customers FIX11). */
+  [data-app="invoices"] .invoices-module .ctox-pane-title-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  [data-app="invoices"] .invoices-module .ctox-pane-title-row > .ctox-pane-titles {
+    flex: 1 0 auto;
+    max-width: 100%;
+  }
+}
+
+/* Positionen schmal (FIX10, Standard lexoffice mobil): ist die Detail-Pane ≤ 760 px breit, wird jede Position zur Karte
+   „Beschreibung / Menge Einheit × Einzelpreis = Betrag / USt · SKR“ statt einer seitwärts scrollenden Tabelle.
+   Gemessen wird die eigene Pane (Container invoices-pane), nie der Bildschirm: das deckt die einspaltige Stufe
+   (Fenster ≤ 768 px) UND die zweispaltige bei mittlerer Fensterbreite (900 px: Pane ~530 px, Geometrie G1). Der
+   Zeilenbetrag (.invoices-line-amount) erscheint nur in der Karte; breit bleibt die Tabelle unverändert. */
+[data-app="invoices"] .invoices-lines-view .invoices-line-amount { display: none; }
+
+@container invoices-pane (max-width: 760px) {
+  [data-app="invoices"] .invoices-lines-table { min-width: 0; }
+  [data-app="invoices"] .invoices-lines-view,
+  [data-app="invoices"] .invoices-lines-view tbody {
+    display: block;
+    width: 100%;
+  }
+  [data-app="invoices"] .invoices-lines-view thead { display: none; }
+  [data-app="invoices"] .invoices-lines-view tr {
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      "desc desc desc action"
+      "qty unit price amount"
+      "meta meta meta meta";
+    align-items: center;
+    column-gap: 6px;
+    row-gap: 4px;
+    padding: 8px 2px;
+    border-bottom: 1px solid var(--hairline, var(--line));
+  }
+  [data-app="invoices"] .invoices-lines-view td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+  [data-app="invoices"] .invoices-lines-view td[data-col="pos"] { display: none; }
+  [data-app="invoices"] .invoices-lines-view td[data-col="desc"] {
+    grid-area: desc;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+  [data-app="invoices"] .invoices-lines-view td[data-col="action"] { grid-area: action; }
+  [data-app="invoices"] .invoices-lines-view td[data-col="qty"] { grid-area: qty; }
+  [data-app="invoices"] .invoices-lines-view td[data-col="unit"] { grid-area: unit; color: var(--muted); }
+  [data-app="invoices"] .invoices-lines-view td[data-col="price"],
+  [data-app="invoices"] .invoices-lines-view td[data-col="amount"] {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+  }
+  [data-app="invoices"] .invoices-lines-view td[data-col="price"] { grid-area: price; }
+  [data-app="invoices"] .invoices-lines-view td[data-col="amount"] {
+    grid-area: amount;
+    justify-content: flex-end;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  [data-app="invoices"] .invoices-lines-view td[data-col="price"]::before { content: "×"; color: var(--muted); }
+  [data-app="invoices"] .invoices-lines-view td[data-col="amount"]::before { content: "="; color: var(--muted); font-weight: 400; }
+  /* USt und SKR teilen sich die dritte Zeile, mit ihrer Beschriftung davor. */
+  [data-app="invoices"] .invoices-lines-view td[data-col="tax"],
+  [data-app="invoices"] .invoices-lines-view td[data-col="account"] {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  [data-app="invoices"] .invoices-lines-view td[data-col="tax"] { grid-area: meta; justify-self: start; }
+  [data-app="invoices"] .invoices-lines-view td[data-col="account"] { grid-area: meta; justify-self: end; }
+  [data-app="invoices"] .invoices-lines-view td[data-col="tax"]::before,
+  [data-app="invoices"] .invoices-lines-view td[data-col="account"]::before { content: attr(data-label); }
+  [data-app="invoices"] .invoices-lines-table td .ctox-input { width: 100%; min-width: 0; }
+  [data-app="invoices"] .invoices-lines-table td[data-col="qty"] .ctox-input { width: 5.5em; }
+  [data-app="invoices"] .invoices-lines-table td[data-col="unit"] .ctox-input { width: 4.5em; }
+  [data-app="invoices"] .invoices-lines-table td[data-col="tax"] .ctox-input { width: 4.5em; }
+  [data-app="invoices"] .invoices-lines-table td[data-col="account"] .ctox-input { width: 6em; }
 }
 
 /* Touch targets on coarse pointers (phone/tablet): every interactive
    control reaches the 44px minimum, including the dense line-edit inputs. */
 @media (pointer: coarse) {
-  .invoices-module button,
-  .invoices-module input,
-  .invoices-module select,
-  .invoices-module textarea {
+  [data-app="invoices"] .invoices-module button,
+  [data-app="invoices"] .invoices-module input,
+  [data-app="invoices"] .invoices-module select,
+  [data-app="invoices"] .invoices-module textarea {
     min-height: 44px;
   }
 
-  .invoices-module .ctox-pane-icon {
+  [data-app="invoices"] .invoices-module .ctox-pane-icon {
     width: 44px;
     min-width: 44px;
   }
 
-  .invoices-module .ctox-record-list .ctox-list-item {
+  [data-app="invoices"] .invoices-module .ctox-record-list .ctox-list-item {
     min-height: 44px;
   }
 
-  .invoices-module .invoices-lines-table .ctox-input {
+  [data-app="invoices"] .invoices-module .invoices-lines-table .ctox-input {
     min-height: 44px;
   }
 }
 
 /* Shell-v2 surfaces: identity, frame edge and window controls belong to the
    shell, so the panes drop their own chrome and take the shell surfaces. */
-.shell-window[data-shell-contract="v2"] .invoices-shell {
-  background: var(--shell-v2-surface, var(--bg));
+[data-app="invoices"] .invoices-shell {
+  background: var(--bg);
 }
-.shell-window[data-shell-contract="v2"] .invoices-module {
-  background: var(--shell-v2-surface, var(--bg));
+[data-app="invoices"] .invoices-module {
+  background: var(--bg);
 }
-.shell-window[data-shell-contract="v2"] .invoices-module .ctox-pane {
-  background: var(--shell-v2-surface-alt, var(--surface));
+[data-app="invoices"] .invoices-module .ctox-pane {
+  background: var(--surface);
   box-shadow: none;
 }
-.shell-window[data-shell-contract="v2"] .invoices-module .ctox-pane-header.ctox-pane-band {
-  background: var(--shell-v2-surface-alt, var(--surface));
+[data-app="invoices"] .invoices-module .ctox-pane-header.ctox-pane-band {
+  background: var(--surface);
 }
 /* The rail's kicker duplicates the app identity the shell already paints next
    to the icon; only the centre head keeps its record kicker. */
-.shell-window[data-shell-contract="v2"] .invoices-rail .ctox-pane-kicker { display: none; }
+[data-app="invoices"] .invoices-rail .ctox-pane-kicker { display: none; }
+
+/* Leere Liste: ein Satz plus eine Aktion (Textdiät Regel 2). */
+[data-app="invoices"] .invoices-empty-stage { display: grid; justify-items: start; gap: 10px; padding: 18px; color: var(--muted); }
+[data-app="invoices"] .invoices-empty-stage p { margin: 0; }
+
+/* Suche/Filter ohne Treffer (FIX9a): ein Satz plus „Filter zurücksetzen“. */
+[data-app="invoices"] .invoices-no-match { display: grid; justify-items: start; gap: 10px; padding: 18px 14px; color: var(--muted); }
+[data-app="invoices"] .invoices-no-match p { margin: 0; }

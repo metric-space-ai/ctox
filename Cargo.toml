@@ -16,11 +16,15 @@ name = "ctox"
 path = "src/core/main.rs"
 
 [features]
+app-runtime-node = ["ctox-app-runtime/bundled-node"]
 # Build-time capability; runtime placement still uses the GPU admission plan.
 local-speech-cuda = ["ctox-voxtral-mini-4b-realtime-2602/cuda", "ctox-voxtral-4b-tts-2603/cuda"]
 local-speech-openblas = ["ctox-voxtral-4b-tts-2603/openblas"]
 
 [dependencies]
+ctox-app-runtime = { path = "src/core/app_runtime" }
+ctox-store = { path = "src/core/store" }
+ctox-process-network = { path = "src/core/app_capabilities/process-network" }
 anyhow = "1"
 async-trait = "0.1"
 base64 = "0.22"
@@ -83,12 +87,16 @@ scraper = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+similar = "2.7"
 # Already locked via the SSH transport; private keys remain in native SecretStore.
 ssh-key = { version = "=0.7.0-rc.11", default-features = false, features = ["std", "ed25519"] }
 tiny_http = "0.12"
 # `tls` ist ureqs rustls-Rueckwand; `native-tls` wuerde OpenSSL hereinziehen.
 ureq = { version = "2.12", features = ["tls"] }
 url = "2.5"
+# Reuse the existing Google Calendar adapter from the pending Toolhub strand.
+# Build-time source pin only; no GitHub requests at runtime.
+ctox-toolhub = { git = "https://github.com/metric-space-ai/ctox", rev = "1b84900ce0b6a63e568d1ba3255d1ce651d343ec", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 zeroize = "1.8"
 zbus = "5.14"
@@ -137,10 +145,13 @@ tempfile = "3"
 
 [workspace]
 members = [
+    "src/core/store",
     "src/core/execution/cliproxyapi",
     "src/tools/postgres-adapter",
 ]
 exclude = [
+    "src/core/app_runtime",
+    "src/core/app_capabilities/contract",
     "src/apps/desktop",
     "src/core/communication/whatsapp_rust",
     "src/core/harness",
@@ -162,6 +173,7 @@ exclude = [
 ]
 
 [patch.crates-io]
+rtc-turn = { path = "src/core/rxdb/patches/rtc-turn" }
 # Mirror of src/core/harness/Cargo.toml patch.crates-io so that codex-* path
 # dependencies resolve against the same forks agent-runtime uses.
 crossterm = { git = "https://github.com/nornagon/crossterm", branch = "nornagon/color-query" }
@@ -169,6 +181,8 @@ ratatui = { git = "https://github.com/nornagon/ratatui", branch = "nornagon-v0.2
 tokio-tungstenite = { git = "https://github.com/openai-oss-forks/tokio-tungstenite", rev = "132f5b39c862e3a970f731d709608b3e6276d5f6" }
 tungstenite = { git = "https://github.com/openai-oss-forks/tungstenite-rs", rev = "9200079d3b54a1ff51072e24d81fd354f085156f" }
 rtc-ice = { path = "src/core/rxdb/patches/rtc-ice" }
+rtc = { path = "src/core/rxdb/patches/rtc" }
+webrtc = { path = "src/core/rxdb/patches/webrtc" }
 # Polars 0.53 pins object_store 0.13; this fork moves it to quick-xml 0.41.
 # See src/tools/object-store-patched/CTOX-PATCH.md.
 object_store = { path = "src/tools/object-store-patched" }

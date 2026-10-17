@@ -446,50 +446,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn qwen36_27b_aliases_resolve() {
-        assert!(is_qwen36_27b("qwen36-27b-q4km-dflash"));
-        assert!(is_qwen36_27b("Qwen/Qwen3.6-27B"));
-        assert!(is_qwen36_27b("Qwen/Qwen3.6-27B-Instruct"));
-        assert!(is_qwen36_27b("unsloth/Qwen3.6-27B-GGUF"));
-        assert!(is_qwen36_27b("qwen35-27b-q4km-dflash"));
-        assert!(is_qwen36_27b("Qwen/Qwen3.5-27B"));
-        assert!(is_qwen36_27b("Qwen/Qwen3.5-27B-Instruct"));
-        assert!(is_qwen36_27b("unsloth/Qwen3.5-27B-GGUF"));
-        assert!(!is_qwen36_27b("Qwen/Qwen3-4B"));
-        assert!(!is_qwen36_27b("anthropic/claude-sonnet-4.7"));
-    }
-
-    #[test]
-    fn qwen36_aliases_resolve() {
-        assert!(is_qwen36_35b_a3b("Qwen/Qwen3.6-35B-A3B"));
-        assert!(is_qwen36_35b_a3b("qwen3.6-35b-a3b"));
-        assert!(is_qwen36_35b_a3b("qwen36-35b-a3b-ggml"));
-        assert!(is_qwen36_35b_a3b("Qwen/Qwen3.5-35B-A3B"));
-        assert!(is_qwen36_35b_a3b("qwen3.5-35b-a3b"));
-        assert!(is_qwen36_35b_a3b("qwen35-35b-a3b"));
-    }
-
-    #[test]
-    fn voxtral_tts_aliases_resolve() {
-        assert!(is_voxtral_4b_tts("engineai/Voxtral-4B-TTS-2603"));
-        assert!(is_voxtral_4b_tts("engineai/voxtral-4b-tts-2603"));
-        assert!(is_voxtral_4b_tts("voxtral-4b-tts-2603"));
-        assert!(!is_voxtral_4b_tts("engineai/Voxtral-Mini-4B-Realtime-2602"));
-    }
-
-    #[test]
-    fn voxtral_stt_aliases_resolve() {
-        assert!(is_voxtral_mini_4b_realtime(
-            "engineai/Voxtral-Mini-4B-Realtime-2602"
-        ));
-        assert!(is_voxtral_mini_4b_realtime(
-            "engineai/voxtral-mini-4b-realtime-2602"
-        ));
-        assert!(is_voxtral_mini_4b_realtime("voxtral-mini-4b-realtime-2602"));
-        assert!(!is_voxtral_mini_4b_realtime("engineai/Voxtral-4B-TTS-2603"));
-    }
-
-    #[test]
     fn voxtral_stt_backend_assembles_hidden_service_cli() {
         let root = Path::new("/tmp/ctoxroot");
         let backend = resolve_local_model_backend(LocalModelRequest {

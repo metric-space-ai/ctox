@@ -1,0 +1,82 @@
+[
+  {
+    "name": "(a) Klick auf „Research starten“ (echte Maus)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "(a) Chatleiste offen, Eingabefeld sichtbar mit Entwurf",
+    "ok": true,
+    "detail": "{\"visible\":true,\"len\":1499}"
+  },
+  {
+    "name": "(a) Entwurf = vollständige Anweisung (Kopf, Aufgabe, Abschluss des Templates)",
+    "ok": true,
+    "detail": "Führe die systematische Recherche für \"Drohnen-Lagerlasten\" mit dem System-Skill systematic-research fort.\nResearch Task ID: research_drone_bearings\nResearch Ru"
+  },
+  {
+    "name": "(a) vor dem Senden KEIN Befehl (weder research.systematic.run noch Chatbefehl)",
+    "ok": true,
+    "detail": "{\"handled\":0,\"docs\":[]}"
+  },
+  {
+    "name": "(a) Rahmen setzt Quelle aus dem Fenster und merkt Befehlstyp + Parameter",
+    "ok": true,
+    "detail": "{\"source\":\"research\",\"title\":\"Webrecherche\",\"winTitle\":\"Webrecherche\",\"type\":\"research.systematic.run\",\"record\":\"research_drone_bearings\"}"
+  },
+  {
+    "name": "(a) Lauf-Kopf im Chat-Weg: status chat (nichts läuft vor dem Senden)",
+    "ok": true,
+    "detail": "[\"chat\"]"
+  },
+  {
+    "name": "(b) Klick auf Senden (echte Maus)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "(b) genau ein Befehl research.systematic.run, kein Chat-Standardbefehl",
+    "ok": true,
+    "detail": "{\"handled\":[[\"research.systematic.run\",\"shell\"]],\"docs\":[[\"research.systematic.run\",\"shell\",\"done\"]]}"
+  },
+  {
+    "name": "(b) Nutzlast trägt jede Befehlsgröße des direkten Wegs unverändert",
+    "ok": true,
+    "detail": "{\"keys\":18,\"diff\":[]}"
+  },
+  {
+    "name": "(b) Absender Chat (App shell), Datensatz = Research-Aufgabe, Anweisung = Entwurf",
+    "ok": true,
+    "detail": "{\"app\":\"shell\",\"record\":\"research_drone_bearings\"}"
+  },
+  {
+    "name": "(d) Entwurf byte-gleich zur Anweisung des Handlers research.systematic.run (gleicher Befehl)",
+    "ok": true,
+    "detail": "{\"handler\":1499,\"draft\":1499,\"firstDiff\":-1}"
+  },
+  {
+    "name": "(c) Klick auf „Research starten“ ohne Chatleiste (echte Maus)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "(c) direkter Weg: genau ein Befehl research.systematic.run von der App research",
+    "ok": true,
+    "detail": "{\"handled\":[[\"research.systematic.run\",\"research\"]],\"newDocs\":1}"
+  },
+  {
+    "name": "(c) direkter Weg: dieselben Befehlsgrößen wie die Chat-Übergabe (bis auf Lauf-Kennungen)",
+    "ok": true,
+    "detail": ""
+  },
+  {
+    "name": "(c) kein Fehler- oder navigate-Eintrag in der Zone",
+    "ok": true,
+    "detail": "{\"frame\":[],\"kernel\":[]}"
+  },
+  {
+    "name": "keine Seitenfehler",
+    "ok": true,
+    "detail": ""
+  }
+]

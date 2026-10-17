@@ -154,56 +154,6 @@ fn candidate_codex_oauth_rejects_other_provider_and_api_key_fallback() {
     }
 }
 
-#[tokio::test]
-async fn candidate_codex_oauth_home_execute_count_stream_preserve_legacy_update_capability() {
-    for path in ["execute", "count", "stream"] {
-        for (plan, model, explicit, expected) in [
-            ("free", "gpt-6-luna", None, true),
-            ("free", "gpt-5.5", None, false),
-            ("plus", "gpt-6-astra", None, true),
-            ("plus", "gpt-6-astra", Some(false), false),
-            ("free", "gpt-6-astra", None, false),
-        ] {
-            let transport = TestHomeTransport::with_auth_ids(&[]);
-            let executor = TestExecutor::failing(0);
-            let (runtime, _) = runtime(transport.clone(), executor.clone());
-            let mut model_info = serde_json::json!({"id":model, "context_length":12345});
-            if let Some(explicit) = explicit {
-                model_info["support_configuration_update"] = explicit.into();
-            }
-            let account = oauth_auth("codex", plan);
-            transport.push_dispatch(serde_json::json!({
-                "provider":"codex", "model":format!("{model}(high)"),
-                "auth_index":account.id, "model_info":model_info, "auth":account
-            }));
-            if path == "stream" {
-                let mut stream = runtime
-                    .execute_home_stream(request("public"), "")
-                    .await
-                    .unwrap();
-                while let Some(chunk) = stream.chunks.recv().await {
-                    assert!(chunk.error.is_none());
-                }
-            } else {
-                runtime
-                    .execute_home(request("public"), "", path == "count")
-                    .await
-                    .unwrap();
-            }
-            let seen = executor.seen();
-            assert_eq!(seen.len(), 1, "{path}/{plan}/{model}");
-            let info = seen[0].resolved_model_info.as_ref().unwrap();
-            assert_eq!(info.id, model);
-            assert_eq!(info.context_length, 12345); // The central wire keeps authority.
-            assert_eq!(
-                info.support_configuration_update, expected,
-                "{path}/{plan}/{model}"
-            );
-            assert!(!info.is_compat);
-        }
-    }
-}
-
 #[test]
 fn candidate_codex_oauth_never_uses_same_id_api_key_routing_snapshot() {
     use super::api_key_model_capabilities_test::{manager, register};

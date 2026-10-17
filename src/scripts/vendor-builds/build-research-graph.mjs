@@ -10,7 +10,8 @@ const execFile = promisify(execFileCallback);
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(scriptDir, '..', '..', '..');
 const businessOsRoot = path.join(repoRoot, 'src', 'apps', 'business-os');
-const vendorRoot = path.join(businessOsRoot, 'vendor');
+// App-eigenes Vendor-Ziel (Strang VENDOR): research-graph gehoert nur der App research.
+const vendorRoot = path.join(businessOsRoot, 'modules', 'research', 'vendor');
 const sourceRoot = path.join(repoRoot, 'runtime', 'vendor-sources', 'research-graph');
 const inputPath = path.join(scriptDir, 'research-graph-packages.json');
 const bundlePath = path.join(vendorRoot, 'research-graph.mjs');

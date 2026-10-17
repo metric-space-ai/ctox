@@ -73,18 +73,24 @@ pub(super) fn update(
                 .context("crew plan explanation must be a string")
         })
         .transpose()?;
+    let bound_attempt = expected.attempt_id.clone();
+    let guard_command = command_id.clone();
     crate::crew::open_engine(root)?.record_task_execution_plan_guarded(
         crate::lcm::TaskExecutionPlanUpdate {
             work_key: &work_key,
             task_id: &task_id,
             command_id: &command_id,
-            attempt_id: &expected.attempt_id,
+            attempt_id: &bound_attempt,
             explanation,
             steps: &steps,
         },
-        |conn| {
-            let (current, _) =
-                crew_context::live_binding(conn, &command_id, &payload_hash, &expected.attempt_id)?;
+        move |conn| {
+            let (current, _) = crew_context::live_binding(
+                conn,
+                &guard_command,
+                &payload_hash,
+                &expected.attempt_id,
+            )?;
             anyhow::ensure!(
                 current == expected,
                 "crew session lease or identity changed"

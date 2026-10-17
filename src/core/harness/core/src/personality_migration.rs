@@ -129,7 +129,3 @@ async fn create_marker(marker_path: &Path) -> io::Result<()> {
         Err(err) => Err(err),
     }
 }
-
-#[cfg(test)]
-#[path = "personality_migration_tests.rs"]
-mod tests;

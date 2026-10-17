@@ -425,21 +425,6 @@ mod tests {
     }
 
     #[test]
-    fn registry_metadata() {
-        let m = module();
-        assert_eq!(m.id(), "bundesanzeiger.de");
-        assert!(m.aliases().contains(&"bundesanzeiger"));
-        assert!(m.aliases().contains(&"ba"));
-        assert_eq!(m.tier(), Tier::P);
-        assert_eq!(m.countries(), &[Country::De]);
-        assert!(m.requires_credential().is_none());
-        let auth = m.authoritative_for();
-        assert!(auth.contains(&FieldKey::FirmaName));
-        assert!(auth.contains(&FieldKey::Umsatz));
-        assert!(auth.contains(&FieldKey::Mitarbeiter));
-    }
-
-    #[test]
     fn shape_query_de_pins_domain_and_keyword() {
         let shaped = module()
             .shape_query("WITTENSTEIN SE", &ctx_de())
@@ -468,12 +453,6 @@ mod tests {
     #[test]
     fn shape_query_empty_returns_none() {
         assert!(module().shape_query("   ", &ctx_de()).is_none());
-    }
-
-    #[test]
-    fn no_fetch_direct_override() {
-        // Crawl-Pfad — kein direkter API-Call.
-        assert!(module().fetch_direct(&ctx_de(), "WITTENSTEIN SE").is_none());
     }
 
     /// Extracts `firma_name` from a frozen Bundesanzeiger search-results

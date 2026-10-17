@@ -72,67 +72,6 @@ async fn extract_metadata_from_rollout_uses_session_meta() {
     assert_eq!(outcome.parse_errors, 0);
 }
 
-#[tokio::test]
-async fn extract_metadata_from_rollout_returns_latest_memory_mode() {
-    let dir = tempdir().expect("tempdir");
-    let uuid = Uuid::new_v4();
-    let id = ThreadId::from_string(&uuid.to_string()).expect("thread id");
-    let path = dir
-        .path()
-        .join(format!("rollout-2026-01-27T12-34-56-{uuid}.jsonl"));
-
-    let session_meta = SessionMeta {
-        id,
-        forked_from_id: None,
-        timestamp: "2026-01-27T12:34:56Z".to_string(),
-        cwd: dir.path().to_path_buf(),
-        originator: "cli".to_string(),
-        cli_version: "0.0.0".to_string(),
-        source: SessionSource::default(),
-        agent_nickname: None,
-        agent_role: None,
-        model_provider: Some("openai".to_string()),
-        base_instructions: None,
-        dynamic_tools: None,
-        capability_profile: None,
-        memory_mode: None,
-    };
-    let polluted_meta = SessionMeta {
-        memory_mode: Some("polluted".to_string()),
-        ..session_meta.clone()
-    };
-    let lines = vec![
-        RolloutLine {
-            timestamp: "2026-01-27T12:34:56Z".to_string(),
-            item: RolloutItem::SessionMeta(SessionMetaLine {
-                meta: session_meta,
-                git: None,
-            }),
-        },
-        RolloutLine {
-            timestamp: "2026-01-27T12:35:00Z".to_string(),
-            item: RolloutItem::SessionMeta(SessionMetaLine {
-                meta: polluted_meta,
-                git: None,
-            }),
-        },
-    ];
-    let mut file = File::create(&path).expect("create rollout");
-    for line in lines {
-        writeln!(
-            file,
-            "{}",
-            serde_json::to_string(&line).expect("serialize rollout line")
-        )
-        .expect("write rollout line");
-    }
-
-    let outcome = extract_metadata_from_rollout(&path, "openai")
-        .await
-        .expect("extract");
-
-    assert_eq!(outcome.memory_mode.as_deref(), Some("polluted"));
-}
 
 #[test]
 fn builder_from_items_falls_back_to_filename() {

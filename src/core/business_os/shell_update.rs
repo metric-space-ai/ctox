@@ -786,6 +786,43 @@ pub(super) fn verified_release(
     Ok(Some(release))
 }
 
+/// Test-only admission of an unsigned slot. Production slots are admitted only
+/// through `verified_release` (signature + inventory); tests cannot sign, so
+/// they seed the same cache entry with an inventory computed from the slot.
+#[cfg(test)]
+pub(super) fn admit_release_for_test(root: &Path, version: &str, files: &[&str]) -> Result<()> {
+    let path = slots_root(root).join(version);
+    let inventory = files
+        .iter()
+        .map(|name| {
+            let bytes = fs::read(path.join(name))?;
+            Ok((
+                (*name).to_owned(),
+                super::shell_assets::InventoryFile {
+                    size: bytes.len() as u64,
+                    sha256: sha256(&bytes),
+                },
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    let release = Arc::new(super::shell_assets::VerifiedRelease::admitted(
+        &path,
+        version.to_owned(),
+        "0".repeat(40),
+        "0".repeat(64),
+        inventory,
+    )?);
+    VERIFIED_RELEASES
+        .get_or_init(|| Mutex::new(BTreeMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(
+            (root.to_path_buf(), version.to_owned()),
+            Arc::new(Mutex::new(Some(release))),
+        );
+    Ok(())
+}
+
 fn public_status(state: &ShellUpdateState, administrable: bool) -> serde_json::Value {
     let phase = if state.phase == "restart_required" {
         "restart"
@@ -1046,7 +1083,10 @@ pub fn active_shell_root(root: &Path) -> Result<Option<PathBuf>> {
         return Ok(None);
     };
     let path = slots_root(root).join(&slot);
-    verify_slot(&path, Some(&slot))?;
+    // Admit once before the HTTP listener starts. The index handler reuses this
+    // verified inventory; every immutable asset read still checks its own bytes.
+    // Re-verifying the entire slot on the first GET / blocks before headers.
+    verified_release(root, slot)?.context("selected shell release is missing")?;
     if state.phase == "restart_required" {
         state.phase = if state.rollback_active {
             "rollback"

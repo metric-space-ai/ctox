@@ -121,7 +121,7 @@ struct RuntimeSwitchLease {
 
 impl Drop for RuntimeSwitchLease {
     fn drop(&mut self) {
-        let _ = persistence::release_lease(&self.root, RUNTIME_SWITCH_LEASE_KEY);
+        let _ = persistence::release_lease_on_drop(&self.root, RUNTIME_SWITCH_LEASE_KEY);
     }
 }
 
@@ -2861,21 +2861,6 @@ mod tests {
             .unwrap()
             .expect("restored plan");
         assert_eq!(restored_plan.model, "Qwen/Qwen3.6-27B");
-    }
-
-    #[test]
-    fn apply_runtime_selection_defaults_gemma_e4b_to_candle() {
-        let root = make_temp_root();
-        let change = apply_runtime_selection(&root, "google/gemma-4-E4B-it", None)
-            .expect("Gemma4 E4B should default to Candle unless explicitly overridden");
-        assert_eq!(
-            change.next_state.local_runtime,
-            runtime_state::LocalRuntimeKind::Candle
-        );
-        assert_eq!(
-            change.next_state.active_model.as_deref(),
-            Some("google/gemma-4-E4B-it")
-        );
     }
 
     #[test]

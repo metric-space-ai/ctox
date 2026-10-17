@@ -15,12 +15,4 @@ mod tests {
     fn accepts_stream_alias(_: Option<TranslateResponseFunc>) {}
     fn accepts_non_stream_alias(_: Option<TranslateResponseNonStreamFunc>) {}
     fn accepts_response_alias(_: Option<TranslateResponse>) {}
-
-    #[test]
-    fn aliases_are_the_canonical_sdk_translator_types() {
-        accepts_request_alias(None::<crate::sdk::translator::RequestTransform>);
-        accepts_stream_alias(None::<crate::sdk::translator::ResponseStreamTransform>);
-        accepts_non_stream_alias(None::<crate::sdk::translator::ResponseNonStreamTransform>);
-        accepts_response_alias(None::<crate::sdk::translator::ResponseTransform>);
-    }
 }

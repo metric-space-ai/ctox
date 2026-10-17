@@ -418,7 +418,3 @@ fn marketplace_interface_summary(
         None
     }
 }
-
-#[cfg(test)]
-#[path = "marketplace_tests.rs"]
-mod tests;

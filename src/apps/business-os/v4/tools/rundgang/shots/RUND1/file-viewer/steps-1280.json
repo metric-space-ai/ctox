@@ -1,0 +1,50 @@
+{
+ "app": "file-viewer",
+ "width": 1280,
+ "steps": [
+  {
+   "label": "Launcher",
+   "role": "launcher",
+   "shot": "1280-00.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "dialogs": null,
+   "navigations": null,
+   "openedFiles": null,
+   "probs": []
+  },
+  {
+   "label": "geöffnet",
+   "role": "open",
+   "shot": "1280-01.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [],
+   "title": "Datei-Viewer",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  }
+ ],
+ "flags": []
+}

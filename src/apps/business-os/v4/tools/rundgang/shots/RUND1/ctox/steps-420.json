@@ -1,0 +1,1238 @@
+{
+ "app": "ctox",
+ "width": 420,
+ "steps": [
+  {
+   "label": "Launcher",
+   "role": "launcher",
+   "shot": "420-00.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "dialogs": null,
+   "navigations": null,
+   "openedFiles": null,
+   "probs": []
+  },
+  {
+   "label": "geöffnet",
+   "role": "open",
+   "shot": "420-01.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche „Lieferantenbewertung“ in Aufgaben suchen",
+   "role": "search",
+   "shot": "420-02.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche geleert",
+   "role": "search",
+   "shot": "420-03.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Weitere Aktionen",
+   "role": "summary",
+   "covered": false,
+   "filled": [],
+   "shot": "420-04.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Aufgaben exportieren",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-05.jpg",
+   "effect": "Inhalt geändert",
+   "log": [
+    {
+     "kind": "download",
+     "spec": "ctox-tasks-2026-10-15-17-36-47.json"
+    }
+   ],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Als Liste anzeigen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-06.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Als Karten anzeigen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-07.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Filter",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-08.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Quelle → Option 1",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "420-09.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Alle (4)",
+   "role": "tab",
+   "covered": false,
+   "filled": [],
+   "shot": "420-10.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Arbeitet (0)",
+   "role": "tab",
+   "covered": false,
+   "filled": [],
+   "shot": "420-11.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Wartet (4)",
+   "role": "tab",
+   "covered": false,
+   "filled": [],
+   "shot": "420-12.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Erledigt (0)",
+   "role": "tab",
+   "covered": false,
+   "filled": [],
+   "shot": "420-13.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Angepinnt → Option 1",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "420-14.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Alle (0)",
+   "role": "tab",
+   "covered": false,
+   "filled": [],
+   "shot": "420-15.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Wartet (0)",
+   "role": "tab",
+   "covered": false,
+   "filled": [],
+   "shot": "420-16.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "neueste zuerst → Option 1",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "420-17.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Sortierrichtung wechseln",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-18.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Filter zurücksetzen",
+   "role": "button",
+   "skipped": "destruktiv – nicht geklickt"
+  },
+  {
+   "label": "Einpassen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-19.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Vergrößern",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-20.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Aufgabe bearbeiten",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-21.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Sophie Meyer",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-22.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Details anzeigen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-23.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Sophie Meyer",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-24.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Bearbeiten",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-25.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Speichern",
+   "role": "button",
+   "covered": false,
+   "filled": [
+    "prompt",
+    "voice",
+    "sketch",
+    "spec_modules",
+    "spec_command_types",
+    "spec_skills"
+   ],
+   "shot": "420-26.jpg",
+   "effect": "Inhalt geändert",
+   "log": [
+    {
+     "kind": "command",
+     "type": "ctox.crew.memory.update",
+     "payload": "{\"member_id\":\"crew-member-004\",\"kind\":\"anchors\",\"mode\":\"full\",\"body\":\"# CONTINUITY ANCHORS\\n\\n## Entries\\nanchor_id: owner_mv9tmjw3_1\\nanchor_type: owner_confirmed\\nstatement: Rundgang Test\\nsource_class: owner\\nsource_ref: owner\\nobserved_…",
+     "status": "done"
+    }
+   ],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Archivieren",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-27.jpg",
+   "effect": "Inhalt geändert",
+   "log": [
+    {
+     "kind": "command",
+     "type": "ctox.crew.member.update",
+     "payload": "{\"member_id\":\"crew-member-004\",\"archived\":true,\"record_id\":\"\",\"module\":\"ctox\",\"inbound_channel\":\"business_os.ctox\",\"client_context\":{\"source_module\":\"ctox\",\"command_path\":\"ctox_crew_member_archive\"}}",
+     "status": "done"
+    }
+   ],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Dringend Hoch Normal Niedrig → Option 3",
+   "role": "select",
+   "covered": false,
+   "filled": [],
+   "shot": "420-28.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Speichern",
+   "role": "button",
+   "covered": false,
+   "filled": [
+    "prompt"
+   ],
+   "shot": "420-29.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "command",
+     "type": "ctox.task.update",
+     "payload": "{\"task_id\":\"task-004\",\"title\":\"Lieferantenbewertung 2026\",\"prompt\":\"Rundgang Test\",\"priority\":\"low\",\"record_id\":\"task-004\",\"module\":\"ctox\",\"inbound_channel\":\"business_os.ctox\",\"client_context\":{\"source_module\":\"ctox\",\"command_path\":\"ctox_ta…",
+     "status": "done"
+    }
+   ],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Abbrechen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-30.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [
+    {
+     "kind": "command",
+     "type": "ctox.command.cancel",
+     "payload": "{\"target_command_id\":\"command-001\",\"reason\":\"Vom Nutzer abgebrochen\",\"record_id\":\"command-001\",\"module\":\"ctox\",\"inbound_channel\":\"business_os.ctox\",\"client_context\":{\"source_module\":\"ctox\",\"command_path\":\"ctox_task_cancel\"}}",
+     "status": "done"
+    }
+   ],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Crew verwalten",
+   "role": "summary",
+   "covered": false,
+   "filled": [],
+   "shot": "420-31.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Kanäle verwalten",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-32.jpg",
+   "effect": "Inhalt geändert",
+   "log": [
+    {
+     "kind": "shell.navigate",
+     "spec": "[\"shell\",{\"open\":\"settings\",\"tab\":\"channels\"}]"
+    }
+   ],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": true,
+   "zoneText": "Ziel „shell“ ist nicht vorhanden",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Wartet auf den Start",
+   "role": "button",
+   "covered": false,
+   "filled": [
+    "prompt"
+   ],
+   "shot": "420-33.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": true,
+   "zoneText": "Ziel „shell“ ist nicht vorhanden",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Escape (Überlagerung schließen)",
+   "role": "key",
+   "shot": "420-34.jpg",
+   "effect": "keine sichtbare Wirkung",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": true,
+   "zoneText": "Ziel „shell“ ist nicht vorhanden",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Arbeitet",
+   "role": "button",
+   "skipped": "nach Scrollen verdeckt"
+  },
+  {
+   "label": "Bereit zur Prüfung",
+   "role": "button",
+   "skipped": "nach Scrollen verdeckt"
+  },
+  {
+   "label": "Wird geprüft",
+   "role": "button",
+   "skipped": "nach Scrollen verdeckt"
+  },
+  {
+   "label": "Prüfung bestanden",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-35.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": true,
+   "zoneText": "Ziel „shell“ ist nicht vorhanden",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Prüfung nicht bestanden",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-36.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": true,
+   "zoneText": "Ziel „shell“ ist nicht vorhanden",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Prüfung nicht verfügbar",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-37.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": true,
+   "zoneText": "Ziel „shell“ ist nicht vorhanden",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "Prüfung wiederholen",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "420-38.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Crew",
+   "zone": [],
+   "zoneVisible": true,
+   "zoneText": "Ziel „shell“ ist nicht vorhanden",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 420,
+    "h": 816,
+    "mobile": true
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": [
+    "Zone sichtbar"
+   ]
+  },
+  {
+   "label": "12 weitere Elemente nicht bedient (Grenze --max 34)",
+   "role": "note",
+   "rest": [
+    "button|Nacharbeit nötig|1",
+    "button|Nachweis nötig|1",
+    "button|Nachweis wird geprüft|1",
+    "button|Nachweis bestätigt|1",
+    "button|Arbeit gescheitert|1",
+    "button|Dienst gescheitert|1",
+    "button|Sophie Meyer · Lieferantenbewertung 2026 · queue-task-004|1",
+    "button|ohne Crew-Zuordnung · 2 Aufgaben · Onboarding neue Mitarbeit|1",
+    "button|Marie Becker · Rahmenvertrag über Wartung und Instandhaltung|1",
+    "summary|Verlauf|1",
+    "button|Bereit zum Start|1",
+    "button|Prüfung steht aus|1"
+   ]
+  }
+ ],
+ "flags": [
+  {
+   "step": 33,
+   "label": "Kanäle verwalten",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "420-32.jpg"
+  },
+  {
+   "step": 34,
+   "label": "Wartet auf den Start",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "420-33.jpg"
+  },
+  {
+   "step": 35,
+   "label": "Escape (Überlagerung schließen)",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "420-34.jpg"
+  },
+  {
+   "step": 39,
+   "label": "Prüfung bestanden",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "420-35.jpg"
+  },
+  {
+   "step": 40,
+   "label": "Prüfung nicht bestanden",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "420-36.jpg"
+  },
+  {
+   "step": 41,
+   "label": "Prüfung nicht verfügbar",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "420-37.jpg"
+  },
+  {
+   "step": 42,
+   "label": "Prüfung wiederholen",
+   "probs": [
+    "Zone sichtbar"
+   ],
+   "shot": "420-38.jpg"
+  }
+ ]
+}

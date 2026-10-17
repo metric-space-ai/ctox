@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: MIT OR AGPL-3.0-only
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import { customerReleaseViolations } from './assert-customer-app-isolation.mjs';
 
@@ -40,4 +45,39 @@ test('unknown and malformed distribution markers fail closed', () => {
   ]);
   const violations = customerReleaseViolations(paths, (path) => values.get(path));
   assert.equal(violations.length, 3);
+});
+
+test('CLI checks direct and symlinked entrypoints against release data', (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), 'ctox-isolation-cli-')));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const physical = join(base, 'physical');
+  const alias = join(base, 'alias');
+  const project = join(physical, 'project');
+  const relative = 'src/apps/business-os/installed-modules/fixture-app/module.json';
+  mkdirSync(join(project, 'src/apps/business-os/installed-modules/fixture-app'), { recursive: true });
+  writeFileSync(join(project, relative), JSON.stringify({ id: 'fixture-app' }));
+  execFileSync('git', ['init', '-q', project]);
+  execFileSync('git', ['-C', project, 'add', '-f', relative]);
+  copyFileSync(fileURLToPath(new URL('./assert-customer-app-isolation.mjs', import.meta.url)), join(physical, 'guard.mjs'));
+  symlinkSync(physical, alias, 'dir');
+
+  const entries = [
+    ['direct', join(physical, 'guard.mjs'), project],
+    ['symlink', join(alias, 'guard.mjs'), join(alias, 'project')],
+  ];
+  for (const [route, entry, root] of entries) {
+    const result = spawnSync(process.execPath, [entry, root], { encoding: 'utf8' });
+    assert.notEqual(result.status, 0, `${route} invocation must reject runtime app data`);
+    assert.match(result.stderr + result.stdout, /Customer app isolation failed/);
+  }
+
+  // A successful CLI exit must also prove the check ran.
+  const safe = join(base, 'safe');
+  mkdirSync(safe);
+  execFileSync('git', ['init', '-q', safe]);
+  for (const [route, entry] of entries) {
+    const result = spawnSync(process.execPath, [entry, safe], { encoding: 'utf8' });
+    assert.equal(result.status, 0, `${route}: ${result.stderr}`);
+    assert.match(result.stdout, /customer app isolation: ok/);
+  }
 });

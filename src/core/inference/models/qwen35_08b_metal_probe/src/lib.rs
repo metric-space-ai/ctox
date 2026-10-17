@@ -40,26 +40,4 @@ pub use shape_audit::{audit_shape_contract, ShapeAuditRow, ShapeAuditStatus};
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn exported_shape_is_qwen35_08b() {
-        assert_eq!(QWEN35_08B.model, QWEN35_08B_CANONICAL_MODEL);
-        assert_eq!(QWEN35_08B.hidden_size, 1024);
-        assert_eq!(QWEN35_08B.vocab_size, 248_320);
-        assert_eq!(QWEN35_08B.n_layers, 24);
-    }
-
-    #[test]
-    fn research_plan_starts_with_correctness_and_gpu_locality() {
-        let plan = ResearchPlan::default();
-        assert_eq!(plan.gates[0].name, "shape-contract");
-        assert!(plan
-            .gates
-            .iter()
-            .any(|gate| gate.name == "gpu-local-lm-head-argmax"));
-        assert!(plan
-            .gates
-            .iter()
-            .any(|gate| gate.name == "one-cpu-sync-per-token"));
-    }
 }

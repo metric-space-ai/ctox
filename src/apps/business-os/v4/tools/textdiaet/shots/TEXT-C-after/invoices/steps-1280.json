@@ -1,0 +1,162 @@
+{
+ "app": "invoices",
+ "width": 1280,
+ "steps": [
+  {
+   "label": "Launcher",
+   "role": "launcher",
+   "shot": "1280-00.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0~shell@lab/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "HTTP 404 /~a/outbound-lead-generation@1.0.0~shell@lab/assets/icon/outbound-lead-generation.svg",
+    "console: Failed to load resource: the server responded with a status of 404 (Not Found)"
+   ],
+   "dialogs": null,
+   "navigations": null,
+   "openedFiles": null,
+   "probs": []
+  },
+  {
+   "label": "geöffnet",
+   "role": "open",
+   "shot": "1280-01.jpg",
+   "effect": "",
+   "log": [],
+   "errors": [],
+   "title": "Rechnungen",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche „Müller“ in Suchen...",
+   "role": "search",
+   "shot": "1280-02.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Rechnungen",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Suche geleert",
+   "role": "search",
+   "shot": "1280-03.jpg",
+   "effect": "Inhalt geändert",
+   "log": [],
+   "errors": [],
+   "title": "Rechnungen",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "Neue Rechnung",
+   "role": "button",
+   "covered": false,
+   "filled": [],
+   "shot": "1280-04.jpg",
+   "effect": "Inhalt geändert",
+   "log": [
+    {
+     "kind": "command",
+     "type": "invoices.invoice.create",
+     "payload": "{\"invoice_id\":\"inv_mv9ws47u\",\"invoice_type\":\"sale_out\",\"party_id\":\"account-001\",\"invoice_date_ms\":1792091117658,\"due_date_ms\":1793300717658,\"currency\":\"EUR\",\"lines\":[],\"client_context\":{\"build\":\"invoices-ui-v0.1\",\"surface\":\"invoices.invoice…",
+     "status": "done"
+    }
+   ],
+   "errors": [],
+   "title": "Rechnungen",
+   "zone": [],
+   "zoneVisible": false,
+   "zoneText": "",
+   "hscroll": [],
+   "outside": [],
+   "bodyNew": [],
+   "window": {
+    "x": 0,
+    "y": 0,
+    "w": 1280,
+    "h": 748,
+    "mobile": false
+   },
+   "dialogs": 0,
+   "navigations": 0,
+   "openedFiles": 0,
+   "probs": []
+  },
+  {
+   "label": "19 weitere Elemente nicht bedient (Grenze --max 1)",
+   "role": "note",
+   "rest": [
+    "button|Weitere Aktionen|1",
+    "button|Kachelansicht|1",
+    "button|Listenansicht|1",
+    "button|Filter|1",
+    "tab|Alle (6)|1",
+    "tab|Offen (2)|1",
+    "tab|Bezahlt (1)|1",
+    "tab|Überfällig (1)|1",
+    "button|RE-2026-1040 Gebucht Müller Maschinenbau GmbH · 32.903,50 €|1",
+    "button|RE-2026-1041 Überfällig Schneider Logistik AG · 3.826,45 €|1",
+    "button|RE-2026-1042 Bezahlt Becker & Söhne KG · 10.400,60 €|1",
+    "button|RE-2026-1043 Teilweise bezahlt Hoffmann Medizintechnik GmbH |1",
+    "button|RE-2026-1044 Entwurf Wagner Elektrotechnik GmbH · 1.856,40 €|1",
+    "button|RE-2026-1045 Storniert Fischer Software Solutions GmbH · 22.|1",
+    "separator|Spaltenbreite anpassen|1",
+    "button|Details schließen|1",
+    "button|Journal|1",
+    "button|XRechnung|1",
+    "button|Zahlungen|1"
+   ]
+  }
+ ],
+ "flags": []
+}

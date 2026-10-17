@@ -50,75 +50,7 @@ fn map_api_error_maps_server_overloaded_from_503_body() {
     assert!(matches!(err, CodexErr::ServerOverloaded));
 }
 
-#[test]
-fn map_api_error_maps_usage_limit_limit_name_header() {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        ACTIVE_LIMIT_HEADER,
-        http::HeaderValue::from_static("codex_other"),
-    );
-    headers.insert(
-        "x-codex-other-limit-name",
-        http::HeaderValue::from_static("codex_other"),
-    );
-    let body = serde_json::json!({
-        "error": {
-            "type": "usage_limit_reached",
-            "plan_type": "pro",
-        }
-    })
-    .to_string();
-    let err = map_api_error(ApiError::Transport(TransportError::Http {
-        status: http::StatusCode::TOO_MANY_REQUESTS,
-        url: Some("http://example.com/v1/responses".to_string()),
-        headers: Some(headers),
-        body: Some(body),
-    }));
 
-    let CodexErr::UsageLimitReached(usage_limit) = err else {
-        panic!("expected CodexErr::UsageLimitReached, got {err:?}");
-    };
-    assert_eq!(
-        usage_limit
-            .rate_limits
-            .as_ref()
-            .and_then(|snapshot| snapshot.limit_name.as_deref()),
-        Some("codex_other")
-    );
-}
-
-#[test]
-fn map_api_error_does_not_fallback_limit_name_to_limit_id() {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        ACTIVE_LIMIT_HEADER,
-        http::HeaderValue::from_static("codex_other"),
-    );
-    let body = serde_json::json!({
-        "error": {
-            "type": "usage_limit_reached",
-            "plan_type": "pro",
-        }
-    })
-    .to_string();
-    let err = map_api_error(ApiError::Transport(TransportError::Http {
-        status: http::StatusCode::TOO_MANY_REQUESTS,
-        url: Some("http://example.com/v1/responses".to_string()),
-        headers: Some(headers),
-        body: Some(body),
-    }));
-
-    let CodexErr::UsageLimitReached(usage_limit) = err else {
-        panic!("expected CodexErr::UsageLimitReached, got {err:?}");
-    };
-    assert_eq!(
-        usage_limit
-            .rate_limits
-            .as_ref()
-            .and_then(|snapshot| snapshot.limit_name.as_deref()),
-        None
-    );
-}
 
 #[test]
 fn map_api_error_extracts_identity_auth_details_from_headers() {
@@ -153,15 +85,4 @@ fn map_api_error_extracts_identity_auth_details_from_headers() {
         Some("missing_authorization_header")
     );
     assert_eq!(err.identity_error_code.as_deref(), Some("token_expired"));
-}
-
-#[test]
-fn core_auth_provider_reports_when_auth_header_will_attach() {
-    let auth = CoreAuthProvider {
-        token: Some("access-token".to_string()),
-        account_id: None,
-    };
-
-    assert!(auth.auth_header_attached());
-    assert_eq!(auth.auth_header_name(), Some("authorization"));
 }

@@ -11,7 +11,9 @@ pub(super) struct Fixture {
 
 impl Fixture {
     pub(super) fn new() -> Result<Self> {
-        let root = tempfile::tempdir()?;
+        Self::with_root(tempfile::tempdir()?)
+    }
+    pub(super) fn with_root(root: tempfile::TempDir) -> Result<Self> {
         store::issue_business_os_capability_token_for_managed_user(
             root.path(),
             "owner",
@@ -460,5 +462,17 @@ fn policy_mutation_and_replay_receipt_share_one_transaction() -> Result<()> {
         1
     );
     assert_eq!(policy_revision(&conn, "owner")?, 1);
+    Ok(())
+}
+
+#[test]
+fn provider_list_treats_empty_record_id_from_command_bus_as_absent() -> Result<()> {
+    let f = Fixture::new()?;
+    let mut empty = command("ctox.workjet.providers.list", json!({}));
+    empty.record_id = Some(String::new());
+    assert!(handle_command(f.root.path(), &empty, "owner", None).is_ok());
+    let mut scoped = command("ctox.workjet.providers.list", json!({}));
+    scoped.record_id = Some("acc_1".into());
+    assert!(handle_command(f.root.path(), &scoped, "owner", None).is_err());
     Ok(())
 }

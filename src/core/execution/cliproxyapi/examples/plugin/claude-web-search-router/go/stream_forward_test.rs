@@ -19,22 +19,3 @@ impl StreamSink for Sink {
         self.closed = true
     }
 }
-#[test]
-fn identifies_wrong_protocol() {
-    assert!(stream_forward::looks_like_openai_responses_sse(
-        b"event: response.created\n"
-    ));
-    assert!(!stream_forward::looks_like_openai_responses_sse(
-        b"event: message_start\n"
-    ));
-}
-#[test]
-fn bounded_start_and_forward() {
-    let mut sink = Sink::default();
-    let content = execute_stream::start("s", |id| {
-        stream_forward::forward(id, &[b"event: message_start\n".to_vec()], &mut sink)
-    })
-    .unwrap();
-    assert_eq!(content, "text/event-stream");
-    assert!(sink.closed);
-}

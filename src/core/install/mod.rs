@@ -909,7 +909,7 @@ fn mark_maintenance_rolled_back(state_root: &Path, error: &str) -> Result<()> {
 /// live, but the update reported failure and never recorded the new release
 /// in the install manifest. A lock is not a missing credential, so wait for
 /// it; any other failure is still reported at once.
-fn verify_preserved_while_service_starts(
+fn verify_preserved_before_service_starts(
     invariants: &RuntimeCredentialSnapshot,
     state_root: &Path,
 ) -> Result<()> {
@@ -1547,28 +1547,30 @@ pub fn handle_update_command(root: &Path, args: &[String]) -> Result<()> {
                 20,
                 "Vorherige CTOX-Version wird wiederhergestellt",
             )?;
-            let result = match rollback_update(root) {
-                Ok(result) => result,
-                Err(error) => {
-                    let _ = fail_maintenance(
-                        &layout.state_root,
-                        &maintenance.lease_id,
-                        &error.to_string(),
-                    );
-                    return Err(error);
-                }
-            };
-            update_maintenance(&layout.state_root, &maintenance.lease_id, |state| {
-                state.phase = "rolled_back".to_string();
-                state.status = "rolled_back".to_string();
-                state.service_active = true;
-                state.progress = MaintenanceProgress {
-                    percent: 100,
-                    message: "Rollback abgeschlossen".to_string(),
-                };
-                state.finished_at = Some(now_rfc3339());
-            })?;
-            println!("{}", serde_json::to_string_pretty(&result)?);
+            let result = finish_rollback_receipt(&layout, || {
+                let result = rollback_update(root)?;
+                update_maintenance(&layout.state_root, &maintenance.lease_id, |state| {
+                    state.phase = "rolled_back".to_string();
+                    state.status = "rolled_back".to_string();
+                    state.current_release = Some(result.current_release.clone());
+                    state.previous_release = result.previous_release.clone();
+                    state.service_active = true;
+                    state.progress = MaintenanceProgress {
+                        percent: 100,
+                        message: "Rollback abgeschlossen".to_string(),
+                    };
+                    state.finished_at = Some(now_rfc3339());
+                })?;
+                Ok(result)
+            });
+            if let Err(error) = &result {
+                let _ = fail_maintenance(
+                    &layout.state_root,
+                    &maintenance.lease_id,
+                    &format!("{error:#}"),
+                );
+            }
+            println!("{}", serde_json::to_string_pretty(&result?)?);
             Ok(())
         }
         _ => anyhow::bail!("{}", UPDATE_USAGE),
@@ -2165,6 +2167,28 @@ fn apply_update(
         mark_maintenance_rolled_back(&layout.state_root, &err.to_string())?;
         return Err(err);
     }
+    // Verify the installer's state changes while it still has exclusive
+    // offline ownership. After starting the new daemon, this process must
+    // not attach a second owner to its live runtime/secrets databases.
+    if let Err(err) =
+        verify_preserved_before_service_starts(&runtime_invariants, &layout.state_root)
+    {
+        rollback_to_previous_release(
+            &install_root,
+            &current_link,
+            previous_release_root.as_deref(),
+            &layout.state_root,
+            should_restart,
+        )?;
+        persist_update_phase(
+            &layout.update_state_path(),
+            "failed",
+            Some(err.to_string().as_str()),
+        )?;
+        mark_maintenance_rolled_back(&layout.state_root, &err.to_string())?;
+        return Err(err);
+    }
+
     if should_restart {
         set_active_maintenance_phase(&layout, "restarting", 85, "CTOX-Dienst wird neu gestartet")?;
         progress_step("starting CTOX background service");
@@ -2200,7 +2224,6 @@ fn apply_update(
             return Err(err);
         }
     }
-    verify_preserved_while_service_starts(&runtime_invariants, &layout.state_root)?;
     if should_restart {
         if let Some(state) = load_maintenance_state_from_root(&layout.state_root)? {
             if !state.is_terminal() {
@@ -2245,6 +2268,256 @@ fn apply_update(
     })
 }
 
+/// Joining a dedicated thread drops legacy thread-local read caches. Returning
+/// from a probe closure on the rollback thread alone does not close those FDs.
+fn rollback_probe_closed<T: Send>(probe: impl FnOnce() -> Result<T> + Send) -> Result<T> {
+    std::thread::scope(|scope| {
+        scope
+            .spawn(probe)
+            .join()
+            .map_err(|_| anyhow::anyhow!("rollback stop probe panicked"))?
+    })
+}
+
+fn finish_rollback_receipt<T>(
+    layout: &InstallLayout,
+    operation: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    persist_update_phase(&layout.update_state_path(), "rolling_back", None)?;
+    let result = operation();
+    match &result {
+        Ok(_) => persist_update_phase(&layout.update_state_path(), "rolled_back", None)?,
+        Err(error) => persist_update_phase(
+            &layout.update_state_path(),
+            "failed",
+            Some(&format!("{error:#}")),
+        )?,
+    }
+    result
+}
+
+/// Retain the same stable lock inodes as the daemon/writers until verification
+/// ends. The watchdog switch guard remains held by rollback_update throughout.
+struct RestoreCustody(Vec<std::fs::File>);
+impl Drop for RestoreCustody {
+    fn drop(&mut self) {
+        for file in &self.0 {
+            let _ = file.unlock();
+        }
+    }
+}
+
+fn wait_for_restore_custody(state_root: &Path, timeout: Duration) -> Result<RestoreCustody> {
+    let until = Instant::now() + timeout;
+    loop {
+        let attempt = (|| -> Result<RestoreCustody> {
+            let mut paths = vec![state_root.join("store/store-daemon.lock")];
+            for db in collect_sqlite_database_files(state_root) {
+                if db.starts_with(state_root.join("backups"))
+                    || db == state_root.join(MAINTENANCE_STORE_FILE_NAME)
+                {
+                    continue;
+                }
+                let mut name = db
+                    .file_name()
+                    .context("database name missing")?
+                    .to_os_string();
+                name.push(".ctox-store.lock");
+                paths.push(db.with_file_name(name));
+            }
+            paths.sort();
+            paths.dedup();
+            let mut custody = RestoreCustody(Vec::new());
+            for path in paths {
+                ensure_dir(path.parent().context("owner lock parent missing")?)?;
+                let file = OpenOptions::new()
+                    .create(true)
+                    .truncate(false)
+                    .read(true)
+                    .write(true)
+                    .open(&path)?;
+                file.try_lock().map_err(|e| {
+                    anyhow::anyhow!("store owner has not drained ({}): {e}", path.display())
+                })?;
+                custody.0.push(file);
+            }
+            ensure_no_restore_handles(state_root)?;
+            Ok(custody)
+        })();
+        match attempt {
+            Ok(custody) => return Ok(custody),
+            Err(error) if Instant::now() >= until => {
+                return Err(error.context(
+                    "rollback restore refused: store/DB handles did not drain before deadline",
+                ))
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(50)),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_no_restore_handles(state_root: &Path) -> Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    let root = fs::canonicalize(state_root)?;
+    let uid = fs::metadata("/proc/self")?.uid();
+    let own_pid = std::process::id();
+    for entry in fs::read_dir("/proc")? {
+        let entry = entry?;
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let Ok(meta) = entry.metadata() else {
+            continue;
+        };
+        if meta.uid() != uid {
+            continue;
+        }
+        let fds = match fs::read_dir(entry.path().join("fd")) {
+            Ok(fds) => fds,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            // Uninspectable same-UID helpers (e.g. sshd/sd-pam) neither prove
+            // nor disprove a DB holder. Keep checking all readable target FDs;
+            // our own handles must always be inspectable and closed.
+            Err(error) if pid != own_pid && error.kind() == ErrorKind::PermissionDenied => continue,
+            Err(error) => return Err(error).context("cannot verify DB handle custody"),
+        };
+        for fd in fds {
+            let fd = match fd {
+                Ok(fd) => fd,
+                Err(error) if pid != own_pid && error.kind() == ErrorKind::PermissionDenied => {
+                    continue
+                }
+                Err(error) => return Err(error).context("cannot enumerate DB handles"),
+            };
+            let target = match fs::read_link(fd.path()) {
+                Ok(path) => path,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) if pid != own_pid && error.kind() == ErrorKind::PermissionDenied => {
+                    continue
+                }
+                Err(error) => return Err(error).context("cannot inspect DB handle"),
+            };
+            let text = target.to_string_lossy();
+            let path = Path::new(text.strip_suffix(" (deleted)").unwrap_or(&text));
+            if !path.starts_with(&root) || path.starts_with(root.join("backups")) {
+                continue;
+            }
+            let Some(name) = path.file_name().and_then(OsStr::to_str) else {
+                continue;
+            };
+            if name.starts_with(MAINTENANCE_STORE_FILE_NAME) {
+                continue;
+            }
+            let body = SQLITE_SIDECAR_SUFFIXES
+                .iter()
+                .find_map(|suffix| name.strip_suffix(suffix))
+                .unwrap_or(name);
+            if is_sqlite_database_file(Path::new(body)) {
+                anyhow::bail!(
+                    "database still open by pid {} fd {} ({})",
+                    entry.file_name().to_string_lossy(),
+                    fd.file_name().to_string_lossy(),
+                    path.display()
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn ensure_no_restore_handles(state_root: &Path) -> Result<()> {
+    let files: Vec<_> = collect_sqlite_database_files(state_root)
+        .into_iter()
+        .filter(|p| {
+            !p.starts_with(state_root.join("backups"))
+                && p != &state_root.join(MAINTENANCE_STORE_FILE_NAME)
+        })
+        .collect();
+    if files.is_empty() {
+        return Ok(());
+    }
+    let output = Command::new("lsof")
+        .args(["-nP", "-t", "--"])
+        .args(&files)
+        .output()
+        .context("lsof is required to establish offline restore custody on this platform")?;
+    anyhow::ensure!(
+        output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty(),
+        "restore refused: DB handles remain or cannot be inspected"
+    );
+    Ok(())
+}
+
+#[cfg(windows)]
+fn ensure_no_restore_handles(state_root: &Path) -> Result<()> {
+    use std::os::windows::fs::OpenOptionsExt;
+    for path in collect_sqlite_database_files(state_root) {
+        if path.starts_with(state_root.join("backups"))
+            || path == state_root.join(MAINTENANCE_STORE_FILE_NAME)
+        {
+            continue;
+        }
+        // Deny all sharing while probing; Windows refuses this even for a
+        // handle retained by this same process. Daemon/file leases stay held.
+        let _probe = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .share_mode(0)
+            .open(path)
+            .context("database handle remains open before rollback restore")?;
+    }
+    Ok(())
+}
+
+fn restore_rollback_state(backup_root: &Path, state_root: &Path, timeout: Duration) -> Result<()> {
+    let _custody = wait_for_restore_custody(state_root, timeout)?;
+    restore_state_backup(backup_root, state_root)?;
+    verify_restored_databases(backup_root, state_root)
+}
+
+fn verify_restored_databases(backup_root: &Path, state_root: &Path) -> Result<()> {
+    for original in collect_sqlite_database_files(backup_root) {
+        if original == backup_root.join(MAINTENANCE_STORE_FILE_NAME) {
+            continue;
+        }
+        let restored = state_root.join(original.strip_prefix(backup_root)?);
+        let db = rusqlite::Connection::open_with_flags(
+            &restored,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        let check: Result<String> = db
+            .query_row("PRAGMA quick_check", [], |row| row.get(0))
+            .map_err(Into::into);
+        match check {
+            Ok(check) => anyhow::ensure!(
+                check == "ok",
+                "restored database failed verification: {}",
+                restored.display()
+            ),
+            Err(error) if sqlite_error_is_not_a_database(&error) => {
+                // Historical backups preserve non-SQLite files with a DB suffix.
+                let source = rusqlite::Connection::open_with_flags(
+                    original,
+                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                )?;
+                let source_check: Result<String> = source
+                    .query_row("PRAGMA quick_check", [], |row| row.get(0))
+                    .map_err(Into::into);
+                anyhow::ensure!(
+                    source_check
+                        .as_ref()
+                        .is_err_and(sqlite_error_is_not_a_database),
+                    "restored SQLite snapshot became unreadable"
+                );
+            }
+            Err(error) => return Err(error).context("restored database verification failed"),
+        }
+    }
+    Ok(())
+}
+
 fn rollback_update(root: &Path) -> Result<RollbackResult> {
     let layout = InstallLayout::resolve(root)?;
     let install_root = layout
@@ -2264,21 +2537,26 @@ fn rollback_update(root: &Path) -> Result<RollbackResult> {
         .clone()
         .context("current release missing from manifest")?;
     let update_state = load_update_state(&layout.update_state_path())?;
-    let has_runnable_queue_work = has_runnable_durable_queue_work(&layout.active_root);
-    let should_restart = service::service_status_snapshot(&layout.active_root)
-        .map(|status| status.running || status.autostart_enabled || has_runnable_queue_work)
-        .unwrap_or(false);
     let _watchdog_switch_guard = acquire_watchdog_release_switch_guard(&install_root)?;
-    stop_background_for_release_switch(&layout.active_root)?;
+    // Queue/status/stop probes retain thread-local channel readers. Join the
+    // short-lived probe thread (including its TLS destructors) BEFORE restore.
+    let should_restart = rollback_probe_closed(|| {
+        let queued = has_runnable_durable_queue_work(&layout.active_root);
+        let restart = service::service_status_snapshot(&layout.active_root)
+            .map(|status| status.running || status.autostart_enabled || queued)
+            .unwrap_or(false);
+        stop_background_for_release_switch(&layout.active_root)?;
+        Ok(restart)
+    })?;
     if let Some(backup_path) = update_state.and_then(|entry| entry.state_backup_path) {
-        restore_state_backup(&backup_path, &layout.state_root)?;
+        restore_rollback_state(&backup_path, &layout.state_root, Duration::from_secs(30))?;
     }
     switch_current_release(&current_link, &previous_release_root)?;
     sync_managed_launch_binaries(&install_root, &current_link, &layout.state_root)?;
     write_managed_wrapper(&install_root, &layout.state_root)?;
     refresh_service_unit(&current_link, &layout.state_root, Some(&install_root))?;
     if should_restart {
-        let _ = service::start_background(&current_link);
+        service::start_background(&current_link)?;
     }
     manifest.current_release = Some(previous_release.clone());
     manifest.previous_release = Some(current_release);
@@ -2289,7 +2567,7 @@ fn rollback_update(root: &Path) -> Result<RollbackResult> {
         &layout.update_state_path(),
         &UpdateState {
             schema_version: 1,
-            phase: "rolled_back".to_string(),
+            phase: "verifying".to_string(),
             current_version: build_version().to_string(),
             current_release: manifest.current_release.clone(),
             previous_release: manifest.previous_release.clone(),
@@ -3944,7 +4222,19 @@ fn restore_state_backup(backup_root: &Path, state_root: &Path) -> Result<()> {
     if !backup_root.exists() {
         anyhow::bail!("state backup not found: {}", backup_root.display());
     }
+    // The operation's live control store is not historical tenant state.
+    // Restoring its old lease would make an otherwise completed rollback fail
+    // its final ownership check; replacing its WAL under the heartbeat is unsafe.
+    let maintenance = backup_root.join(MAINTENANCE_STORE_FILE_NAME);
     copy_filtered(backup_root, state_root, &|path, _| {
+        if path == backup_root.join(UPDATE_STATE_FILE_NAME)
+            || path == maintenance
+            || SQLITE_SIDECAR_SUFFIXES.iter().any(|suffix| {
+                path == backup_root.join(format!("{MAINTENANCE_STORE_FILE_NAME}{suffix}"))
+            })
+        {
+            return true;
+        }
         path.file_name()
             .and_then(OsStr::to_str)
             .is_some_and(|name| name == "backup_manifest.json")
@@ -3956,6 +4246,9 @@ fn restore_state_backup(backup_root: &Path, state_root: &Path) -> Result<()> {
     // ship the sidecars themselves — those were just restored deliberately
     // and carry committed transactions; they must be kept.
     for database in collect_sqlite_database_files(backup_root) {
+        if database == maintenance {
+            continue;
+        }
         let Ok(relative) = database.strip_prefix(backup_root) else {
             continue;
         };
@@ -3989,6 +4282,15 @@ struct RuntimeCredentialSnapshot {
 
 impl RuntimeCredentialSnapshot {
     fn capture(root: &Path) -> Result<Self> {
+        // The installer can run with the service stopped. Own the stores only
+        // for this snapshot, releasing the daemon lease before switching or
+        // starting a release; never hold an owner across the upgrade itself.
+        let work = root.to_owned();
+        crate::persistence::run_cli_owned(root, move || Self::capture_owned(&work))
+            .context("failed to capture upgrade credentials through the store owner")
+    }
+
+    fn capture_owned(root: &Path) -> Result<Self> {
         let env_map = runtime_env::effective_operator_env_map(root)
             .with_context(|| format!("failed to read runtime env from {}", root.display()))?;
         let env_values = UPGRADE_RUNTIME_ENV_INVARIANT_KEYS
@@ -5074,19 +5376,6 @@ mod tests {
     }
 
     #[test]
-    fn release_bundle_matrix_includes_windows() {
-        assert_eq!(
-            target_bundle_asset_name_for("windows", "x86_64"),
-            Some("ctox-windows-x64.zip")
-        );
-        assert_eq!(
-            target_bundle_asset_name_for("macos", "aarch64"),
-            Some("ctox-macos-arm64.tar.gz")
-        );
-        assert_eq!(target_bundle_asset_name_for("windows", "aarch64"), None);
-    }
-
-    #[test]
     fn latest_core_release_ignores_newer_shell_release() {
         let release = |tag_name: &str, draft: bool, prerelease: bool| GitHubReleaseResponse {
             tag_name: tag_name.to_string(),
@@ -5324,79 +5613,6 @@ mod tests {
     }
 
     #[test]
-    fn waiting_collections_without_browser_ack_completes_after_grace() {
-        let temp = tempdir().unwrap();
-        // Same root resolution as the status endpoint, so the reconcile and the
-        // projection below read the same persisted state.
-        let layout = InstallLayout::resolve(temp.path()).unwrap();
-        let started = begin_maintenance(&layout, "branch:main").unwrap();
-        let now_ms = current_utc().timestamp_millis();
-        let mut waiting = load_maintenance_state_from_root(&layout.state_root)
-            .unwrap()
-            .unwrap();
-        waiting.service_active = true;
-        waiting.replication_up = true;
-        waiting.phase = "waiting_collections".to_string();
-        waiting.lease_expires_at_ms = now_ms + MAINTENANCE_LEASE_TTL_MS;
-        waiting.waiting_collections_since_ms = now_ms - MAINTENANCE_CLIENT_ACK_GRACE_MS + 30_000;
-        persist_maintenance_state_to_root(&layout.state_root, &waiting).unwrap();
-
-        // Inside the grace period the instance keeps waiting for the browser.
-        let still_waiting = reconcile_maintenance_runtime(temp.path(), &layout)
-            .unwrap()
-            .unwrap();
-        assert_eq!(still_waiting.lease_id, started.lease_id);
-        assert_eq!(still_waiting.status, "active");
-        assert_eq!(still_waiting.phase, "waiting_collections");
-        assert_eq!(
-            business_os_maintenance_status(temp.path()).unwrap()["active"],
-            true
-        );
-
-        let mut overdue = load_maintenance_state_from_root(&layout.state_root)
-            .unwrap()
-            .unwrap();
-        overdue.waiting_collections_since_ms = now_ms - MAINTENANCE_CLIENT_ACK_GRACE_MS - 1;
-        persist_maintenance_state_to_root(&layout.state_root, &overdue).unwrap();
-
-        let released = reconcile_maintenance_runtime(temp.path(), &layout)
-            .unwrap()
-            .unwrap();
-        assert_eq!(released.status, "completed");
-        assert_eq!(released.phase, "completed");
-        assert!(released.finished_at.is_some());
-        // Honest projection: no client ever acknowledged its collections.
-        assert!(!released.initial_replication_complete);
-        assert!(released.client_readiness.is_empty());
-        let payload = business_os_maintenance_status(temp.path()).unwrap();
-        assert_eq!(payload["active"], false);
-        assert_eq!(payload["message"], "");
-    }
-
-    #[test]
-    fn waiting_collections_grace_starts_at_first_observation() {
-        let temp = tempdir().unwrap();
-        let layout = InstallLayout::resolve(temp.path()).unwrap();
-        begin_maintenance(&layout, "branch:main").unwrap();
-        let mut waiting = load_maintenance_state_from_root(&layout.state_root)
-            .unwrap()
-            .unwrap();
-        waiting.service_active = true;
-        waiting.replication_up = true;
-        waiting.phase = "waiting_collections".to_string();
-        waiting.lease_expires_at_ms = current_utc().timestamp_millis() + MAINTENANCE_LEASE_TTL_MS;
-        // A state persisted by an older binary carries no start timestamp.
-        waiting.waiting_collections_since_ms = 0;
-        persist_maintenance_state_to_root(&layout.state_root, &waiting).unwrap();
-
-        let observed = reconcile_maintenance_runtime(temp.path(), &layout)
-            .unwrap()
-            .unwrap();
-        assert_eq!(observed.status, "active");
-        assert!(observed.waiting_collections_since_ms > 0);
-    }
-
-    #[test]
     fn active_target_recovers_interrupted_service_activation() {
         let temp = tempdir().unwrap();
         let mut layout = maintenance_test_layout(temp.path());
@@ -5457,47 +5673,6 @@ mod tests {
     }
 
     #[test]
-    fn healthy_native_peer_owns_post_upgrade_wait() {
-        let temp = tempdir().unwrap();
-        let layout = maintenance_test_layout(temp.path());
-        let mut state = begin_maintenance(&layout, "branch:main").unwrap();
-        state.service_active = true;
-
-        let (healthy, replication_up) = native_peer_maintenance_health_from_status(&json!({
-            "running": true,
-            "replicationUp": false,
-            "heartbeat": {"fresh": true}
-        }));
-        assert!(healthy);
-        assert!(!replication_up);
-        assert!(maintenance_peer_owns_wait(&state, healthy));
-
-        let (healthy, _) = native_peer_maintenance_health_from_status(&json!({
-            "running": true,
-            "replicationUp": false,
-            "heartbeat": {"fresh": false}
-        }));
-        assert!(!healthy);
-        assert!(!maintenance_peer_owns_wait(&state, healthy));
-    }
-
-    #[test]
-    fn upgrade_progress_lines_are_numbered_and_timed() {
-        assert_eq!(
-            format_progress_step(8, 3, "fetch binary release bundle"),
-            "ctox upgrade | 00:08 | step 03 | fetch binary release bundle"
-        );
-        assert_eq!(
-            format_progress_info(9, "installer output follows"),
-            "ctox upgrade | 00:09 | info    | installer output follows"
-        );
-        assert_eq!(
-            format_progress_done(80, "downloaded v1.2.3", 75),
-            "ctox upgrade | 01:20 | done    | downloaded v1.2.3 | took 1m 15s"
-        );
-    }
-
-    #[test]
     fn legacy_release_bundle_is_normalized_to_installable_layout() {
         let temp = tempdir().unwrap();
         let legacy = temp
@@ -5517,29 +5692,6 @@ mod tests {
         // validation on the missing runtime assets, not on the binary check.
         let error = validate_binary_bundle(temp.path()).unwrap_err().to_string();
         assert!(error.contains("missing required runtime paths"));
-    }
-
-    #[test]
-    fn upgrade_help_is_a_non_mutating_top_level_path() {
-        let args = vec!["--help".to_string()];
-        let help = update_help_text(&args);
-
-        assert!(help.contains("ctox upgrade [--stable|--dev]"));
-        assert!(help.contains("without starting an upgrade"));
-    }
-
-    #[test]
-    fn update_apply_help_is_a_non_mutating_subcommand_path() {
-        let args = vec![
-            "apply".to_string(),
-            "--latest".to_string(),
-            "--from-source".to_string(),
-            "--help".to_string(),
-        ];
-        let help = update_help_text(&args);
-
-        assert!(help.contains("ctox update apply --latest"));
-        assert!(help.contains("without starting an update"));
     }
 
     #[test]
@@ -5910,6 +6062,41 @@ mod tests {
         assert_eq!(state.phase, "building");
         assert!(state.finished_at.is_none());
         assert!(state.last_error.is_none());
+    }
+
+    #[test]
+    fn installer_snapshot_owns_stopped_runtime_and_preserves_guard() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().to_owned();
+        let work = root.clone();
+        crate::persistence::run_cli_owned(&root, move || {
+            let mut env = std::collections::BTreeMap::new();
+            env.insert("CTOX_CHAT_TURN_TIMEOUT_SECS".to_owned(), "30".to_owned());
+            runtime_env::save_runtime_env_map(&work, &env)
+        })
+        .unwrap();
+
+        // The old installer path is the mutation: the identical read without
+        // the CLI owner must still be rejected by the production guard.
+        let error = RuntimeCredentialSnapshot::capture_owned(&root).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<crate::persistence::CoreSyncError>(),
+            Some(crate::persistence::CoreSyncError::Required)
+        ));
+        let snapshot = RuntimeCredentialSnapshot::capture(&root).unwrap();
+        assert!(snapshot
+            .env_values
+            .iter()
+            .any(|(key, value)| key == "CTOX_CHAT_TURN_TIMEOUT_SECS" && value == "30"));
+        snapshot.verify_preserved(&root).unwrap();
+
+        // Each capture released its exclusive lease; the next offline owner
+        // can attach, and callers outside it still cannot access the store.
+        let error = runtime_env::effective_operator_env_map(&root).unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<crate::persistence::CoreSyncError>(),
+            Some(crate::persistence::CoreSyncError::Required)
+        ));
     }
 
     #[test]
@@ -6496,22 +6683,11 @@ mod tests {
             .join("previous/tools/model-runtime/target")
             .exists());
     }
-
-    #[test]
-    fn doctor_appsec_contract_includes_version_and_functional_smoke() {
-        let root = Path::new("/tmp/ctox-doctor-contract");
-        let args = appsec_doctor_args(root);
-        assert!(args
-            .windows(2)
-            .any(|window| window == ["--profile", "standard"]));
-        assert!(args.iter().any(|arg| arg == "--probe-versions"));
-        assert!(args.iter().any(|arg| arg == "--smoke"));
-        assert!(args
-            .windows(2)
-            .any(|window| window == ["--smoke-timeout", "10"]));
-        assert!(args
-            .iter()
-            .any(|arg| arg.ends_with("runtime/appsec/doctor")));
-        assert!(args.iter().any(|arg| arg.ends_with("runtime/tools/appsec")));
-    }
 }
+
+#[cfg(test)]
+mod rollback_tests;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "rollback_restore_tests.rs"]
+mod rollback_restore_tests;

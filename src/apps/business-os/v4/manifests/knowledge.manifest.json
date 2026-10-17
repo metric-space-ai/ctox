@@ -1,0 +1,615 @@
+{
+  "_capability_evidence": {
+    "agent.task.enqueue": [
+      "handlers/_lib/agent.js"
+    ],
+    "agent.task.get": [
+      "handlers/_lib/callback.js"
+    ],
+    "agent.task.workspace.read": [
+      "handlers/_lib/callback.js"
+    ],
+    "dataframe.window": [
+      "handlers/knowledge.view.window.js"
+    ]
+  },
+  "_commands_out_evidence": {
+    "ctox ctox.app.modify.request": [
+      "index.js:2857"
+    ],
+    "ctox ctox.chat.task": [
+      "index.js:2857"
+    ]
+  },
+  "_declaration": "modules/knowledge/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/knowledge/index.html",
+  "_rust_basis": "`rs:rxdb_peer_knowledge_rows.rs` 113 Z. (Parquet-Quelle für `rxdb.rows.fetch`); weitere ~70 Fundstellen in `rs:rxdb_peer.rs`, 11 in `rs:importer.rs`.",
+  "_source_dir": "src/apps/business-os/modules/knowledge",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "knowledge",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [
+    "agent.task.enqueue",
+    "agent.task.get",
+    "agent.task.workspace.read",
+    "dataframe.window"
+  ],
+  "collections": {
+    "knowledge_items": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/knowledge.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "source_path": {
+            "type": "string"
+          },
+          "subtitle": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "knowledge_runbooks": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/knowledge.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "source_path": {
+            "type": "string"
+          },
+          "subtitle": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "knowledge_table_rows": {
+      "_class_proposal": "modules/knowledge/V4-PORT.md Manifest-Ergänzung (E11): Projektion eines Sichtfensters, Zeilenfilter eigener Nutzer; client_limit Vorschlag",
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/knowledge.collections.schema.json",
+      "byte_budget": null,
+      "class": "window",
+      "client_limit": 5000,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "actor_id": {
+            "type": "string"
+          },
+          "content_hash": {
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "row_count": {
+            "type": "integer"
+          },
+          "row_index": {
+            "type": "integer"
+          },
+          "schema_hash": {
+            "type": "string"
+          },
+          "table_id": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          },
+          "values": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "view_id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "window_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "view_id",
+          "actor_id",
+          "row_index",
+          "values",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "knowledge_tables": {
+      "_class_proposal": "heute demand-only (shared/sync.js:3873 isDemandOnlyPullCollection)",
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/knowledge.collections.schema.json",
+      "byte_budget": null,
+      "class": "window",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "id": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "source_path": {
+            "type": "string"
+          },
+          "subtitle": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "title",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "knowledge_tasks": {
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/knowledge.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "acknowledged_at": {
+            "type": "string"
+          },
+          "acknowledged_by": {
+            "type": "string"
+          },
+          "command_id": {
+            "type": "string"
+          },
+          "command_type": {
+            "type": "string"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "error": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "record_id": {
+            "type": "string"
+          },
+          "result": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "command_id",
+          "command_type",
+          "title",
+          "status",
+          "created_at_ms",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    },
+    "knowledge_views": {
+      "_class_proposal": "modules/knowledge/V4-PORT.md Manifest-Ergänzung (E11): Fenster je Nutzer; client_limit Vorschlag",
+      "_owner_basis": "neue Collection, nur in collections.schema.json dieser App definiert",
+      "_schema_source": "v4/schemas/knowledge.collections.schema.json",
+      "byte_budget": null,
+      "class": "window",
+      "client_limit": 200,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "actor_id": {
+            "type": "string"
+          },
+          "filter": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "skip": {
+            "type": "integer"
+          },
+          "sort": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "table": {
+            "maxLength": 180,
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "table",
+          "filter",
+          "sort",
+          "skip",
+          "limit",
+          "actor_id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [
+    {
+      "from": [
+        "research"
+      ],
+      "type": "knowledge.book.ingest"
+    }
+  ],
+  "commands_out": [
+    {
+      "app": "ctox",
+      "type": "ctox.app.modify.request"
+    },
+    {
+      "app": "ctox",
+      "type": "ctox.chat.task"
+    }
+  ],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "knowledge_items": [
+      "read"
+    ],
+    "knowledge_runbooks": [
+      "read"
+    ],
+    "knowledge_table_rows": [
+      "read"
+    ],
+    "knowledge_tables": [
+      "read"
+    ]
+  },
+  "files": {
+    "V4-HANDLERS.md": "a5d6b7aa8cac4306cb4310daec66e301a96f466a31889483839757e0b6fb8d04",
+    "V4-PORT.md": "87a0319215d5513d6b28a93ba4702bef09ffaba4b24ddc04cfc6d06b15587ec9",
+    "assets/icon/knowledge-1024.png": "d8c2b54b52f9b41de4098fd36c4b058edf7b88db2898e0171cc4b8e81d95e825",
+    "assets/icon/knowledge-144.png": "e756262f5c5a2e3089d31091205df27bfc7a014023ac618a2612a283fe585bca",
+    "assets/icon/knowledge-256.png": "257526ec6c932c287be864be47e7e7708f32d136d587ab2d17da6cc62629c220",
+    "assets/icon/knowledge-512.png": "64c5cc0b883c770754923bc9fc132cc89c8e8cf430607e6e53c157a1e3c64b8d",
+    "assets/icon/knowledge-60.png": "d7e1a31e6225944870d2eb50ddce4dc2017876459a5a4401a6c760a2268e729f",
+    "assets/icon/knowledge-candidate-01-original.jpg": "6aaaac3c849a444f1bc8af3e4f019eb4eded5ad64ac70ec85eee5c54cdb06e3b",
+    "assets/icon/provenance.json": "2f74978d0777507437d29ca472a50121f0f107c8c38870d5a9c3bf22f09d6890",
+    "collections.schema.json": "b0b561233ed6b85f27c802571e9facb699e1d68143cb570af8bd7749e512e2f6",
+    "handlers/_lib/agent.js": "2dffa4145f6856720c020a04ca78082e632560f6f0399fc6f332aebd26960cc3",
+    "handlers/_lib/book.js": "d314255580b81273001856626f8166966163d4b0b1e9ed383c6e6fcdf8612967",
+    "handlers/_lib/callback.js": "82ec0fa41dd4ef29948c43163b1580bb9f7360ff636c876cd1e58ce6ab664fd6",
+    "handlers/ctox.knowledge.book.create.js": "e9e5e3184ca3a86be0d7d4e8f49427805144f08d0f15bab740550954d764e6f6",
+    "handlers/ctox.knowledge.book.export.js": "a83b74b6391280263606503b09e06f06332420dbf9ce28d018a31f8548e7be74",
+    "handlers/ctox.knowledge.book.import.js": "fddcbc1393cea99a7c40f0a08f7604ed469ee6d6c51e2f9d22221bbcf12dbf58",
+    "handlers/ctox.knowledge.chat.js": "503ca5633b005fe6d755523f5e84bf038c1c14ecd89027734a073b499ad9dcda",
+    "handlers/ctox.knowledge.document.modify.js": "625380dc733bf4966ef158f5d22088879ea961f95ce3eba315fdc2a528d1e0f1",
+    "handlers/ctox.knowledge.runbook.execute.js": "e6bc1ca59bc3688a9789d15c06ecf3a36fe29953dec63578a67989c0e48a2785",
+    "handlers/ctox.knowledge.runbook.modify.js": "d64df69cee11332082ce6d061ec3438cbea9fddf6d47cdd24a35faa696c94575",
+    "handlers/knowledge.book.ingest.js": "89a1b8bf4e29ca3404b2d0a5425182243ae1b5e03d9da45717076787205c9428",
+    "handlers/knowledge.task.complete.js": "3b7da41eb825b6eb61de44260c1acdd406bb2c43fd13032dbadcc0861a0cb7b6",
+    "handlers/knowledge.task.failed.js": "81d5033d76225b0e0c9b9905af6c68c154bdd3ababa585e9e238caab346ba5fa",
+    "handlers/knowledge.view.window.js": "a911620fcc2dc879f5f1d481e2b6f4c759d9781b023f5d352a990196d4723bde",
+    "icon.svg": "39331bc093f21f20296c5350c204a84bfaf0fa6b2de92c71f3220a30f47c58cd",
+    "index.css": "ce63a75adf3effdea0e2286f52089a1e9ac72076c56369b50d652e440874d299",
+    "index.html": "0c59a4d2db16a8ef1f1824e8086854d6660058fe8881e708f9618eaf549daada",
+    "index.js": "552b8ecc16c7036f29483e25d60867cadd76dd8dac097e04eb0fbaa7aec8d610",
+    "locales/de.json": "43d63fe2b9f278b547072b6af2cc65f293b8c57e446a0686eeddc81a0b3593f1",
+    "locales/en.json": "9a49ca5ae3e234165f69776172a052773383db762ec6c10d455b1328b6f7880a",
+    "module.json": "c009bd49c6b7e90a3613ab1318a480bc10a021604877e63a6cfd2c291cdd5f3a",
+    "prompts/book-create.md": "42ce80498e8556d7085d87bd64c2d644c2106f98b67effdcd8ac0708263bcedf",
+    "prompts/book-export.md": "5c77b4344472cb29dd003f15a631021626c898e8d3d17562fe6c6844abb34fb5",
+    "prompts/book-import.md": "986dd70a7ce7f68870421d5375987229bb6028bf4db3568eb3515c7e5a61028b",
+    "prompts/chat.md": "9e88cd918c30a97481734af867d80d3c30e492fccdf8dd1a0ce38d42c23f0c15",
+    "prompts/document-modify.md": "0aa12bbdacf9b9d341c7e3d6290abece90fe462b7e467e317baabbd764065acd",
+    "prompts/runbook-execute.md": "4016c7895ed1d191d6ac4ae0f2a26dfa4df30d1fb8b6cf8140088786b34520e9",
+    "prompts/runbook-modify.md": "297fe338620ff5399b1b2d834b202f52e9c69062826d6c6613fd2f257de5377f",
+    "skills/knowledge-maintenance/SKILL.md": "fb9f977fbfb6338661345bc1a232564f62445e2ea02c54810712edbdf6603ef6",
+    "v4-manifest.json": "0f3ed72212f7290ae05ba730af6a65305b82bd33f5e79b6251fef08c2dc56bad"
+  },
+  "foreign_collections": {
+    "business_commands": {
+      "_evidence": {
+        "code_read": [],
+        "code_write": [],
+        "sources": [
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    }
+  },
+  "handlers": {
+    "ctox.knowledge.book.create": "handlers/ctox.knowledge.book.create.js",
+    "ctox.knowledge.book.export": "handlers/ctox.knowledge.book.export.js",
+    "ctox.knowledge.book.import": "handlers/ctox.knowledge.book.import.js",
+    "ctox.knowledge.chat": "handlers/ctox.knowledge.chat.js",
+    "ctox.knowledge.document.modify": "handlers/ctox.knowledge.document.modify.js",
+    "ctox.knowledge.runbook.execute": "handlers/ctox.knowledge.runbook.execute.js",
+    "ctox.knowledge.runbook.modify": "handlers/ctox.knowledge.runbook.modify.js",
+    "knowledge.book.ingest": "handlers/knowledge.book.ingest.js",
+    "knowledge.task.complete": "handlers/knowledge.task.complete.js",
+    "knowledge.task.failed": "handlers/knowledge.task.failed.js",
+    "knowledge.view.window": "handlers/knowledge.view.window.js"
+  },
+  "layout": {
+    "_icon_asset_source": "modules/knowledge/assets/icon/knowledge-256.png (shared/operator-icon-selection.js, sha256 257526ec6c93…; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "_multi_instance_basis": "v4-manifest.json; modules/knowledge/V4-PORT.md OFFEN-4; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "category": "Knowledge",
+    "default_height": 720,
+    "default_width": 1200,
+    "drawers": {
+      "bottom": "Selected rows, dataframe diagnostics, and CTOX task evidence",
+      "left": "Knowledge source and import configuration",
+      "right": "Runbook configuration, modification, and execution"
+    },
+    "icon_asset": "assets/icon/knowledge-256.png",
+    "icon_asset_60": "assets/icon/knowledge-60.png",
+    "icon_asset_srcset": "assets/icon/knowledge-256.png 1x, assets/icon/knowledge-512.png 2x, assets/icon/knowledge-1024.png 4x",
+    "min_height": 480,
+    "min_width": 360,
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 720,
+        "width": 1200
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 360
+      },
+      "mobile": {
+        "accent": "#0891b2",
+        "category": "Knowledge",
+        "iconAssetId": "workjet.business-os.knowledge",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "list-detail",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "Knowledge"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "prompts": [
+    {
+      "name": "book-create",
+      "path": "prompts/book-create.md"
+    },
+    {
+      "name": "book-export",
+      "path": "prompts/book-export.md"
+    },
+    {
+      "name": "book-import",
+      "path": "prompts/book-import.md"
+    },
+    {
+      "name": "chat",
+      "path": "prompts/chat.md"
+    },
+    {
+      "name": "document-modify",
+      "path": "prompts/document-modify.md"
+    },
+    {
+      "name": "runbook-execute",
+      "path": "prompts/runbook-execute.md"
+    },
+    {
+      "name": "runbook-modify",
+      "path": "prompts/runbook-modify.md"
+    }
+  ],
+  "provenance": {
+    "base_hash": "e20e9960752f1c89bdf8cc3cd7b40f3d249a68baac902e3188bc4b7e87de6e75",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "row_filters": {
+    "knowledge_table_rows": {
+      "actor_id": "$self"
+    },
+    "knowledge_views": {
+      "actor_id": "$self"
+    }
+  },
+  "skills": [
+    {
+      "name": "knowledge-maintenance",
+      "path": "skills/knowledge-maintenance/SKILL.md"
+    }
+  ],
+  "styles": [
+    "index.css"
+  ],
+  "title": "Knowledge",
+  "triggers": [
+    {
+      "handler": "handlers/knowledge.view.window.js",
+      "on": {
+        "collection": "knowledge_views",
+        "op": "insert"
+      }
+    },
+    {
+      "handler": "handlers/knowledge.view.window.js",
+      "on": {
+        "collection": "knowledge_views",
+        "op": "update"
+      }
+    }
+  ],
+  "version": "1.1.7"
+}

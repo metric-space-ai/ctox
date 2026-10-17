@@ -1,0 +1,402 @@
+{
+  "_capability_evidence": {},
+  "_declaration": "modules/esign/v4-manifest.json",
+  "_format": "ctox-shell-v4-app-manifest-draft-1",
+  "_generator": "src/apps/business-os/v4/tools/manifest/gen-manifest.mjs",
+  "_legacy_count": 0,
+  "_legacy_entry": "modules/esign/index.html",
+  "_rust_basis": "`store_ats_commands.rs` Arme `ats.signature.request` (`:871`, ~30), `ats.signature.sign` (`:901`, ~103) ≈ 0,13k.",
+  "_source_dir": "src/apps/business-os/modules/esign",
+  "_styles_basis": "§16.19 Nr. 6; index.css der App (Shell lädt sie, Reihenfolge = Ladereihenfolge)",
+  "_todo": [
+    "command_rights ats.*: kein passender Handler.",
+    "rights je Collection: module.json hat kein permissions-Feld → null; Rechte aus policy.rs/permissions.js beim Port festlegen.",
+    "client_limit/byte_budget: keine Ist-Messung im Repo → null.",
+    "app_ver/author/created_at setzt der Core bei der Veröffentlichung (§9.1, §9.2)."
+  ],
+  "app_id": "esign",
+  "app_ver": null,
+  "author": null,
+  "capabilities_required": [],
+  "collections": {
+    "signature_requests": {
+      "_owner_basis": "Basis-Zuordnung ownership-baseline.json (Strang M, 8a332b929)",
+      "_schema_source": "v4/schemas/esign.collections.schema.json",
+      "byte_budget": null,
+      "class": "full",
+      "client_limit": null,
+      "rights": null,
+      "schema": {
+        "additionalProperties": true,
+        "primaryKey": "id",
+        "properties": {
+          "_deleted": {
+            "type": "boolean"
+          },
+          "created_at_ms": {
+            "type": "number"
+          },
+          "document_id": {
+            "type": "string"
+          },
+          "expires_at_ms": {
+            "type": "number"
+          },
+          "id": {
+            "maxLength": 160,
+            "type": "string"
+          },
+          "sent_at_ms": {
+            "type": "number"
+          },
+          "signed_artifact_id": {
+            "type": "string"
+          },
+          "signers": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "status": {
+            "type": "string"
+          },
+          "subject_kind": {
+            "type": "string"
+          },
+          "updated_at_ms": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "document_id",
+          "updated_at_ms"
+        ],
+        "type": "object",
+        "version": 0
+      }
+    }
+  },
+  "command_rights": {},
+  "commands_in": [],
+  "commands_out": [],
+  "created_at": null,
+  "entry": "index.js",
+  "exports": {
+    "signature_requests": [
+      "read",
+      "write"
+    ]
+  },
+  "files": {
+    "README.md": "2c8fda2064d87b0a5676ba12bf4e894260630c63119ebf73428e840b6a303692",
+    "V4-HANDLERS.md": "b25efc73fc79a26742d5e830f8a2812f68e6ba3c6e4735c9457a6b1f19fda0e7",
+    "V4-PORT.md": "37da3485862c7cdfc5c32763362b8c06dfbe3612ccb3ab0fdf57eee92902e097",
+    "assets/icon.jpg": "89896657d542772428d14dad14a0fe634b02ee4f0ad8deaa4236df88af595a52",
+    "assets/icon@512.jpg": "dbc5218cb41381406d1e7b2399848338a5a7bac873c87317e6ab6b16c4017ddc",
+    "collections.schema.json": "4e9604d5dd9a697bcce4265b3a275b21b77c1468ceb31a8625aedfcd201cf34f",
+    "core/signature.js": "aa8a6372988feb4c935de2a34e436bb95fb5ba57cd1072300d1803260a219895",
+    "handlers/_ats.js": "106c6da0358fb3fad8885549b272cd91b6f6113ad1db0416a61c8791c3229988",
+    "handlers/_sha256.js": "1ff0c246683822435b50fb3879af0243c235700cf70fa04572266d1aacc94d12",
+    "handlers/ats.signature.request.js": "c9f0796ff61be9d5b41c58f7feb4a692f7145b56d1f17ed93029d67fc0366c8a",
+    "handlers/ats.signature.sign.js": "4125f277f17cf4bb423bbf29ebe02c26d21efd90904bde67bdbae960d168dc70",
+    "icon.svg": "420acabd7dd113e084742ef65d2f90acfcb9ebea0c1004d925585753e64ee5c9",
+    "index.css": "1cc8dcccc409e256d05952e009d0292383f84a161dba15c3bd7301d3d3969064",
+    "index.html": "8b98fc8d424584578435cb174ab2f9a98575b6d48708bb7a2b17dc7cdf6a41c6",
+    "index.js": "484a8e5fdaf6c1d9de1d801f8f6abd4c70a729ca3977884e367fa0b0b4f2738d",
+    "locales/de.json": "04d6067c7cea15c084f6c1c295267334e5d90c6d79a2fa80bb8b00609c47bbec",
+    "locales/en.json": "5f2b76db38d7475116fa7ef955fba673dc95a30038d82e3ed83582cd32bec1b2",
+    "module.json": "b109fc2b3f2bbaa4d82850470cfb7ae3f206e57ac556d72182bbf9181d48e587",
+    "v4-manifest.json": "5738af7dab7c327bd1ad3727b8100db168c399fa2d706100958465fd0d79007f"
+  },
+  "foreign_collections": {
+    "accounting_invoices": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:264"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "invoices"
+    },
+    "applications": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197",
+          "index.js:48"
+        ],
+        "code_write": [],
+        "declaration_basis": "Strang FIX7 (v4/tools/textdiaet/FIX7.md): Neue Anfrage wählt Dokument aus documents/desktop_files und Unterzeichner aus customer_contacts/applications (nur lesen, Namen statt IDs)",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "intake"
+    },
+    "business_commands": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:233"
+        ],
+        "code_write": [],
+        "sources": [
+          "code",
+          "module.json.collections"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
+    },
+    "business_consents": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "consent"
+    },
+    "business_credentials": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "nachweise"
+    },
+    "customer_contacts": {
+      "_evidence": {
+        "code_read": [
+          "index.js:48",
+          "index.js:589",
+          "index.js:592"
+        ],
+        "code_write": [],
+        "declaration_basis": "Strang FIX7 (v4/tools/textdiaet/FIX7.md): Neue Anfrage wählt Dokument aus documents/desktop_files und Unterzeichner aus customer_contacts/applications (nur lesen, Namen statt IDs)",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "customers"
+    },
+    "desktop_files": {
+      "_evidence": {
+        "code_read": [
+          "index.js:47",
+          "index.js:572",
+          "index.js:580"
+        ],
+        "code_write": [],
+        "declaration_basis": "Strang FIX7 (v4/tools/textdiaet/FIX7.md): Neue Anfrage wählt Dokument aus documents/desktop_files und Unterzeichner aus customer_contacts/applications (nur lesen, Namen statt IDs)",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "desktop"
+    },
+    "documents": {
+      "_evidence": {
+        "code_read": [
+          "index.js:47"
+        ],
+        "code_write": [],
+        "declaration_basis": "Strang FIX7 (v4/tools/textdiaet/FIX7.md): Neue Anfrage wählt Dokument aus documents/desktop_files und Unterzeichner aus customer_contacts/applications (nur lesen, Namen statt IDs)",
+        "sources": [
+          "code",
+          "v4-manifest.json"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "documents"
+    },
+    "interview_meetings": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:198"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "interviews"
+    },
+    "interview_scorecards": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:198"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "interviews"
+    },
+    "offers": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "placements"
+    },
+    "placements": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "placements"
+    },
+    "planning_time_records": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:198"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "shiftflow"
+    },
+    "submissions": {
+      "_evidence": {
+        "code_read": [
+          "handlers/_ats.js:197"
+        ],
+        "code_write": [],
+        "sources": [
+          "code"
+        ]
+      },
+      "_proposal": "nur per Code-Literal erkannt (Zeilen-Scan), Nutzung bestätigen",
+      "ops": [
+        "read"
+      ],
+      "owner_app": "submissions"
+    }
+  },
+  "handlers": {},
+  "layout": {
+    "_icon_asset_source": "shared/assets/workjet-icons/operator-selection-v1/esign.jpg (shared/operator-icon-selection.js, sha256 766c1175e036…, 1024 px; Paket: 256 px + 512 px laut v4/tools/manifest/icon-derivations.json; Shell-V2 zeigt dasselbe Bild)",
+    "_icon_file": "icon.svg",
+    "category": "Operations",
+    "icon_asset": "assets/icon.jpg",
+    "icon_asset_srcset": "assets/icon.jpg 1x, assets/icon@512.jpg 2x",
+    "multi_instance": false,
+    "presentation": {
+      "auto_restore": false,
+      "default_mode": "window",
+      "initial_size": {
+        "height": 680,
+        "width": 960
+      },
+      "minimum_size": {
+        "height": 480,
+        "width": 640
+      },
+      "mobile": {
+        "accent": "#7c3aed",
+        "category": "Governance",
+        "iconAssetId": "workjet.business-os.esign",
+        "iconFamilyVersion": 1,
+        "iconRequired": true,
+        "mobilePresentation": "document",
+        "phoneReady": true,
+        "tabletReady": true,
+        "title": "E-Signatur"
+      },
+      "multi_instance": false,
+      "supported_modes": [
+        "window",
+        "maximized",
+        "focus"
+      ]
+    },
+    "shell": "windowed"
+  },
+  "legacy": [],
+  "migrations": {},
+  "min_app_api": "4.0",
+  "provenance": {
+    "base_hash": "ba117cc067935c1e76f1a31af858f75a1ab80a697e5f145d6f2e86c6012e1a94",
+    "base_release": "main@4794af03d",
+    "locally_modified": false
+  },
+  "styles": [
+    "index.css"
+  ],
+  "title": "E-Signatur",
+  "triggers": [],
+  "version": "0.2.1"
+}

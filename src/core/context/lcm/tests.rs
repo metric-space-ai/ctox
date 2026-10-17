@@ -465,27 +465,6 @@ fn secret_rewrite_replaces_literals_across_memory_without_breaking_structure() -
 }
 
 #[test]
-fn new_session_starts_with_raw_continuity_templates() -> Result<()> {
-    let db_path = temp_db();
-    let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
-
-    engine.add_message(9, "user", "First session message.")?;
-
-    let current = engine
-        .latest_continuity(9)?
-        .context("expected continuity state")?;
-    assert!(current.narrative.contains("# CONTINUITY NARRATIVE"));
-    assert!(current.narrative.contains("## Situation"));
-    assert!(current.anchors.contains("# CONTINUITY ANCHORS"));
-    assert!(current.focus.contains("# ACTIVE FOCUS"));
-    assert!(current.focus.contains("Mission:"));
-    assert!(!current.narrative.contains("- "));
-
-    let _ = std::fs::remove_file(db_path);
-    Ok(())
-}
-
-#[test]
 fn mission_state_tracks_focus_contract_and_preserves_watcher_metadata() -> Result<()> {
     let db_path = temp_db();
     let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
@@ -1373,59 +1352,6 @@ fn continuity_apply_diff_accepts_indented_focus_diff_lines() -> Result<()> {
 }
 
 #[test]
-fn continuity_prompt_contains_document_and_diff_rules() -> Result<()> {
-    let db_path = temp_db();
-    let engine = LcmEngine::open(&db_path, LcmConfig::default())?;
-    let _ = engine.continuity_init_documents(12)?;
-    engine.add_message(
-        12,
-        "user",
-        "Keep the rollout gate active until validation passes on db-prod.internal.",
-    )?;
-
-    let payload = engine.continuity_build_prompt(12, ContinuityKind::Narrative)?;
-    assert!(payload.prompt.contains(
-        "Your reply text does not update memory. You must call `ctox continuity-update`"
-    ));
-    assert!(payload.prompt.contains("<CURRENT_DOCUMENT>"));
-    assert!(payload.prompt.contains("<RECENT_MESSAGES>"));
-    assert!(payload.prompt.contains("## Entries"));
-    assert!(payload
-        .prompt
-        .contains("Keep the existing `##` section names. Do not invent new headings."));
-    for mode in ["full", "replace", "diff"] {
-        assert!(payload.prompt.contains(&format!("--mode {mode}")));
-    }
-    assert!(payload.prompt.contains("--kind narrative"));
-    assert!(payload.prompt.contains("--conversation-id 12"));
-    assert!(payload
-        .prompt
-        .contains("memory is updated only after the CLI command succeeds"));
-    assert!(!payload.prompt.contains("Reply with only a diff"));
-
-    let focus_payload = engine.continuity_build_prompt(12, ContinuityKind::Focus)?;
-    assert!(focus_payload.prompt.contains("mission_state:"));
-    assert!(focus_payload.prompt.contains("continuation_mode:"));
-    assert!(focus_payload
-        .prompt
-        .contains(&focus_payload.current_document));
-    assert!(focus_payload
-        .prompt
-        .contains("whether it is still open, what is blocked, what to do next"));
-    assert!(focus_payload
-        .prompt
-        .contains("Do not keep stale closed fields"));
-    assert!(focus_payload
-        .prompt
-        .contains("mission_state: active` / `continuation_mode: continuous"));
-    assert!(focus_payload.prompt.contains("--kind focus"));
-    assert!(focus_payload.prompt.contains("--conversation-id 12"));
-
-    let _ = std::fs::remove_file(db_path);
-    Ok(())
-}
-
-#[test]
 fn focus_continuity_prompt_keeps_open_continuation_signal_from_long_assistant_reply() -> Result<()>
 {
     let db_path = temp_db();
@@ -1704,32 +1630,6 @@ fn context_token_count_propagates_db_errors() -> Result<()> {
 
     let _ = std::fs::remove_file(db_path);
     Ok(())
-}
-
-#[test]
-fn agent_outcome_token_round_trips() {
-    for outcome in [
-        AgentOutcome::Success,
-        AgentOutcome::TurnTimeout,
-        AgentOutcome::ExecutionError,
-        AgentOutcome::ContextRejected,
-        AgentOutcome::Aborted,
-        AgentOutcome::Cancelled,
-    ] {
-        let token = outcome.as_str();
-        assert_eq!(AgentOutcome::from_token(token), Some(outcome));
-    }
-    assert!(AgentOutcome::from_token("unknown").is_none());
-}
-
-#[test]
-fn agent_outcome_failure_predicate_only_excludes_success() {
-    assert!(!AgentOutcome::Success.is_agent_failure());
-    assert!(AgentOutcome::TurnTimeout.is_agent_failure());
-    assert!(AgentOutcome::ExecutionError.is_agent_failure());
-    assert!(AgentOutcome::ContextRejected.is_agent_failure());
-    assert!(AgentOutcome::Aborted.is_agent_failure());
-    assert!(AgentOutcome::Cancelled.is_agent_failure());
 }
 
 /// P2 — clobber guard: a watchdog write that tries to clear

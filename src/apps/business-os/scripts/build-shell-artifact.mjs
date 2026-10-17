@@ -6,6 +6,7 @@ import {
   mkdir,
   open,
   readdir,
+  readFile,
   rm,
   stat,
   unlink,
@@ -38,7 +39,12 @@ export const RUNTIME_TREES = Object.freeze([
   'template-store',
   'themes',
   'ui-contract',
+  // Shell v4 (M7): Rahmen, Shell-Laufzeit, Code-Ansicht, Boot, Manifeste; Labor/Werkzeuge siehe Ausschlüsse unten.
+  'v4',
   'vendor',
+  // E38: Kern-Bootstrap (kernel/boot.mjs, loader.mjs, kernel.mjs, …); der Daemon liefert ihn unter /kernel/* aus.
+  // Tests, Testkit und Fake-Core bleiben draußen (siehe Ausschlüsse).
+  'kernel',
 ]);
 export const MAX_RUNTIME_FILE_COUNT = 20_000;
 export const MAX_RUNTIME_FILE_BYTES = 512 * 1024 * 1024;
@@ -82,9 +88,44 @@ const EXCLUDED_DIRECTORIES = new Set([
   'tmp',
   'temp',
 ]);
+// v4: Dateien, auf die v4/manifests/*.manifest.json (Basis-Apps, nicht customer-modules) verweisen – Pfad relativ zur
+// Shell-Wurzel. Wird in collectRuntimePayload gesetzt; außerhalb (z. B. gen-manifest) leer.
+let MANIFEST_REFERENCED = new Set();
+let CUSTOMER_MANIFESTS = new Set();
+export async function manifestReferencedFiles(root) {
+  const out = new Set();
+  CUSTOMER_MANIFESTS = new Set();
+  let names = [];
+  try { names = (await readdir(resolve(root, 'v4', 'manifests'))).filter((n) => n.endsWith('.manifest.json')); } catch { return out; }
+  for (const name of names) {
+    let m;
+    try { m = JSON.parse(await readFile(resolve(root, 'v4', 'manifests', name), 'utf8')); } catch { continue; }
+    const src = String(m?._source_dir || '').replace(/^src\/apps\/business-os\/?/, '');
+    if (src.startsWith('customer-modules/')) { CUSTOMER_MANIFESTS.add(`v4/manifests/${name}`); continue; }
+    const files = Array.isArray(m?.files) ? m.files : Object.keys(m?.files || {});
+    for (const f of files) out.add(src ? `${src}/${f}` : f);
+  }
+  return out;
+}
+// E31.3: Pflichtdatei unter v4/tools, die trotz Ausschluss von v4/tools in den Slot gehört.
+export const V4_REQUIRED_TOOL_FILES = new Set(['v4/tools/manifest/out/ownership.json']);
 const EXCLUDED_UNWIRED_RUNTIME_PREFIXES = Object.freeze([
   'public/calendar-booking',
+  // Shell v4: Prüfstände, Entwicklerwerkzeuge, Schuldenbuch und Abnahmeläufe gehören nicht ins Laufzeit-Artefakt.
+  'v4/frame/lab',
+  'v4/lab',
+  'v4/tools',
+  'v4/debt',
+  'v4/k24',
+  'v4/os-primitives',
+  // E38: nur der Kern-Bootstrap, keine Prüfstände des Kerns.
+  'kernel/tests',
+  'kernel/testkit',
 ]);
+// E38: Fake-Core (Test-Core des Kerns) und Kern-Doku gehören nicht in den Slot.
+const EXCLUDED_KERNEL_FILE = /^kernel\/(?:fake-core[^/]*\.mjs|[^/]*\.md)$/;
+// E38: Einstieg der Shell v4 (Daemon GET / → v4/index.html, Seite lädt v4/boot.js); Pflicht, sobald v4 im Slot ist.
+export const V4_ENTRY_FILES = Object.freeze(['v4/index.html', 'v4/boot.js']);
 const GENERATED_DIRECTORY = /^(?:build|release|cache|local[-_]?state)(?:[._-].*)?$/i;
 const GENERATED_FILE_TOKEN = /(?:^|[._-])(?:build|release|cache|local[-_]?state)(?:[._-]|$)/i;
 const REQUIRED_RUNTIME_PATHS = new Set([
@@ -136,9 +177,13 @@ export function validateRelativePath(relativePath) {
 
 export function isExcludedRuntimePath(relativePath, { directory = false } = {}) {
   validateRelativePath(relativePath);
+  // E31.3: der Basis-Release-Import des Kerns (schema.rs load_base_release) liest die Eigentumszuordnung aus dem Slot.
+  if (V4_REQUIRED_TOOL_FILES.has(relativePath)) return false;
+  if (directory && [...V4_REQUIRED_TOOL_FILES].some((f) => f.startsWith(`${relativePath}/`))) return false;
   if (EXCLUDED_UNWIRED_RUNTIME_PREFIXES.some((prefix) => (
     relativePath === prefix || relativePath.startsWith(`${prefix}/`)
   ))) return true;
+  if (!directory && EXCLUDED_KERNEL_FILE.test(relativePath)) return true;
   const segments = relativePath.split('/');
   const basename = segments.at(-1);
   const lowerSegments = segments.map((segment) => segment.toLowerCase());
@@ -151,9 +196,14 @@ export function isExcludedRuntimePath(relativePath, { directory = false } = {}) 
     return true;
   }
   if (basename === '.DS_Store' || PACKAGE_LOCKS.has(basename.toLowerCase())) return true;
+  // Shell v4: Berichte und Notizen (*.md) unter v4/ sind Entwicklerdokumentation, kein Laufzeitinhalt.
+  if (!directory && relativePath.startsWith('v4/') && /\.md$/i.test(basename)) return true;
   if (/^(?:agents|claude)(?:\..*)?$/i.test(basename)) return true;
   if (!directory && REQUIRED_RUNTIME_PATHS.has(relativePath)) return false;
   if (!directory && RUNTIME_NOTICE_FILE.test(basename)) return false;
+  // Von einem v4-App-Manifest referenzierte Dateien sind Laufzeitinhalt, auch wenn ihr Name „build“, „release“ oder
+  // „test“ enthält (z. B. handlers/ctox.queue.release.js); siehe manifestReferencedFiles.
+  if (!directory && MANIFEST_REFERENCED.has(relativePath)) return false;
   if (!directory && (TEST_FILE_TOKEN.test(basename) || GENERATED_FILE_TOKEN.test(basename))) return true;
   return false;
 }
@@ -360,6 +410,7 @@ async function collectTree(sourceRoot, relativeDirectory, directories, files, bu
 
 export async function collectRuntimePayload(sourceRoot) {
   const absoluteSourceRoot = resolve(sourceRoot);
+  MANIFEST_REFERENCED = await manifestReferencedFiles(absoluteSourceRoot);
   await assertDirectoryNoSymlink(absoluteSourceRoot, absoluteSourceRoot);
   const directories = [];
   const files = [];
@@ -383,12 +434,21 @@ export async function collectRuntimePayload(sourceRoot) {
     }
   }
 
+  // Manifeste von Kunden-Apps (customer-modules/*) gehören nicht in einen globalen Shell-Release (wie die Apps selbst).
+  for (let i = files.length - 1; i >= 0; i -= 1) {
+    if (CUSTOMER_MANIFESTS.has(files[i].path)) files.splice(i, 1);
+  }
   files.sort((left, right) => comparePaths(left.path, right.path));
   directories.sort(comparePaths);
   const payloadPaths = new Set(files.map((file) => file.path));
   for (const relativePath of REQUIRED_PAYLOAD_FILES) {
     if (!payloadPaths.has(relativePath)) {
       throw new Error(`Required runtime file is missing: ${relativePath}`);
+    }
+  }
+  if ([...payloadPaths].some((p) => p.startsWith('v4/'))) {
+    for (const relativePath of V4_ENTRY_FILES) {
+      if (!payloadPaths.has(relativePath)) throw new Error(`Required runtime file is missing: ${relativePath}`);
     }
   }
   return { directories, files };

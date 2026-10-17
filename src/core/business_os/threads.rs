@@ -237,6 +237,7 @@ pub(super) fn may_accept_peer_write(root: &Path, token: &str, collection: &str) 
 /// these have a browser write path (unlike e.g. `desktop_files`, which the
 /// desktop apps legitimately create and therefore stays writable).
 const NATIVE_PROJECTION_COLLECTIONS: &[&str] = &[
+    "planned_steps",
     "ctox_crew_members",
     "ctox_crew_learnings",
     "ctox_harness_events",
@@ -417,6 +418,11 @@ impl ReplicationPolicyReader for RootReplicationReader<'_> {
         document: &Value,
         user: &str,
     ) -> Option<bool> {
+        if collection == "planned_steps" {
+            return Some(super::project_chats::plan_state::visible_from_root(
+                self.root, document, user,
+            ));
+        }
         if collection == super::provider_federation::REGISTRY_COLLECTION {
             let decision = (|| -> anyhow::Result<bool> {
                 let conn = Connection::open_with_flags(
@@ -467,6 +473,12 @@ impl ReplicationPolicyReader for HeldReplicationReader<'_> {
         document: &Value,
         user: &str,
     ) -> Option<bool> {
+        if collection == "planned_steps" {
+            return Some(
+                super::project_chats::plan_state::visible(self.core, self.store, document, user)
+                    .unwrap_or(false),
+            );
+        }
         if collection == super::provider_federation::REGISTRY_COLLECTION {
             return Some(
                 super::provider_federation::projection_visible(self.store, document, user)
@@ -1416,6 +1428,55 @@ fn create_message(
     }))
 }
 
+/// E54: choices are an app's question to a user, never delegated permission
+/// to execute the privileged target of an ordinary approval request.
+fn decision_request_app(
+    command: &BusinessCommand,
+    source: &Value,
+) -> anyhow::Result<Option<String>> {
+    let Some(options) = command.payload.get("decision_options") else {
+        return Ok(None);
+    };
+    let options = options
+        .as_array()
+        .context("decision_options must be an array")?;
+    anyhow::ensure!(
+        !options.is_empty() && options.len() <= 32,
+        "decision_options must contain 1..32 choices"
+    );
+    let mut ids = BTreeSet::new();
+    for option in options {
+        let id = option
+            .as_str()
+            .or_else(|| option.get("id").and_then(Value::as_str))
+            .context("decision option requires a string id")?;
+        anyhow::ensure!(
+            !id.trim().is_empty()
+                && id.len() <= 180
+                && !id.chars().any(char::is_control)
+                && ids.insert(id),
+            "decision option ids must be bounded and unique"
+        );
+        if let Some(object) = option.as_object() {
+            anyhow::ensure!(
+                object
+                    .keys()
+                    .all(|k| matches!(k.as_str(), "id" | "label" | "description"))
+                    && object
+                        .values()
+                        .all(|v| v.as_str().is_some_and(|s| s.len() <= 2048)),
+                "invalid decision option metadata"
+            );
+        }
+    }
+    let app = source_string(source, "module").context("decision requester app is required")?;
+    anyhow::ensure!(
+        !app.trim().is_empty() && app.len() <= 180 && !app.chars().any(char::is_control),
+        "invalid decision requester app"
+    );
+    Ok(Some(app))
+}
+
 fn request_approval(
     root: &Path,
     session: &BusinessOsSession,
@@ -1427,6 +1488,7 @@ fn request_approval(
     let reviewer_display_name = active_business_user_display_name(root, &reviewer_user_id)?;
     let source = source_context(command);
     ensure_source_context_read_policy(root, session, &source)?;
+    let decision_app = decision_request_app(command, &source)?;
     let thread_id = thread_id_for_command(command, &source);
     ensure_existing_thread_participant_or_admin(root, session, &thread_id)?;
     let approval_id = first_string_field(&command.payload, &["approval_request_id", "id"])
@@ -1443,7 +1505,7 @@ fn request_approval(
         == Some(true)
         && is_admin_session(session);
     anyhow::ensure!(
-        reviewer_user_id != actor || self_approval_override,
+        decision_app.is_some() || reviewer_user_id != actor || self_approval_override,
         "requester cannot assign themselves as approval reviewer"
     );
     let participants = participant_set(
@@ -1653,6 +1715,10 @@ fn approve_approval(
     ensure_pending_approval(&approval)?;
     ensure_approval_version(command, &approval)?;
     ensure_reviewer_or_admin(session, &approval)?;
+    if approval["requester_kind"] == "app" {
+        ensure_source_context_read_policy(root, session, &approval["source_context"])?;
+        return decide_without_queue(root, session, command, "approved", "approval_approved");
+    }
     ensure_approval_target_policy(root, session, &approval)?;
 
     let approved = enqueue_approved_ctox_command(root, session, &approval, command)?;
@@ -1799,6 +1865,13 @@ fn decide_without_queue(
         .unwrap_or_else(|| thread_source_context(&approval).unwrap_or_else(|| json!({})));
     let requester = value_string(&approval, "requester_user_id");
     let prompt = value_string(&approval, "prompt");
+    // The app is the decision principal; user notifications still go to the
+    // authenticated initiator retained for audit, never an empty user id.
+    let requester = if requester.is_empty() && approval["requester_kind"] == "app" {
+        value_string(&approval, "requested_by_user_id")
+    } else {
+        requester
+    };
     let decision_note =
         first_string_field(&command.payload, &["decision_note", "note"]).unwrap_or_default();
     let message_body = if decision_note.is_empty() {
@@ -1811,6 +1884,22 @@ fn decide_without_queue(
     let mut projections = Vec::new();
     let mut next = approval.clone();
     set_object_string(&mut next, "status", status);
+    let choice = if approval["requester_kind"] == "app" && status == "approved" {
+        let choice = required_string(&command.payload, &["decision_option_id", "decision_option"])?;
+        anyhow::ensure!(
+            approval["decision_options"]
+                .as_array()
+                .is_some_and(|options| options.iter().any(|option| option
+                    .as_str()
+                    .or_else(|| option.get("id").and_then(Value::as_str))
+                    == Some(choice.as_str()))),
+            "unknown decision option"
+        );
+        set_object_string(&mut next, "decision_option_id", &choice);
+        Some(choice)
+    } else {
+        None
+    };
     set_object_i64(&mut next, "decided_at_ms", now);
     set_object_string(&mut next, "decision_by_id", &actor_id(session));
     set_object_string(&mut next, "decision_note", &decision_note);
@@ -1867,7 +1956,9 @@ fn decide_without_queue(
         &approval_id,
         message_kind,
         std::slice::from_ref(&requester),
-        if status == "rejected" {
+        if status == "approved" {
+            "Entscheidung gespeichert"
+        } else if status == "rejected" {
             "CTOX Freigabe abgelehnt"
         } else {
             "CTOX Freigabe storniert"
@@ -1883,6 +1974,7 @@ fn decide_without_queue(
         "approval_request_id": approval_id,
         "thread_id": thread_id,
         "status": status,
+        "decision_option_id": choice,
         "projections": projection_values(projections),
     }))
 }
@@ -3405,6 +3497,7 @@ fn approval_record(
     now: i64,
     decided_at_ms: Option<i64>,
 ) -> Value {
+    let decision_app = decision_request_app(command, source).ok().flatten();
     let target_module = first_string_field(&command.payload, &["target_module"])
         .or_else(|| source_string(source, "module"))
         .unwrap_or_else(|| "ctox".to_owned());
@@ -3417,13 +3510,17 @@ fn approval_record(
         "approval_request_id": approval_id,
         "thread_id": thread_id,
         "status": status,
-        "requester_user_id": actor_id(session),
-        "requester_display_name": actor_display_name(session),
+        "requester_kind": if decision_app.is_some() {"app"} else {"user"},
+        "requester_app_id": decision_app.clone(),
+        "requested_by_user_id": actor_id(session),
+        "requester_user_id": if decision_app.is_some() {String::new()} else {actor_id(session)},
+        "requester_display_name": decision_app.clone().unwrap_or_else(||actor_display_name(session)),
+        "decision_options": command.payload.get("decision_options").cloned().unwrap_or(Value::Null),
         "reviewer_user_id": reviewer_user_id,
         "reviewer_display_name": reviewer_display_name,
         "prompt": prompt,
         "instruction": first_string_field(&command.payload, &["instruction"]).unwrap_or_else(|| prompt.to_owned()),
-        "target_command_type": first_string_field(&command.payload, &["target_command_type", "command_type"]).unwrap_or_else(|| "business_os.chat.task".to_owned()),
+        "target_command_type": if decision_app.is_some() {json!("")} else {json!(first_string_field(&command.payload, &["target_command_type", "command_type"]).unwrap_or_else(|| "business_os.chat.task".to_owned()))},
         "target_module": target_module,
         "target_record_id": target_record_id,
         "source_module": source_string(source, "module").unwrap_or_default(),
@@ -3437,7 +3534,7 @@ fn approval_record(
         "decision_note": decision_note,
         "approved_command_id": "",
         "approved_task_id": "",
-        "target_payload": command.payload.get("target_payload").cloned().unwrap_or_else(|| json!({})),
+        "target_payload": if decision_app.is_some() {json!({})} else {command.payload.get("target_payload").cloned().unwrap_or_else(|| json!({}))},
         "source_context": source,
         "client_context": command.client_context.clone(),
         "created_at_ms": now,
@@ -3554,6 +3651,12 @@ fn upsert_thread(
         );
         metadata["workjet_supervisor_contract"] =
             json!(super::project_chats::supervisor_binding::CONTRACT);
+        metadata["failed_step_id"] = json!(super::project_chats::plan_state::failed(
+            root,
+            &owner,
+            &binding.project_id,
+            &binding.thread_key
+        )?);
         metadata["workjet_supervisor"] = serde_json::to_value(binding)?;
     }
     let record = json!({
@@ -6216,6 +6319,138 @@ mod tests {
         );
         assert_eq!(bob.get("attention_score").and_then(Value::as_i64), Some(70));
         Ok(())
+    }
+
+    #[test]
+    fn e54_app_decision_preserves_privileged_self_review_boundary() -> anyhow::Result<()> {
+        use sha2::{Digest, Sha256};
+        println!(
+            "E54_THREADS_SOURCE_SHA256 {:x}",
+            Sha256::digest(include_bytes!("threads.rs"))
+        );
+        let temp = tempdir()?;
+        let owner_root = temp.path().to_owned();
+        let root = owner_root.clone();
+        crate::persistence::run_cli_owned(&owner_root, move || {
+            seed_threads_user(&root, "junior", "Junior", "user")?;
+            seed_threads_user(&root, "admin", "Admin", "admin")?;
+            let session = |id: &str, role: &str| BusinessOsSession {
+                ok: true,
+                authenticated: true,
+                auth_required: true,
+                user: Some(BusinessOsSessionUser {
+                    id: id.into(),
+                    display_name: id.into(),
+                    role: role.into(),
+                    is_admin: role == "admin",
+                }),
+                login_url: None,
+                reason: None,
+            };
+            let user = session("junior", "user");
+            let mut request = BusinessCommand {
+                id: Some("e54-request".into()),
+                module: "threads".into(),
+                command_type: "threads.ctox_approval.request".into(),
+                record_id: Some("e54-case".into()),
+                origin: CommandOrigin::ReplicatedPeer,
+                client_context: json!({}),
+                payload: json!({"approval_request_id":"e54-decision","prompt":"Choose an option","reviewer_user_id":"junior",
+                    "decision_options":[{"id":"yes","label":"Continue"},{"id":"no","label":"Stop"}],
+                    "target_command_type":"ctox.business_os.app.modify","target_payload":{"target":"app"},
+                    "source_context":{"module":"threads","record_type":"case","record_id":"e54-case"}}),
+            };
+            request_approval(&root, &user, &request)
+                .expect("E54: an app decision to the same user is not self-approval");
+            let saved = load_record(&root, "ctox_task_approval_requests", "e54-decision")?
+                .context("decision persisted")?;
+            let schema: Value = serde_json::from_str(include_str!(
+                "../../apps/business-os/v4/schemas/threads.collections.schema.json"
+            ))?;
+            assert_eq!(
+                schema["collections"]["ctox_task_approval_requests"]["properties"]
+                    ["target_command_type"]["type"],
+                "string",
+                "the base-release approval contract must remain compatible"
+            );
+            assert_eq!(saved["requester_kind"], "app");
+            assert_eq!(saved["requester_app_id"], "threads");
+            assert_eq!(saved["requester_user_id"], "");
+            assert_eq!(saved["requested_by_user_id"], "junior");
+            assert_eq!(saved["reviewer_user_id"], "junior");
+            assert_eq!(
+                saved["decision_options"],
+                request.payload["decision_options"]
+            );
+            assert!(
+                saved["target_command_type"].is_string() && saved["target_command_type"] == "",
+                "a choice is not delegated native authority"
+            );
+            assert_eq!(saved["target_payload"], json!({}));
+            request.id = Some("e54-plain".into());
+            request.payload["approval_request_id"] = json!("e54-plain");
+            request
+                .payload
+                .as_object_mut()
+                .unwrap()
+                .remove("decision_options");
+            request.payload["allow_self_approval_admin_override"] = json!(true);
+            assert!(
+                request_approval(&root, &user, &request).is_err(),
+                "E54: optionless self-review must remain denied to a user"
+            );
+            for malformed in [
+                Value::Null,
+                json!([]),
+                json!(["same", "same"]),
+                json!([{"id":"x","execute":"privileged"}]),
+            ] {
+                request.payload["decision_options"] = malformed;
+                assert!(
+                    request_approval(&root, &user, &request).is_err(),
+                    "malformed choices cannot bypass self-review"
+                );
+            }
+            request
+                .payload
+                .as_object_mut()
+                .unwrap()
+                .remove("decision_options");
+            request.id = Some("e54-admin".into());
+            request.payload["approval_request_id"] = json!("e54-admin");
+            request.payload["reviewer_user_id"] = json!("admin");
+            request_approval(&root, &session("admin", "admin"), &request)?;
+            let mut decide = BusinessCommand {
+                id: Some("e54-choice".into()),
+                module: "threads".into(),
+                command_type: "threads.ctox_approval.approve".into(),
+                record_id: Some("e54-decision".into()),
+                origin: CommandOrigin::ReplicatedPeer,
+                client_context: json!({}),
+                payload: json!({"approval_request_id":"e54-decision","expected_updated_at_ms":saved["updated_at_ms"],"decision_option_id":"unknown"}),
+            };
+            assert!(
+                approve_approval(&root, &user, &decide).is_err(),
+                "unknown choice must not close a decision"
+            );
+            decide.payload["decision_option_id"] = json!("yes");
+            let outcome = approve_approval(&root, &user, &decide)
+                .expect("E54: an app choice must finish without authorizing native execution");
+            assert_eq!(
+                outcome["decision_option_id"], "yes",
+                "E54: an app choice must finish without authorizing native execution"
+            );
+            let saved = load_record(&root, "ctox_task_approval_requests", "e54-decision")?.unwrap();
+            assert_eq!(saved["status"], "approved");
+            assert_eq!(saved["decision_option_id"], "yes");
+            assert_eq!(saved["approved_command_id"], "");
+            assert_eq!(
+                collection_document_count(&root, "ctox_queue_tasks")?,
+                0,
+                "E54: a user choice must never enqueue privileged execution"
+            );
+            Ok(())
+        })
     }
 
     #[test]

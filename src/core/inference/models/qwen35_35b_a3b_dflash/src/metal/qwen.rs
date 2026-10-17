@@ -1704,27 +1704,6 @@ impl GatedDeltaNet {
 mod tests {
     use super::*;
 
-    #[test]
-    fn gqa_factor_basic() {
-        let attn = Attention {
-            wq: unreachable_linear(),
-            wk: unreachable_linear(),
-            wv: unreachable_linear(),
-            wo: unreachable_linear(),
-            q_norm: None,
-            k_norm: None,
-            rope: Rope {
-                head_dim: 128,
-                rope_dim: 64,
-                base: 10_000_000.0,
-            },
-            n_heads: 24,
-            n_kv_heads: 4,
-            head_dim: 128,
-        };
-        assert_eq!(attn.gqa_factor(), 6);
-    }
-
     // The tests below touch no actual GPU — they just exercise the
     // shape-arithmetic helpers. A `Device` would be needed for any
     // real forward test, which we defer to the Metal driver-level

@@ -1,0 +1,12 @@
+{
+  "_basis": {
+    "multi_instance": "modules/calendar/V4-PORT.md OFFEN 3; v4/frame/INTEGRATION.md FR2-4 (Apps mit modulweitem Zustand: multi_instance:false)",
+    "styles": "modules/calendar/V4-PORT.md OFFEN 4 / „Manifest-Bedarf styles“"
+  },
+  "_format": "ctox-shell-v4-app-declaration-1",
+  "_note": "Deklaration für gen-manifest.mjs (Strang MAN): nur Angaben, die sich nicht aus dem Code ableiten lassen. _basis = Fundstelle je Feld.",
+  "multi_instance": false,
+  "styles": [
+    "vendor/event-calendar/event-calendar.min.css"
+  ]
+}

@@ -103,12 +103,7 @@ impl GgmlBackendCtx {
     /// Reserve a tensor slot. Device memory is still unallocated;
     /// call [`realize`] after declaring all tensors to get a real
     /// CUdeviceptr out of `tensor->data`.
-    pub fn new_tensor(
-        &self,
-        dtype: DType,
-        ne: [i64; 4],
-        name: &str,
-    ) -> *mut sys::ggml_tensor {
+    pub fn new_tensor(&self, dtype: DType, ne: [i64; 4], name: &str) -> *mut sys::ggml_tensor {
         let t = unsafe {
             sys::ggml_new_tensor_4d(self.ctx, dtype_to_ggml(dtype), ne[0], ne[1], ne[2], ne[3])
         };
@@ -142,11 +137,9 @@ impl GgmlBackendCtx {
     }
 
     /// Upload host f32 data to a tensor already realized on the GPU.
-    pub fn upload_f32(
-        &self,
-        t: *mut sys::ggml_tensor,
-        host: &[f32],
-    ) -> Result<(), String> {
+    /// # Safety
+    /// All raw handles must remain valid and belong to the live ggml backend.
+    pub unsafe fn upload_f32(&self, t: *mut sys::ggml_tensor, host: &[f32]) -> Result<(), String> {
         if t.is_null() || self.buffer.is_null() {
             return Err("upload_f32: tensor null or context not realized".into());
         }
@@ -159,7 +152,13 @@ impl GgmlBackendCtx {
 
     /// Download a tensor back to host f32. `n` must match the
     /// tensor's element count.
-    pub fn download_f32(&self, t: *mut sys::ggml_tensor, n: usize) -> Result<Vec<f32>, String> {
+    /// # Safety
+    /// All raw handles must remain valid and belong to the live ggml backend.
+    pub unsafe fn download_f32(
+        &self,
+        t: *mut sys::ggml_tensor,
+        n: usize,
+    ) -> Result<Vec<f32>, String> {
         let mut out = vec![0.0_f32; n];
         let bytes = n * std::mem::size_of::<f32>();
         unsafe {
@@ -171,7 +170,9 @@ impl GgmlBackendCtx {
     /// Extract a [`Tensor`] view suitable for the Rust-native
     /// dispatcher. The returned Tensor aliases the ggml tensor's
     /// device memory — no copy, just a handle translation.
-    pub fn as_rust_tensor(&self, t: *mut sys::ggml_tensor) -> Tensor {
+    /// # Safety
+    /// All raw handles must remain valid and belong to the live ggml backend.
+    pub unsafe fn as_rust_tensor(&self, t: *mut sys::ggml_tensor) -> Tensor {
         unsafe {
             let ne = (*t).ne;
             let dtype = match (*t).type_ {

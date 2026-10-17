@@ -19,7 +19,11 @@ cluster: research
 `payload.record_snapshot.topic` — title, prompt (the editorial focus), language,
 categories, `max_posts`. `payload.record_snapshot.sources` — the enabled
 sources of this topic. `payload.issue_id`, `payload.issue_date`,
-`payload.previous_issue_id`. Only these sources plus open web search are in
+`payload.previous_issue_id`, `payload.window_start` (ISO time; nothing older
+belongs in the issue) and `payload.covered_urls` (primary links earlier issues
+of this topic already carried). `payload.mode` is `weekly_digest` for the
+weekly summary of a daily topic; then follow "Weekly digest" below instead
+of collecting. Only these sources plus open web search are in
 scope; do not invent sources the topic did not configure, except to confirm or
 complete a story found through them.
 
@@ -123,24 +127,48 @@ The owner asked CTOX to set up its own account for this source.
  "account": "<username or e-mail, no password>", "note": "<one sentence for the owner>"}
 ```
 
-Time window: since the previous issue (`previous_issue_id`), otherwise the last
-24 hours for daily topics and 7 days for weekly ones.
+## Freshness window (enforced)
+
+The window runs from `payload.window_start` to now: since the previous issue,
+otherwise the last 24 hours for daily topics and 7 days for weekly ones.
+
+- A story belongs in the issue only when its **primary source** (the lab post,
+  model card, paper, release note) was first published inside the window. A
+  Hacker News thread, a newsletter or a trending list that is new today does
+  not make an older story new.
+- `published_at` is the primary source's publication time (ISO 8601, read from
+  the page: `datePublished`, `article:published_time`, the release tag date,
+  the arXiv submission date). Never use the time you found the story.
+- The writeback drops every post without `published_at`, with `published_at`
+  before the window (6 hours of slack), and every post whose primary link is in
+  `covered_urls`. Dropped posts are listed on the issue as rejected — they
+  are not hidden successes, so do not send them.
+- Write "heute"/"today" only when the primary source was published on
+  `issue_date`; otherwise name the day ("am Montag", "on 13 October").
+- A quiet window is a valid result: send fewer posts rather than filling up
+  with older material.
 
 ## Editorial rules
 
 1. One post per story. Merge duplicate coverage into the strongest primary
-   source; list the others as additional `sources`.
+   source; list the others as additional `sources`. A story whose primary link
+   is in `covered_urls` is not repeated — not even as a "follow-up" with new
+   point counts. Only a new primary source (a new release, a paper, an
+   official statement) makes it a new story.
 2. Primary source first: the lab's own post, model card, paper, repo or
    release note. A newsletter or aggregator is never the only source when the
    primary exists.
-3. `intro`: one or two sentences, what happened and why it matters — written
-   like a good X post, no hashtags, no emoji, in the topic language.
+3. `intro`: one or two sentences on the substance — what the model, paper,
+   product or decision does and why it matters — written like a good X post,
+   no hashtags, no emoji, in the topic language. Hacker News points, comment
+   counts, star counts and "Stand … UTC" never appear in the intro.
 4. `body`: the long form — concrete facts (numbers, availability, pricing,
    licence, benchmarks with their caveats), what is new versus the previous
-   version, and what the discussion says. Separate paragraphs with a blank
-   line. No speculation presented as fact.
-5. `quote`: optional, one telling comment from the discussion (HN, Reddit, X)
-   with its link.
+   version, and in one closing sentence at most what the discussion says.
+   Separate paragraphs with a blank line. No speculation presented as fact.
+5. `quote`: optional, one telling statement from the primary source, an
+   author or a named expert (X, Reddit, a lab blog) with its link. Never quote
+   Hacker News comments — the writeback removes them.
 6. `hype_score` 0–100 reflects measured attention (points, comments, reposts,
    coverage breadth), not your opinion. `discussion_count` is the summed
    comment/reply count you actually observed.
@@ -148,7 +176,45 @@ Time window: since the previous issue (`previous_issue_id`), otherwise the last
    development; then say what changed.
 8. Order `posts` by relevance to the topic prompt; the app numbers them.
 9. Respect `max_posts` and `categories` (`model`, `tool`, `research`,
-   `debate`; anything else becomes `other`).
+   `debate`; anything else becomes `other`). Category follows what the story
+   is, not where it was discussed: a new or updated model, model card or
+   weights → `model`; a library, app, SDK, agent framework or product feature
+   → `tool`; a paper, benchmark or study → `research`; policy, safety claims,
+   lawsuits, business and opinion pieces → `debate`.
+10. Trending repositories (GitHub, Hugging Face) are news only with a real
+    release inside the window (a tagged release, a new model upload, a launch
+    post). An older repo that is merely trending again is not a story.
+11. `author_name`/`author_handle` are the organisation or person that
+    published the primary source (Google DeepMind for a DeepMind model card,
+    Meta AI for a Meta paper), not the outlet that reported it and not the
+    aggregator. Outlets are `author_kind: media` only when the outlet's own
+    reporting is the primary source.
+12. `link_card.title` is the primary page's real title (`<title>` or
+    `og:title`), copied, not paraphrased.
+13. `trends`: three to five short theme labels (at most 60 characters, no
+    parentheses, no lists of products), each with the `discussion_count` you
+    measured and the `post_index` of its post. Parenthetical additions are cut
+    by the writeback.
+
+## Weekly digest (`payload.mode: weekly_digest`)
+
+The digest re-tells the week from the topic's own daily issues; it is not a
+new research run.
+
+- Input is `payload.digest_posts` (the week's daily posts, strongest first,
+  with their links, dates and counts). Read nothing else: no source reads,
+  no web search. A post whose primary link is not among the week's posts is
+  dropped by the writeback (`not_in_week`).
+- Merge posts that tell the same story across days into one post; keep the
+  original primary source as `link_card` and its `published_at`, and say in the
+  body how the story developed during the week.
+- Pick the top stories of the week (at most `record_snapshot.topic.max_posts`)
+  by relevance to the topic prompt first, measured attention second.
+- `intro` says what happened this week and why it mattered; the editorial
+  rules above (substance, categories, poster, titles) apply unchanged.
+- `trends` are the three to five themes of the week with summed
+  `discussion_count`; `summary` is two or three sentences on the week.
+- Reply with the same `ctox.news.issue.v1` object; `source_report` stays empty.
 
 ## Reply contract — `ctox.news.issue.v1`
 
@@ -198,6 +264,8 @@ source (`record_snapshot.sources[].id`) one status — `ok`, `needs_auth` or
 ## Done when
 
 - Every configured source was read or its failure is named in `source_report`.
-- Every post links its primary source.
+- Every post links its primary source and carries that source's `published_at`
+  inside the window.
+- No post repeats a link from `covered_urls`.
 - The reply is the JSON object above and nothing the writeback would drop
   silently.

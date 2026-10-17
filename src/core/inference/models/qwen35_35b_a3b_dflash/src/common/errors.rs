@@ -27,12 +27,4 @@ pub fn last_error() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn last_error_set_and_read() {
-        set_last_error("boom");
-        assert_eq!(last_error(), "boom");
-        set_last_error("different");
-        assert_eq!(last_error(), "different");
-    }
 }

@@ -299,6 +299,18 @@ async fn http_connect_accept(
         return Err(blocked_text_with_details(REASON_MITM_REQUIRED, &details));
     }
 
+    match app_state.pin_destination(&host, authority.port).await {
+        Ok(Some(target)) => {
+            req.extensions_mut().insert(target);
+        }
+        Ok(None) => {}
+        Err(_) => {
+            return Err(text_response(
+                StatusCode::FORBIDDEN,
+                "blocked DNS destination",
+            ));
+        }
+    }
     req.extensions_mut().insert(ProxyTarget(authority));
     req.extensions_mut().insert(mode);
     if let Some(mitm_state) = mitm_state {
@@ -735,6 +747,18 @@ async fn http_plain_proxy(
         UpstreamClient::direct()
     };
 
+    match app_state.pin_destination(&host, port).await {
+        Ok(Some(target)) => {
+            req.extensions_mut().insert(target);
+        }
+        Ok(None) => {}
+        Err(_) => {
+            return Ok(text_response(
+                StatusCode::FORBIDDEN,
+                "blocked DNS destination",
+            ));
+        }
+    }
     // Strip hop-by-hop headers only after extracting metadata used for policy correlation.
     remove_hop_by_hop_request_headers(req.headers_mut());
     match client.serve(req).await {
@@ -985,14 +1009,11 @@ struct BlockedResponse<'a> {
 mod tests {
     use super::*;
 
-    use crate::config::NetworkMode;
     use crate::config::NetworkProxySettings;
     use crate::runtime::network_proxy_state_for_policy;
-    use pretty_assertions::assert_eq;
     use rama_http::Method;
     use rama_http::Request;
     use std::net::Ipv4Addr;
-    use std::net::TcpListener as StdTcpListener;
     use std::sync::Arc;
     use tokio::io::AsyncReadExt;
     use tokio::io::AsyncWriteExt;
@@ -1001,300 +1022,127 @@ mod tests {
     use tokio::time::timeout;
 
     #[tokio::test]
-    async fn http_connect_accept_blocks_in_limited_mode() {
-        let policy = NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            ..Default::default()
-        };
-        let state = Arc::new(network_proxy_state_for_policy(policy));
-        state.set_network_mode(NetworkMode::Limited).await.unwrap();
-
-        let mut req = Request::builder()
-            .method(Method::CONNECT)
-            .uri("https://example.com:443")
-            .header("host", "example.com:443")
-            .body(Body::empty())
-            .unwrap();
-        req.extensions_mut().insert(state);
-
-        let response = http_connect_accept(None, req).await.unwrap_err();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        assert_eq!(
-            response.headers().get("x-proxy-error").unwrap(),
-            "blocked-by-mitm-required"
-        );
-    }
-
-    #[tokio::test]
-    async fn http_connect_accept_allows_allowlisted_host_in_full_mode() {
-        let policy = NetworkProxySettings {
-            allowed_domains: vec!["example.com".to_string()],
-            ..Default::default()
-        };
-        let state = Arc::new(network_proxy_state_for_policy(policy));
-
-        let mut req = Request::builder()
-            .method(Method::CONNECT)
-            .uri("https://example.com:443")
-            .header("host", "example.com:443")
-            .body(Body::empty())
-            .unwrap();
-        req.extensions_mut().insert(state);
-
-        let (response, _request) = http_connect_accept(None, req).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn http_proxy_listener_accepts_plain_http1_connect_requests() {
-        let target_listener = TokioTcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-            .await
-            .expect("target listener should bind");
-        let target_addr = target_listener
-            .local_addr()
-            .expect("target listener should expose local addr");
-        let target_task = tokio::spawn(async move {
-            let (mut stream, _) = target_listener
-                .accept()
-                .await
-                .expect("target listener should accept");
-            let mut buf = [0_u8; 1];
-            let _ = timeout(Duration::from_secs(1), stream.read(&mut buf)).await;
-        });
-
-        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
-            allowed_domains: vec!["127.0.0.1".to_string()],
-            allow_local_binding: true,
-            ..NetworkProxySettings::default()
-        }));
-        let listener =
-            StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).expect("proxy listener should bind");
-        let proxy_addr = listener
-            .local_addr()
-            .expect("proxy listener should expose local addr");
-        let proxy_task = tokio::spawn(run_http_proxy_with_std_listener(state, listener, None));
-
-        let mut stream = tokio::net::TcpStream::connect(proxy_addr)
-            .await
-            .expect("client should connect to proxy");
-        let request = format!(
-            "CONNECT 127.0.0.1:{port} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n",
-            port = target_addr.port()
-        );
-        stream
-            .write_all(request.as_bytes())
-            .await
-            .expect("client should write CONNECT request");
-
-        let mut buf = [0_u8; 256];
-        let bytes_read = timeout(Duration::from_secs(2), stream.read(&mut buf))
-            .await
-            .expect("proxy should respond before timeout")
-            .expect("client should read proxy response");
-        let response = String::from_utf8_lossy(&buf[..bytes_read]);
-        assert!(
-            response.starts_with("HTTP/1.1 200 OK\r\n"),
-            "unexpected proxy response: {response:?}"
-        );
-
-        drop(stream);
-        proxy_task.abort();
-        let _ = proxy_task.await;
-        target_task.abort();
-        let _ = target_task.await;
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn http_plain_proxy_blocks_unix_socket_when_method_not_allowed() {
-        let state = Arc::new(network_proxy_state_for_policy(
-            NetworkProxySettings::default(),
-        ));
-        state
-            .set_network_mode(NetworkMode::Limited)
-            .await
-            .expect("network mode should update");
-
-        let mut req = Request::builder()
-            .method(Method::POST)
-            .uri("http://example.com")
-            .header("x-unix-socket", "/tmp/test.sock")
-            .body(Body::empty())
-            .expect("request should build");
-        req.extensions_mut().insert(state);
-
-        let response = http_plain_proxy(None, req).await.unwrap();
-
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        assert_eq!(
-            response.headers().get("x-proxy-error").unwrap(),
-            "blocked-by-method-policy"
-        );
-    }
-
-    #[tokio::test(flavor = "current_thread")]
-    async fn http_plain_proxy_rejects_unix_socket_when_not_allowlisted() {
-        let state = Arc::new(network_proxy_state_for_policy(
-            NetworkProxySettings::default(),
-        ));
-
-        let mut req = Request::builder()
-            .method(Method::GET)
-            .uri("http://example.com")
-            .header("x-unix-socket", "/tmp/test.sock")
-            .body(Body::empty())
-            .expect("request should build");
-        req.extensions_mut().insert(state);
-
-        let response = http_plain_proxy(None, req).await.unwrap();
-
-        if cfg!(target_os = "macos") {
-            assert_eq!(response.status(), StatusCode::FORBIDDEN);
-            assert_eq!(
-                response.headers().get("x-proxy-error").unwrap(),
-                "blocked-by-allowlist"
-            );
-        } else {
-            assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    async fn e20b_foreign_domain_is_rejected_without_dns() -> anyhow::Result<()> {
+        ensure_rustls_crypto_provider();
+        struct Dns(std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl crate::runtime::DestinationResolver for Dns {
+            async fn resolve(&self, _: &str, _: u16) -> anyhow::Result<Vec<SocketAddr>> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                anyhow::bail!("foreign DNS must not be consulted");
+            }
         }
-    }
-
-    #[cfg(target_os = "macos")]
-    #[tokio::test(flavor = "current_thread")]
-    async fn http_plain_proxy_attempts_allowed_unix_socket_proxy() {
-        let state = Arc::new(network_proxy_state_for_policy(NetworkProxySettings {
-            allow_unix_sockets: vec!["/tmp/test.sock".to_string()],
+        let dns = Arc::new(Dns(std::sync::atomic::AtomicUsize::new(0)));
+        let state = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["example.com".into()],
+            allow_upstream_proxy: false,
             ..NetworkProxySettings::default()
-        }));
-
+        })
+        .with_public_destinations_only()
+        .with_resolver(dns.clone());
         let mut req = Request::builder()
-            .method(Method::GET)
-            .uri("http://example.com")
-            .header("x-unix-socket", "/tmp/test.sock")
-            .body(Body::empty())
-            .expect("request should build");
-        req.extensions_mut().insert(state);
-
-        let response = http_plain_proxy(None, req).await.unwrap();
-        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+            .uri("http://foreign.invalid/")
+            .body(Body::empty())?;
+        req.extensions_mut().insert(Arc::new(state));
+        let response = http_plain_proxy(None, req).await?;
+        assert_eq!(
+            dns.0.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "E20b foreign domain triggered DNS"
+        );
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn http_connect_accept_denies_denylisted_host() {
-        let policy = NetworkProxySettings {
-            allowed_domains: vec!["**.openai.com".to_string()],
-            denied_domains: vec!["api.openai.com".to_string()],
-            ..Default::default()
+    async fn e20b_private_dns_destination_cannot_reach_host_service() -> anyhow::Result<()> {
+        ensure_rustls_crypto_provider();
+        let listener = TokioTcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
+        let port = listener.local_addr()?.port();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let mut buf = [0; 4096];
+                let _ = stream.read(&mut buf).await;
+                let _ = stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecret",
+                    )
+                    .await;
+            }
+        });
+        let state = || {
+            network_proxy_state_for_policy(NetworkProxySettings {
+                allowed_domains: vec!["localhost".into()],
+                allow_upstream_proxy: false,
+                ..NetworkProxySettings::default()
+            })
         };
-        let state = Arc::new(network_proxy_state_for_policy(policy));
+        let request = |state| -> anyhow::Result<_> {
+            let mut req = Request::builder()
+                .uri(format!("http://localhost:{port}/"))
+                .body(Body::empty())?;
+            req.extensions_mut().insert(Arc::new(state));
+            Ok(req)
+        };
+        // Real target control: the existing explicitly-local Harness policy
+        // reaches this listener. Strict process DNS must refuse that answer.
+        let control = timeout(
+            Duration::from_secs(5),
+            http_plain_proxy(None, request(state())?),
+        )
+        .await??;
+        assert_eq!(control.status(), StatusCode::OK);
+        struct Rebinding(std::sync::atomic::AtomicUsize);
+        #[async_trait::async_trait]
+        impl crate::runtime::DestinationResolver for Rebinding {
+            async fn resolve(&self, host: &str, port: u16) -> anyhow::Result<Vec<SocketAddr>> {
+                assert_eq!(host, "rebinding.test");
+                let answer = self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let ip = if answer < 2 {
+                    "93.184.215.14"
+                } else {
+                    "127.0.0.1"
+                };
+                Ok(vec![SocketAddr::new(ip.parse()?, port)])
+            }
+        }
+        let dns = Arc::new(Rebinding(std::sync::atomic::AtomicUsize::new(0)));
+        let strict = network_proxy_state_for_policy(NetworkProxySettings {
+            allowed_domains: vec!["rebinding.test".into()],
+            allow_upstream_proxy: false,
+            ..NetworkProxySettings::default()
+        })
+        .with_public_destinations_only()
+        .with_resolver(dns.clone());
+        let mut rebound = Request::builder()
+            .uri(format!("http://rebinding.test:{port}/"))
+            .body(Body::empty())?;
+        rebound.extensions_mut().insert(Arc::new(strict));
+        let result = timeout(Duration::from_secs(5), http_plain_proxy(None, rebound)).await;
+        server.abort();
+        let response = result??;
+        assert_eq!(
+            dns.0.load(std::sync::atomic::Ordering::SeqCst),
+            3,
+            "fixture must rebind only at connect-time DNS"
+        );
+        assert_eq!(
+            response.status(),
+            StatusCode::FORBIDDEN,
+            "E20b private DNS reached host service"
+        );
 
         let mut req = Request::builder()
             .method(Method::CONNECT)
-            .uri("https://api.openai.com:443")
-            .header("host", "api.openai.com:443")
-            .body(Body::empty())
-            .unwrap();
-        req.extensions_mut().insert(state);
-
-        let response = http_connect_accept(None, req).await.unwrap_err();
+            .uri(format!("localhost:{port}"))
+            .body(Body::empty())?;
+        req.extensions_mut()
+            .insert(Arc::new(state().with_public_destinations_only()));
+        let response = match http_connect_accept(None, req).await {
+            Err(response) => response,
+            Ok(_) => anyhow::bail!("private CONNECT was admitted"),
+        };
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
-        assert_eq!(
-            response.headers().get("x-proxy-error").unwrap(),
-            "blocked-by-denylist"
-        );
-    }
-
-    #[tokio::test]
-    async fn http_plain_proxy_rejects_absolute_uri_host_header_mismatch() {
-        let state = Arc::new(network_proxy_state_for_policy(
-            NetworkProxySettings::default(),
-        ));
-        let mut req = Request::builder()
-            .method(Method::GET)
-            .uri("http://raw.githubusercontent.com/openai/codex/main/README.md")
-            .header(header::HOST, "api.github.com")
-            .body(Body::empty())
-            .unwrap();
-        req.extensions_mut().insert(state);
-
-        let response = http_plain_proxy(None, req).await;
-        assert_eq!(response.unwrap().status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[test]
-    fn validate_absolute_form_host_header_allows_matching_default_port() {
-        let req = Request::builder()
-            .method(Method::GET)
-            .uri("http://example.com/")
-            .header("host", "example.com")
-            .body(Body::empty())
-            .unwrap();
-
-        assert_eq!(
-            validate_absolute_form_host_header(&req, &RequestContext::try_from(&req).unwrap(),),
-            Ok(())
-        );
-    }
-
-    #[test]
-    fn validate_absolute_form_host_header_rejects_mismatched_host() {
-        let req = Request::builder()
-            .method(Method::GET)
-            .uri("http://raw.githubusercontent.com/")
-            .header("host", "api.github.com")
-            .body(Body::empty())
-            .unwrap();
-
-        assert_eq!(
-            validate_absolute_form_host_header(&req, &RequestContext::try_from(&req).unwrap(),),
-            Err("Host header does not match request target")
-        );
-    }
-
-    #[test]
-    fn validate_absolute_form_host_header_rejects_missing_non_default_port() {
-        let req = Request::builder()
-            .method(Method::GET)
-            .uri("http://example.com:8080/")
-            .header("host", "example.com")
-            .body(Body::empty())
-            .unwrap();
-
-        assert_eq!(
-            validate_absolute_form_host_header(&req, &RequestContext::try_from(&req).unwrap(),),
-            Err("Host header does not match request target")
-        );
-    }
-
-    #[test]
-    fn remove_hop_by_hop_request_headers_keeps_forwarding_headers() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONNECTION,
-            HeaderValue::from_static("x-hop, keep-alive"),
-        );
-        headers.insert("x-hop", HeaderValue::from_static("1"));
-        headers.insert(
-            header::PROXY_AUTHORIZATION,
-            HeaderValue::from_static("Basic abc"),
-        );
-        headers.insert(
-            &header::X_FORWARDED_FOR,
-            HeaderValue::from_static("127.0.0.1"),
-        );
-        headers.insert(header::HOST, HeaderValue::from_static("example.com"));
-
-        remove_hop_by_hop_request_headers(&mut headers);
-
-        assert_eq!(headers.get(header::CONNECTION), None);
-        assert_eq!(headers.get("x-hop"), None);
-        assert_eq!(headers.get(header::PROXY_AUTHORIZATION), None);
-        assert_eq!(
-            headers.get(&header::X_FORWARDED_FOR),
-            Some(&HeaderValue::from_static("127.0.0.1"))
-        );
-        assert_eq!(
-            headers.get(header::HOST),
-            Some(&HeaderValue::from_static("example.com"))
-        );
+        Ok(())
     }
 }

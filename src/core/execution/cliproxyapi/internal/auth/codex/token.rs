@@ -171,6 +171,44 @@ impl CodexStoredCredentials {
 }
 
 pub trait CodexSecretStore: Send + Sync {
+    /// Async host boundary. Native stores override this to admit the job on
+    /// their existing file owners; the portable default performs no Core IO.
+    fn load_credentials_async(
+        self: std::sync::Arc<Self>,
+        handles: CodexCredentialHandles,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<CodexStoredCredentials, SecretStoreError>>
+                + Send,
+        >,
+    >
+    where
+        Self: 'static,
+    {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || self.load_credentials(&handles))
+                .await
+                .map_err(|_| SecretStoreError::Read)?
+        })
+    }
+
+    /// Async host boundary. Native stores override this to admit the job on
+    /// their existing file owners; the portable default performs no Core IO.
+    fn store_credentials_async(
+        self: std::sync::Arc<Self>,
+        handles: CodexCredentialHandles,
+        credentials: CodexStoredCredentials,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), SecretStoreError>> + Send>>
+    where
+        Self: 'static,
+    {
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || self.store_credentials(&handles, &credentials))
+                .await
+                .map_err(|_| SecretStoreError::Write)?
+        })
+    }
+
     fn load_credentials(
         &self,
         handles: &CodexCredentialHandles,

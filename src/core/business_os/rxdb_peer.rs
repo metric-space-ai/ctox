@@ -16,6 +16,12 @@
 // Origin: CTOX
 // License: Apache-2.0
 
+#[path = "rxdb_peer_native_command_routes.rs"]
+mod native_command_routes;
+pub(crate) use native_command_routes::register_v4_native_command_handlers;
+
+#[path = "../store/peer_schema_adapter.rs"]
+pub(crate) mod peer_schema_adapter;
 use super::app_runtime;
 use super::browser_runtime::browser_runtime_manager;
 use super::desktop_files::*;
@@ -111,6 +117,7 @@ use rxdb::plugins::replication_webrtc::{
 use rxdb::rx_collection::RxCollection;
 use rxdb::rx_collection_helper::fill_object_data_before_insert;
 use rxdb::rx_database::{create_rx_database, RxCollectionCreator, RxDatabase, RxDatabaseCreator};
+#[cfg(test)]
 use rxdb::storage::sqlite::{get_rx_storage_sqlite, RxStorageSqliteSettings};
 use rxdb::types::{BulkWriteRow, HashOutput, JsonSchema, MangoQuery, RxJsonSchema};
 use serde::{Deserialize, Serialize};
@@ -689,7 +696,8 @@ enum NativePeerExit {
     HeartbeatStale,
     /// The persisted sync room/signaling config changed: respawn with fresh config.
     SyncConfigurationChanged,
-    /// Runtime-installed module schemas changed: respawn so new collections are registered.
+    /// Compatibility file-source change: the immutable v3 pool needs a new
+    /// inventory. V4 registry commits use online activation instead.
     RuntimeSchemasChanged,
     /// A load-bearing command/projection task exited unexpectedly: respawn.
     CriticalTaskExited,
@@ -824,11 +832,17 @@ fn validate_and_bind_mobile_device_proof(
     {
         return Reject;
     }
-    if !super::mobile_invites::authorize_or_bind_device_proof(
+    // §16.43: optional self-declared device type, validated against the
+    // fixed list; an invalid declaration rejects the handshake.
+    let Ok(descriptor) = super::mobile_invites::device_descriptor(proof) else {
+        return Reject;
+    };
+    if !super::mobile_invites::authorize_or_bind_device_proof_with(
         root,
         user_id,
         &thumbprint,
         chrono::Utc::now().timestamp_millis(),
+        descriptor.as_ref(),
     ) {
         return Reject;
     }
@@ -1392,6 +1406,8 @@ pub(super) struct NativePeer {
     _business_record_projection_sync: tokio::task::JoinHandle<()>,
     _iot_agent_supervisors: Vec<Arc<AtomicBool>>,
     _browser_runtime_maintenance: tokio::task::JoinHandle<()>,
+    /// §16.43 device presence from admitted peers (not load-bearing).
+    _device_presence: tokio::task::JoinHandle<()>,
     /// Work backlog, not lifecycle state. Keeping it on the active peer lets
     /// heartbeat diagnostics read it without opening SQLite and without adding
     /// another global lifecycle truth.
@@ -1532,6 +1548,7 @@ impl NativePeer {
             stop.store(true, Ordering::SeqCst);
         }
         self._browser_runtime_maintenance.abort();
+        self._device_presence.abort();
         // FIX 2: stop the dedicated heartbeat OS thread.
         if let Ok(mut heartbeat) = self._status_heartbeat.lock() {
             if let Some(handle) = heartbeat.as_mut() {
@@ -2197,10 +2214,7 @@ pub fn spawn_native_peer(
                         );
                     }
                     Ok(NativePeerExit::RuntimeSchemasChanged) => {
-                        eprintln!(
-                            "[business-os] native rxdb peer runtime app schemas changed; \
-                             reconfiguring immediately"
-                        );
+                        eprintln!("[business-os] legacy runtime schema files changed; reconfiguring the v3 pool inventory");
                     }
                     Ok(NativePeerExit::CriticalTaskExited) => {
                         eprintln!(
@@ -2748,6 +2762,7 @@ async fn run_native_peer(
         return Ok(NativePeerExit::ProcessLockUnavailable);
     };
     let configured_signaling_urls = signaling_urls.clone();
+    let mut schema_commits = peer_schema_adapter::subscribe(&store::rxdb_store_path(&root));
     let mut runtime_schema_state = runtime_installed_module_schema_state(&root)?;
     let signaling_base_urls: Vec<String> = signaling_urls
         .into_iter()
@@ -2789,11 +2804,8 @@ async fn run_native_peer(
         peer_session_id.clone(),
         database_path.clone(),
     );
-    let repaired_revisions = repair_legacy_business_command_revisions(&database_path)
-        .context("repair legacy Business OS command revisions")?;
-    if repaired_revisions > 0 {
-        eprintln!("[business-os] repaired {repaired_revisions} legacy business_commands revisions");
-    }
+    // Revision/envelope normalization now commits with each bounded legacy
+    // import page on the registered writer, not through a second raw writer.
     for collection in ["business_commands", "business_chats"] {
         let repaired_envelopes = store::repair_missing_rxdb_envelopes(&root, collection)
             .with_context(|| format!("repair malformed Business OS {collection} envelopes"))?;
@@ -3092,47 +3104,7 @@ async fn run_native_peer(
                 // `RxWebRTCReplicationPool::new_multi`.
                 register_demand_file_sources(pool, &database, &root);
                 super::rxdb_peer_knowledge_rows::register_knowledge_row_source(pool, &root);
-                let browser_live_root = root.clone();
-                let browser_live_database = Arc::clone(&database);
-                pool.register_auxiliary_request_handler(
-                    BROWSER_LIVE_WEBRTC_METHOD,
-                    Arc::new(move |_peer_identity, capability_token, params| {
-                        let root = browser_live_root.clone();
-                        let database = Arc::clone(&browser_live_database);
-                        Box::pin(async move {
-                            handle_browser_live_webrtc_request(
-                                &root,
-                                &database,
-                                &capability_token,
-                                params,
-                            )
-                            .await
-                        })
-                    }),
-                )?;
-                let outbound_lookup_root = root.clone();
-                pool.register_auxiliary_request_handler(
-                    OUTBOUND_SELLIFY_LOOKUP_WEBRTC_METHOD,
-                    Arc::new(move |_peer_identity, capability_token, params| {
-                        let root = outbound_lookup_root.clone();
-                        Box::pin(async move {
-                            if !store::capability_allows_collection_permission(
-                                &root,
-                                &capability_token,
-                                "outbound_lead_generation_leads",
-                                crate::business_os::policy::BusinessOsPermission::DataRead,
-                            ) {
-                                return Err(
-                                    "outbound Sellify lookup capability may not read managed tenant leads"
-                                        .to_string(),
-                                );
-                            }
-                            let payload = params.first().cloned().unwrap_or(Value::Null);
-                            outbound_sellify_lookup(&root, &payload)
-                                .map_err(|error| error.to_string())
-                        })
-                    }),
-                )?;
+                register_v4_native_command_handlers(pool, &database, &root)?;
                 let field_review_root = root.clone();
                 pool.register_auxiliary_request_handler(
                     super::outbound_field_review::NATIVE_FIELD_REVIEW_VIEW_METHOD,
@@ -3151,29 +3123,7 @@ async fn run_native_peer(
                         })
                     }),
                 )?;
-                let workjet_device_root = root.clone();
                 super::rxdb_peer_transfer_publication::register(pool, &root)?;
-                super::rxdb_peer_jour_fixe_speech::register(pool, &root)?;
-                super::rxdb_peer_dictation::register(pool, &root)?;
-                super::rxdb_peer_grok::register(pool, &root)?;
-                let calendar_read_root = root.clone();
-                pool.register_auxiliary_request_handler(
-                    super::mcp_channel::WORKJET_CALENDAR_READ_METHOD,
-                    Arc::new(move |_peer_identity, capability_token, params| {
-                        let root = calendar_read_root.clone();
-                        Box::pin(async move {
-                            tokio::task::spawn_blocking(move || {
-                                super::mcp_channel::read_workjet_calendar_webrtc(
-                                    &root,
-                                    &capability_token,
-                                    params,
-                                )
-                            })
-                            .await
-                            .map_err(|_| "CALENDAR_READ_UNAVAILABLE".to_string())?
-                        })
-                    }),
-                )?;
                 let business_data_root = root.clone();
 
                 let business_data_database = Arc::clone(&database);
@@ -3220,19 +3170,8 @@ async fn run_native_peer(
                         })
                     }),
                 )?;
-                pool.register_auxiliary_request_handler(
-                    WORKJET_DEVICE_WEBRTC_METHOD,
-                    Arc::new(move |_peer_identity, capability_token, params| {
-                        let root = workjet_device_root.clone();
-                        Box::pin(async move {
-                            handle_workjet_device_webrtc_request(&root, &capability_token, params)
-                                .await
-                        })
-                    }),
-                )?;
                 super::mcp_channel::NativeSupervisorSourceHost::register(&pool, &root)?;
                 let consumer_root = root.clone();
-                super::rxdb_peer_speech_settings::register(&pool, &root)?;
                 let consumer_transport = pool.connection_handler.clone();
                 pool.register_guarded_auxiliary_request_handler(
                     super::consumer_authority::CONSUMER_AUTHORITY_METHOD,
@@ -3384,6 +3323,13 @@ async fn run_native_peer(
             eprintln!("[business-os] browser session recovery failed: {err:#}");
         }
     }
+    let device_presence = tokio::spawn(super::devices::presence_loop(
+        root.clone(),
+        pools
+            .iter()
+            .map(|session| std::sync::Arc::downgrade(&session.pool_clone()))
+            .collect(),
+    ));
     let browser_runtime_maintenance = tokio::spawn(browser_runtime_maintenance_loop(
         root.clone(),
         Arc::clone(&database),
@@ -3416,6 +3362,7 @@ async fn run_native_peer(
         _business_record_projection_sync: business_record_projection_sync,
         _iot_agent_supervisors: iot_agent_supervisors,
         _browser_runtime_maintenance: browser_runtime_maintenance,
+        _device_presence: device_presence,
         pending_outbox: AtomicU64::new(0),
         _status_heartbeat: Mutex::new(Some(status_heartbeat)),
     });
@@ -3569,25 +3516,32 @@ async fn run_native_peer(
                     }
                 }
             }
+            update = schema_commits.changed() => {
+                if update.is_ok() {
+                    let creators = schema_commits.borrow_and_update().clone();
+                    if let Some(creators) = creators {
+                        let registries = peer._pools.iter()
+                            .map(|session| session.pool().query_fetch_registry.clone())
+                            .collect::<Vec<_>>();
+                        if let Err(error) = peer_schema_adapter::apply(&peer.database, &registries, (*creators).clone()).await {
+                            eprintln!("[business-os] committed schema activation incomplete: {error:#}");
+                        }
+                    }
+                }
+            }
             _ = runtime_schema_watch.tick() => {
-                match native_peer_runtime_installed_schemas_changed(
-                    &root,
-                    &mut runtime_schema_state,
-                ) {
+                // Compatibility files still feed the immutable v3 pool. Merely
+                // adding QueryFetchRegistry entries would leave new schemas out
+                // of its handshake/master/live inventories. Keep the proven v3
+                // reconfiguration until that transport is replaced. The v4
+                // registry commit branch above does not retire the peer.
+                match native_peer_runtime_installed_schemas_changed(&root, &mut runtime_schema_state) {
                     Ok(true) => {
-                        eprintln!(
-                            "[business-os] native rxdb peer: runtime app schemas changed; \
-                             shutting down for immediate supervised reconfiguration"
-                        );
                         exit = NativePeerExit::RuntimeSchemasChanged;
                         break;
                     }
                     Ok(false) => {}
-                    Err(err) => {
-                        eprintln!(
-                            "[business-os] native rxdb peer runtime app schema check failed: {err:#}"
-                        );
-                    }
+                    Err(error) => eprintln!("[business-os] runtime schema discovery failed: {error:#}"),
                 }
             }
         }
@@ -3855,7 +3809,7 @@ fn native_peer_retry_delay(base: Duration) -> Duration {
 type NativeSignalingUrlProvider = Arc<dyn Fn() -> Vec<String> + Send + Sync>;
 type NativeSignalingClock = Arc<dyn Fn() -> u64 + Send + Sync>;
 
-fn native_signaling_url_provider(
+pub(super) fn native_signaling_url_provider(
     base_urls: Vec<String>,
     sync_room: String,
     native_peer_id: String,
@@ -4901,9 +4855,10 @@ pub(super) async fn sync_runtime_settings_with_database(
     database: &Arc<RxDatabase>,
 ) -> anyhow::Result<usize> {
     let root = root.to_path_buf();
-    let mut document = tokio::task::spawn_blocking(move || store::runtime_settings_for_rxdb(&root))
-        .await
-        .context("join native runtime settings projection load")??;
+    let mut document =
+        crate::persistence::run_core_sync(move || store::runtime_settings_for_rxdb(&root))
+            .await
+            .context("native runtime settings owner read failed")?;
     if let Some(object) = document.as_object_mut() {
         object.remove("_rev");
         object.remove("_meta");
@@ -8508,6 +8463,7 @@ fn valid_rxdb_revision(revision: &str) -> bool {
     !hash.is_empty() && !hash.contains('-') && height.parse::<u64>().is_ok()
 }
 
+#[cfg(test)]
 fn repair_legacy_business_command_revisions(database_path: &Path) -> anyhow::Result<usize> {
     if !database_path.is_file() {
         return Ok(0);
@@ -8665,7 +8621,7 @@ fn clamp_oversized_projected_documents(root: &Path, database_path: &Path) -> any
 }
 
 pub(super) async fn open_database(database_path: PathBuf) -> anyhow::Result<Arc<RxDatabase>> {
-    let storage = get_rx_storage_sqlite(RxStorageSqliteSettings { database_path });
+    let storage = crate::service::store_rxdb::native_storage(database_path).await?;
     create_rx_database(RxDatabaseCreator {
         name: "ctox-business-os".to_string(),
         storage,
@@ -9138,6 +9094,9 @@ fn resolve_business_os_installed_app_root_for_native_peer(root: &Path) -> PathBu
     root.join("business-os")
 }
 
+#[path = "schema_v4_migrations.rs"]
+mod schema_v4_migrations;
+
 fn native_declarative_migration_operations(spec: &Value) -> anyhow::Result<Vec<Value>> {
     let operations = if let Some(array) = spec.as_array() {
         array.clone()
@@ -9168,10 +9127,58 @@ fn native_declarative_migration_operations(spec: &Value) -> anyhow::Result<Vec<V
                     "set_boolean migration needs field"
                 );
             }
+            "v4_function" => schema_v4_migrations::validate(operation)?,
             other => anyhow::bail!("unsupported declarative migration operation {other}"),
         }
     }
     Ok(operations)
+}
+
+/// Frozen cutover uses the same reviewed generated native migration chain as
+/// ordinary schema upgrades. No SQL, file opener, JS evaluator or new writer.
+pub(crate) fn migrate_cutover_document(
+    collection: &str,
+    spec: &Value,
+    mut body: Value,
+) -> ctox_store::import::Result<Value> {
+    let run = || -> anyhow::Result<Value> {
+        anyhow::ensure!(
+            spec["from_ver"] == ctox_store::import::base_release::FROM_VERSION,
+            "wrong cutover migration base"
+        );
+        static CHAINS: OnceLock<Option<BTreeMap<String, BTreeMap<i64, Value>>>> = OnceLock::new();
+        let chains = CHAINS
+            .get_or_init(|| {
+                serde_json::from_str(include_str!("business_os_schema_migrations.json")).ok()
+            })
+            .as_ref()
+            .context("invalid canonical cutover migration registry")?;
+        let chain = chains
+            .get(collection)
+            .context("cutover native migration chain missing")?;
+        let from = spec["_schema_version"]["from"]
+            .as_i64()
+            .context("cutover migration source version missing")?;
+        let to = spec["_schema_version"]["to"]
+            .as_i64()
+            .context("cutover migration target version missing")?;
+        anyhow::ensure!(
+            from >= 0 && to > from && to <= chain.keys().copied().max().unwrap_or(0),
+            "invalid cutover native migration versions"
+        );
+        for version in (from + 1)..=to {
+            body = apply_native_declarative_migration(
+                &body,
+                chain
+                    .get(&version)
+                    .context("cutover native migration step missing")?,
+            )?;
+        }
+        Ok(body)
+    };
+    run().map_err(|_| {
+        ctox_store::StoreError::Invalid(format!("cutover_native_migration_failed:{collection}"))
+    })
 }
 
 fn apply_native_declarative_migration(old_doc: &Value, spec: &Value) -> anyhow::Result<Value> {
@@ -9218,6 +9225,12 @@ fn apply_native_declarative_migration_operations(
                             .is_some_and(native_declarative_value_is_truthy),
                     ),
                 );
+            }
+            "v4_function" => {
+                migrated = schema_v4_migrations::apply(&Value::Object(migrated), operation)?
+                    .as_object()
+                    .context("native v4 migration output object")?
+                    .clone();
             }
             other => anyhow::bail!("unsupported declarative migration operation {other}"),
         }
@@ -9336,44 +9349,26 @@ fn native_rxdb_version_migration_entries(
     root: &Path,
 ) -> anyhow::Result<Vec<RuntimeModuleCollectionEntry>> {
     let mut entries = runtime_module_collection_entries_for_root(root);
-    entries.retain(|entry| {
-        !matches!(
-            entry.name.as_str(),
-            "business_commands"
-                | "ctox_queue_tasks"
-                | "ctox_runs"
-                | "workjet_computers"
-                | "workjet_projects"
-        )
-    });
-    // Packaged cockpit schema upgrades use the same copy/verify transaction as installed modules.
-    // Only these explicitly versioned collections are opted in; no blanket schema rewrite.
-    let packaged: Value = serde_json::from_str(include_str!(
-        "../../apps/business-os/modules/ctox/collections.schema.json"
-    ))?;
-    for name in [
-        "business_commands",
-        "ctox_queue_tasks",
-        "ctox_runs",
-        "workjet_computers",
-        "workjet_projects",
-    ] {
-        let schema = schema_from_json(
-            business_os_schema_contract()
-                .get(name)
-                .context("missing packaged cockpit schema")?
-                .clone(),
-        );
-        let strategies = packaged
-            .pointer(&format!("/migration_strategies/{name}"))
-            .and_then(Value::as_object)
-            .context("missing packaged cockpit migration strategies")?;
+    entries.retain(|entry| !business_os_schema_contract().contains_key(&entry.name));
+    let strategies: BTreeMap<String, BTreeMap<i64, Value>> =
+        serde_json::from_str(include_str!("business_os_schema_migrations.json"))?;
+    for (name, raw) in business_os_schema_contract() {
+        let schema = schema_from_json(raw.clone());
+        if schema.version == 0 {
+            continue;
+        }
         let migration_strategies = strategies
-            .iter()
-            .map(|(version, spec)| Ok((version.parse::<i64>()?, spec.clone())))
-            .collect::<anyhow::Result<BTreeMap<_, _>>>()?;
+            .get(name)
+            .with_context(|| format!("missing canonical native migration strategies for {name}"))?
+            .clone();
+        native_rxdb_version_migration_steps(
+            name,
+            0,
+            schema.version.into(),
+            Some(&migration_strategies),
+        )?;
         entries.push(RuntimeModuleCollectionEntry {
-            name: name.to_string(),
+            name: name.clone(),
             schema,
             sync_profile: RuntimeModuleSyncProfile::Eager,
             migration_strategies,
@@ -9533,8 +9528,19 @@ fn copy_and_verify_native_rxdb_version_table(
                     )
                 })?;
         }
+        let source_id: String = row.get(0)?;
+        if operation_steps
+            .iter()
+            .flatten()
+            .any(|op| op["op"] == "v4_function")
+        {
+            anyhow::ensure!(
+                migrated["id"].as_str() == Some(source_id.as_str()),
+                "native v4 migration changes row identity for {collection}; source retained"
+            );
+        }
         let migration_row = NativeMigrationRow {
-            id: row.get(0)?,
+            id: source_id,
             revision: row.get(1)?,
             deleted: row.get(2)?,
             last_write_time: row.get(3)?,
@@ -12374,7 +12380,7 @@ pub(in crate::business_os) mod tests {
     ) -> anyhow::Result<()> {
         let root = tempfile::tempdir()?;
         let packaged: Value = serde_json::from_str(include_str!(
-            "../../apps/business-os/modules/ctox/collections.schema.json"
+            "../../apps/business-os/v4/schemas/ctox.collections.schema.json"
         ))?;
         let entries = native_rxdb_version_migration_entries(root.path())?;
         for (name, schema) in packaged["collections"].as_object().unwrap() {
@@ -13266,7 +13272,7 @@ pub(in crate::business_os) mod tests {
         )?;
         assert!(
             native_peer_runtime_installed_schemas_changed(temp.path(), &mut state)?,
-            "runtime app schema edits must force a native peer respawn"
+            "runtime app schema edits must request online registration"
         );
         Ok(())
     }
@@ -14221,6 +14227,8 @@ pub(in crate::business_os) mod tests {
             Some("kept")
         );
     }
+
+    include!("schema_v4_migration_tests.rs");
 
     #[tokio::test]
     async fn native_all_schema_hashes_match_browser_contract_fixture() {
@@ -22481,5 +22489,48 @@ mod command_plane_query_tests {
             (2, Some(3)),
             "deleted rows still count, as before"
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod owner_factory_contract_tests {
+    use super::*;
+    use crate::service::store_runtime::DaemonStores;
+    use ctox_store::{ipc::StoreEndpoint, DbId};
+
+    #[tokio::test]
+    async fn native_open_requires_daemon_owner_and_never_uses_legacy_tables() -> anyhow::Result<()>
+    {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("sync.sqlite3");
+        assert!(
+            open_database(path.clone()).await.is_err(),
+            "raw-opener bypass"
+        );
+        assert!(!path.exists(), "raw factory opened an unowned file");
+        let mut stores = DaemonStores::start(
+            StoreEndpoint::UnixSocket {
+                path: dir.path().join("ipc/store.sock"),
+            },
+            tokio::runtime::Handle::current(),
+        )?;
+        let owner = stores
+            .register("sync", DbId::new(&path)?, true, Arc::new(|_| Ok(())))
+            .await?;
+        stores.install_native_rxdb(owner.clone()).await?;
+        let database = open_database(path.clone()).await?;
+        owner.readers.read(|tx| {
+            let rows:i64=tx.query_row("SELECT COUNT(*) FROM c__rxdb_internal",[],|r|r.get(0))?;
+            assert!(rows>0,"native factory did not persist through canonical owner");
+            assert!(!tx.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='ctox_business_os___rxdb_internal__v0')",[],|r|r.get::<_,bool>(0))?,"legacy table activated beside canonical one");
+            Ok(())
+        }).await?;
+        database.close().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        stores.shutdown().await?;
+        assert!(
+            open_database(path).await.is_err(),
+            "closed owner silently reopened"
+        );
+        Ok(())
     }
 }

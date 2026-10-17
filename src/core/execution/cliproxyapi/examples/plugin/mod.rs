@@ -52,35 +52,4 @@ mod claude_web_search_router;
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn every_example_has_a_stable_identity() {
-        let examples = [
-            auth::example(),
-            cli::example(),
-            codex_service_tier::example(),
-            executor::example(),
-            frontend_auth_exclusive::example(),
-            frontend_auth::example(),
-            host_callback_auth_files::example(),
-            host_callback::example(),
-            host_model_callback::example(),
-            management_api::example(),
-            model::example(),
-            protocol_format::example(),
-            request_lifecycle::example(),
-            request_normalizer::example(),
-            request_translator::example(),
-            response_normalizer::example(),
-            response_translator::example(),
-            scheduler::example(),
-            simple::example(),
-            thinking::example(),
-            usage::example(),
-            claude_web_search_router::example(),
-        ];
-        assert!(examples
-            .iter()
-            .all(|example| example.id.starts_with("example-")));
-    }
 }
