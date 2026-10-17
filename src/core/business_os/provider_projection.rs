@@ -143,217 +143,233 @@ mod tests {
 
     #[test]
     fn startup_backfill_keeps_existing_accounts_and_current_metadata() -> Result<()> {
-        let f = Fixture::new()?;
-        f.adopt(&[account("private-backfill")])?;
-        assert!(store::outbound_load_record(&f.conn, COLLECTION, &record_id("owner"))?.is_none());
-        repair(f.root.path())?;
-        let first = store::outbound_load_record(&f.conn, COLLECTION, &record_id("owner"))?.unwrap();
-        assert_eq!(first["accounts"].as_array().unwrap().len(), 1);
-        repair(f.root.path())?;
-        assert_eq!(
-            first,
-            store::outbound_load_record(&f.conn, COLLECTION, &record_id("owner"))?.unwrap()
-        );
-        f.conn.execute(
-            "UPDATE business_provider_federation_accounts SET enabled=0,revision=revision+1",
-            [],
-        )?;
-        repair(f.root.path())?;
-        let current =
-            store::outbound_load_record(&f.conn, COLLECTION, &record_id("owner"))?.unwrap();
-        assert_eq!(current["accounts"][0]["enabled"], false);
-        assert_eq!(current["accounts"].as_array().unwrap().len(), 1);
-        // An older metadata snapshot is readable; it is not an execution permit.
-        assert!(visible(&f.conn, &first, "owner")?);
-        assert!(visible(&f.conn, &current, "owner")?);
-        Ok(())
+        crate::persistence::test_support::run(move |root| {
+            let f = Fixture::with_root(root)?;
+            f.adopt(&[account("private-backfill")])?;
+            assert!(
+                store::outbound_load_record(&f.conn, COLLECTION, &record_id("owner"))?.is_none()
+            );
+            repair(f.root.path())?;
+            let first =
+                store::outbound_load_record(&f.conn, COLLECTION, &record_id("owner"))?.unwrap();
+            assert_eq!(first["accounts"].as_array().unwrap().len(), 1);
+            repair(f.root.path())?;
+            assert_eq!(
+                first,
+                store::outbound_load_record(&f.conn, COLLECTION, &record_id("owner"))?.unwrap()
+            );
+            f.conn.execute(
+                "UPDATE business_provider_federation_accounts SET enabled=0,revision=revision+1",
+                [],
+            )?;
+            repair(f.root.path())?;
+            let current =
+                store::outbound_load_record(&f.conn, COLLECTION, &record_id("owner"))?.unwrap();
+            assert_eq!(current["accounts"][0]["enabled"], false);
+            assert_eq!(current["accounts"].as_array().unwrap().len(), 1);
+            // An older metadata snapshot is readable; it is not an execution permit.
+            assert!(visible(&f.conn, &first, "owner")?);
+            assert!(visible(&f.conn, &current, "owner")?);
+            Ok(())
+        })
     }
 
     #[test]
     fn actual_sync_readers_apply_owner_filter_and_reject_peer_writes() -> Result<()> {
-        let f = Fixture::new()?;
-        f.adopt(&[account("private-transport")])?;
-        repair(f.root.path())?;
-        let record =
-            store::outbound_load_record(&f.conn, COLLECTION, &record_id("owner"))?.unwrap();
-        let (owner_token, _) = store::issue_business_os_capability_token_for_managed_user(
-            f.root.path(),
-            "owner",
-            "Owner",
-            "chef",
-            store::now_ms() as i64,
-        )?;
-        let (foreign_token, _) = store::issue_business_os_capability_token_for_managed_user(
-            f.root.path(),
-            "foreign",
-            "Foreign",
-            "admin",
-            store::now_ms() as i64,
-        )?;
-        let threads = super::super::super::threads::may_replicate_document;
-        assert!(threads(f.root.path(), &owner_token, COLLECTION, &record));
-        assert!(!threads(f.root.path(), &foreign_token, COLLECTION, &record));
-        // rxdb_peer's collection_write_authz rejects native projections before
-        // the document-specific authorship hook. Exercise that actual gate.
-        for token in [&owner_token, &foreign_token] {
-            assert!(!super::super::super::threads::may_accept_peer_write(
+        crate::persistence::test_support::run(move |root| {
+            let f = Fixture::with_root(root)?;
+            f.adopt(&[account("private-transport")])?;
+            repair(f.root.path())?;
+            let record =
+                store::outbound_load_record(&f.conn, COLLECTION, &record_id("owner"))?.unwrap();
+            let (owner_token, _) = store::issue_business_os_capability_token_for_managed_user(
                 f.root.path(),
-                token,
-                COLLECTION,
-            ));
-        }
-        let core = Connection::open_in_memory()?;
-        let projection = Connection::open(store::rxdb_store_path(f.root.path()))?;
-        let held =
-            super::super::super::threads::native_business_data_document_visible_from_connections;
-        for (user, role, allowed, expected) in [
-            ("owner", "chef", true, true),
-            ("foreign", "admin", true, false),
-            ("owner", "chef", false, false),
-        ] {
-            assert_eq!(
-                held(
-                    &core,
-                    &f.conn,
-                    &projection,
+                "owner",
+                "Owner",
+                "chef",
+                store::now_ms() as i64,
+            )?;
+            let (foreign_token, _) = store::issue_business_os_capability_token_for_managed_user(
+                f.root.path(),
+                "foreign",
+                "Foreign",
+                "admin",
+                store::now_ms() as i64,
+            )?;
+            let threads = super::super::super::threads::may_replicate_document;
+            assert!(threads(f.root.path(), &owner_token, COLLECTION, &record));
+            assert!(!threads(f.root.path(), &foreign_token, COLLECTION, &record));
+            // rxdb_peer's collection_write_authz rejects native projections before
+            // the document-specific authorship hook. Exercise that actual gate.
+            for token in [&owner_token, &foreign_token] {
+                assert!(!super::super::super::threads::may_accept_peer_write(
+                    f.root.path(),
+                    token,
                     COLLECTION,
-                    &record,
-                    super::super::super::threads::ReplicationActor {
-                        user_id: user,
-                        role,
-                        collection_read_allowed: allowed,
-                    }
-                )?,
-                expected
-            );
-        }
-        Ok(())
+                ));
+            }
+            let core = Connection::open_in_memory()?;
+            let projection = Connection::open(store::rxdb_store_path(f.root.path()))?;
+            let held =
+            super::super::super::threads::native_business_data_document_visible_from_connections;
+            for (user, role, allowed, expected) in [
+                ("owner", "chef", true, true),
+                ("foreign", "admin", true, false),
+                ("owner", "chef", false, false),
+            ] {
+                assert_eq!(
+                    held(
+                        &core,
+                        &f.conn,
+                        &projection,
+                        COLLECTION,
+                        &record,
+                        super::super::super::threads::ReplicationActor {
+                            user_id: user,
+                            role,
+                            collection_read_allowed: allowed,
+                        }
+                    )?,
+                    expected
+                );
+            }
+            Ok(())
+        })
     }
 
     #[test]
     fn registry_reads_use_verified_managed_alias_and_current_canonical_owner() -> Result<()> {
-        let f = Fixture::new()?;
-        let canonical = uuid::Uuid::new_v4().to_string();
-        let alias = "owner-alias@fixture.example";
-        store::issue_business_os_capability_token_for_managed_user_with_email(
-            f.root.path(),
-            &canonical,
-            Some(alias),
-            "Canonical",
-            "chef",
-            store::now_ms() as i64,
-        )?;
-        let (token, _) = store::issue_business_os_capability_token_for_managed_user(
-            f.root.path(),
-            alias,
-            "Verified alias",
-            "admin",
-            store::now_ms() as i64,
-        )?;
-        adopt(
-            &f.conn,
-            &canonical,
-            "native-instance",
-            &[account("alias-private")],
-            100,
-        )?;
-        let effect = applied(&f.conn, &canonical)?;
-        let record = store::outbound_load_record(&f.conn, COLLECTION, &effect.projections[0].id)?
-            .context("canonical registry missing")?;
-        assert!(visible(&f.conn, &record, alias)?);
-        assert!(super::super::super::threads::may_replicate_document(
-            f.root.path(),
-            &token,
-            COLLECTION,
-            &record,
-        ));
-        f.conn.execute(
-            "UPDATE business_users SET active=0 WHERE user_id=?1",
-            [&canonical],
-        )?;
-        assert!(visible(&f.conn, &record, alias).is_err());
-        assert!(!super::super::super::threads::may_replicate_document(
-            f.root.path(),
-            &token,
-            COLLECTION,
-            &record,
-        ));
-        Ok(())
+        crate::persistence::test_support::run(move |root| {
+            let f = Fixture::with_root(root)?;
+            let canonical = uuid::Uuid::new_v4().to_string();
+            let alias = "owner-alias@fixture.example";
+            store::issue_business_os_capability_token_for_managed_user_with_email(
+                f.root.path(),
+                &canonical,
+                Some(alias),
+                "Canonical",
+                "chef",
+                store::now_ms() as i64,
+            )?;
+            let (token, _) = store::issue_business_os_capability_token_for_managed_user(
+                f.root.path(),
+                alias,
+                "Verified alias",
+                "admin",
+                store::now_ms() as i64,
+            )?;
+            adopt(
+                &f.conn,
+                &canonical,
+                "native-instance",
+                &[account("alias-private")],
+                100,
+            )?;
+            let effect = applied(&f.conn, &canonical)?;
+            let record =
+                store::outbound_load_record(&f.conn, COLLECTION, &effect.projections[0].id)?
+                    .context("canonical registry missing")?;
+            assert!(visible(&f.conn, &record, alias)?);
+            assert!(super::super::super::threads::may_replicate_document(
+                f.root.path(),
+                &token,
+                COLLECTION,
+                &record,
+            ));
+            f.conn.execute(
+                "UPDATE business_users SET active=0 WHERE user_id=?1",
+                [&canonical],
+            )?;
+            assert!(visible(&f.conn, &record, alias).is_err());
+            assert!(!super::super::super::threads::may_replicate_document(
+                f.root.path(),
+                &token,
+                COLLECTION,
+                &record,
+            ));
+            Ok(())
+        })
     }
 
     #[test]
     fn registry_projection_is_content_only_and_idempotent() -> Result<()> {
-        let f = Fixture::new()?;
-        f.adopt(&[account("private-selector-never-synced")])?;
-        let first = applied(&f.conn, "owner")?;
-        assert_eq!(first.projections.len(), 1);
-        let reference = &first.projections[0];
-        let stored = store::outbound_load_record(&f.conn, COLLECTION, &reference.id)?
-            .context("registry projection missing")?;
-        for forbidden in [
-            "private-selector-never-synced",
-            "private_local_account_id",
-            "secret_ref",
-            "fingerprint",
-        ] {
-            assert!(!stored.to_string().contains(forbidden));
-        }
-        assert!(stored["accounts"][0]["modelCatalog"].get("fresh").is_none());
-        assert_eq!(stored["accounts"][0]["inferenceVerified"], false);
-        let account = &stored["accounts"][0];
-        assert_eq!(
-            account["nativeAccountReference"],
-            json!({
-                "accountId":account["id"],"holderInstanceId":account["holder"]["id"],
-                "accountRevision":account["revision"]
-            })
-        );
-        let mut forged = stored.clone();
-        forged["accounts"][0]["nativeAccountReference"]["holderInstanceId"] =
-            json!("another-holder");
-        assert!(!visible(&f.conn, &forged, "owner")?);
-        assert_eq!(stored["catalog_freshness_ms"], CATALOG_FRESHNESS_MS);
-        applied(&f.conn, "owner")?;
-        let repeated = store::outbound_load_record(&f.conn, COLLECTION, &reference.id)?.unwrap();
-        assert_eq!(stored, repeated);
-        Ok(())
+        crate::persistence::test_support::run(move |root| {
+            let f = Fixture::with_root(root)?;
+            f.adopt(&[account("private-selector-never-synced")])?;
+            let first = applied(&f.conn, "owner")?;
+            assert_eq!(first.projections.len(), 1);
+            let reference = &first.projections[0];
+            let stored = store::outbound_load_record(&f.conn, COLLECTION, &reference.id)?
+                .context("registry projection missing")?;
+            for forbidden in [
+                "private-selector-never-synced",
+                "private_local_account_id",
+                "secret_ref",
+                "fingerprint",
+            ] {
+                assert!(!stored.to_string().contains(forbidden));
+            }
+            assert!(stored["accounts"][0]["modelCatalog"].get("fresh").is_none());
+            assert_eq!(stored["accounts"][0]["inferenceVerified"], false);
+            let account = &stored["accounts"][0];
+            assert_eq!(
+                account["nativeAccountReference"],
+                json!({
+                    "accountId":account["id"],"holderInstanceId":account["holder"]["id"],
+                    "accountRevision":account["revision"]
+                })
+            );
+            let mut forged = stored.clone();
+            forged["accounts"][0]["nativeAccountReference"]["holderInstanceId"] =
+                json!("another-holder");
+            assert!(!visible(&f.conn, &forged, "owner")?);
+            assert_eq!(stored["catalog_freshness_ms"], CATALOG_FRESHNESS_MS);
+            applied(&f.conn, "owner")?;
+            let repeated =
+                store::outbound_load_record(&f.conn, COLLECTION, &reference.id)?.unwrap();
+            assert_eq!(stored, repeated);
+            Ok(())
+        })
     }
 
     #[test]
     fn registry_projection_requires_current_own_management_identity() -> Result<()> {
-        let f = Fixture::new()?;
-        f.adopt(&[account("private")])?;
-        let effect = applied(&f.conn, "owner")?;
-        let mut record =
-            store::outbound_load_record(&f.conn, COLLECTION, &effect.projections[0].id)?.unwrap();
-        assert!(visible(&f.conn, &record, "owner")?);
-        store::issue_business_os_capability_token_for_managed_user(
-            f.root.path(),
-            "foreign",
-            "Foreign",
-            "admin",
-            store::now_ms() as i64,
-        )?;
-        assert!(!visible(&f.conn, &record, "foreign")?);
-        record["owner_user_id"] = json!("foreign");
-        assert!(!visible(&f.conn, &record, "foreign")?);
-        record["id"] = json!(record_id("foreign"));
-        assert!(!visible(&f.conn, &record, "foreign")?);
-        adopt(
-            &f.conn,
-            "foreign",
-            "native-instance",
-            &[account("foreign-private")],
-            101,
-        )?;
-        applied(&f.conn, "foreign")?;
-        // Even a real foreign-owner registry cannot authorize victim account data.
-        assert!(!visible(&f.conn, &record, "foreign")?);
-        f.conn.execute(
-            "UPDATE business_users SET active=0 WHERE user_id='foreign'",
-            [],
-        )?;
-        assert!(visible(&f.conn, &record, "foreign").is_err());
-        Ok(())
+        crate::persistence::test_support::run(move |root| {
+            let f = Fixture::with_root(root)?;
+            f.adopt(&[account("private")])?;
+            let effect = applied(&f.conn, "owner")?;
+            let mut record =
+                store::outbound_load_record(&f.conn, COLLECTION, &effect.projections[0].id)?
+                    .unwrap();
+            assert!(visible(&f.conn, &record, "owner")?);
+            store::issue_business_os_capability_token_for_managed_user(
+                f.root.path(),
+                "foreign",
+                "Foreign",
+                "admin",
+                store::now_ms() as i64,
+            )?;
+            assert!(!visible(&f.conn, &record, "foreign")?);
+            record["owner_user_id"] = json!("foreign");
+            assert!(!visible(&f.conn, &record, "foreign")?);
+            record["id"] = json!(record_id("foreign"));
+            assert!(!visible(&f.conn, &record, "foreign")?);
+            adopt(
+                &f.conn,
+                "foreign",
+                "native-instance",
+                &[account("foreign-private")],
+                101,
+            )?;
+            applied(&f.conn, "foreign")?;
+            // Even a real foreign-owner registry cannot authorize victim account data.
+            assert!(!visible(&f.conn, &record, "foreign")?);
+            f.conn.execute(
+                "UPDATE business_users SET active=0 WHERE user_id='foreign'",
+                [],
+            )?;
+            assert!(visible(&f.conn, &record, "foreign").is_err());
+            Ok(())
+        })
     }
 }

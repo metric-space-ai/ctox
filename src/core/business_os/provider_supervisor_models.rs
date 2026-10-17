@@ -182,139 +182,149 @@ mod tests {
     #[test]
     fn supervisor_and_admitted_model_require_the_same_private_account_and_catalog_pins(
     ) -> Result<()> {
-        let f = Fixture::new()?;
-        f.enroll("source")?;
-        let state = f.adopt(&[account("native")])?;
-        let id = account_id(&state);
-        observe(&f, id, 1, &[CURRENT, OTHER], 100)?;
-        select_models(&f, &[CURRENT, OTHER], 101)?;
-        let sealed = resolve_at(&f.conn, "owner", id, 1, CURRENT, 101)?;
-        let current = consumable_model(&f.conn, &f.facts("source"), id, 1, CURRENT, 101)?;
-        sealed.assert_consumer_binding(&current)?;
-        for change in [
-            "owner",
-            "account",
-            "holder",
-            "provider",
-            "local",
-            "revision",
-            "policy",
-            "model",
-            "catalog_time",
-            "private_binding",
-            "catalog",
-        ] {
-            let mut changed = consumable_model(&f.conn, &f.facts("source"), id, 1, CURRENT, 101)?;
-            match change {
-                "owner" => changed.consumer.owner_user_id = "foreign".into(),
-                "account" => changed.account.account_id = "another-native-account".into(),
-                "holder" => changed.account.holder_instance_id = "another-holder".into(),
-                "provider" => changed.account.provider = "claude".into(),
-                "local" => {
-                    changed.account.private_local_account_id = "another-local-selector".into()
+        crate::persistence::test_support::run(move |root| {
+            let f = Fixture::with_root(root)?;
+            f.enroll("source")?;
+            let state = f.adopt(&[account("native")])?;
+            let id = account_id(&state);
+            observe(&f, id, 1, &[CURRENT, OTHER], 100)?;
+            select_models(&f, &[CURRENT, OTHER], 101)?;
+            let sealed = resolve_at(&f.conn, "owner", id, 1, CURRENT, 101)?;
+            let current = consumable_model(&f.conn, &f.facts("source"), id, 1, CURRENT, 101)?;
+            sealed.assert_consumer_binding(&current)?;
+            for change in [
+                "owner",
+                "account",
+                "holder",
+                "provider",
+                "local",
+                "revision",
+                "policy",
+                "model",
+                "catalog_time",
+                "private_binding",
+                "catalog",
+            ] {
+                let mut changed =
+                    consumable_model(&f.conn, &f.facts("source"), id, 1, CURRENT, 101)?;
+                match change {
+                    "owner" => changed.consumer.owner_user_id = "foreign".into(),
+                    "account" => changed.account.account_id = "another-native-account".into(),
+                    "holder" => changed.account.holder_instance_id = "another-holder".into(),
+                    "provider" => changed.account.provider = "claude".into(),
+                    "local" => {
+                        changed.account.private_local_account_id = "another-local-selector".into()
+                    }
+                    "revision" => changed.account.account_revision += 1,
+                    "policy" => changed.account.policy_revision += 1,
+                    "model" => changed.model = OTHER.into(),
+                    "catalog_time" => changed.catalog_checked_at_ms += 1,
+                    "private_binding" => {
+                        changed.private_configuration_binding =
+                            Some("different-private-binding".into())
+                    }
+                    "catalog" => changed.catalog_fingerprint[0] ^= 1,
+                    _ => unreachable!(),
                 }
-                "revision" => changed.account.account_revision += 1,
-                "policy" => changed.account.policy_revision += 1,
-                "model" => changed.model = OTHER.into(),
-                "catalog_time" => changed.catalog_checked_at_ms += 1,
-                "private_binding" => {
-                    changed.private_configuration_binding = Some("different-private-binding".into())
-                }
-                "catalog" => changed.catalog_fingerprint[0] ^= 1,
-                _ => unreachable!(),
+                assert!(
+                    sealed.assert_consumer_binding(&changed).is_err(),
+                    "{change}"
+                );
             }
-            assert!(
-                sealed.assert_consumer_binding(&changed).is_err(),
-                "{change}"
-            );
-        }
-        Ok(())
+            Ok(())
+        })
     }
 
     #[test]
     fn supervisor_uses_only_current_owned_selected_account_models_without_browser_facts(
     ) -> Result<()> {
-        let f = Fixture::new()?;
-        let state = f.adopt(&[account("native")])?;
-        let id = account_id(&state);
-        observe(&f, id, 1, &[CURRENT, OTHER], 100)?;
-        assert!(resolve_at(&f.conn, "owner", id, 1, CURRENT, 101).is_err());
-        select_models(&f, &[CURRENT], 101)?;
-        let chosen = resolve_at(&f.conn, "owner", id, 1, CURRENT, 101)?;
-        assert_eq!(chosen.account().account_id, id);
-        assert_eq!(chosen.account().holder_instance_id, "native-instance");
-        assert_eq!(chosen.account().private_local_account_id, "native");
-        assert_eq!(chosen.model(), CURRENT);
-        assert_eq!(chosen.catalog_checked_at_ms(), 100);
-        chosen.revalidate_at(&f.conn, "owner", 101)?;
-        assert!(resolve_at(&f.conn, "foreign", id, 1, CURRENT, 101).is_err());
-        assert!(resolve_at(&f.conn, "owner", id, 2, CURRENT, 101).is_err());
-        assert!(resolve_at(&f.conn, "owner", id, 1, OTHER, 101).is_err());
-        assert!(resolve_at(
-            &f.conn,
-            "owner",
-            id,
-            1,
-            CURRENT,
-            100 + CATALOG_FRESHNESS_MS + 1
-        )
-        .is_err());
-        assert!(resolve_at(&f.conn, "owner", id, 1, CURRENT, 99).is_err());
-        f.conn.execute(
-            "UPDATE business_users SET active=0 WHERE user_id='owner'",
-            [],
-        )?;
-        assert!(chosen.revalidate_at(&f.conn, "owner", 101).is_err());
-        Ok(())
+        crate::persistence::test_support::run(move |root| {
+            let f = Fixture::with_root(root)?;
+            let state = f.adopt(&[account("native")])?;
+            let id = account_id(&state);
+            observe(&f, id, 1, &[CURRENT, OTHER], 100)?;
+            assert!(resolve_at(&f.conn, "owner", id, 1, CURRENT, 101).is_err());
+            select_models(&f, &[CURRENT], 101)?;
+            let chosen = resolve_at(&f.conn, "owner", id, 1, CURRENT, 101)?;
+            assert_eq!(chosen.account().account_id, id);
+            assert_eq!(chosen.account().holder_instance_id, "native-instance");
+            assert_eq!(chosen.account().private_local_account_id, "native");
+            assert_eq!(chosen.model(), CURRENT);
+            assert_eq!(chosen.catalog_checked_at_ms(), 100);
+            chosen.revalidate_at(&f.conn, "owner", 101)?;
+            assert!(resolve_at(&f.conn, "foreign", id, 1, CURRENT, 101).is_err());
+            assert!(resolve_at(&f.conn, "owner", id, 2, CURRENT, 101).is_err());
+            assert!(resolve_at(&f.conn, "owner", id, 1, OTHER, 101).is_err());
+            assert!(resolve_at(
+                &f.conn,
+                "owner",
+                id,
+                1,
+                CURRENT,
+                100 + CATALOG_FRESHNESS_MS + 1
+            )
+            .is_err());
+            assert!(resolve_at(&f.conn, "owner", id, 1, CURRENT, 99).is_err());
+            f.conn.execute(
+                "UPDATE business_users SET active=0 WHERE user_id='owner'",
+                [],
+            )?;
+            assert!(chosen.revalidate_at(&f.conn, "owner", 101).is_err());
+            Ok(())
+        })
     }
 
     #[test]
     fn captured_eligibility_retires_on_catalog_private_binding_policy_and_holder_changes(
     ) -> Result<()> {
-        let f = Fixture::new()?;
-        let state = f.adopt(&[account("native")])?;
-        let id = account_id(&state);
-        observe(&f, id, 1, &[CURRENT], 100)?;
-        select_models(&f, &[CURRENT], 101)?;
-        let chosen = resolve_at(&f.conn, "owner", id, 1, CURRENT, 101)?;
-        observe(&f, id, 1, &[CURRENT], 102)?;
-        assert!(chosen.revalidate_at(&f.conn, "owner", 103).is_err());
-        let chosen = resolve_at(&f.conn, "owner", id, 1, CURRENT, 103)?;
-        set_native_binding(&f.conn, id, Some("private-fixture-generation"))?;
-        assert!(chosen.revalidate_at(&f.conn, "owner", 103).is_err());
-        let chosen = resolve_at(&f.conn, "owner", id, 1, CURRENT, 103)?;
-        bump_policy(&f.conn, "owner")?;
-        assert!(chosen.revalidate_at(&f.conn, "owner", 103).is_err());
-        let chosen = resolve_at(&f.conn, "owner", id, 1, CURRENT, 103)?;
-        f.conn.execute("UPDATE business_provider_federation_accounts SET holder_instance_id='replacement' WHERE account_id=?1",[id])?;
-        assert!(chosen.revalidate_at(&f.conn, "owner", 103).is_err());
-        f.conn.execute(
-            "UPDATE business_provider_federation_accounts SET enabled=0 WHERE account_id=?1",
-            [id],
-        )?;
-        assert!(resolve_at(&f.conn, "owner", id, 1, CURRENT, 103).is_err());
-        Ok(())
+        crate::persistence::test_support::run(move |root| {
+            let f = Fixture::with_root(root)?;
+            let state = f.adopt(&[account("native")])?;
+            let id = account_id(&state);
+            observe(&f, id, 1, &[CURRENT], 100)?;
+            select_models(&f, &[CURRENT], 101)?;
+            let chosen = resolve_at(&f.conn, "owner", id, 1, CURRENT, 101)?;
+            observe(&f, id, 1, &[CURRENT], 102)?;
+            assert!(chosen.revalidate_at(&f.conn, "owner", 103).is_err());
+            let chosen = resolve_at(&f.conn, "owner", id, 1, CURRENT, 103)?;
+            set_native_binding(&f.conn, id, Some("private-fixture-generation"))?;
+            assert!(chosen.revalidate_at(&f.conn, "owner", 103).is_err());
+            let chosen = resolve_at(&f.conn, "owner", id, 1, CURRENT, 103)?;
+            bump_policy(&f.conn, "owner")?;
+            assert!(chosen.revalidate_at(&f.conn, "owner", 103).is_err());
+            let chosen = resolve_at(&f.conn, "owner", id, 1, CURRENT, 103)?;
+            f.conn.execute("UPDATE business_provider_federation_accounts SET holder_instance_id='replacement' WHERE account_id=?1",[id])?;
+            assert!(chosen.revalidate_at(&f.conn, "owner", 103).is_err());
+            f.conn.execute(
+                "UPDATE business_provider_federation_accounts SET enabled=0 WHERE account_id=?1",
+                [id],
+            )?;
+            assert!(resolve_at(&f.conn, "owner", id, 1, CURRENT, 103).is_err());
+            Ok(())
+        })
     }
 
     #[test]
     fn exclusion_and_failed_discovery_reject_without_mutating_the_account() -> Result<()> {
-        let f = Fixture::new()?;
-        let state = f.adopt(&[account("native")])?;
-        let id = account_id(&state);
-        observe(&f, id, 1, &[CURRENT], 100)?;
-        select_models(&f, &[CURRENT], 101)?;
-        f.conn.execute("INSERT INTO business_provider_federation_model_exclusions(account_id,models_json) VALUES (?1,?2)",
+        crate::persistence::test_support::run(move |root| {
+            let f = Fixture::with_root(root)?;
+            let state = f.adopt(&[account("native")])?;
+            let id = account_id(&state);
+            observe(&f, id, 1, &[CURRENT], 100)?;
+            select_models(&f, &[CURRENT], 101)?;
+            f.conn.execute("INSERT INTO business_provider_federation_model_exclusions(account_id,models_json) VALUES (?1,?2)",
             params![id,serde_json::to_string(&[CURRENT])?])?;
-        assert!(resolve_at(&f.conn, "owner", id, 1, CURRENT, 101).is_err());
-        f.conn.execute(
-            "DELETE FROM business_provider_federation_model_exclusions WHERE account_id=?1",
-            [id],
-        )?;
-        f.conn.execute("UPDATE business_provider_federation_model_observations SET last_attempt_json=?2 WHERE account_id=?1",
+            assert!(resolve_at(&f.conn, "owner", id, 1, CURRENT, 101).is_err());
+            f.conn.execute(
+                "DELETE FROM business_provider_federation_model_exclusions WHERE account_id=?1",
+                [id],
+            )?;
+            f.conn.execute("UPDATE business_provider_federation_model_observations SET last_attempt_json=?2 WHERE account_id=?1",
             params![id,r#"{"checkedAtMs":102,"success":false,"failure":"transport_failed"}"#])?;
-        assert!(resolve_at(&f.conn, "owner", id, 1, CURRENT, 103).is_err());
-        assert_eq!(list(&f.conn, "owner")?["accounts"][0]["enabled"], true);
-        assert_eq!(list(&f.conn, "owner")?["accounts"][0]["revision"], 1);
-        Ok(())
+            assert!(resolve_at(&f.conn, "owner", id, 1, CURRENT, 103).is_err());
+            assert_eq!(list(&f.conn, "owner")?["accounts"][0]["enabled"], true);
+            assert_eq!(list(&f.conn, "owner")?["accounts"][0]["revision"], 1);
+            Ok(())
+        })
     }
 }

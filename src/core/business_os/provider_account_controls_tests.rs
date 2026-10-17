@@ -12,12 +12,11 @@ fn credentials(marker: &str) -> ClaudeStoredCredentials {
     )
 }
 fn with_owner(
-    test: impl FnOnce(tempfile::TempDir) -> Result<tempfile::TempDir> + Send + 'static,
+    test: impl FnOnce(std::sync::Arc<tempfile::TempDir>) -> Result<std::sync::Arc<tempfile::TempDir>>
+        + Send
+        + 'static,
 ) -> Result<()> {
-    let root = tempfile::tempdir()?;
-    let path = root.path().to_owned();
-    // Retain the directory until all owner actors and their runtime shut down.
-    crate::persistence::run_cli_owned(&path, move || test(root)).map(drop)
+    crate::persistence::test_support::run(test).map(drop)
 }
 // Intake recovery goes through the central policy gate. Offline Core owners
 // do not install a Sync rights authority; bootstrap the same real owner used
@@ -60,7 +59,7 @@ fn with_policy_owner<T>(root: &Path, operation: impl FnOnce() -> Result<T>) -> R
     runtime.block_on(writer.shutdown())?;
     result
 }
-fn fixture(root: tempfile::TempDir) -> Result<(Fixture, String)> {
+fn fixture(root: std::sync::Arc<tempfile::TempDir>) -> Result<(Fixture, String)> {
     let f = Fixture::with_root(root)?;
     proxy::install_claude_subscription(
         f.root.path(),
