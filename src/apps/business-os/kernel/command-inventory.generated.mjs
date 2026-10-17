@@ -328,7 +328,10 @@ export const COMMAND_INVENTORY = {
     "browser.credential.fill",
     "browser.dialog.respond",
     "browser.forward",
+    "browser.http_auth.respond",
     "browser.navigate",
+    "browser.observer.grant",
+    "browser.observer.revoke",
     "browser.permission.respond",
     "browser.reload",
     "browser.reset",
@@ -337,6 +340,8 @@ export const COMMAND_INVENTORY = {
     "browser.tab.activate",
     "browser.tab.close",
     "browser.tab.open",
+    "browser.upload.select",
+    "browser.webauthn.respond",
     "web_stack.auth_assist.complete"
   ],
   "browser_literal_types": [
