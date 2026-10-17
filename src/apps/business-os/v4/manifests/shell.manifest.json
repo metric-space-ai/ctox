@@ -97,7 +97,7 @@
     "shared/shell-permissions-ui.js": "f5b029309774721d1cb195a884e359220f2202cce292d5120e8263e8113ac4a5",
     "shared/shell-topbar.css": "c636ea51319e56425a8f565d873151620727eb88f64d150c6c42ffced786a4f6",
     "shared/shell-v2-chrome.css": "bc19ef06f8fd04a2d4e58c8ef3635bae2e10fddb0158039a8693744e200a5834",
-    "shared/shell-v2-topbar.css": "739262bedbab3f46724712dfffd0b4fb3ace90aa22741c528806222111b63e45",
+    "shared/shell-v2-topbar.css": "023944fa9f3e815430b418293d84986d845121c9685358ce32dfdbedf731750c",
     "shared/speech-dictation.mjs": "9d6f97aa372c3f25a8d64a628c6478ecbb93f79b128bb95be78373449a239f20",
     "shared/speech-settings-control.mjs": "f4c0cf4eab10dd25a7090fe8ad217319dd24dd6708dbfaeea266b3c020203196",
     "shared/stable-dom.js": "9d866492d18e296b1f67838e39f67f7661e87dccbd8cd937c511fb1fee1c6083",
@@ -138,7 +138,7 @@
     "v4/frame/shell-v2-desktop.css": "c9181cf9e0dc9b253ba854cee25e6488ad613a08154c61485da7311fabe81897",
     "v4/frame/taskbar.js": "79f2b6d809b2d26af891116d60e20aa7cf3bc358401fc398816a7a429cd9bcbe",
     "v4/frame/theme/theme.css": "571d4a54c7970fca64af48832ccbd2174e920f42aed047b4e8dd61f812e6fa11",
-    "v4/frame/topbar.js": "bf46186ac11a6367ada6d2b9d8ba0fb5b54692d83c95da0988557dcb86733aec",
+    "v4/frame/topbar.js": "3dc8ee148f46c3f15254b2900871cf20e9048afbc379e250f0ed508c7cbd7d7b",
     "v4/frame/window-sheet.js": "a0c508dff3ab4441343ea062744644447424790de099195528820935072bbeaf",
     "v4/shell/app-host.js": "ed97baf7dd7d170b09ee2d6d155418a02f1e682cb5dd8de765bfb8f2a09a5d4b",
     "v4/shell/chat/chat-v2.css": "2b8052b88bf02528c4db3aca499620b9228826a97546acfbe817fe6d88a51317",
@@ -388,7 +388,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "67c77ba1d81287e1150fee5a5058836f57e16b9bd75257715a2e5db6aea37b50",
+    "base_hash": "45081edd7ec2411d08167db85d5feaebdf03634e163c51fbe090206956fc7fb1",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },
