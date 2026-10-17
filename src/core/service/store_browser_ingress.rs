@@ -395,10 +395,22 @@ impl WebRTCPublicationGuard for Publication {
             return publish();
         }
         let mut result = None;
-        if let Some((session,token))=&self.grant {
-            session.with_publication(token,now()/1000,&self.peer.epoch,||{result=Some(publish());Ok(())}).map_err(|_|invalid())?;
+        if let Some((session, token)) = &self.grant {
+            session
+                .with_publication(token, now() / 1000, &self.peer.epoch, || {
+                    result = Some(publish());
+                    Ok(())
+                })
+                .map_err(|_| invalid())?;
         } else {
-            self.admission.authority().router.with_snapshot(self.peer.rights_ver,&self.peer.epoch,|_,_|{result=Some(publish());Ok(())}).map_err(|_|invalid())?;
+            self.admission
+                .authority()
+                .router
+                .with_snapshot(self.peer.rights_ver, &self.peer.epoch, |_, _| {
+                    result = Some(publish());
+                    Ok(())
+                })
+                .map_err(|_| invalid())?;
         }
         result.ok_or_else(invalid)?
     }
@@ -433,17 +445,24 @@ impl V4StreamSource for Source {
                 .token_current(&token, now() / 1000)
                 .map_err(|_| invalid())?;
             Some((session, token))
-        } else if packet["type"]=="scope.grant" {
-            let token=packet["token"].as_str().ok_or_else(invalid)?.to_owned();
-            let session=scope_grant_route::bound_owner(&self.admission,&binding)?.session();
-            session.token_current(&token,now()/1000).map_err(|_|invalid())?;
-            Some((session,token))
-        } else {None};
+        } else if packet["type"] == "scope.grant" {
+            let token = packet["token"].as_str().ok_or_else(invalid)?.to_owned();
+            let session = scope_grant_route::bound_owner(&self.admission, &binding)?.session();
+            session
+                .token_current(&token, now() / 1000)
+                .map_err(|_| invalid())?;
+            Some((session, token))
+        } else {
+            None
+        };
         Ok(Arc::new(Publication {
             grant,
             // Typed receipts contain op/seq/revision metadata, never business
             // bodies; committed E14 results and cleanup must survive revocation.
-            revocation: matches!(packet["type"].as_str(),Some("scope_revoke" | "write_result" | "forbidden")),
+            revocation: matches!(
+                packet["type"].as_str(),
+                Some("scope_revoke" | "write_result" | "forbidden")
+            ),
             inputs: self.inputs.clone(),
             admission: self.admission.clone(),
             peer: binding,

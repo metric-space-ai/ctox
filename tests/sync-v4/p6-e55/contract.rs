@@ -591,13 +591,17 @@ async fn p6_shell_boot_preference_cursor_uses_real_p8_and_e55_reader() {
     // a timing assertion. Keep the real reader/writer with an explicit budget.
     let writer = f.store.writer();
     let readers = ctox_store::read_pool::ReadPool::for_database(
-        writer.db_id(), writer.generation(), Default::default(),
+        writer.db_id(),
+        writer.generation(),
+        Default::default(),
         ctox_store::config::AdmissionBudget {
             wait: std::time::Duration::from_secs(2),
             execution: std::time::Duration::from_secs(2),
             ..Default::default()
         },
-    ).await.unwrap();
+    )
+    .await
+    .unwrap();
     let mut cursor = Subscription::new(readers.clone(), &writer, key, None).unwrap();
     let page = cursor
         .next_page(100, reader, &*f.key, || 1_001_000)
