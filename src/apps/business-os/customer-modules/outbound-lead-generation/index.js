@@ -33,6 +33,9 @@ import { readErrorEntry, visibleReadErrorKeys } from './read-error-grace.mjs';
 import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-flight-lead-sweep.mjs';
 import { revealDetailIfStacked } from './stacked-detail-reveal.mjs';
 import { doppelteAdapterIds } from './adapter-dedupe.mjs';
+import { mergeStoredContacts } from './contact-merge.mjs';
+import { hebePruefdienstRegelAn } from './policy-migration.mjs';
+import { berichtAusBefehl, berichtHtml } from './research-report.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
 import {
   actionAllowedOnStartupSnapshot, buildStartupSnapshot, readStartupSnapshot,
@@ -549,7 +552,7 @@ const DEFAULT_RESEARCH_POLICY = [
   "3. Danach die Kennzahlen: WZ-Code, Umsatz, Mitarbeiter und Geschäftstätigkeit. WZ-Code in allen drei Ländern ausschließlich aus D&B Hoovers und/oder Leadfeeder; Deutschland zusätzlich Bundesanzeiger. Kennzahlen gehören zur exakten juristischen Person des Leads, nicht zum Konzern. Umsatz und Mitarbeiter mit Geschäftsjahr im Zitat; den jüngsten Jahresabschluss im Bundesanzeiger bevorzugen, D&B-Schätzwerte als Schätzung kennzeichnen. Die Geschäftstätigkeit über D&B Hoovers oder eine Google-Suche nach Unternehmensname und Tätigkeit klären; aus der Homepage einen Firmensteckbrief erstellen (Homepage-Fact-Sheet).",
   "4. Zuletzt die Ansprechpartner: Vorname, Nachname, Funktion, Position, E-Mail, Telefon, LinkedIn und XING. Gesucht wird mindestens eine Person aus jeder dieser Kategorien, in dieser Reihenfolge: Geschäftsführung/Gesamtverantwortung, Leitung Finanzen, Einkauf, Supply Chain Management, Operations, Technik, Entwicklung. Personen über die Namenssuche in LinkedIn und XING ansteuern, nicht über angeklickte Suchtreffer.",
   "4a. Geschlecht und Titel jeder Person selbst bestimmen, nicht suchen: Das Geschlecht ergibt sich aus dem Vornamen (männlich/weiblich). Als Beleg die Quelle der Person mit dem Zitat, das ihren Vornamen nennt, und als Begründung „aus dem Vornamen abgeleitet“. Nur bei einem nicht eindeutigen Vornamen (z. B. Kim, Andrea im Ausland) das Feld als prüfbedürftig melden. Titel ist ein akademischer Titel, wenn eine Quelle ihn nennt (z. B. Dr., Prof., Dipl.-Ing.); sonst „Herr“ oder „Frau“ nach dem Geschlecht.",
-  "4b. E-Mail der Person: Steht die Adresse wörtlich auf der Unternehmensseite oder in einer anderen Quelle, ist sie damit belegt. Sonst die Adresse aus dem Muster anderer bekannter Adressen derselben Firma bilden: Adressen anderer Mitarbeiter auf der Website, in Sellify, in Registern, Pressemitteilungen, Leadfeeder oder RocketReach (z. B. vorname.nachname@, v.nachname@, vorname@). Umlaute und ß wie im Muster umsetzen (ü → ue). Die gebildete Adresse über den Adapter experte-de prüfen, bei unklarem Ergebnis einmal über mailtester-com. Nur ein Ergebnis „gültig“ bzw. „zustellbar“ belegt die Adresse: dann die E-Mail eintragen mit dem Prüfergebnis als Beleg und der Musterquelle als zweitem Beleg, und das Ergebnis in E-Mail-Prüfung festhalten. Bei „ungültig“ das nächste plausible Muster prüfen, höchstens drei Varianten je Person. Bei „unbekannt“ oder Catch-All die beste Variante eintragen und als prüfbedürftig melden. Jede Adresse höchstens einmal je Prüfdienst; ist ein Dienst blockiert, das Feld als prüfbedürftig mit diesem Grund melden.",
+  "4b. E-Mail der Person: Steht die Adresse wörtlich auf der Unternehmensseite oder in einer anderen Quelle, ist sie damit belegt. Sonst die Adresse aus dem Muster anderer bekannter Adressen derselben Firma bilden: Adressen anderer Mitarbeiter auf der Website, in Sellify, in Registern, Pressemitteilungen, Leadfeeder oder RocketReach (z. B. vorname.nachname@, v.nachname@, vorname@). Umlaute und ß wie im Muster umsetzen (ü → ue). Die gebildete Adresse über den Adapter experte-de prüfen; bei unklarem Ergebnis oder wenn experte-de blockiert oder nicht erreichbar ist, einmal über mailtester-com. Nur ein Ergebnis „gültig“ bzw. „zustellbar“ belegt die Adresse: dann die E-Mail eintragen mit dem Prüfergebnis als Beleg und der Musterquelle als zweitem Beleg, und das Ergebnis in E-Mail-Prüfung festhalten. Bei „ungültig“ das nächste plausible Muster prüfen, höchstens drei Varianten je Person. Bei „unbekannt“ oder Catch-All die beste Variante eintragen und als prüfbedürftig melden. Jede Adresse höchstens einmal je Prüfdienst; ist ein Dienst blockiert, den anderen nehmen, und erst wenn beide blockiert sind, das Feld als prüfbedürftig mit diesem Grund melden.",
   "4c. Telefon der Person: Durchwahl aus Website, Signatur, Pressemitteilung, Leadfeeder oder RocketReach. Ohne eigene Durchwahl bleibt das Feld leer; die Zentrale gehört in Firmen-Telefon, nicht zur Person.",
   "5. Belegregel (Owner 07.10.2026: „Qualität geht immer vor Quantität. Wenn es nur eine Quelle gibt, ist die Recherche nicht gut, das sollte nur im Notfall sein.“): Für jedes Feld, das Dritte unabhängig prüfen können (Firmenname, Anschrift, PLZ, Ort, Länderkennzeichen, Aktivitätsstatus, frühere Namen, Geschäftstätigkeit, Geschäftsführung, WZ-Code, Umsatz, Mitarbeiter), zwei unabhängige Quellen (verschiedene Anbieter) mit URL und wörtlichem Zitat, das den konkreten Wert nennt. Nur wenn nach allen dafür genannten Quellen nur eine den Wert belegt, den Wert mit Begründung „single source: …“ eintragen. So viele Quellen wie möglich, jede aber nur einmal. Zwei Seiten derselben Quelle sind eine Quelle, und Sellify allein belegt nichts. Eine Spanne (z. B. 11–100) belegt keinen Einzelwert.",
   "5a. Selbstauskünfte wie Domain, Firmen-E-Mail, Firmen-Telefon, Fax, Postfach, Besucheradresse, Postadresse, Homepage-Fact-Sheet sowie alle Felder der Ansprechpartner belegt die Unternehmensseite (Impressum, Kontakt, Team) bzw. das Profil selbst, mit URL und wörtlichem Zitat. Einen so belegten Wert eintragen, niemals als nicht gefunden verwerfen mit der Begründung, er stehe nur auf der eigenen Website.",
@@ -1619,7 +1622,7 @@ function hebeBelegregelAn(text) {
 }
 function researchPolicyInstructions(policy) {
   const text = String(policy?.instructions || DEFAULT_RESEARCH_POLICY).trim() || DEFAULT_RESEARCH_POLICY;
-  return hebeBelegregelAn(text);
+  return hebePruefdienstRegelAn(hebeBelegregelAn(text));
 }
 
 // Eigener Prompt fuer die Nachrecherche (Owner-Vorgabe 31.08.). Leer heisst:
@@ -4718,7 +4721,10 @@ async function startScopedResearch(campaign, leads, options = {}) {
       melde();
     }
   };
-  await Promise.all(Array.from({ length: Math.min(3, eligibleLeads.length) }, arbeiter));
+  // Owner 15.10.2026 (Stresstest): "es ist doch ein stresstest und kein
+  // streicheltest" - acht Starts nebeneinander, so viele wie die CTOX-Queue
+  // gleichzeitig abarbeitet.
+  await Promise.all(Array.from({ length: Math.min(8, eligibleLeads.length) }, arbeiter));
   if (!queued.length) {
     const message = failed.length
       ? `Kein Lead konnte gestartet werden (${failed.length} Fehler): ${failed.slice(0, 3).map((entry) => entry.error).join(' \u00b7 ')}`
@@ -12731,6 +12737,7 @@ async function patchLead(id, patch, { payloadMerge = false, dataMerge = false } 
   const current = doc.toJSON?.() || doc;
   if (payloadMerge && patch?.payload) patch = { ...patch, payload: { ...(current.payload || {}), ...patch.payload } };
   if (dataMerge && patch?.data) patch = { ...patch, data: { ...(current.data || {}), ...patch.data } };
+  if (Array.isArray(patch?.contacts)) patch = { ...patch, contacts: mergeStoredContacts(current.contacts, patch.contacts) };
   const normalized = normalizeLeadRecipientShape({ ...current, ...patch, id });
   const updatedAt = Date.now();
   const applied = {
@@ -13409,6 +13416,11 @@ function researchFieldReview(lead) {
     groups,
     fields,
     total: researchFields.length,
+    // Owner 15.10.2026: der Zaehler soll die Pflichtfelder meinen, nicht alle
+    // Felder einschliesslich der optionalen.
+    requiredTotal: researchFields.filter((field) => !field.optional).length,
+    researchedRequiredCount: researchFields.filter((field) => !field.optional && field.filled
+      && researchedKeys.has(field.key)).length,
     maintenanceCount: fields.length - researchFields.length,
     filledCount: researchFields.filter((field) => field.filled).length,
     // Owner-Befund 07.09.2026: "nichts ist recherchiert obwohl Felder belegt
@@ -13783,14 +13795,54 @@ function renderResearchReviewSummary(review, lead) {
     ${review.evidenceUnloaded ? `<p class="leadgen-review-notice">${escapeHtml(tr('evidenceUnloadedTitle', 'Belege werden noch geladen'))}</p>` : ''}
     ${letzterRechercheFehler(lead) ? `<p class="leadgen-review-notice">${escapeHtml(letzterRechercheFehler(lead))}</p>` : ''}
     <div class="leadgen-review-metrics" aria-label="Recherchefortschritt">
-      <div><strong>${untouched ? 0 : review.researchedCount}<span> / ${review.total}</span></strong><small>recherchiert</small></div>
+      <div><strong>${untouched ? 0 : review.researchedRequiredCount}<span> / ${review.requiredTotal}</span></strong><small>Pflichtfelder recherchiert</small></div>
       <div><strong>${review.filledCount}</strong><small>Werte vorhanden (inkl. Import)</small></div>
       <div><strong>${review.sufficientCount}</strong><small>ausreichend belegt</small></div>
       <div><strong>${untouched ? '—' : openCount}</strong><small>offene Prüfungen</small></div>
     </div>
     ${untouched ? '' : `<p class="leadgen-muted">${nichtGefunden} Feld(er) von der Recherche begründet „nicht gefunden“${optionalOffen ? ` · ${optionalOffen} optionale(s) Feld(er) ohne Wert` : ''} – blockieren die Freigabe nicht.</p>`}
     <p class="leadgen-muted">${escapeHtml(tr('campaignLabel', 'Kampagne'))}: ${escapeHtml(lead?.campaign || tr('annualResearch', 'Jahresrecherche'))}</p>
+    ${renderResearchReport(lead)}
   </section>`;
+}
+// Abschlussbericht der letzten Recherche, aus dem Ergebnis ihres Befehls.
+// Gelesen wird zuerst der lokale Speicher; ohne Treffer bleibt der Bereich weg.
+function renderResearchReport(lead) {
+  const commandId = String(lead?.command_id || '');
+  if (!commandId) return '';
+  if (!(state.researchReports instanceof Map)) state.researchReports = new Map();
+  const eintrag = state.researchReports.get(commandId);
+  if (eintrag === undefined || (eintrag?.erneutAb && Date.now() >= eintrag.erneutAb)) {
+    state.researchReports.set(commandId, { erneutAb: Date.now() + 30_000 });
+    void ladeRechercheBericht(commandId);
+    return '';
+  }
+  const text = typeof eintrag === 'string' ? eintrag : '';
+  if (!text) return '';
+  return `<details class="leadgen-research-report"><summary>${escapeHtml(tr('researchReport', 'Abschlussbericht der Recherche'))}</summary><div class="leadgen-research-report-body">${berichtHtml(text)}</div></details>`;
+}
+async function ladeRechercheBericht(commandId) {
+  const collection = state.ctx?.db?.collection?.('business_commands');
+  let befehl = null;
+  try {
+    const gespeichert = await collection?.storageCollection?.findDocumentsById?.([commandId], false);
+    befehl = Array.isArray(gespeichert) ? gespeichert[0] : (gespeichert?.[commandId] || null);
+    if (!befehl && collection?.findOne) {
+      const doc = await collection.findOne(commandId).exec();
+      befehl = doc?.toJSON?.() || doc || null;
+    }
+  } catch (error) {
+    console.warn('[outbound-lead-generation] Abschlussbericht nicht lesbar', error);
+  }
+  const text = befehlAbgeschlossen(befehl) ? berichtAusBefehl(befehl) : '';
+  // Laufende Recherche: der Eintrag haelt die Wartezeit, das naechste Zeichnen
+  // nach 30 s liest erneut.
+  if (!text) return;
+  state.researchReports.set(commandId, text);
+  render();
+}
+function befehlAbgeschlossen(befehl) {
+  return ['completed', 'failed', 'cancelled'].includes(String(befehl?.status || ''));
 }
 function renderContactRecipientSelection(lead) {
   const normalized = normalizeLeadRecipientShape(lead || {});
