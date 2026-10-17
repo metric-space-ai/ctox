@@ -1,6 +1,9 @@
 #![cfg(unix)]
 //! Regression: a storage-backed native host must publish its real listener
 //! from the multi-thread async acceptance path, without blocking a worker.
+// The shared fixture uses the sync crate's dependency name; reuse the root
+// crate's existing futures-util dependency without adding another package.
+extern crate futures_util as futures;
 #[allow(dead_code)] // Shared signaling support also serves the larger host suite.
 #[path = "../src/core/sync/tests/support/signaling.rs"]
 mod signaling;
@@ -67,7 +70,10 @@ fn bundle(root: &Path) -> Result<()> {
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn native_host_publishes_listener_from_multithread_runtime() -> Result<()> {
-    let fixture = tempfile::Builder::new().prefix("hstart-").tempdir()?;
+    // The lane sets a deep TMPDIR; native Unix sockets require a short root.
+    let fixture = tempfile::Builder::new()
+        .prefix("hstart-")
+        .tempdir_in("/tmp")?;
     let signal = signaling::SignalingFixture::with_roles(["ctox_instance"]).await;
     let mut voters = BTreeMap::new();
     for id in 1..=3 {
