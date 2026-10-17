@@ -32780,7 +32780,7 @@ Business OS command:
 
     #[test]
     fn non_work_tui_route_is_acknowledged_without_agent_queue() {
-        crate::persistence::test_support::run(move |owner_root| {
+        crate::persistence::test_support::run_queue(move |owner_root| {
             let root = owner_root.path().to_path_buf();
             upsert_test_inbound_message(
                 &root,

@@ -9,6 +9,17 @@ pub(crate) async fn attach_lcm_store(
     writer: ctox_store::writer::WriterHandle,
     readers: ctox_store::read_pool::ReadPool,
 ) -> std::result::Result<owner_adapter::OwnerAdapter, ctox_store::StoreError> {
+    // The legacy domain schema is initialized on the existing writer before
+    // publishing the adapter. A freshly owned Core file must support continuity
+    // and secret rewriting just as the legacy opener did.
+    // TODO(P3-06): source this initializer from the schema registry seam.
+    writer
+        .submit(ctox_store::WriteJob::new(Default::default(), |tx| {
+            LcmEngine::borrowed(tx, LcmConfig::default())
+                .init_schema()
+                .map_err(|error| ctox_store::StoreError::Invalid(format!("LCM schema: {error}")))
+        }))?
+        .await?;
     owner_adapter::OwnerAdapter::attach(&crate::paths::lcm_db(root), writer, readers).await
 }
 

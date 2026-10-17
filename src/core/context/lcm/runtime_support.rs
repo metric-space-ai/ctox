@@ -783,8 +783,8 @@ pub(super) fn migrate_empty_mission_split_brain_with(conn: &Connection) -> Resul
             details_json TEXT NOT NULL DEFAULT '{}'
         );",
     )?;
-    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)
-        .context("failed to begin empty mission-state migration")?;
+    let tx =
+        LcmTransaction::begin(conn).context("failed to begin empty mission-state migration")?;
     let already_applied = tx.query_row(
         "SELECT EXISTS(
             SELECT 1 FROM lcm_data_migrations WHERE migration_id = ?1

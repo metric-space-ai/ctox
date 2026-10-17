@@ -2011,7 +2011,7 @@ pub fn handle_channel_command(root: &Path, args: &[String]) -> Result<()> {
             } else {
                 (None, failure_reason)
             };
-            let updated = crate::service::queue_store::ack(
+            let updated = crate::service::queue_store::ack_from_core(
                 root,
                 &message_keys,
                 status.as_str(),
@@ -2601,7 +2601,7 @@ pub fn has_runnable_inbound_message(root: &Path) -> Result<bool> {
 }
 
 pub fn ack_leased_messages(root: &Path, message_keys: &[String], status: &str) -> Result<usize> {
-    crate::service::queue_store::ack(root, message_keys, status, None, None, None, None)
+    crate::service::queue_store::ack_from_core(root, message_keys, status, None, None, None, None)
 }
 
 /// Ack with an explicit routing reason. The reason is audit data only and does
@@ -2617,7 +2617,7 @@ pub fn ack_leased_messages_for_attempt(
     status: &str,
     failure_reason: Option<&str>,
 ) -> Result<usize> {
-    crate::service::queue_store::ack(
+    crate::service::queue_store::ack_from_core(
         root,
         message_keys,
         status,
@@ -2803,7 +2803,15 @@ pub fn ack_leased_messages_with_reason(
     status: &str,
     reason: &str,
 ) -> Result<usize> {
-    crate::service::queue_store::ack(root, message_keys, status, None, Some(reason), None, None)
+    crate::service::queue_store::ack_from_core(
+        root,
+        message_keys,
+        status,
+        None,
+        Some(reason),
+        None,
+        None,
+    )
 }
 
 pub(crate) fn ack_leased_messages_with_reason_and_grant(
@@ -2813,7 +2821,7 @@ pub(crate) fn ack_leased_messages_with_reason_and_grant(
     reason: &str,
     terminal_policy_grant: TerminalPolicyGrant,
 ) -> Result<usize> {
-    crate::service::queue_store::ack(
+    crate::service::queue_store::ack_from_core(
         root,
         message_keys,
         status,
@@ -2834,7 +2842,7 @@ pub fn ack_leased_messages_with_failure_reason(
         canonical_queue_route_status(status)? == QueueRouteStatus::Failed,
         "failure acknowledgement requires failed status"
     );
-    crate::service::queue_store::ack(
+    crate::service::queue_store::ack_from_core(
         root,
         message_keys,
         status,

@@ -137,6 +137,39 @@ pub(crate) fn ack(
     Ok(serde_json::from_slice(&reply)?)
 }
 
+/// Synchronous domain callers already admitted by Core may run on its bounded
+/// blocking executor. Await the queue's async owner API using that executor's
+/// runtime; ordinary service threads retain the synchronous transport path.
+/// The raw `ack` guard remains strict, and async workers lack Core admission.
+pub(crate) fn ack_from_core(
+    root: &Path,
+    keys: &[String],
+    status: &str,
+    failure: Option<&str>,
+    reason: Option<&str>,
+    attempt: Option<&str>,
+    grant: Option<TerminalPolicyGrant>,
+) -> anyhow::Result<usize> {
+    let Ok(runtime) = Handle::try_current() else {
+        return ack(root, keys, status, failure, reason, attempt, grant);
+    };
+    crate::persistence::require_sync_owner_context()?;
+    runtime.block_on(ack_async(
+        root.to_owned(),
+        AckRequest {
+            operation_id: attempt
+                .map(|a| format!("queue-ack-{:x}", Sha256::digest(a.as_bytes())))
+                .unwrap_or_else(|| format!("queue-ack-{}", uuid::Uuid::new_v4())),
+            keys: keys.to_vec(),
+            status: status.into(),
+            failure: failure.map(str::to_owned),
+            reason: reason.map(str::to_owned),
+            attempt: attempt.map(str::to_owned),
+        },
+        grant,
+    ))
+}
+
 /// Runtime callers await the typed result directly; SQLite remains on its
 /// owner thread and IPC stays on its bounded same-user transport pool.
 pub(crate) async fn ack_async(
