@@ -421,9 +421,149 @@ async fn command_release_change_retires_a_live_fence_and_old_metadata_requires_c
 async fn command_kernel_p5_wire_replays_the_native_canonical_document() {
     kernel_component(false).await;
 }
+const E25_NATIVE_TEST: &str =
+    "change_log::subscription::write_contract::tests::command_tests::e25_kernel_command_to_native_completion";
+const E25_NATIVE_CHILD: &str = "CTOX_STORE_E25_NATIVE_TEST_CHILD";
+const E25_BUDGET_TEST: &str =
+    "change_log::subscription::write_contract::tests::command_tests::e25_native_reader_budget_is_process_isolated";
+const E25_BUDGET_CHILD: &str = "CTOX_STORE_E25_BUDGET_TEST_CHILD";
+
+fn run_native_test_process(test: &str, marker: &str, method: Option<&str>) {
+    use std::io::{Read, Seek, SeekFrom};
+    struct Process(std::process::Child);
+    impl Drop for Process {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    fn tail(path: &std::path::Path) -> String {
+        let mut file = std::fs::File::open(path).unwrap();
+        let count = file.metadata().unwrap().len().min(64 * 1024);
+        file.seek(SeekFrom::End(-(count as i64))).unwrap();
+        let mut bytes = Vec::with_capacity(count as usize);
+        file.read_to_end(&mut bytes).unwrap();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+    let logs = tempfile::tempdir().unwrap();
+    let stdout = logs.path().join("native-test.stdout");
+    let stderr = logs.path().join("native-test.stderr");
+    let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", test])
+        .env(marker, "1")
+        .stdout(std::fs::File::create(&stdout).unwrap())
+        .stderr(std::fs::File::create(&stderr).unwrap());
+    if let Some(method) = method {
+        command.env("E25_METHOD", method);
+        if let Some(trace) = std::env::var_os("E25_TRACE_OUT") {
+            let mut path = std::path::PathBuf::from(trace);
+            path.set_extension("budget.trace.json");
+            command.env("E25_TRACE_OUT", path);
+        }
+    }
+    let mut child = Process(command.spawn().unwrap());
+    let status = child.0.wait().unwrap();
+    let stdout_tail = tail(&stdout);
+    assert!(
+        status.success()
+            && stdout_tail.contains("running 1 test")
+            && stdout_tail.contains(test)
+            && stdout_tail.contains("1 passed; 0 failed"),
+        "isolated native test {test} failed or selected no test: {status}\nstdout tail:\n{}\nstderr tail:\n{}",
+        stdout_tail,
+        tail(&stderr)
+    );
+}
+
+async fn isolated_e25_component(method: Option<&str>) {
+    if std::env::var_os(E25_NATIVE_CHILD).is_some() {
+        kernel_component(true).await;
+        return;
+    }
+    // ReadPool intentionally has a PROCESS-wide blocking budget. Admission and
+    // cancellation tests in the full suite exercise that same static semaphore.
+    // Give this latency component its own native process, not a larger budget
+    // or a serial full suite. All native writes, signed pages and SLA checks run.
+    run_native_test_process(E25_NATIVE_TEST, E25_NATIVE_CHILD, method);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn e25_kernel_command_to_native_completion() {
-    kernel_component(true).await;
+    isolated_e25_component(None).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn e25_native_reader_budget_is_process_isolated() {
+    if std::env::var_os(E25_BUDGET_CHILD).is_none() {
+        // The stress producer must also be isolated: never exhaust the budget
+        // of unrelated tests in the parent libtest process.
+        run_native_test_process(E25_BUDGET_TEST, E25_BUDGET_CHILD, None);
+        return;
+    }
+    use crate::config::{AdmissionBudget, ConnectionConfig, MAX_BLOCKING_READS, READ_CONNECTIONS};
+    use crate::read_pool::ReadPool;
+    use std::{num::NonZeroUsize, sync::mpsc, time::Duration};
+    let temp = tempfile::tempdir().unwrap();
+    let config = ConnectionConfig::default();
+    let mut writers = Vec::new();
+    let mut pools = Vec::new();
+    assert_eq!(MAX_BLOCKING_READS % READ_CONNECTIONS, 0);
+    for index in 0..MAX_BLOCKING_READS / READ_CONNECTIONS {
+        let path = temp.path().join(format!("reader-load-{index}.sqlite"));
+        let writer = rusqlite::Connection::open(&path).unwrap();
+        config.apply_writer(&writer).unwrap();
+        writer
+            .execute_batch("CREATE TABLE sample(value INTEGER); INSERT INTO sample VALUES(1)")
+            .unwrap();
+        let pool = ReadPool::open(
+            path,
+            1,
+            config,
+            AdmissionBudget::new(
+                NonZeroUsize::new(READ_CONNECTIONS).unwrap(),
+                Duration::from_secs(2),
+                Duration::from_secs(600),
+            )
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+        writers.push(writer);
+        pools.push(pool);
+    }
+    let mut releases = Vec::new();
+    let mut running = Vec::new();
+    for pool in &pools {
+        for _ in 0..READ_CONNECTIONS {
+            let pool = pool.clone();
+            let (started, start) = tokio::sync::oneshot::channel();
+            let (release, released) = mpsc::channel();
+            running.push(tokio::spawn(async move {
+                pool.read(move |tx| {
+                    started.send(()).unwrap();
+                    released.recv_timeout(Duration::from_secs(600)).unwrap();
+                    tx.query_row("SELECT value FROM sample", [], |r| r.get::<_, i64>(0))
+                })
+                .await
+            }));
+            start.await.unwrap();
+            releases.push(release);
+        }
+    }
+    // Every parent-process blocking permit is occupied, but the actual native
+    // command still crosses Core/Kernel/P5 and must meet the unchanged 150ms SLA.
+    isolated_e25_component(Some("ctox.workjet.project.supervisor.route.read.v2")).await;
+    for release in releases {
+        release.send(()).unwrap();
+    }
+    for job in running {
+        assert_eq!(job.await.unwrap().unwrap(), 1);
+    }
+    for pool in pools {
+        pool.shutdown().await.unwrap();
+    }
+    drop(writers);
 }
 async fn kernel_component(e25: bool) {
     use crate::change_log::subscription::{
