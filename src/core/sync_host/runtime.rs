@@ -170,26 +170,36 @@ async fn current_signaling_urls(root: PathBuf, config: HostConfiguration) -> Vec
 }
 
 pub(super) fn status(root: &Path) -> Result<()> {
-    let Some(config) = load_config(root)? else {
-        return print(serde_json::json!({"configured": false, "listener":"inactive"}));
+    // Offline CLI execution is already on its admitted blocking worker. Borrow
+    // that owner's runtime; status reads themselves use the async owner path.
+    print(tokio::runtime::Handle::try_current()?.block_on(owner_status(root.to_owned()))?)
+}
+
+pub(super) async fn owner_status(root: PathBuf) -> Result<serde_json::Value> {
+    let state = crate::persistence::run_core_sync(move || {
+        let Some(config) = load_config(&root)? else {
+            return Ok(None);
+        };
+        let descriptor = std::fs::File::open(directory(&root).join("listener.json"))
+            .ok()
+            .and_then(|file| serde_json::from_reader::<_, Descriptor>(file.take(16384)).ok())
+            .filter(|value| {
+                value.version == 1
+                    && value.node_id == config.node_id()
+                    && value.scope_id == config.scope_id
+                    && value.ipc_endpoint.is_absolute()
+            });
+        Ok(Some((config, descriptor)))
+    })
+    .await?;
+    let Some((config, descriptor)) = state else {
+        return Ok(serde_json::json!({"configured":false,"listener":"inactive"}));
     };
-    let descriptor = std::fs::File::open(directory(root).join("listener.json"))
-        .ok()
-        .and_then(|file| serde_json::from_reader::<_, Descriptor>(file.take(16384)).ok())
-        .filter(|value| {
-            value.version == 1
-                && value.node_id == config.node_id()
-                && value.scope_id == config.scope_id
-                && value.ipc_endpoint.is_absolute()
-        });
     let endpoint = if let Some(descriptor) = descriptor {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()?;
-        let alive = runtime.block_on(async {
-            tokio::time::timeout(Duration::from_secs(2), hello(&descriptor)).await
-        });
-        if matches!(alive, Ok(Ok(()))) {
+        if matches!(
+            tokio::time::timeout(Duration::from_secs(2), hello(&descriptor)).await,
+            Ok(Ok(()))
+        ) {
             Some(descriptor.ipc_endpoint)
         } else {
             None
@@ -197,9 +207,9 @@ pub(super) fn status(root: &Path) -> Result<()> {
     } else {
         None
     };
-    print(
-        serde_json::json!({"configured": true, "nodeId":config.node_id(), "scopeId":config.scope_id,
-        "identity":config.identity()?, "listener":if endpoint.is_some() {"active"} else {"inactive"}, "ipcEndpoint":endpoint}),
+    Ok(
+        serde_json::json!({"configured":true,"nodeId":config.node_id(),"scopeId":config.scope_id,
+        "identity":config.identity()?,"listener":if endpoint.is_some(){"active"}else{"inactive"},"ipcEndpoint":endpoint}),
     )
 }
 async fn hello(descriptor: &Descriptor) -> io::Result<()> {

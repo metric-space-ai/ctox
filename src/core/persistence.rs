@@ -434,11 +434,45 @@ pub(crate) fn run_cli_owned<T: Send + 'static>(
     with_cli_owners(root, move || run_core_blocking_at(&work, operation))
 }
 
+/// Native lifecycle commands need Runtime/Secrets, not a fresh business/turn
+/// ledger. Existing Core state is retained for explicit legacy-key migration.
+pub(crate) fn run_native_cli_owned<T: Send + 'static>(
+    root: &Path,
+    operation: impl FnOnce() -> Result<T> + Send + 'static,
+) -> Result<T> {
+    with_cli_owner_scope(root, CliCoreCustody::ExistingOnly, move |runtime| {
+        run_core_blocking(&runtime, operation)
+    })
+    .map_err(|error| {
+        if matches!(
+            error.downcast_ref::<ctox_store::StoreError>(),
+            Some(ctox_store::StoreError::AlreadyOwned)
+        ) {
+            error.context("another authority host owns this endpoint")
+        } else {
+            error
+        }
+    })
+}
+
+enum CliCoreCustody {
+    Required,
+    ExistingOnly,
+}
+
 /// Lifecycle scope for foreground HTTP/MCP listeners. Listening and remote I/O
 /// consume no compatibility permit; only their individual store phases do.
 pub(crate) fn with_cli_owners<T>(root: &Path, operation: impl FnOnce() -> Result<T>) -> Result<T> {
-    if injected_core(root).is_ok() {
-        return operation();
+    with_cli_owner_scope(root, CliCoreCustody::Required, move |_| operation())
+}
+
+fn with_cli_owner_scope<T>(
+    root: &Path,
+    core_custody: CliCoreCustody,
+    operation: impl FnOnce(tokio::runtime::Handle) -> Result<T>,
+) -> Result<T> {
+    if let Ok(core) = injected_core(root) {
+        return operation(core.runtime.clone());
     }
     anyhow::ensure!(
         tokio::runtime::Handle::try_current().is_err(),
@@ -451,15 +485,20 @@ pub(crate) fn with_cli_owners<T>(root: &Path, operation: impl FnOnce() -> Result
         .build()?;
     let handle = runtime.handle().clone();
     let endpoint = crate::service::queue_store::endpoint(root);
-    let mut stores = crate::service::store_runtime::DaemonStores::start(endpoint, handle)?;
+    let mut stores = crate::service::store_runtime::DaemonStores::start(endpoint, handle.clone())?;
+    let include_core =
+        matches!(core_custody, CliCoreCustody::Required) || crate::paths::core_db(root).is_file();
     let work = root.to_owned();
     let attached = runtime.block_on(async {
         use ctox_store::DbId;
         use std::sync::Arc;
-        let core = stores.register("core", DbId::new(crate::paths::core_db(&work))?, false,
-            Arc::new(|_| Ok(()))).await?;
-        let core_owner = install_core_owner(&work, core.writer.clone(), core.readers.clone()).await?;
-        let lcm = crate::lcm::attach_lcm_store(&work, core.writer, core.readers).await?;
+        let core = if include_core {
+            let core = stores.register("core", DbId::new(crate::paths::core_db(&work))?, false,
+                Arc::new(|_| Ok(()))).await?;
+            let owner = install_core_owner(&work, core.writer.clone(), core.readers.clone()).await?;
+            let lcm = crate::lcm::attach_lcm_store(&work, core.writer, core.readers).await?;
+            Some((owner, lcm))
+        } else { None };
         let runtime_db = stores.register("runtime", DbId::new(crate::paths::runtime_config_db(&work))?, false,
             Arc::new(|tx| {tx.execute_batch("CREATE TABLE IF NOT EXISTS runtime_env_kv(env_key TEXT PRIMARY KEY,env_value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS runtime_state_store(state_id INTEGER PRIMARY KEY CHECK(state_id=1),state_json TEXT NOT NULL);")?; Ok(())})).await?;
         let runtime_owner = crate::runtime_env::RuntimeStore::attach(&work, runtime_db.writer, runtime_db.readers).await?;
@@ -467,11 +506,11 @@ pub(crate) fn with_cli_owners<T>(root: &Path, operation: impl FnOnce() -> Result
             Arc::new(|tx| {crate::secrets::initialize_owned_secret_schema(tx).map_err(|_|ctox_store::StoreError::Invalid("secret schema initialization failed".into()))?; Ok(())})).await?;
         let secrets_owner = crate::secrets::SecretStore::attach(&work, secrets_db.writer, secrets_db.readers).await?;
         stores.expose_identity_root(&work);
-        Ok::<_, anyhow::Error>((core_owner, lcm, runtime_owner, secrets_owner))
+        Ok::<_, anyhow::Error>((core, runtime_owner, secrets_owner))
     });
     let result = match attached {
         Ok(retained) => {
-            let result = operation();
+            let result = operation(handle);
             drop(retained);
             result
         }

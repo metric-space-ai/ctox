@@ -74,6 +74,10 @@ async fn native_host_publishes_listener_from_multithread_runtime() -> Result<()>
         let root = fixture.path().join(id.to_string());
         bundle(&root)?;
         let identity = cli(&root, "init", None).await?;
+        assert!(
+            !root.join("runtime/ctox.sqlite3").exists(),
+            "native CLI created unrelated Core/turn-ledger state"
+        );
         voters.insert(
             id,
             Peer {
@@ -141,6 +145,10 @@ async fn native_host_publishes_listener_from_multithread_runtime() -> Result<()>
         matches!(response.result, SyncIpcResult::Ready { node_id: 1, .. }),
         "listener did not answer its actual host identity"
     );
+    eprintln!("HOST_STARTUP_LISTENER_READY actual_ipc=true");
+    // A live host already owns these files. Status must use that owner's IPC,
+    // not try to acquire a second Core/Runtime/Secrets ownership lease.
+    let owner_status = cli(&root, "status", None).await;
     let pid = child.id().ok_or("host disappeared after publication")?;
     if unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) } != 0 {
         return Err(std::io::Error::last_os_error().into());
@@ -150,6 +158,9 @@ async fn native_host_publishes_listener_from_multithread_runtime() -> Result<()>
         stopped.success(),
         "native host did not drain after listener publication"
     );
-    eprintln!("HOST_STARTUP_LISTENER_READY actual_ipc=true clean_shutdown=true");
+    let owner_status = owner_status?;
+    assert_eq!(owner_status["listener"], "active");
+    assert_eq!(owner_status["nodeId"], 1);
+    eprintln!("HOST_STARTUP_SHUTDOWN clean_shutdown=true status_via_owner=true");
     Ok(())
 }

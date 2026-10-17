@@ -28,6 +28,8 @@ mod unix;
 #[cfg(all(unix, test))]
 pub(crate) use unix::guests::serve_connection as serve_native_guest_enrollment;
 #[cfg(unix)]
+pub(crate) use unix::owner_status;
+#[cfg(unix)]
 pub use unix::{handle_command, start_if_configured};
 
 /// Reuse the provisioned native Sync identity. Reading never creates or rotates
