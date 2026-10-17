@@ -61,92 +61,96 @@ pub(super) fn saved(root: &Path) -> anyhow::Result<Value> {
 }
 #[test]
 fn owner_meeting_cycle_and_operation_replay_preserve_native_revision() -> anyhow::Result<()> {
-    let root = fixture("ready")?;
-    let first = send(
-        root.path(),
-        "start",
-        "meeting.start",
-        "owner",
-        request("start-op", 0),
-    )?;
-    assert_eq!(first["status"], "completed");
-    assert_eq!(first["result"]["mutation"]["state"], "live");
-    assert_eq!(first["result"]["mutation"]["revision"], 1);
-    let replay = send(
-        root.path(),
-        "start-replay",
-        "meeting.start",
-        "owner",
-        request("start-op", 0),
-    )?;
-    assert_eq!(replay["result"], first["result"]);
-    let ended = send(
-        root.path(),
-        "end",
-        "meeting.end",
-        "owner",
-        request("end-op", 1),
-    )?;
-    assert_eq!(ended["status"], "completed");
-    assert_eq!(saved(root.path())?["state"], "review");
-    assert_eq!(saved(root.path())?["revision"], 2);
-    rejected(send(
-        root.path(),
-        "changed-operation",
-        "meeting.end",
-        "owner",
-        request("start-op", 2),
-    ));
-    assert_eq!(saved(root.path())?["revision"], 2);
-    Ok(())
+    crate::persistence::test_support::run_scoped(move || {
+        let root = fixture("ready")?;
+        let first = send(
+            root.path(),
+            "start",
+            "meeting.start",
+            "owner",
+            request("start-op", 0),
+        )?;
+        assert_eq!(first["status"], "completed");
+        assert_eq!(first["result"]["mutation"]["state"], "live");
+        assert_eq!(first["result"]["mutation"]["revision"], 1);
+        let replay = send(
+            root.path(),
+            "start-replay",
+            "meeting.start",
+            "owner",
+            request("start-op", 0),
+        )?;
+        assert_eq!(replay["result"], first["result"]);
+        let ended = send(
+            root.path(),
+            "end",
+            "meeting.end",
+            "owner",
+            request("end-op", 1),
+        )?;
+        assert_eq!(ended["status"], "completed");
+        assert_eq!(saved(root.path())?["state"], "review");
+        assert_eq!(saved(root.path())?["revision"], 2);
+        rejected(send(
+            root.path(),
+            "changed-operation",
+            "meeting.end",
+            "owner",
+            request("start-op", 2),
+        ));
+        assert_eq!(saved(root.path())?["revision"], 2);
+        Ok(())
+    })
 }
 #[test]
 fn unavailable_foreign_stale_and_nonready_meetings_do_not_transition() -> anyhow::Result<()> {
-    for state in [
-        "planned",
-        "preparing",
-        "live",
-        "review",
-        "confirmed",
-        "cancelled",
-        "failed",
-    ] {
-        let root = fixture(state)?;
+    crate::persistence::test_support::run_scoped(move || {
+        for state in [
+            "planned",
+            "preparing",
+            "live",
+            "review",
+            "confirmed",
+            "cancelled",
+            "failed",
+        ] {
+            let root = fixture(state)?;
+            rejected(send(
+                root.path(),
+                "not-ready",
+                "meeting.start",
+                "owner",
+                request("op", 0),
+            ));
+            assert_eq!(saved(root.path())?["state"], state);
+        }
+        let root = fixture("ready")?;
         rejected(send(
             root.path(),
-            "not-ready",
+            "foreign",
+            "meeting.start",
+            "foreign",
+            request("foreign", 0),
+        ));
+        rejected(send(
+            root.path(),
+            "stale",
             "meeting.start",
             "owner",
-            request("op", 0),
+            request("stale", 9),
         ));
-        assert_eq!(saved(root.path())?["state"], state);
-    }
-    let root = fixture("ready")?;
-    rejected(send(
-        root.path(),
-        "foreign",
-        "meeting.start",
-        "foreign",
-        request("foreign", 0),
-    ));
-    rejected(send(
-        root.path(),
-        "stale",
-        "meeting.start",
-        "owner",
-        request("stale", 9),
-    ));
-    let mut missing = request("missing", 0);
-    missing["meeting_id"] = json!("other-meeting");
-    rejected(send(
-        root.path(),
-        "missing",
-        "meeting.start",
-        "owner",
-        missing,
-    ));
-    assert_eq!(saved(root.path())?["revision"], 0);
-    Ok(())
+        let mut missing = request("missing", 0);
+        missing["meeting_id"] = json!("other-meeting");
+        rejected(send(
+            root.path(),
+            "missing",
+            "meeting.start",
+            "owner",
+            missing,
+        ));
+        assert_eq!(saved(root.path())?["revision"], 0);
+        Ok(())
+    })
 }
 fn text_turn(operation: &str, revision: u64) -> Value {
     let mut value = request(operation, revision);
@@ -158,57 +162,59 @@ fn text_turn(operation: &str, revision: u64) -> Value {
 #[test]
 fn owner_text_is_durable_idempotent_and_cannot_claim_supervisor_or_speech_provenance(
 ) -> anyhow::Result<()> {
-    let root = fixture("live")?;
-    let first = send(
-        root.path(),
-        "text",
-        "transcript.append",
-        "owner",
-        text_turn("text-op", 0),
-    )?;
-    assert_eq!(first["status"], "completed");
-    assert_eq!(
-        saved(root.path())?["transcript"][0]["text"],
-        "Please verify persistence."
-    );
-    let replay = send(
-        root.path(),
-        "text-replay",
-        "transcript.append",
-        "owner",
-        text_turn("text-op", 0),
-    )?;
-    assert_eq!(replay["result"], first["result"]);
-    assert_eq!(
-        saved(root.path())?["transcript"].as_array().unwrap().len(),
-        1
-    );
-    for (field, value) in [
-        ("speaker", json!("supervisor")),
-        ("modality", json!("speech")),
-        ("source_run_id", json!("invented-stt")),
-        ("stream_id", json!("invented-stream")),
-        ("meeting_id", json!("another-meeting")),
-        ("sequence", json!(5)),
-        ("ended_at_ms", json!(1)),
-    ] {
-        let mut payload = text_turn(&format!("bad-{field}"), 1);
-        payload["turn"]["id"] = json!(format!("turn-{field}"));
-        payload["turn"][field] = value;
-        rejected(send(
+    crate::persistence::test_support::run_scoped(move || {
+        let root = fixture("live")?;
+        let first = send(
             root.path(),
-            &format!("bad-{field}"),
+            "text",
             "transcript.append",
             "owner",
-            payload,
-        ));
-    }
-    assert_eq!(
-        saved(root.path())?["transcript"].as_array().unwrap().len(),
-        1
-    );
-    assert_eq!(saved(root.path())?["revision"], 1);
-    Ok(())
+            text_turn("text-op", 0),
+        )?;
+        assert_eq!(first["status"], "completed");
+        assert_eq!(
+            saved(root.path())?["transcript"][0]["text"],
+            "Please verify persistence."
+        );
+        let replay = send(
+            root.path(),
+            "text-replay",
+            "transcript.append",
+            "owner",
+            text_turn("text-op", 0),
+        )?;
+        assert_eq!(replay["result"], first["result"]);
+        assert_eq!(
+            saved(root.path())?["transcript"].as_array().unwrap().len(),
+            1
+        );
+        for (field, value) in [
+            ("speaker", json!("supervisor")),
+            ("modality", json!("speech")),
+            ("source_run_id", json!("invented-stt")),
+            ("stream_id", json!("invented-stream")),
+            ("meeting_id", json!("another-meeting")),
+            ("sequence", json!(5)),
+            ("ended_at_ms", json!(1)),
+        ] {
+            let mut payload = text_turn(&format!("bad-{field}"), 1);
+            payload["turn"]["id"] = json!(format!("turn-{field}"));
+            payload["turn"][field] = value;
+            rejected(send(
+                root.path(),
+                &format!("bad-{field}"),
+                "transcript.append",
+                "owner",
+                payload,
+            ));
+        }
+        assert_eq!(
+            saved(root.path())?["transcript"].as_array().unwrap().len(),
+            1
+        );
+        assert_eq!(saved(root.path())?["revision"], 1);
+        Ok(())
+    })
 }
 #[test]
 fn owner_todo_revision_stays_proposed_and_references_only_this_meeting() -> anyhow::Result<()> {

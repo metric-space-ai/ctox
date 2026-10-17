@@ -138,148 +138,156 @@ fn guest_input_user_is_denied_before_dispatch() -> anyhow::Result<()> {
 
 #[test]
 fn guest_observe_rejects_unknown_fields_and_arbitrary_commands() -> anyhow::Result<()> {
-    let root = tempdir()?;
-    seed_guest_command_users(root.path())?;
-    for (command_id, command_type, payload) in [
-        (
-            "cmd-guest-actor",
-            "ctox.guest.observe",
-            json!({"guest_id": "guest-a", "actor": "admin"}),
-        ),
-        (
-            "cmd-guest-shell",
-            "ctox.guest.input",
-            json!({
-                "guest_id": "guest-a",
-                "frame_id": "frame-current",
-                "input": {"kind": "shell", "command": "id"}
-            }),
-        ),
-    ] {
-        let error = accept_rxdb_business_command(
-            root.path(),
-            document(
-                command_id,
-                command_type,
-                payload,
-                actor("owner-1", "admin"),
-                None,
+    crate::persistence::test_support::run_scoped(move || {
+        let root = tempdir()?;
+        seed_guest_command_users(root.path())?;
+        for (command_id, command_type, payload) in [
+            (
+                "cmd-guest-actor",
+                "ctox.guest.observe",
+                json!({"guest_id": "guest-a", "actor": "admin"}),
             ),
-        )
-        .expect_err(command_id);
-        let message = error.to_string();
-        assert!(
-            message.contains("invalid ctox.guest")
-                || message.contains("unknown field")
-                || message.contains("guest command"),
-            "{command_id}: {message}"
-        );
-    }
-    Ok(())
+            (
+                "cmd-guest-shell",
+                "ctox.guest.input",
+                json!({
+                    "guest_id": "guest-a",
+                    "frame_id": "frame-current",
+                    "input": {"kind": "shell", "command": "id"}
+                }),
+            ),
+        ] {
+            let error = accept_rxdb_business_command(
+                root.path(),
+                document(
+                    command_id,
+                    command_type,
+                    payload,
+                    actor("owner-1", "admin"),
+                    None,
+                ),
+            )
+            .expect_err(command_id);
+            let message = error.to_string();
+            assert!(
+                message.contains("invalid ctox.guest")
+                    || message.contains("unknown field")
+                    || message.contains("guest command"),
+                "{command_id}: {message}"
+            );
+        }
+        Ok(())
+    })
 }
 
 #[test]
 fn guest_command_replay_keeps_failed_receipt_correlated() -> anyhow::Result<()> {
-    let root = tempdir()?;
-    seed_guest_command_users(root.path())?;
-    let command_id = "cmd-guest-observe-replay";
-    let request = document(
-        command_id,
-        "ctox.guest.observe",
-        json!({"guest_id": "guest-a"}),
-        actor("owner-1", "admin"),
-        None,
-    );
-    let first = accept_rxdb_business_command(root.path(), request.clone());
-    assert!(first.is_err(), "{first:?}");
-    let replay = accept_rxdb_business_command(root.path(), request)?;
-    assert_eq!(replay["already_accepted"], true);
-    assert_eq!(replay["command_id"], command_id);
-    assert_eq!(replay["status"], "failed");
-    assert!(
-        replay["result"]["error"]
-            .as_str()
-            .is_some_and(|value| value.contains("guest command owner is not registered")),
-        "{replay}"
-    );
-    Ok(())
-}
-
-#[test]
-fn registered_guest_owner_observe_and_input_use_command_plane_receipts() -> anyhow::Result<()> {
-    let root = tempdir()?;
-    seed_guest_command_users(root.path())?;
-    let injection = super::super::guest_commands::test_guest_runtime(false);
-    let observe = accept_rxdb_business_command_with_guest_runtime(
-        root.path(),
-        document(
-            "cmd-guest-observe-registered",
-            "ctox.guest.observe",
-            json!({"guest_id": "guest-a"}),
-            actor("owner", "admin"),
-            None,
-        ),
-        CommandOrigin::TrustedLocal,
-        injection.clone(),
-    )?;
-    assert_eq!(observe["ok"], true);
-    assert_eq!(observe["status"], "completed");
-    assert_eq!(observe["command_id"], "cmd-guest-observe-registered");
-    assert_eq!(observe["result"]["outcome"], "observation_published");
-    assert_eq!(observe["result"]["frame_id"], "frame-current");
-    assert_eq!(observe["result"]["guest_id"], "guest-a");
-    assert!(observe["result"].get("png").is_none());
-    assert!(!observe["result"].to_string().contains("png"));
-
-    let applied = accept_rxdb_business_command_with_guest_runtime(
-        root.path(),
-        document(
-            "cmd-guest-input-registered",
-            "ctox.guest.input",
-            json!({
-                "guest_id": "guest-a",
-                "frame_id": "frame-current",
-                "input": {"kind": "click", "x": 2, "y": 3, "button": "left"}
-            }),
-            actor("owner", "admin"),
-            None,
-        ),
-        CommandOrigin::TrustedLocal,
-        injection,
-    )?;
-    assert_eq!(applied["ok"], true);
-    assert_eq!(applied["status"], "completed");
-    assert_eq!(applied["command_id"], "cmd-guest-input-registered");
-    assert_eq!(applied["result"]["outcome"], "input_applied");
-    assert_eq!(
-        applied["result"]["command_id"],
-        "cmd-guest-input-registered"
-    );
-    assert!(applied["result"].get("png").is_none());
-    Ok(())
-}
-
-#[test]
-fn public_intake_wrapper_stays_unregistered_and_cannot_execute() -> anyhow::Result<()> {
-    let root = tempdir()?;
-    seed_guest_command_users(root.path())?;
-    let error = accept_rxdb_business_command_with_origin(
-        root.path(),
-        document(
-            "cmd-guest-public-unregistered",
+    crate::persistence::test_support::run_scoped(move || {
+        let root = tempdir()?;
+        seed_guest_command_users(root.path())?;
+        let command_id = "cmd-guest-observe-replay";
+        let request = document(
+            command_id,
             "ctox.guest.observe",
             json!({"guest_id": "guest-a"}),
             actor("owner-1", "admin"),
             None,
-        ),
-        CommandOrigin::TrustedLocal,
-    )
-    .expect_err("public intake must pass Unregistered");
-    assert!(
-        error
-            .to_string()
-            .contains("guest command owner is not registered for this runtime"),
-        "{error}"
-    );
-    Ok(())
+        );
+        let first = accept_rxdb_business_command(root.path(), request.clone());
+        assert!(first.is_err(), "{first:?}");
+        let replay = accept_rxdb_business_command(root.path(), request)?;
+        assert_eq!(replay["already_accepted"], true);
+        assert_eq!(replay["command_id"], command_id);
+        assert_eq!(replay["status"], "failed");
+        assert!(
+            replay["result"]["error"]
+                .as_str()
+                .is_some_and(|value| value.contains("guest command owner is not registered")),
+            "{replay}"
+        );
+        Ok(())
+    })
+}
+
+#[test]
+fn registered_guest_owner_observe_and_input_use_command_plane_receipts() -> anyhow::Result<()> {
+    crate::persistence::test_support::run_scoped(move || {
+        let root = tempdir()?;
+        seed_guest_command_users(root.path())?;
+        let injection = super::super::guest_commands::test_guest_runtime(false);
+        let observe = accept_rxdb_business_command_with_guest_runtime(
+            root.path(),
+            document(
+                "cmd-guest-observe-registered",
+                "ctox.guest.observe",
+                json!({"guest_id": "guest-a"}),
+                actor("owner", "admin"),
+                None,
+            ),
+            CommandOrigin::TrustedLocal,
+            injection.clone(),
+        )?;
+        assert_eq!(observe["ok"], true);
+        assert_eq!(observe["status"], "completed");
+        assert_eq!(observe["command_id"], "cmd-guest-observe-registered");
+        assert_eq!(observe["result"]["outcome"], "observation_published");
+        assert_eq!(observe["result"]["frame_id"], "frame-current");
+        assert_eq!(observe["result"]["guest_id"], "guest-a");
+        assert!(observe["result"].get("png").is_none());
+        assert!(!observe["result"].to_string().contains("png"));
+
+        let applied = accept_rxdb_business_command_with_guest_runtime(
+            root.path(),
+            document(
+                "cmd-guest-input-registered",
+                "ctox.guest.input",
+                json!({
+                    "guest_id": "guest-a",
+                    "frame_id": "frame-current",
+                    "input": {"kind": "click", "x": 2, "y": 3, "button": "left"}
+                }),
+                actor("owner", "admin"),
+                None,
+            ),
+            CommandOrigin::TrustedLocal,
+            injection,
+        )?;
+        assert_eq!(applied["ok"], true);
+        assert_eq!(applied["status"], "completed");
+        assert_eq!(applied["command_id"], "cmd-guest-input-registered");
+        assert_eq!(applied["result"]["outcome"], "input_applied");
+        assert_eq!(
+            applied["result"]["command_id"],
+            "cmd-guest-input-registered"
+        );
+        assert!(applied["result"].get("png").is_none());
+        Ok(())
+    })
+}
+
+#[test]
+fn public_intake_wrapper_stays_unregistered_and_cannot_execute() -> anyhow::Result<()> {
+    crate::persistence::test_support::run_scoped(move || {
+        let root = tempdir()?;
+        seed_guest_command_users(root.path())?;
+        let error = accept_rxdb_business_command_with_origin(
+            root.path(),
+            document(
+                "cmd-guest-public-unregistered",
+                "ctox.guest.observe",
+                json!({"guest_id": "guest-a"}),
+                actor("owner-1", "admin"),
+                None,
+            ),
+            CommandOrigin::TrustedLocal,
+        )
+        .expect_err("public intake must pass Unregistered");
+        assert!(
+            error
+                .to_string()
+                .contains("guest command owner is not registered for this runtime"),
+            "{error}"
+        );
+        Ok(())
+    })
 }
