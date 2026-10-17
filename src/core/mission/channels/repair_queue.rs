@@ -139,64 +139,71 @@ mod tests {
 
     #[test]
     fn incident_scrape_repair_stops_after_three_failures_with_durable_backoff() {
-        let root =
-            std::env::temp_dir().join(format!("ctox-repair-budget-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        let mut keys = Vec::new();
-        for attempt in 0..3 {
-            let task = create_scrape_repair_queue_task(
-                &root,
-                "scrape",
-                "maps-google-com",
-                request(attempt),
-            )
-            .unwrap();
-            assert!(!keys.contains(&task.message_key));
-            let conn = open_channel_db(&resolve_db_path(&root, None)).unwrap();
-            let retry: Option<String> = conn
+        crate::persistence::test_support::run_scoped(move || {
+            let owner_root = crate::persistence::test_support::scoped_tempdir()?;
+            let root = owner_root.path().to_path_buf();
+            crate::persistence::test_support::with_queue(&root.clone(), move || {
+                std::fs::create_dir_all(&root).unwrap();
+                let mut keys = Vec::new();
+                for attempt in 0..3 {
+                    let task = create_scrape_repair_queue_task(
+                        &root,
+                        "scrape",
+                        "maps-google-com",
+                        request(attempt),
+                    )
+                    .unwrap();
+                    assert!(!keys.contains(&task.message_key));
+                    let conn = open_channel_db(&resolve_db_path(&root, None)).unwrap();
+                    let retry: Option<String> = conn
                 .query_row(
                     "SELECT retry_not_before FROM communication_routing_state WHERE message_key=?1",
                     params![task.message_key],
                     |row| row.get(0),
                 )
                 .unwrap();
-            if attempt == 0 {
-                assert!(retry.is_none());
-            } else {
-                let delay = chrono::DateTime::parse_from_rfc3339(&retry.unwrap())
-                    .unwrap()
-                    .signed_duration_since(chrono::Utc::now())
-                    .num_seconds();
-                assert!(delay >= (300 * (1 << (attempt - 1))) - 10);
-                assert!(lease_queue_task(&root, &task.message_key, "worker").is_err());
-            }
-            drop(conn);
-            ack_leased_messages_with_failure_reason(
-                &root,
-                &[task.message_key.clone()],
-                "failed",
-                "repair verification failed",
-            )
-            .unwrap();
-            keys.push(task.message_key);
-        }
-        let exhausted =
-            create_scrape_repair_queue_task(&root, "scrape", "maps-google-com", request(4))
-                .unwrap();
-        assert_eq!(exhausted.message_key, *keys.last().unwrap());
-        assert_eq!(exhausted.route_status, "failed");
-        assert_eq!(exhausted.status_note.as_deref(), Some(REPAIR_EXHAUSTED));
-        assert!(
-            list_queue_tasks(&root, &["pending".into(), "leased".into()], 100)
-                .unwrap()
-                .is_empty()
-        );
-        assert_eq!(
-            list_queue_tasks(&root, &["failed".into()], 100)
-                .unwrap()
-                .len(),
-            3
-        );
-        std::fs::remove_dir_all(root).unwrap();
+                    if attempt == 0 {
+                        assert!(retry.is_none());
+                    } else {
+                        let delay = chrono::DateTime::parse_from_rfc3339(&retry.unwrap())
+                            .unwrap()
+                            .signed_duration_since(chrono::Utc::now())
+                            .num_seconds();
+                        assert!(delay >= (300 * (1 << (attempt - 1))) - 10);
+                        assert!(lease_queue_task(&root, &task.message_key, "worker").is_err());
+                    }
+                    drop(conn);
+                    ack_leased_messages_with_failure_reason(
+                        &root,
+                        &[task.message_key.clone()],
+                        "failed",
+                        "repair verification failed",
+                    )
+                    .unwrap();
+                    keys.push(task.message_key);
+                }
+                let exhausted =
+                    create_scrape_repair_queue_task(&root, "scrape", "maps-google-com", request(4))
+                        .unwrap();
+                assert_eq!(exhausted.message_key, *keys.last().unwrap());
+                assert_eq!(exhausted.route_status, "failed");
+                assert_eq!(exhausted.status_note.as_deref(), Some(REPAIR_EXHAUSTED));
+                assert!(
+                    list_queue_tasks(&root, &["pending".into(), "leased".into()], 100)
+                        .unwrap()
+                        .is_empty()
+                );
+                assert_eq!(
+                    list_queue_tasks(&root, &["failed".into()], 100)
+                        .unwrap()
+                        .len(),
+                    3
+                );
+                std::fs::remove_dir_all(root).unwrap();
+
+                Ok(())
+            })
+        })
+        .unwrap();
     }
 }

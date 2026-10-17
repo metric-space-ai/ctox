@@ -25,18 +25,19 @@ import { execFileSync, execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const { chromium } = require(process.env.PLAYWRIGHT_MODULE || join(homedir(), 'Documents/ctox/src/apps/business-os/node_modules/playwright'));
 const HERE = dirname(fileURLToPath(import.meta.url));
-const BOS = join(HERE, '../..'); // src/apps/business-os
-const REPO = join(BOS, '../../..');
+// tests/sync-v4/k24 → repository root; the shell under test is this checkout's src/apps/business-os.
+const REPO = join(HERE, '../../..');
+const BOS = join(REPO, 'src/apps/business-os');
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || join(BOS, 'node_modules/playwright'));
 const OUT = join(HERE, 'out');
 const SHOTS = join(HERE, 'shots');
 const APP_ID = 'k24-probe';
 const COLL = 'k24_ticks';
 const APP_V1 = join(HERE, 'app/v1', APP_ID);
 const APP_V2 = join(HERE, 'app/v2', APP_ID);
-// Wächter liegen im Hauptklon des Shell-v4-Strangs (nur lesend ausgeführt).
-const GUARD_BOS = process.env.K24_GUARD_BOS || join(homedir(), 'Documents/ctox-shell-v4/src/apps/business-os');
+// Guards run from the same checkout by default (read-only); K24_GUARD_BOS can point elsewhere.
+const GUARD_BOS = process.env.K24_GUARD_BOS || BOS;
 const LIMIT_MS = 2000;
 
 // ------------------------------------------------------------------ Argumente
@@ -221,14 +222,14 @@ try {
       handlerRuntime: /handlers\.get\(doc\.type\)/.test(kernelSrc) && !/import\(.*handlers\//.test(kernelSrc),
       removeApi: /uninstall|removeApp|archiveApp/.test(kernelSrc),
       publishDraftMigrations: /publishDraft[\s\S]{0,900}incompatible/.test(kernelSrc),
-      bootActorFixedAdmin: /role: 'admin'/.test(await readFile(join(BOS, 'v4/boot/boot.js'), 'utf8')),
+      bootActorFixedAdmin: /role: 'admin'/.test(await readFile(join(BOS, 'v4/boot.js'), 'utf8')),
     };
   }
   const frameSrc = (await Promise.all((await walk(join(BOS, 'v4/frame'), (p) => p.includes('/lab'))).concat(await walk(join(BOS, 'v4/shell'))).filter((f) => f.endsWith('.js')).map((f) => readFile(f, 'utf8')))).join('\n');
   results.evidence.frameUploadEntry = /openAppUpload|publishUpload|source\/upload\.js/.test(frameSrc);
 
   // ---- (1) Ausgangszustand ----
-  const SHELL_SRC = ['kernel', 'v4/frame', 'v4/shell', 'v4/source', 'v4/boot', 'shared'].map((d) => join(BOS, d));
+  const SHELL_SRC = ['kernel', 'v4/frame', 'v4/shell', 'v4/source', 'shared'].map((d) => join(BOS, d));
   // Nur Code/Konfiguration: Tests, Bilder und Berichte anderer Stränge im selben Klon (z. B. bind.test.mjs-Läufe) zählen nicht.
   const skipVolatile = (p) => p.includes('/tests/') || p.includes('/node_modules') || p.includes('/lab/') || /\.(md|png|jpg)$/.test(p);
   // Stand des Bind-Klons (andere Stränge arbeiten darin): HEAD + ungesicherte Pfade außerhalb v4/k24.

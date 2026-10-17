@@ -52,6 +52,27 @@ impl AckRequest {
         Ok(())
     }
 }
+type AckPolicy = (Option<std::collections::BTreeMap<String, String>>, Option<crate::lcm::owner_adapter::PublicationReservation>);
+
+/// Capture policy on the bounded Core compatibility executor, never wait for
+/// another store from a Core writer callback. Runtime writes are fenced until
+/// the ACK's actual commit; profile rows are rechecked on that Core transaction.
+fn prepare_ack_policy(root: &Path, request: &AckRequest, readers: &ctox_store::read_pool::ReadPool) -> anyhow::Result<AckPolicy> {
+    if request.status != "handled" || request.keys.is_empty() { return Ok((None, None)); }
+    let keys = request.keys.clone();
+    let email = Handle::current().block_on(readers.read_job(ctox_store::ReadJob::new(options(), move |conn| {
+        let slots = vec!["?"; keys.len()].join(",");
+        Ok(conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM communication_messages WHERE channel='email' AND direction='inbound' AND message_key IN ({slots}))"), rusqlite::params_from_iter(keys), |row| row.get::<_, bool>(0))?)
+    })))?;
+    if !email { return Ok((None, None)); }
+    let runtime = crate::lcm::owner_adapter::OwnerAdapter::for_path(&crate::paths::runtime_config_db(root))?;
+    let (fence, reservation) = runtime.submit_publication(|_| Ok(()))?;
+    fence.blocking_wait()?;
+    let mut settings = crate::runtime_env::load_persisted_runtime_env_map_cached(root)?;
+    settings.retain(|key, _| !crate::secrets::is_secret_key(key));
+    Ok((Some(settings), Some(reservation)))
+}
+
 fn now() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -135,6 +156,64 @@ pub(crate) fn ack(
     )?
     .blocking_wait()?;
     Ok(serde_json::from_slice(&reply)?)
+}
+
+/// Synchronous domain callers already admitted by Core may run on its bounded
+/// blocking executor. Await the queue's async owner API using that executor's
+/// runtime; ordinary service threads retain the synchronous transport path.
+/// The raw `ack` guard remains strict, and async workers lack Core admission.
+pub(crate) fn ack_from_core(
+    root: &Path,
+    keys: &[String],
+    status: &str,
+    failure: Option<&str>,
+    reason: Option<&str>,
+    attempt: Option<&str>,
+    grant: Option<TerminalPolicyGrant>,
+) -> anyhow::Result<usize> {
+    let Ok(runtime) = Handle::try_current() else {
+        return ack(root, keys, status, failure, reason, attempt, grant);
+    };
+    crate::persistence::require_sync_owner_context()?;
+    let request = AckRequest {
+        operation_id: attempt
+            .map(|a| format!("queue-ack-{:x}", Sha256::digest(a.as_bytes())))
+            .unwrap_or_else(|| format!("queue-ack-{}", uuid::Uuid::new_v4())),
+        keys: keys.to_vec(),
+        status: status.into(),
+        failure: failure.map(str::to_owned),
+        reason: reason.map(str::to_owned),
+        attempt: attempt.map(str::to_owned),
+    };
+    request.validate()?;
+    let key = ctox_store::DbId::new(crate::paths::core_db(root))?;
+    let owner = OWNERS
+        .get_or_init(Mutex::default)
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .get(key.path())
+        .and_then(Weak::upgrade);
+    if let Some(owner) = owner {
+        // Prepare on this admitted blocking thread, before driving the result
+        // future. Preparing inside block_on would recursively enter its runtime.
+        let pending = owner.submit(request, grant, options())?;
+        return Ok(runtime.block_on(pending)?);
+    }
+    anyhow::ensure!(
+        grant.is_none(),
+        "trusted queue grants require daemon-local owner"
+    );
+    let pending = ipc::request(
+        endpoint(root),
+        Request {
+            request_id: 1,
+            kind: JobKind::Write,
+            method: "queue.ack".into(),
+            payload: serde_json::to_vec(&request)?,
+        },
+        options(),
+    )?;
+    Ok(serde_json::from_slice(&runtime.block_on(pending)?)?)
 }
 
 /// Runtime callers await the typed result directly; SQLite remains on its
@@ -432,20 +511,38 @@ impl QueueStore {
         let root = self.root.clone();
         let wake = self.wake.clone();
         let cancellation = options.cancellation.clone();
-        let mut pending = self.core.writer.submit(WriteJob::new(options, move |tx| {
-            crate::channels::ack_owned_in_transaction(&root, tx, &request, grant)
-                .map_err(|e| StoreError::Invalid(format!("queue acknowledgement rejected: {e}")))
-        }))?;
+        let prepared = if crate::persistence::require_sync_owner_context().is_ok() {
+            Some(prepare_ack_policy(&root, &request, &self.core.readers).map_err(|error| StoreError::Invalid(format!("queue policy snapshot failed: {error}")))?)
+        } else { None };
+        let writer = self.core.writer.clone();
+        let readers = self.core.readers.clone();
         let (mut reply, receive) = tokio::sync::oneshot::channel();
         self.runtime.spawn(async move {
             let _permit = permit;
-            let result = tokio::select! {
-                result=&mut pending=>result,
-                _=reply.closed()=>{cancellation.cancel();pending.await}
-            };
-            if result.is_ok() {
-                wake.notify_one();
-            }
+            let result = async {
+                let (settings, reservation) = match prepared {
+                    Some(prepared) => prepared,
+                    None => {
+                        let prepare_root = root.clone();
+                        let prepare_request = request.clone();
+                        crate::persistence::run_core_sync(move || prepare_ack_policy(&prepare_root, &prepare_request, &readers))
+                            .await.map_err(|error| StoreError::Invalid(format!("queue policy snapshot failed: {error}")))?
+                    }
+                };
+                if reply.is_closed() { cancellation.cancel(); return Err(StoreError::Cancelled); }
+                let mut pending = writer.submit(WriteJob::new(options, move |tx| {
+                    let updated = crate::channels::ack_owned_in_transaction(&root, tx, &request, grant, settings.as_ref())
+                        .map_err(|e| StoreError::Invalid(format!("queue acknowledgement rejected: {e}")))?;
+                    // The result retains the Runtime fence through Core commit.
+                    Ok((updated, reservation))
+                }))?;
+                let committed = tokio::select! {
+                    result=&mut pending=>result,
+                    _=reply.closed()=>{cancellation.cancel();pending.await}
+                }?;
+                Ok(committed.0)
+            }.await;
+            if result.is_ok() { wake.notify_one(); }
             let _ = reply.send(result);
         });
         Ok(JobHandle::from_receiver(receive))
@@ -505,3 +602,35 @@ impl Drop for QueueStore {
 #[cfg(all(test, unix))]
 #[path = "queue_store_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod policy_snapshot_tests {
+    use super::*;
+    #[test]
+    fn email_policy_snapshot_fences_runtime_changes_until_commit() -> anyhow::Result<()> {
+        crate::persistence::test_support::run_queue(|root| {
+            crate::runtime_env::set_runtime_env_value(root.path(), "CTOX_OWNER_EMAIL_ADDRESS", "founder@example.test")?;
+            let task = crate::channels::create_queue_task(root.path(), crate::channels::QueueTaskCreateRequest {
+                title: "Owner policy fence".into(), prompt: "Private fixture".into(), thread_key: "owner-policy-fence".into(),
+                workspace_root: None, priority: "normal".into(), suggested_skill: None, parent_message_key: None, extra_metadata: None,
+            })?;
+            let key = task.message_key.clone();
+            crate::lcm::with_lcm_write(&crate::paths::core_db(root.path()), move |tx| {
+                tx.execute("UPDATE communication_messages SET channel='email',direction='inbound',sender_address='founder@example.test' WHERE message_key=?1", [key])?;
+                Ok(())
+            })?;
+            let identity = ctox_store::DbId::new(crate::paths::core_db(root.path()))?;
+            let owner = OWNERS.get().unwrap().lock().unwrap().get(identity.path()).and_then(Weak::upgrade).expect("real queue owner");
+            let request = AckRequest { operation_id: "owner-policy-fence".into(), keys: vec![task.message_key], status: "handled".into(), failure: None, reason: None, attempt: None };
+            let (settings, reservation) = prepare_ack_policy(root.path(), &request, &owner.core.readers)?;
+            assert_eq!(settings.as_ref().unwrap().get("CTOX_OWNER_EMAIL_ADDRESS").map(String::as_str), Some("founder@example.test"));
+            assert!(reservation.is_some());
+            let blocked = crate::runtime_env::set_runtime_env_value(root.path(), "CTOX_OWNER_EMAIL_ADDRESS", "replacement@example.test").expect_err("a pending Core effect must fence Runtime policy changes");
+            assert!(matches!(blocked.downcast_ref::<StoreError>(), Some(StoreError::Busy)), "{blocked:#}");
+            drop(reservation);
+            crate::runtime_env::set_runtime_env_value(root.path(), "CTOX_OWNER_EMAIL_ADDRESS", "replacement@example.test")?;
+            assert_eq!(crate::runtime_env::load_persisted_runtime_env_map_cached(root.path())?.get("CTOX_OWNER_EMAIL_ADDRESS").map(String::as_str), Some("replacement@example.test"));
+            Ok(())
+        })
+    }
+}

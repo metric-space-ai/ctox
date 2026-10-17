@@ -857,7 +857,8 @@ impl AntigravitySubscriptionAccountPool {
         while !remaining.is_empty() {
             let selected = self
                 .router
-                .select("antigravity", Some(model), self.clock.now_ms(), &remaining)
+                .select_async("antigravity", Some(model), self.clock.now_ms(), &remaining)
+                .await
                 .map_err(AntigravityAccountPoolError::Routing)?;
             crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
@@ -956,7 +957,8 @@ impl AntigravitySubscriptionAccountPool {
         while !remaining.is_empty() {
             let selected = self
                 .router
-                .select("antigravity", Some(model), self.clock.now_ms(), &remaining)
+                .select_async("antigravity", Some(model), self.clock.now_ms(), &remaining)
+                .await
                 .map_err(AntigravityAccountPoolError::Routing)?;
             crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
@@ -1066,7 +1068,8 @@ impl AntigravitySubscriptionAccountPool {
         while !remaining.is_empty() {
             let selected = self
                 .router
-                .select("antigravity", Some(model), self.clock.now_ms(), &remaining)
+                .select_async("antigravity", Some(model), self.clock.now_ms(), &remaining)
+                .await
                 .map_err(AntigravityAccountPoolError::Routing)?;
             crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);
@@ -1164,7 +1167,8 @@ impl AntigravitySubscriptionAccountPool {
         while !remaining.is_empty() {
             let selected = self
                 .router
-                .select("antigravity", Some(model), self.clock.now_ms(), &remaining)
+                .select_async("antigravity", Some(model), self.clock.now_ms(), &remaining)
+                .await
                 .map_err(AntigravityAccountPoolError::Routing)?;
             crate::internal::api::account_selection::record_selected(&selected.auth_id);
             remaining.retain(|candidate| candidate.auth_id != selected.auth_id);

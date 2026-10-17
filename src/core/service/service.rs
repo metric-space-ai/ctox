@@ -5,6 +5,9 @@ use anyhow::Result;
 mod auth_assist_recovery_tests;
 #[path = "service_cv_print_recovery.rs"]
 mod cv_print_recovery;
+#[cfg(unix)]
+#[path = "store_status.rs"]
+pub(super) mod owner_status;
 #[path = "service_runtime_support.rs"]
 mod runtime_support;
 #[cfg(test)]
@@ -2535,6 +2538,38 @@ fn normalize_state_token(value: &str) -> String {
 }
 
 pub fn start_background(root: &Path) -> Result<String> {
+    let deadline = Instant::now() + SERVICE_LIFECYCLE_TIMEOUTS.startup;
+    let message = request_background_start(root)?;
+    #[cfg(unix)]
+    wait_for_running_status_socket(root, deadline)?;
+    #[cfg(not(unix))]
+    let _ = deadline;
+    Ok(message)
+}
+
+/// Manager-active/PID existence is not a completed Core startup. Keep the
+/// existing lifecycle budget and require the actual status protocol response.
+#[cfg(unix)]
+fn wait_for_running_status_socket(root: &Path, deadline: Instant) -> Result<()> {
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        anyhow::ensure!(
+            !remaining.is_zero(),
+            "service did not report a running Core owner on {} within the startup budget",
+            service_listen_addr(root)
+        );
+        if let LiveStatusProbe::Status(status) =
+            live_service_status_snapshot(root, Some(remaining.min(Duration::from_millis(500))))
+        {
+            if status.running {
+                return Ok(());
+            }
+        }
+        thread::sleep(remaining.min(Duration::from_millis(100)));
+    }
+}
+
+fn request_background_start(root: &Path) -> Result<String> {
     #[cfg(windows)]
     {
         let windows_status = crate::service::windows_service::status()?;
@@ -3649,6 +3684,13 @@ pub fn service_status_snapshot_with(
     };
     let live = live_service_status_snapshot(root, probe.status_ipc_timeout);
     if let LiveStatusProbe::Status(mut status) = live {
+        // A V4 lifecycle reply freshly observes Core custody, not the queue.
+        // Keep the existing local-only degraded flag; no wire-field change.
+        status.degraded_probe |= status
+            .performance
+            .get("status_only")
+            .and_then(Value::as_bool)
+            == Some(true);
         if probe.include_business_os {
             status.business_os = Some(business_os_health_snapshot(root));
         } else {
@@ -31698,50 +31740,55 @@ Business OS command:
 
     #[test]
     fn chat_submit_auto_ingests_prompt_secrets_before_queueing() {
-        let root = temp_root("chat-submit-secrets");
-        let mut shared = SharedState::default();
-        shared.busy = true;
-        let state = Arc::new(Mutex::new(shared));
+        crate::persistence::test_support::run(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            let mut shared = SharedState::default();
+            shared.busy = true;
+            let state = Arc::new(Mutex::new(shared));
 
-        let response = handle_service_ipc_request(
-            ServiceIpcRequest::ChatSubmit {
-                prompt: "openAI API key:\nsk-proj-service-secret-1234567890".to_string(),
-                thread_key: None,
-                outbound_email: None,
-                outbound_anchor: None,
-            },
-            &root,
-            state.clone(),
-        )
-        .expect("chat submit should be accepted");
+            let response = handle_service_ipc_request(
+                ServiceIpcRequest::ChatSubmit {
+                    prompt: "openAI API key:\nsk-proj-service-secret-1234567890".to_string(),
+                    thread_key: None,
+                    outbound_email: None,
+                    outbound_anchor: None,
+                },
+                &root,
+                state.clone(),
+            )
+            .expect("chat submit should be accepted");
 
-        match response {
-            ServiceIpcResponse::Accepted(response) => {
-                assert!(response.accepted);
-                assert_eq!(response.status, "queued");
+            match response {
+                ServiceIpcResponse::Accepted(response) => {
+                    assert!(response.accepted);
+                    assert_eq!(response.status, "queued");
+                }
+                other => panic!("unexpected response: {other:?}"),
             }
-            other => panic!("unexpected response: {other:?}"),
-        }
 
-        let shared = lock_shared_state(&state);
-        assert_eq!(shared.pending_prompts.len(), 1);
-        assert!(!shared.pending_prompts[0]
-            .prompt
-            .contains("sk-proj-service-secret-1234567890"));
-        assert!(shared.pending_prompts[0]
-            .prompt
-            .contains("[secret-ref:credentials/OPENAI_API_KEY"));
-        assert_eq!(
-            shared.pending_prompts[0].suggested_skill.as_deref(),
-            Some("secret-hygiene")
-        );
-        drop(shared);
+            let shared = lock_shared_state(&state);
+            assert_eq!(shared.pending_prompts.len(), 1);
+            assert!(!shared.pending_prompts[0]
+                .prompt
+                .contains("sk-proj-service-secret-1234567890"));
+            assert!(shared.pending_prompts[0]
+                .prompt
+                .contains("[secret-ref:credentials/OPENAI_API_KEY"));
+            assert_eq!(
+                shared.pending_prompts[0].suggested_skill.as_deref(),
+                Some("secret-hygiene")
+            );
+            drop(shared);
 
-        assert_eq!(
-            secrets::read_secret_value(&root, "credentials", "OPENAI_API_KEY")
-                .expect("secret should be readable"),
-            "sk-proj-service-secret-1234567890"
-        );
+            assert_eq!(
+                secrets::read_secret_value(&root, "credentials", "OPENAI_API_KEY")
+                    .expect("secret should be readable"),
+                "sk-proj-service-secret-1234567890"
+            );
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -32775,30 +32822,35 @@ Business OS command:
 
     #[test]
     fn non_work_tui_route_is_acknowledged_without_agent_queue() {
-        let root = temp_root("tui-non-work-route");
-        upsert_test_inbound_message(
-            &root,
-            "tui-probe-1",
-            "tui",
-            "tui/main",
-            "owner",
-            "Demo",
-            "hello queue",
-            json!({ "priority": "normal" }),
-        );
-        let state = Arc::new(Mutex::new(SharedState::default()));
+        crate::persistence::test_support::run_queue(move |owner_root| {
+            let root = owner_root.path().to_path_buf();
+            upsert_test_inbound_message(
+                &root,
+                "tui-probe-1",
+                "tui",
+                "tui/main",
+                "owner",
+                "Demo",
+                "hello queue",
+                json!({ "priority": "normal" }),
+            );
+            let state = Arc::new(Mutex::new(SharedState::default()));
 
-        route_external_messages(&root, &state).expect("route tui probe");
+            route_external_messages(&root, &state).expect("route tui probe");
 
-        let shared = state.lock().expect("state poisoned");
-        assert!(shared.pending_prompts.is_empty());
-        assert!(shared
-            .recent_events
-            .iter()
-            .any(|event| event.contains("Ignored non-work TUI route")));
-        drop(shared);
-        assert_eq!(route_status_for(&root, "tui-probe-1"), "handled");
-        let _ = std::fs::remove_dir_all(&root);
+            let shared = state.lock().expect("state poisoned");
+            assert!(shared.pending_prompts.is_empty());
+            assert!(shared
+                .recent_events
+                .iter()
+                .any(|event| event.contains("Ignored non-work TUI route")));
+            drop(shared);
+            assert_eq!(route_status_for(&root, "tui-probe-1"), "handled");
+            // Root cleanup follows owner shutdown.
+
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]

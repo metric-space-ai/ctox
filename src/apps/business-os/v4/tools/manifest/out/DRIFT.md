@@ -9,7 +9,7 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | apps | 42 |
 | manifests_total | 43 |
 | collections_total | 242 |
-| collections_in_contract | 238 |
+| collections_in_contract | 242 |
 | owned_by_apps | 226 |
 | owned_by_platform | 16 |
 | owner_proposals | 6 |
@@ -32,7 +32,7 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | schema_js_load_errors | 0 |
 | schema_from_v4_schemas | 42 |
 | no_owner_app | 6 |
-| contract_only | 12 |
+| contract_only | 16 |
 | multiple_owners | 0 |
 | drift_schema_js_vs_json_collections | 29 |
 | drift_migration_steps | 3 |
@@ -148,20 +148,24 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | App | Fehler |
 |---|---|
 
-## 4. Nur im Schema-Vertrag, in keiner collections.schema.json (12)
+## 4. Nur im Schema-Vertrag, in keiner collections.schema.json (16)
 
 | Collection | Eigentümer |
 |---|---|
 | app_activations | ctox-platform |
+| app_catalog | ctox-platform |
 | app_drafts | ctox-platform |
 | app_user_preferences | ctox-platform |
 | business_app_versions | ctox-platform |
 | business_apps | ctox-platform |
 | business_commands | ctox-platform |
 | business_module_catalog | ctox-platform |
+| coding_turns | ctox-platform |
 | ctox_queue_tasks | ctox-platform |
 | ctox_runtime_settings | ctox-platform |
+| devices | ctox-platform |
 | files | ctox-platform |
+| machine_enrollments | ctox-platform |
 | mail_server_state | ctox-platform |
 | shell_preferences | ctox-platform |
 

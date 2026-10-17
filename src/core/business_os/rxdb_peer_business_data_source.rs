@@ -1654,14 +1654,16 @@ impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
     async fn identity(&self, capability_token: &str) -> Option<RemoteIdentity> {
         let root = self.root.clone();
         let token = capability_token.to_owned();
-        tokio::task::spawn_blocking(move || {
-            let claims = store::verified_webrtc_capability_claims(&root, &token)?;
-            let instance = store::sync_connection_config(&root).ok()?.instance_id;
-            Some(RemoteIdentity {
-                user_id: claims.user_id,
-                authorization_epoch: u64::try_from(claims.actor_epoch).ok()?,
-                instance_id: instance,
-            })
+        crate::persistence::run_core_sync(move || {
+            Ok((|| {
+                let claims = store::verified_webrtc_capability_claims(&root, &token)?;
+                let instance = store::sync_connection_config(&root).ok()?.instance_id;
+                Some(RemoteIdentity {
+                    user_id: claims.user_id,
+                    authorization_epoch: u64::try_from(claims.actor_epoch).ok()?,
+                    instance_id: instance,
+                })
+            })())
         })
         .await
         .ok()
@@ -1683,37 +1685,39 @@ impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
         let user_id = identity.user_id.clone();
         let authorization_epoch = identity.authorization_epoch;
         let read = access == Access::Read;
-        tokio::task::spawn_blocking(move || {
-            let claims =
-                store::verified_webrtc_capability_claims(&root, &token).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::PermissionDenied, "capability expired")
-                })?;
-            if claims.user_id != user_id
-                || u64::try_from(claims.actor_epoch).ok() != Some(authorization_epoch)
-            {
-                return Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "actor changed",
-                ));
-            }
-            let permission = if read {
-                BusinessOsPermission::DataRead
-            } else {
-                BusinessOsPermission::DataWrite
-            };
-            if store::webrtc_capability_allows_collection_permission(
-                &root,
-                &token,
-                &collection,
-                permission,
-            ) {
-                Ok(())
-            } else {
-                Err(io::Error::new(
-                    io::ErrorKind::PermissionDenied,
-                    "BusinessData access denied",
-                ))
-            }
+        crate::persistence::run_core_sync(move || {
+            Ok((|| {
+                let claims =
+                    store::verified_webrtc_capability_claims(&root, &token).ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::PermissionDenied, "capability expired")
+                    })?;
+                if claims.user_id != user_id
+                    || u64::try_from(claims.actor_epoch).ok() != Some(authorization_epoch)
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "actor changed",
+                    ));
+                }
+                let permission = if read {
+                    BusinessOsPermission::DataRead
+                } else {
+                    BusinessOsPermission::DataWrite
+                };
+                if store::webrtc_capability_allows_collection_permission(
+                    &root,
+                    &token,
+                    &collection,
+                    permission,
+                ) {
+                    Ok(())
+                } else {
+                    Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "BusinessData access denied",
+                    ))
+                }
+            })())
         })
         .await
         .map_err(|_| io::Error::other("BusinessData policy task failed"))?
@@ -1740,12 +1744,14 @@ impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
         // replicated projection can be changed. Never stage a caller's command
         // over an existing RxDB command while admission may still reject it.
         let root = self.root.clone();
-        let accepted = tokio::task::spawn_blocking(move || {
-            store::accept_rxdb_business_command_with_origin(
-                &root,
-                document,
-                store::CommandOrigin::ReplicatedPeer,
-            )
+        let accepted = crate::persistence::run_core_sync(move || {
+            Ok((|| {
+                store::accept_rxdb_business_command_with_origin(
+                    &root,
+                    document,
+                    store::CommandOrigin::ReplicatedPeer,
+                )
+            })())
         })
         .await
         .map_err(|_| io::Error::other("BusinessData command task failed"))?
@@ -1779,14 +1785,20 @@ impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
         let root = self.root.clone();
         let command_id = command_id.to_owned();
         let user_id = identity.user_id.clone();
-        tokio::task::spawn_blocking(move || {
-            // Ownership comes from the server-persisted admission receipt,
-            // never from a peer-writable RxDB owner or client_context field.
-            let stored = crate::mission::channels::business_command_projection(&root, &command_id)
-                .map_err(|_| {
-                    io::Error::new(io::ErrorKind::PermissionDenied, "command is unavailable")
-                })?;
-            owned_command_projection(&stored, &command_id, &user_id)
+        crate::persistence::run_core_sync(move || {
+            Ok((|| {
+                // Ownership comes from the server-persisted admission receipt,
+                // never from a peer-writable RxDB owner or client_context field.
+                let stored =
+                    crate::mission::channels::business_command_projection(&root, &command_id)
+                        .map_err(|_| {
+                            io::Error::new(
+                                io::ErrorKind::PermissionDenied,
+                                "command is unavailable",
+                            )
+                        })?;
+                owned_command_projection(&stored, &command_id, &user_id)
+            })())
         })
         .await
         .map_err(|_| io::Error::other("BusinessData command owner policy task failed"))?
@@ -1808,22 +1820,24 @@ impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
         let root = self.root.clone();
         let token = capability_token.to_owned();
         let query = query.clone();
-        tokio::task::spawn_blocking(move || {
-            let (_, role) =
-                store::verify_webrtc_capability_actor(&root, &token).ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::PermissionDenied, "capability expired")
-                })?;
-            if let Some(fields) = super::policy::crew_fields_for_role(&role) {
-                if !rxdb::plugins::replication_webrtc::webrtc_types::readable_query_fields(
-                    &query, &fields,
-                ) {
-                    return Err(io::Error::new(
-                        io::ErrorKind::PermissionDenied,
-                        "BusinessData query references unreadable fields",
-                    ));
+        crate::persistence::run_core_sync(move || {
+            Ok((|| {
+                let (_, role) =
+                    store::verify_webrtc_capability_actor(&root, &token).ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::PermissionDenied, "capability expired")
+                    })?;
+                if let Some(fields) = super::policy::crew_fields_for_role(&role) {
+                    if !rxdb::plugins::replication_webrtc::webrtc_types::readable_query_fields(
+                        &query, &fields,
+                    ) {
+                        return Err(io::Error::new(
+                            io::ErrorKind::PermissionDenied,
+                            "BusinessData query references unreadable fields",
+                        ));
+                    }
                 }
-            }
-            Ok(())
+                Ok(())
+            })())
         })
         .await
         .map_err(|_| io::Error::other("BusinessData query policy task failed"))?
@@ -1841,14 +1855,16 @@ impl BusinessDataAccessPolicy for NativeBusinessDataPolicy {
         let identity = identity.clone();
         let requested_collection = collection.to_owned();
         let document = document.clone();
-        tokio::task::spawn_blocking(move || {
-            policy.with_read_snapshot_authority(
-                &identity,
-                &token,
-                &requested_collection,
-                &Scope::Instance {},
-                |authority| authority.document_view(&requested_collection, &document),
-            )
+        crate::persistence::run_core_sync(move || {
+            Ok((|| {
+                policy.with_read_snapshot_authority(
+                    &identity,
+                    &token,
+                    &requested_collection,
+                    &Scope::Instance {},
+                    |authority| authority.document_view(&requested_collection, &document),
+                )
+            })())
         })
         .await
         .map_err(|_| io::Error::other("BusinessData document policy task failed"))?

@@ -669,24 +669,12 @@ pub(crate) fn evaluate_in_store(
     permission: BusinessOsPermission,
     scope: &BusinessOsScope,
 ) -> PolicyDecision {
-    let result = (|| {
-        let path = tx.path().ok_or("Store path unavailable")?;
-        let current = POLICY_AUTHORITY
-            .read()
-            .map_err(|_| "policy authority poisoned")?;
-        let mut matching = current
-            .iter()
-            .filter_map(|b| b.authority.upgrade())
-            .filter(|a| a.writer().db_id().path() == std::path::Path::new(path));
-        let authority = matching.next().ok_or("policy authority unavailable")?;
-        if matching.any(|a| !std::sync::Arc::ptr_eq(&a, &authority)) {
-            return Err("ambiguous policy authority".into());
-        }
-        drop(current);
-        authority.router.with_current_rights(|rights| {
-            Ok(evaluate_with_rights(rights, actor, permission, scope))
-        })
-    })();
+    let result = tx
+        .path()
+        .ok_or_else(|| "Store path unavailable".to_owned())
+        .and_then(|path| {
+            evaluate_for_store_path(std::path::Path::new(path), actor, permission, scope)
+        });
     result.unwrap_or_else(|_: String| {
         PolicyDecision::deny(
             permission,
@@ -696,6 +684,33 @@ pub(crate) fn evaluate_in_store(
         )
     })
 }
+/// Writer callbacks carry the already-owned canonical policy-store identity.
+/// Resolve its retained authority without ambient Tokio context or file I/O.
+/// Unlike a boolean deny fallback, callers can preserve unavailable-authority
+/// failures as typed store errors at cross-store effect boundaries.
+pub(crate) fn evaluate_for_store_path(
+    path: &std::path::Path,
+    actor: &BusinessOsActor,
+    permission: BusinessOsPermission,
+    scope: &BusinessOsScope,
+) -> sync_rights::scope::Result<PolicyDecision> {
+    let current = POLICY_AUTHORITY
+        .read()
+        .map_err(|_| "policy authority poisoned")?;
+    let mut matching = current
+        .iter()
+        .filter_map(|b| b.authority.upgrade())
+        .filter(|a| a.writer().db_id().path() == path);
+    let authority = matching.next().ok_or("policy authority unavailable")?;
+    if matching.any(|a| !std::sync::Arc::ptr_eq(&a, &authority)) {
+        return Err("ambiguous policy authority".into());
+    }
+    drop(current);
+    authority
+        .router
+        .with_current_rights(|rights| Ok(evaluate_with_rights(rights, actor, permission, scope)))
+}
+
 pub fn role_may_read_collection(role: BusinessOsRole, collection: &str) -> bool {
     with_policy_rights(|rights| {
         Ok(rights
