@@ -156,6 +156,23 @@ export function measureInPage({ app, vocab, allow, owner, withG5 }) {
   }
   if (cut.length) out.G4.push(`${cut.length} abgeschnittene Texte (${cut.filter((c) => c.startsWith('Liste')).length} in Listen): ${cut.slice(0, 5).join('; ')}`);
   out.info.ellipsisCut = cut.length;
+  // G4 Icon + Wort (workjet#801): sichtbare Kurzwörter stehen ganz im eigenen Knopf und überdecken sich nicht.
+  const words = [...root.querySelectorAll('.ctox-pane-icon-label')]
+    .map((l) => ({ l, r: l.getBoundingClientRect(), b: l.parentElement.getBoundingClientRect() }))
+    .filter((x) => x.r.width > 0 && x.r.height > 0 && getComputedStyle(x.l).visibility !== 'hidden');
+  const wordHits = [];
+  for (const x of words) {
+    if (x.r.left < x.b.left - 0.5 || x.r.right > x.b.right + 0.5) wordHits.push(`Wort „${x.l.textContent.trim()}“ ragt aus seinem Knopf`);
+  }
+  for (let i = 0; i < words.length; i += 1) {
+    for (let j = i + 1; j < words.length; j += 1) {
+      const a = words[i].r; const c = words[j].r;
+      if (Math.min(a.right, c.right) - Math.max(a.left, c.left) > 0.5 && Math.min(a.bottom, c.bottom) - Math.max(a.top, c.top) > 0.5) {
+        wordHits.push(`Wörter „${words[i].l.textContent.trim()}“ und „${words[j].l.textContent.trim()}“ überdecken sich`);
+      }
+    }
+  }
+  if (wordHits.length) out.G4.push(`${wordHits.length} Wortknopf-Fehler: ${wordHits.slice(0, 4).join('; ')}`);
 
   // ---- G7: Geschwister-Pane-Köpfe eines Fensters gleich hoch (±1 px) ----
   // Geschwister = sichtbare .ctox-pane-header im App-Inhalt mit gleicher Oberkante (±2 px), also Köpfe
