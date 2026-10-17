@@ -34,6 +34,7 @@ import { inFlightLeadsOutsideWindow, IN_FLIGHT_SWEEP_INTERVAL_MS } from './in-fl
 import { revealDetailIfStacked } from './stacked-detail-reveal.mjs';
 import { doppelteAdapterIds } from './adapter-dedupe.mjs';
 import { abgleichBasisVeraltet, hatBelegteFelder } from './reconcile-basis.mjs';
+import { isTransientResearchWaitError, researchStartFailureOutcome } from './research-start-outcome.mjs';
 import {
   actionAllowedOnStartupSnapshot, buildStartupSnapshot, readStartupSnapshot,
   startupCacheScope, writeStartupSnapshot,
@@ -10545,6 +10546,15 @@ async function researchLead(id, options = {}) {
       state.pendingResearchIds.delete(id);
       return researchLead(id, { ...options, _kanalRetry: true });
     }
+    // Vor dem lokalen Schreiben gescheitert: den Befehl gibt es nirgends.
+    // Keine command_id am Lead und kein Lead-Patch (17.10.2026: Geister-IDs
+    // standen auf "running", jeder Fehlstart kostete einen Lead-masterWrite).
+    if (researchStartFailureOutcome(error) === 'not_written') {
+      if (!options.suppressAlerts) {
+        showBusinessAlert(auftragNichtZugestellt(error) ? NICHT_ZUGESTELLT_HINWEIS : message);
+      }
+      return { status: 'not_sent', commandId: '', error: message };
+    }
     // Ein abgelaufener Wartender ist KEIN gescheiterter Auftrag. Der Command-Bus
     // meldet den Zeitablauf ausdruecklich als transient/projection_delayed: der
     // Vorgang laeuft weiter, nur die Projektion kam nicht rechtzeitig hinterher.
@@ -11074,20 +11084,6 @@ function uniqueCommands(commands = []) {
 // und wiederholbar (shared/command-bus.js, code 'projection_delayed'). Wir lesen
 // diese Kennzeichnung, statt den Text zu vergleichen; der Text bleibt nur als
 // letzter Rueckfall, falls ein aelterer Bus die Felder noch nicht mitschickt.
-function isTransientResearchWaitError(error) {
-  if (!error) return false;
-  const code = String(error.code || error.details?.code || '').trim();
-  if (code === 'projection_delayed' || code === 'projection_pending') return true;
-  const status = String(error.status || error.details?.status || '').trim();
-  if (status === 'projection_pending') return true;
-  if (error.transient === true || error.details?.transient === true) return true;
-  // Die Shell meldet nach 30 s "Die Uebergabe an die Queue wurde ... nicht
-  // bestaetigt. Der Auftrag kann trotzdem angenommen worden sein". Am
-  // 26.09.2026 kamen 13 von 14 so gemeldeten Starts danach an. Das ist
-  // unbestaetigt, nicht gescheitert: der Lead bleibt verfolgbar, kein Dialog.
-  if (/nicht best(ä|ae)tigt|kann trotzdem angenommen/i.test(String(error.message || ''))) return true;
-  return /wartet noch auf die R/i.test(String(error.message || ''));
-}
 
 // Kennung, MIT DER SICH INHALTLICH ETWAS GEAENDERT HAT — bewusst ohne Zeitstempel.
 //

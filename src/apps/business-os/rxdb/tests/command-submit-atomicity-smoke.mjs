@@ -171,16 +171,40 @@ function makeSync(state) {
     async pushDocumentsToRemotePeers() {},
   };
   const bus = createCommandBus({ db: makeDb(collection), sync: makeSync(state) });
-  await assert.rejects(
-    bus.submit({
-      id: 'cmd-submit-offline-before-insert',
-      module: 'ctox',
-      command_type: 'business_os.test',
-      sync_ready_timeout_ms: 25,
-    }),
-    (error) => error?.code === 'native_unavailable' && error?.retryable === true,
-  );
+  const lifecycle = [];
+  const previousDispatchEvent = globalThis.dispatchEvent;
+  globalThis.dispatchEvent = (event) => {
+    if (event?.type === 'ctox-business-command-lifecycle') lifecycle.push(event.detail);
+    return true;
+  };
+  try {
+    await assert.rejects(
+      bus.submit({
+        id: 'cmd-submit-offline-before-insert',
+        module: 'ctox',
+        command_type: 'business_os.test',
+        sync_ready_timeout_ms: 25,
+      }),
+      (error) => error?.code === 'native_unavailable'
+        && error?.retryable === true
+        && error?.local_inserted === false
+        && error?.command_written === false
+        && error?.command_id === 'cmd-submit-offline-before-insert',
+    );
+  } finally {
+    globalThis.dispatchEvent = previousDispatchEvent;
+  }
   assert.equal(inserts, 0, 'offline readiness failure happens before local insert');
+  // Field incident 17.10.2026: the pre-write failure emitted no lifecycle
+  // event, so the command kept displaying `sync_ready` forever although it was
+  // never written. The terminal pre-write phase must be explicit.
+  const phases = lifecycle
+    .filter((detail) => detail.command_id === 'cmd-submit-offline-before-insert')
+    .map((detail) => detail.phase);
+  assert.equal(phases.at(-1), 'submit_failed', `last lifecycle phase must be submit_failed, got ${phases.join(',')}`);
+  const failed = lifecycle.find((detail) => detail.phase === 'submit_failed');
+  assert.equal(failed.local_inserted, false);
+  assert.equal(failed.code, 'native_unavailable');
 }
 
 // 3. The established successful path keeps the original receipt contract and
@@ -261,7 +285,8 @@ for (const rejectionKind of ['authorization', 'schema']) {
       && error.command_id === id
       && error.receipt?.tracking.command_id === id
       && error.receipt?.retryable === false
-      && error.receipt?.pushConfirmed === false,
+      && error.receipt?.pushConfirmed === false
+      && error.local_inserted === true,
     'terminal denial must reach the caller with the retained command identity',
   );
   assert.equal(pushes, 1, 'no new wire submission after terminal denial');
