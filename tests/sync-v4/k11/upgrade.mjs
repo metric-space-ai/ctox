@@ -23,7 +23,7 @@ export function requireSandbox(proof){
  }
  if(process.getuid()===0&&(!proof.mappedUser||!proof.host.user||proof.host.user===fs.readlinkSync('/proc/self/ns/user')))throw Error('Host root installer is forbidden; mapped own UID requires a private user namespace');
 }
-export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,roundtrip=false,resumeRolledBack=false,traceRollback=false,dressSmoke=null}){
+export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,roundtrip=false,resumeRolledBack=false,slotOnly=false,traceRollback=false,dressSmoke=null}){
  requireSandbox(proof);if(!tmpdir||!fs.statSync(tmpdir).isDirectory())throw Error('Canonical lane TMPDIR required');const {before,after}=verifiedUpgrade(oldReceipt,newReceipt,root);
  const installRoot=join(root,'managed'),stateRoot=join(root,'runtime');
  const home=join(root,'installer-home');fs.mkdirSync(home,{recursive:true,mode:0o700});
@@ -32,7 +32,9 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
  // Initial fixture layout only. The transition below is the actual supported
  // update apply path, including its own backup, maintenance and link switch.
  const initial=join(releases,oldRelease);
- if(resumeRolledBack){
+ if(slotOnly){
+  if(fs.realpathSync(join(installRoot,'current'))!==join(releases,release)||hash(fs.readFileSync(join(installRoot,'current/bin/ctox')))!==after.binarySha256)throw Error('Slot-only reuse requires verified installed candidate');
+ }else if(resumeRolledBack){
   const state=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json')));
   if(state.phase!=='rolled_back'||fs.realpathSync(join(installRoot,'current'))!==initial||hash(fs.readFileSync(join(initial,'bin/ctox')))!==before.binarySha256)throw Error('Recovery must start from the actual verified rolled-back state');
  }else{
@@ -94,7 +96,10 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
   if(targetUpdater&&executableSha256!==after.binarySha256)throw Error('Target main updater image differs from verified artifact');
   const rollback=args[0]==='update'&&args[1]==='rollback';
   const trace=rollback&&traceRollback;
-  const argv=[...args,'--root',env.CTOX_ROOT];
+  // Business OS forwards subcommand arguments verbatim; its strict shell-update
+  // parser rejects a trailing global flag. CTOX_ROOT is already an isolated,
+  // validated bundle root (main.rs resolve_workspace_root), never an ambient root.
+  const argv=args[0]==='business-os'?[...args]:[...args,'--root',env.CTOX_ROOT];
   if(rollback)holderTrap('rollback-start');
   const p=spawn(trace?'strace':executable,trace?['-f','-k','-ttt','-T','-e','trace=openat','-P',join(stateRoot,'ctox.sqlite3'),'-o',join(output,'rollback.trace'),executable,...argv]:argv,{cwd:env.CTOX_ROOT,env,stdio:['ignore',out,out]});fs.closeSync(out);
   let observer;
@@ -118,6 +123,15 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
   return {evidence:file,...JSON.parse(fs.readFileSync(file))};
  };
  try{
+  if(slotOnly){
+   if(!dressSmoke?.dataReference)throw Error('Slot-only reuse requires prior complete readback');
+   record.slotOnly=true;quiesce();
+   record.signedSmoke=await performDressSmoke({config:dressSmoke,root,output,env,cli,quiesce,phase:'slot-only'});
+   quiesce();const file=join(output,'data-slot.json');
+   execFileSync('python3',[new URL('./m7-data-readback.py',import.meta.url).pathname,'--root',root,'--output',file,'--expect',dressSmoke.dataReference],{env,timeout:30000});
+   record.dataReadback={evidence:file,...JSON.parse(fs.readFileSync(file))};
+   return record;
+  }
   // E29.7: observe the REAL V3 owner before freezing, not a guessed pathname.
   // The enclosing private PID/net/mount/user namespace is already verified.
   if(!resumeRolledBack){
@@ -159,7 +173,7 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
   if(dressSmoke)record.signedSmoke=await performDressSmoke({config:dressSmoke,root,output,env,cli,quiesce,phase:'after-update'});
   if(roundtrip){
    const startedAtMs=Date.now(),snapshot=record.updateState.state_backup_path;
-   quiesce();
+   quiesce();record.dataAfterUpdate=readback('update');
    await cli(['update','rollback']);
    const rolled=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json'))),oldCurrent=fs.realpathSync(join(installRoot,'current'));
    if(rolled.phase!=='rolled_back'||oldCurrent!==initial||hash(fs.readFileSync(join(oldCurrent,'bin/ctox')))!==before.binarySha256)throw Error('Supported rollback did not activate the verified old binary');
@@ -170,10 +184,33 @@ export async function install({oldReceipt,newReceipt,root,output,proof,tmpdir,ro
    const finalCurrent=fs.realpathSync(join(installRoot,'current')),final=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json')));
    if(final.phase!=='completed'||finalCurrent!==join(releases,release)||hash(fs.readFileSync(join(finalCurrent,'bin/ctox')))!==after.binarySha256)throw Error('Forward re-install did not restore the verified candidate');
    record.forward={startedAtMs:forwardAt,durationMs:Date.now()-forwardAt,binarySha256:after.binarySha256,phase:final.phase};
+   const serviceCall=await cli(['status'],{allowFailure:true});
+   const statusText=fs.readFileSync(serviceCall.log,'utf8');let serviceStatus;try{serviceStatus=JSON.parse(statusText.slice(statusText.indexOf('{'),statusText.lastIndexOf('}')+1));}catch{}
+   record.forward.serviceStatus={exit:serviceCall.code,running:serviceStatus?.running===true,manager:serviceStatus?.manager,evidence:serviceCall.log,measuredAtMs:Date.now()};
+   if(serviceCall.code!==0||serviceStatus?.running!==true)throw Error('Installed forward service status is not running');
    quiesce();record.forward.dataReadback=readback('forward');
    record.forward.verifiedDurationMs=Date.now()-forwardAt;
    if(dressSmoke)record.forward.signedSmoke=await performDressSmoke({config:dressSmoke,root,output,env,cli,quiesce,phase:'after-forward'});
    record.roundtripExecuted=true;record.finalUpdateState=final;
+   if(dressSmoke?.extraRecoveryRoundtrip){
+    const second={startedAtMs:Date.now()};record.secondRecovery=second;
+    quiesce();second.beforeReadback=readback('before-second-rollback');
+    second.rollbackCallIndex=calls.length;await cli(['update','rollback']);
+    const rolledAgain=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json'))),backAgain=fs.realpathSync(join(installRoot,'current'));
+    if(rolledAgain.phase!=='rolled_back'||backAgain!==initial||hash(fs.readFileSync(join(backAgain,'bin/ctox')))!==before.binarySha256)throw Error('Second rollback did not activate the verified old binary');
+    quiesce();second.rollback={phase:rolledAgain.phase,binarySha256:before.binarySha256,dataReadback:readback('rollback-again')};
+    second.forwardCallIndex=calls.length;await cli(['update','apply','--version',release,'--force'],{targetUpdater:true});
+    const forwardedAgain=JSON.parse(fs.readFileSync(join(stateRoot,'update_state.json'))),currentAgain=fs.realpathSync(join(installRoot,'current'));
+    if(forwardedAgain.phase!=='completed'||currentAgain!==join(releases,release)||hash(fs.readFileSync(join(currentAgain,'bin/ctox')))!==after.binarySha256)throw Error('Second forward did not activate the verified candidate');
+    second.statusCallIndex=calls.length;const statusCall=await cli(['status'],{allowFailure:true});
+    const text=fs.readFileSync(statusCall.log,'utf8');let status;try{status=JSON.parse(text.slice(text.indexOf('{'),text.lastIndexOf('}')+1));}catch{}
+    if(statusCall.code!==0||status?.running!==true)throw Error('Second forward service is not running');
+    quiesce();second.forward={phase:forwardedAgain.phase,binarySha256:after.binarySha256,serviceStatus:{exit:statusCall.code,running:true,evidence:statusCall.log},dataReadback:readback('forward-again')};
+    second.forward.signedSmoke=await performDressSmoke({config:dressSmoke,root,output,env,cli,quiesce,phase:'after-extra-forward'});
+    const runtimeHelp=await cli(['runtime','--help'],{allowFailure:true});
+    record.providerGatewaySmoke={status:'not_run',reason:'No authorized provider account or gateway route is provisioned in this synthetic fixture; no credentials are imported or invented',probe:{args:runtimeHelp.args,exit:runtimeHelp.code,evidence:runtimeHelp.log},scope:'Installed runtime help availability only, not a provider request or account-selection success'};
+    second.durationMs=Date.now()-second.startedAtMs;second.terminal=true;record.finalUpdateState=forwardedAgain;
+   }
   }
   return record;
  }finally{await new Promise(r=>server.close(r));fs.writeFileSync(join(output,'installer.json'),JSON.stringify(record,null,2));}

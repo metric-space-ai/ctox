@@ -9,24 +9,34 @@ export async function performDressSmoke({config,root,output,env,cli,quiesce,phas
  try{
   let expectedRoot=join(current,'src/apps/business-os/v4/index.html');
   if(config.version){
-   const stage=await cli(['business-os','shell-update','stage','--version',config.version],{allowFailure:true});
-   result.signedSlot={status:stage.code===0?'staged':'fail',stageExit:stage.code,version:config.version};
+   // Hand off the private foreground store owner before the official CLI writes.
+   // The previous live-owner activation failed with AlreadyOwned.
+   quiesce();
+   const stage=config.verifiedActiveReceipt?{code:0,reused:true}:await cli(['business-os','shell-update','stage','--version',config.version],{allowFailure:true});
+   result.signedSlot={status:stage.code===0?'staged':'fail',stageExit:stage.reused?null:stage.code,version:config.version,...(stage.reused?{activationReusedFrom:config.verifiedActiveReceipt}:{})};
    if(stage.code===0){
     // The product CLI has already verified signature + inventory. Bind the
     // actual selected signed manifest to the main artifact, never same-name bytes.
     const slot=fs.realpathSync(join(state,'business-os-shell/slots',config.version));
     if(!slot.startsWith(resolve(root)+'/'))throw Error('Slot escapes private fixture');
     const manifest=JSON.parse(fs.readFileSync(join(slot,'.ctox-shell-release.v2.json')));
-    if(manifest.sourceCommit!==config.mainSha||manifest.version!==config.version)throw Error('Signed slot/main daemon source mismatch');
+    if(manifest.sourceCommit!==(config.slotSourceSha||config.mainSha)||manifest.version!==config.version)throw Error('Signed slot/main daemon source mismatch');
     result.signedSlot.sourceCommit=manifest.sourceCommit;result.signedSlot.artifactSha256=manifest.artifact.sha256;
-    const active=await cli(['business-os','shell-update','activate'],{allowFailure:true});
-    result.signedSlot.activateExit=active.code;result.signedSlot.status=active.code===0?'pass':'fail';
-    if(active.code===0)expectedRoot=join(slot,'v4/index.html');
+    if(config.slotSha256&&manifest.artifact.sha256!==config.slotSha256)throw Error('Signed slot archive checksum differs from pinned official asset');
+    const active=config.verifiedActiveReceipt?{code:0,reused:true}:await cli(['business-os','shell-update','activate'],{allowFailure:true});
+    result.signedSlot.activateExit=active.reused?null:active.code;result.signedSlot.status=active.code===0?'pass':'fail';
+    if(active.code===0){
+     const read=await cli(['business-os','shell-update','status'],{allowFailure:true});let state;try{const text=fs.readFileSync(read.log,'utf8');state=JSON.parse(text.slice(text.indexOf('{'),text.lastIndexOf('}')+1));}catch{}
+     result.signedSlot.statusReadback={exit:read.code,activeVersion:state?.activeVersion,currentSlot:state?.currentSlot,recoveryShell:state?.recoveryShell,phase:state?.phase};
+     if(read.code!==0||state?.activeVersion!==config.version||!state?.currentSlot||state?.recoveryShell!==false){result.signedSlot.status='fail';throw Error('Activated signed slot status readback does not match');}
+     expectedRoot=join(slot,'v4/index.html');
+    }
    }
   }
   // HttpSurface chooses its immutable asset root at startup. Restart only this
   // namespace's real service after official activation, never a host service.
-  quiesce();execFileSync('systemctl',['--user','start','ctox.service'],{env,timeout:30000});
+  quiesce();result.serviceStartAtMs=Date.now();execFileSync('systemctl',['--user','start','ctox.service'],{env,timeout:30000});
+  env={...env,M7_SERVICE_START_AT:String(result.serviceStartAtMs),M7_EXPECT_SIGNALING_DEPLOY:config.signalingPending?'1':'0'};
   const wrapper=join(resolve(env.BUILD_LANE_BIN,'..'),'tools/with-playwright.sh');
   const command=[wrapper,'node',new URL('./m7-t4-smoke.mjs',import.meta.url).pathname,'--base','http://127.0.0.1:8765','--expected-root',expectedRoot,'--output',out,'--proof',join(output,'sandbox.json')];
   const log=fs.openSync(join(out,'wrapper.log'),'w',0o600);
@@ -34,7 +44,14 @@ export async function performDressSmoke({config,root,output,env,cli,quiesce,phas
   if(child.pid){result.browserProcess={pid:child.pid,pgid:child.pid,stop:'smoke terminal or95s timeout'};try{process.kill(-child.pid,'SIGKILL');}catch(e){if(e.code!=='ESRCH')throw e;}}
   result.smokeExit=child.status;result.smokeError=child.error?.message;
   if(fs.existsSync(join(out,'smoke.json')))result.smoke=JSON.parse(fs.readFileSync(join(out,'smoke.json')));
-  result.pass=result.signedSlot.status==='pass'&&result.smoke?.pass===true;
+  const commandCriterion=result.smoke?.criteria?.find(c=>c.id==='platform-command-roundtrip');
+  result.commandNativeReceipt={status:'not_run',owner:commandCriterion?.reason||'browser-boot',reason:'No successful kernel command; no native receipt claimed'};
+  if(commandCriterion?.status==='pass'){
+   const file=join(out,'native-command-receipt.json'),log=fs.openSync(join(out,'native-command-readback.log'),'w',0o600);
+   const read=spawnSync('python3',[new URL('./m7-command-readback.py',import.meta.url).pathname,'--root',root,'--id',commandCriterion.commandId,'--output',file],{env,stdio:['ignore',log,log],timeout:30000});fs.closeSync(log);
+   result.commandNativeReceipt=read.status===0&&fs.existsSync(file)?JSON.parse(fs.readFileSync(file)):{status:'fail',exit:read.status,evidence:join(out,'native-command-readback.log')};
+  }
+  result.pass=result.signedSlot.status==='pass'&&result.smoke?.pass===true&&result.commandNativeReceipt.status==='pass';
  }catch(error){result.error=error.message;}
  finally{result.durationMs=Date.now()-startedAtMs;result.terminal=true;fs.writeFileSync(join(out,'step.json'),JSON.stringify(result,null,2),{mode:0o600});}
  return result;
