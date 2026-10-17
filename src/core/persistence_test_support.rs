@@ -25,7 +25,23 @@ pub(crate) fn run<T: Send + 'static>(
 ) -> Result<T> {
     let root = isolated_root()?;
     let work = root.clone();
-    run_cli_owned(root.path(), move || operation(work))
+    let before = fixture_fd_count();
+    let result = run_cli_owned(root.path(), move || operation(work));
+    if let Some(path) = std::env::var_os("CTOX_TEST_OWNER_METRICS") {
+        use std::io::Write;
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+        {
+            let _ = writeln!(
+                file,
+                "{}",
+                serde_json::json!({"pid":std::process::id(),"before":before,"after":fixture_fd_count()})
+            );
+        }
+    }
+    result
 }
 
 /// Prepare an offline legacy fixture before any owner opens it. Setup may not
@@ -172,12 +188,40 @@ pub(crate) fn with_policy<T>(root: &Path, operation: impl FnOnce() -> Result<T>)
         },
     )?;
     let runtime = tokio::runtime::Handle::current();
+    struct ShutdownWriter(
+        Option<ctox_store::writer::WriterHandle>,
+        tokio::runtime::Handle,
+    );
+    impl ShutdownWriter {
+        fn close(&mut self) -> Result<()> {
+            if let Some(writer) = self.0.take() {
+                self.1.block_on(writer.shutdown())?;
+            }
+            Ok(())
+        }
+    }
+    impl Drop for ShutdownWriter {
+        fn drop(&mut self) {
+            if let Err(error) = self.close() {
+                eprintln!("policy fixture shutdown failed: {error}");
+            }
+        }
+    }
+    let mut shutdown = ShutdownWriter(Some(writer.clone()), runtime.clone());
+    let contracts: serde_json::Value =
+        serde_json::from_str(include_str!("business_os/business_os_schema_contract.json"))?;
+    let collections: Vec<String> = contracts
+        .as_object()
+        .context("canonical collection catalog")?
+        .keys()
+        .cloned()
+        .collect();
     let registration = runtime.block_on(async {
         let authority = StoreRightsAuthority::attach(writer.clone(), "owner-test-fixture".into())
             .await
             .map_err(anyhow::Error::msg)?;
         authority
-            .replace(policy::base_release_rights(&[]), vec![])
+            .replace(policy::base_release_rights(&collections), vec![])
             .await
             .map_err(anyhow::Error::msg)?;
         policy::bind_policy_authority(authority).map_err(anyhow::Error::msg)
@@ -190,7 +234,7 @@ pub(crate) fn with_policy<T>(root: &Path, operation: impl FnOnce() -> Result<T>)
         }
         Err(error) => Err(error),
     };
-    runtime.block_on(writer.shutdown())?;
+    shutdown.close()?;
     result
 }
 
@@ -363,7 +407,7 @@ pub(crate) fn run_queue<T: Send + 'static>(
 
 #[test]
 fn nested_fixture_roots_remain_independent_and_retained() -> Result<()> {
-    run_scoped(|| {
+    let roots = run_scoped(|| {
         let first = scoped_tempdir()?;
         let second = scoped_tempdir()?;
         assert_ne!(first.path(), second.path());
@@ -391,8 +435,18 @@ fn nested_fixture_roots_remain_independent_and_retained() -> Result<()> {
                 .map(String::as_str),
             Some("second")
         );
-        Ok(())
+        Ok((first, second))
     })?;
+    for root in [&roots.0, &roots.1] {
+        for path in [
+            crate::paths::core_db(root.path()),
+            crate::paths::runtime_config_db(root.path()),
+            crate::paths::secrets_db(root.path()),
+        ] {
+            let lease = ctox_store::harness_adapter::FileOwner::acquire(&path)?;
+            lease.require_exclusive()?;
+        }
+    }
     assert_eq!(
         require_sync_owner_context()
             .unwrap_err()
@@ -414,4 +468,29 @@ pub(crate) fn release_scoped_root(root: &Path) -> Result<()> {
         Ok::<_, anyhow::Error>(entries.remove(index).1)
     })?;
     close()
+}
+
+/// Shared fixture factories can migrate independently from their tests. In an
+/// explicit owner scope every fresh root gets owners; outside it this only
+/// allocates an isolated directory, preserving legacy callers until migrated.
+/// It never grants Core admission or opens a SQLite connection by itself.
+pub(crate) fn fixture_tempdir() -> Result<Arc<tempfile::TempDir>> {
+    if FIXTURE_CLEANUP.with(|scope| scope.borrow().is_some()) {
+        scoped_tempdir()
+    } else {
+        isolated_root()
+    }
+}
+
+fn fixture_fd_count() -> Option<usize> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_dir("/proc/self/fd")
+            .ok()
+            .map(|entries| entries.count())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
