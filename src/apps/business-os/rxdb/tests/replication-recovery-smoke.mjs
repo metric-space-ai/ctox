@@ -246,7 +246,8 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
     blob_id: 'blob_large',
     idx: index,
     total: 6,
-    data: 'x'.repeat(700_000),
+    // Two rows fit one bounded batch, a third does not: follows the budget.
+    data: 'x'.repeat(Math.floor(replicationWebRtcTestInternals.DIRECT_PUSH_BATCH_MAX_BYTES * 0.35)),
   }));
 
   await state.pushDocumentsToRemotePeers(largeDocuments);
