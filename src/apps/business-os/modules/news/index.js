@@ -17,6 +17,7 @@ import {
   issueDateKey,
   issueLabel,
   issueNodeLabel,
+  issueWindow,
   issuesForTopic,
   mergeIntoAccountSource,
   migrateLegacyRedditSources,
@@ -934,7 +935,8 @@ async function generateIssue() {
     created_at_ms: now,
     updated_at_ms: now,
   };
-  const envelope = buildGenerateCommand(topic, state.sources, issue, previous);
+  const freshness = issueWindow(topic, state.issues, state.posts, now);
+  const envelope = buildGenerateCommand(topic, state.sources, issue, previous, freshness);
   // Ausgabe lokal anlegen, dann Befehl senden (ohne Warten); die Befehls-ID vergibt der Kernel (OFFEN-2).
   issue.command_id = envelope.command_id;
   const stored = write('put', COLLECTIONS.issues, issue);

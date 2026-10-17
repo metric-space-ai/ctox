@@ -438,8 +438,48 @@ export function topicSnapshot(topic) {
   };
 }
 
-// Anweisung, Skill und Rueckruf setzt der Handler news.issue.generate (prompts/issue.md, Skill news/news-aggregation).
-export function buildGenerateCommand(topic, sources, issue, previousIssue) {
+const HOUR_MS = 3_600_000;
+const DAY_MS = 24 * HOUR_MS;
+
+// Same canonical link form as the writeback (handlers/_lib/news.js normalizeStoryUrl).
+export function normalizeStoryUrl(url) {
+  let rest = String(url || '').trim().split('#')[0];
+  rest = rest.includes('://') ? rest.split('://').slice(1).join('://') : rest;
+  const slash = rest.indexOf('/');
+  let host = (slash >= 0 ? rest.slice(0, slash) : rest).toLowerCase();
+  if (host.startsWith('www.')) host = host.slice(4);
+  const path = (slash >= 0 ? rest.slice(slash + 1) : '').replace(/\/+$/, '');
+  return path ? `${host}/${path}` : host;
+}
+
+// Since the previous issue (never further back than a week), otherwise the
+// last 24 hours for daily topics and 7 days for the rest; plus the links
+// earlier issues of the topic already carried.
+export function issueWindow(topic, issues, posts, now = Date.now()) {
+  const ready = issues.filter((issue) => issue.topic_id === topic.id && issue.status === 'ready'
+    && issue.payload?.kind !== 'weekly_digest' && Number(issue.generated_at_ms) > 0);
+  const previous = ready.reduce((best, issue) => (!best || issue.generated_at_ms > best.generated_at_ms ? issue : best), null);
+  const fallback = topic.cadence === 'daily' ? DAY_MS : 7 * DAY_MS;
+  const startMs = previous && previous.generated_at_ms > now - 7 * DAY_MS
+    ? Math.min(previous.generated_at_ms, now)
+    : now - fallback;
+  const recent = new Set(ready.filter((issue) => issue.generated_at_ms > now - 30 * DAY_MS).map((issue) => issue.id));
+  const covered = [];
+  for (const post of posts) {
+    if (!recent.has(post.issue_id)) continue;
+    const urls = [post.link_card?.url, ...(post.sources || []).filter((source) => source.kind !== 'discussion').map((source) => source.url)];
+    for (const url of urls) {
+      if (!url) continue;
+      const key = normalizeStoryUrl(url);
+      if (!covered.includes(key)) covered.push(key);
+    }
+  }
+  return { startMs, previousIssueId: previous?.id || '', coveredUrls: covered.slice(0, 120) };
+}
+
+// Anweisung, Skill und Rueckruf setzt der Handler news.issue.generate (prompts/issue.md, Skill news/news-aggregation);
+// das Zeitfenster (window_start_ms, covered_urls) reist im Payload und gilt in news.issue.complete.
+export function buildGenerateCommand(topic, sources, issue, previousIssue, window = null) {
   const topicSources = sources.filter((source) => source.topic_id === topic.id);
   const commandId = newCommandId(NEWS_ISSUE_GENERATE);
   return commandEnvelope({
@@ -452,7 +492,12 @@ export function buildGenerateCommand(topic, sources, issue, previousIssue) {
     issue_date: issue.issue_date,
     thread_key: `business-os/news/${topic.id}`,
     output_contract: ISSUE_OUTPUT_CONTRACT,
-    previous_issue_id: previousIssue?.id || '',
+    previous_issue_id: window?.previousIssueId || previousIssue?.id || '',
+    ...(window ? {
+      window_start: new Date(window.startMs).toISOString(),
+      window_start_ms: window.startMs,
+      covered_urls: window.coveredUrls,
+    } : {}),
     record_snapshot: {
       topic: topicSnapshot(topic),
       sources: topicSources.filter((source) => source.enabled !== false).map(sourceSnapshot),

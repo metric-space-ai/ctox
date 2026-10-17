@@ -3,7 +3,17 @@
 //   (b) sonst: prompts/issue.md fuellen und den Agenten mit dem App-Skill news/news-aggregation starten
 //       (enqueueIssue, _lib/news.js). Das Ergebnis kommt als news.issue.complete / news.issue.failed zurueck
 //       (Kern §16.30 Nr. 3); apply_issue_reply :591 steht jetzt in news.issue.complete.js.
-import { NEWS_ISSUE_GENERATE, enqueueIssue, fail, generatePayload, patchRecord, scheduleName, topicThreadKey } from './_lib/news.js';
+import {
+  NEWS_ISSUE_GENERATE,
+  enqueueIssue,
+  fail,
+  generatePayload,
+  patchRecord,
+  scheduleName,
+  topicHistory,
+  topicThreadKey,
+  windowFromHistory,
+} from './_lib/news.js';
 import { sha256Hex } from './_lib/sha256.js';
 
 // ref: store_news_commands.rs emit_scheduled_issue :318
@@ -57,9 +67,12 @@ async function emitScheduledIssue(command, ctx) {
   }
   // Rust: accept_rxdb_business_command_with_origin(... id = commandId, TrustedLocal) im Namen des Owners.
   // v4: Folgebefehl mit fester ID (Vertragswunsch: ctx.command(type, payload, {id, record_id, actor_id})).
+  // #799: Zeitfenster seit der letzten fertigen Ausgabe + schon gebrachte Links (ref: issue_window).
+  const history = await topicHistory(ctx, route.topic_id, issueId);
+  const window = windowFromHistory(history.issues, history.posts, typeof topic.cadence === 'string' ? topic.cadence : '', now);
   const accepted = await ctx.command(
     NEWS_ISSUE_GENERATE,
-    generatePayload(topic, sources, issueId, issueDate),
+    generatePayload(topic, sources, issueId, issueDate, window),
     { id: commandId, record_id: route.topic_id, actor_id: route.owner_user_id, sync_collections: ['news_issues', 'news_posts'] },
   );
   const key = accepted?.task_id ?? accepted?.id;

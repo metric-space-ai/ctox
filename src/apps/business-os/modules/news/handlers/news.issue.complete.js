@@ -10,13 +10,17 @@ import {
   HOLD_STATUSES,
   NEWS_ISSUE_GENERATE,
   callbackOrigin,
+  enforceWindow,
   fail,
   firstStringField,
   holdReason,
   parseIssueReply,
   patchRecord,
+  normalizeStoryUrl,
   resultText,
+  topicHistory,
   validRecordId,
+  windowFromHistory,
 } from './_lib/news.js';
 import { markIssueFailed } from './news.issue.failed.js';
 
@@ -31,6 +35,22 @@ export async function applyIssueReply(original, reply, ctx) {
   if (!validRecordId(issueId)) fail('invalid', 'news issue command is missing issue_id');
   const parsed = parseIssueReply(reply?.text ?? '');
   const now = ctx.now();
+  // #799 (ref: apply_issue_reply → enforce_window): gilt fuer Befehle mit Zeitfenster (window_start_ms), d. h. alle,
+  // die UI und Planer seit dem Nachport senden; aeltere Befehle ohne Fenster laufen wie bisher durch.
+  let rejected = null;
+  const windowStart = Number.isInteger(payload.window_start_ms) && payload.window_start_ms > 0 ? payload.window_start_ms : 0;
+  if (windowStart) {
+    const cadence = typeof payload.record_snapshot?.topic?.cadence === 'string' ? payload.record_snapshot.topic.cadence : 'daily';
+    const history = await topicHistory(ctx, topicId, issueId);
+    const window = windowFromHistory(history.issues, history.posts, cadence, now);
+    window.startMs = windowStart;
+    for (const url of Array.isArray(payload.covered_urls) ? payload.covered_urls : []) {
+      if (typeof url !== 'string') continue;
+      const key = normalizeStoryUrl(url);
+      if (!window.coveredUrls.includes(key)) window.coveredUrls.push(key);
+    }
+    rejected = enforceWindow(parsed, window, now);
+  }
   const postId = (index) => `${issueId}_p${String(index + 1).padStart(2, '0')}`;
 
   return ctx.transaction(async (tx) => {
@@ -65,6 +85,7 @@ export async function applyIssueReply(original, reply, ctx) {
       return { ...rest, post_id: index !== null && index < parsed.posts.length ? postId(index) : '' };
     });
     if (parsed.summary) issuePayload.summary = parsed.summary;
+    if (rejected) issuePayload.rejected_posts = rejected;
     Object.assign(issue, {
       status: 'ready',
       task_id: taskId,
@@ -84,7 +105,14 @@ export async function applyIssueReply(original, reply, ctx) {
       }
     }
     await patchRecord(tx, 'news_topics', topicId, now, { last_issue_at_ms: now });
-    return { ok: true, issue_id: issueId, topic_id: topicId, post_count: parsed.posts.length, dropped_posts: parsed.dropped };
+    return {
+      ok: true,
+      issue_id: issueId,
+      topic_id: topicId,
+      post_count: parsed.posts.length,
+      dropped_posts: parsed.dropped,
+      ...(rejected ? { rejected_posts: rejected.length } : {}),
+    };
   });
 }
 

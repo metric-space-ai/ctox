@@ -16,6 +16,8 @@ import {
   compactCount,
   cronForTopic,
   issueLabel,
+  issueWindow,
+  normalizeStoryUrl,
   issuesForTopic,
   mergeIntoAccountSource,
   newSource,
@@ -216,4 +218,30 @@ test('legacy subreddit scrape targets fold into one Reddit account source', asyn
   assert.ok(sources.includes(hn));
   const again = model.migrateLegacyRedditSources(sources, 't');
   assert.deepEqual(again.removedIds, []);
+});
+
+test('issue window runs since the previous issue and lists covered links', () => {
+  const now = Date.parse('2026-10-15T07:00:00Z');
+  const topic = { id: 't1', cadence: 'daily' };
+  const issues = [
+    { id: 'i1', topic_id: 't1', status: 'ready', generated_at_ms: now - 9 * 3_600_000 },
+    { id: 'i2', topic_id: 't1', status: 'failed', generated_at_ms: now - 3_600_000 },
+  ];
+  const posts = [{ issue_id: 'i1', link_card: { url: 'https://www.Cohere.com/blog/new/' },
+    sources: [{ url: 'https://news.ycombinator.com/item?id=1', kind: 'discussion' }] }];
+  const window = issueWindow(topic, issues, posts, now);
+  assert.equal(window.startMs, now - 9 * 3_600_000);
+  assert.equal(window.previousIssueId, 'i1');
+  assert.deepEqual(window.coveredUrls, ['cohere.com/blog/new']);
+  assert.equal(issueWindow(topic, [], [], now).startMs, now - 24 * 3_600_000);
+  assert.equal(issueWindow({ id: 't1', cadence: 'weekly' }, [], [], now).startMs, now - 7 * 24 * 3_600_000);
+  assert.equal(normalizeStoryUrl('https://x.ai/news#a'), 'x.ai/news');
+  const command = buildGenerateCommand({ ...normalizeTopic({ id: 't1', title: 'KI', cadence: 'daily' }) }, [], { id: 'i3', issue_date: '2026-10-15' }, issues[0], window);
+  assert.equal(command.payload.window_start_ms, window.startMs);
+  assert.equal(command.payload.window_start, new Date(window.startMs).toISOString());
+  assert.equal(command.payload.previous_issue_id, 'i1');
+  assert.deepEqual(command.payload.covered_urls, ['cohere.com/blog/new']);
+  // v4: die Anweisung (inkl. Zeitfenster-Zeile) baut der Handler aus prompts/issue.md.
+  assert.equal(command.payload.instruction, undefined);
+  assert.equal(buildGenerateCommand(normalizeTopic({ id: 't1', title: 'KI' }), [], { id: 'i4', issue_date: '2026-10-15' }, null).payload.window_start_ms, undefined);
 });

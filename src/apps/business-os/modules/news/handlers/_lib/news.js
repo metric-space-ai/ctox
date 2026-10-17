@@ -251,9 +251,127 @@ export function parseSourceReply(replyText) {
   };
 }
 
+// ---------------------------------------------------------------- Zeitfenster und Dubletten (#799, main d4de046cb)
+
+export const HOUR_MS = 3_600_000;
+export const DAY_MS = 24 * HOUR_MS;
+/** Spielraum vor dem Fensterbeginn (Zeitzonen, Agenturzeiten). ref: FRESHNESS_GRACE_MS */
+export const FRESHNESS_GRACE_MS = 6 * HOUR_MS;
+const COVERED_LOOKBACK_MS = 30 * DAY_MS;
+export const MAX_COVERED_URLS = 120;
+
+export const isDigestIssue = (issue) => issue?.payload?.kind === 'weekly_digest';
+
+// ref: normalize_story_url – gleiche Form wie core/news-model.mjs normalizeStoryUrl.
+export function normalizeStoryUrl(url) {
+  let rest = String(url ?? '').trim().split('#')[0];
+  rest = rest.includes('://') ? rest.split('://').slice(1).join('://') : rest;
+  const slash = rest.indexOf('/');
+  let host = (slash >= 0 ? rest.slice(0, slash) : rest).toLowerCase();
+  if (host.startsWith('www.')) host = host.slice(4);
+  const path = (slash >= 0 ? rest.slice(slash + 1) : '').replace(/\/+$/, '');
+  return path ? `${host}/${path}` : host;
+}
+
+// ref: primary_story_url – Link-Karte, sonst die Primaerquelle, sonst die erste Quelle.
+export function primaryStoryUrl(post) {
+  const card = str(post?.link_card?.url);
+  const sources = Array.isArray(post?.sources) ? post.sources : [];
+  const primary = str((sources.find((s) => s?.kind === 'primary') ?? sources[0])?.url);
+  const url = card || primary;
+  return url ? normalizeStoryUrl(url) : undefined;
+}
+
+// ref: all_story_urls
+export function allStoryUrls(post) {
+  const urls = [];
+  const primary = primaryStoryUrl(post);
+  if (primary) urls.push(primary);
+  for (const source of Array.isArray(post?.sources) ? post.sources : []) {
+    if (source?.kind === 'discussion' || !str(source?.url)) continue;
+    const url = normalizeStoryUrl(source.url);
+    if (!urls.includes(url)) urls.push(url);
+  }
+  return urls;
+}
+
+// ref: window_from_history – seit der letzten fertigen Ausgabe (hoechstens eine Woche zurueck), sonst 24 h (daily)
+// bzw. 7 Tage; dazu die Links der Ausgaben der letzten 30 Tage. `issues` = fertige Nicht-Digest-Ausgaben.
+export function windowFromHistory(issues, posts, cadence, now) {
+  const generated = (issue) => (Number.isInteger(issue?.generated_at_ms) ? issue.generated_at_ms : 0);
+  const previous = issues.filter((i) => generated(i) > 0).reduce((best, i) => (!best || generated(i) > generated(best) ? i : best), null);
+  const fallbackStart = now - (cadence === 'daily' ? DAY_MS : 7 * DAY_MS);
+  const startMs = previous && generated(previous) > now - 7 * DAY_MS ? Math.min(generated(previous), now) : fallbackStart;
+  const recent = new Set(issues.filter((i) => generated(i) > now - COVERED_LOOKBACK_MS).map((i) => i.id));
+  const covered = [];
+  for (const post of posts) {
+    if (!recent.has(post?.issue_id)) continue;
+    for (const url of allStoryUrls(post)) if (!covered.includes(url)) covered.push(url);
+  }
+  return { startMs, previousIssueId: str(previous?.id) ?? '', coveredUrls: covered.slice(0, MAX_COVERED_URLS * 4) };
+}
+
+/** Fertige Nicht-Digest-Ausgaben und Beitraege eines Themas (Rust: find_rxdb_collection_records_by_string_field). */
+export async function topicHistory(ctx, topicId, excludeIssueId = '') {
+  const issues = (await ctx.read('news_issues', { selector: { topic_id: topicId }, limit: 500 }))
+    .filter((i) => i.id !== excludeIssueId && i.status === 'ready' && !isDigestIssue(i));
+  const posts = await ctx.read('news_posts', { selector: { topic_id: topicId }, limit: 2_000 });
+  return { issues, posts };
+}
+
+// ref: rfc3339 (SecondsFormat::Secs, Z)
+export const rfc3339 = (ms) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z');
+
+// ref: freshness_rejection
+export function freshnessRejection(post, window, now) {
+  const published = Number.isInteger(post?.published_at_ms) ? post.published_at_ms : 0;
+  if (published <= 0) return 'missing_published_at';
+  if (published < window.startMs - FRESHNESS_GRACE_MS) return 'published_before_window';
+  if (published > now + DAY_MS) return 'published_in_future';
+  const primary = primaryStoryUrl(post);
+  if (primary && window.coveredUrls.includes(primary)) return 'already_covered';
+  return undefined;
+}
+
+// ref: repoint_trends – Trends eines verworfenen Beitrags gehen mit.
+export function repointTrends(parsed, indexMap) {
+  parsed.trends = parsed.trends
+    .map((trend) => {
+      const old = trend.post_index;
+      if (old === null) return trend;
+      const next = indexMap[old] ?? null;
+      return next === null ? undefined : { ...trend, post_index: next };
+    })
+    .filter(Boolean);
+}
+
+// ref: enforce_window – verwirft Beitraege ausserhalb des Fensters, schon gebrachte und Dubletten der Ausgabe.
+export function enforceWindow(parsed, window, now) {
+  const kept = [];
+  const indexMap = [];
+  const rejected = [];
+  const seen = [];
+  for (const post of parsed.posts) {
+    const primary = primaryStoryUrl(post) ?? '';
+    const reason = freshnessRejection(post, window, now) ?? (primary && seen.includes(primary) ? 'duplicate_in_issue' : undefined);
+    if (reason) {
+      indexMap.push(null);
+      rejected.push({ reason, url: primary, intro: clip(post.intro, 160), published_at_ms: post.published_at_ms ?? 0 });
+    } else {
+      indexMap.push(kept.length);
+      seen.push(primary);
+      kept.push(post);
+    }
+  }
+  parsed.posts = kept;
+  parsed.dropped += rejected.length;
+  repointTrends(parsed, indexMap);
+  return rejected;
+}
+
 // ref: :446 generate_payload – Payload der geplanten Ausgabe. Schluessel wie in Rust, ohne `instruction`/
 // `required_skills`: die Anweisung fuellt news.issue.generate aus prompts/issue.md (SKL-B1), `--task-id` = Befehls-ID.
-export function generatePayload(topic, sources, issueId, issueDate) {
+export function generatePayload(topic, sources, issueId, issueDate, window = null) {
   const field = (key) => str(topic?.[key]) ?? '';
   const topicId = field('id');
   // Rust: json!({"id": source.get("id"), …}) -> fehlende Felder werden null.
@@ -264,6 +382,12 @@ export function generatePayload(topic, sources, issueId, issueDate) {
     issue_date: issueDate,
     thread_key: topicThreadKey(topicId),
     output_contract: NEWS_ISSUE_CONTRACT,
+    ...(window ? {
+      previous_issue_id: window.previousIssueId,
+      window_start: rfc3339(window.startMs),
+      window_start_ms: window.startMs,
+      covered_urls: window.coveredUrls.slice(0, MAX_COVERED_URLS),
+    } : {}),
     record_snapshot: {
       topic: {
         id: topicId,
@@ -340,18 +464,24 @@ export function issuePromptValues(command, previousIssue = null) {
     source_line: sources.map((s) => `${str(s.kind) ?? 'web'}:${str(s.label) ?? ''}`).join('; ') || 'keine konfiguriert, nutze die Websuche',
     signed_in_task_id: signedIn ? command.id : '',
     previous_issue_date: str(previousIssue?.issue_date) ?? '',
+    window_start: Number.isInteger(payload.window_start_ms) && payload.window_start_ms > 0 ? rfc3339(payload.window_start_ms) : '',
     context_json: contextJson({
       command_id: command.id,
       topic_id: str(payload.topic_id) ?? '',
       issue_id: str(payload.issue_id) ?? '',
       issue_date: str(payload.issue_date) ?? '',
       previous_issue_id: str(payload.previous_issue_id) ?? '',
+      ...(Number.isInteger(payload.window_start_ms) ? {
+        window_start: str(payload.window_start) ?? rfc3339(payload.window_start_ms),
+        window_start_ms: payload.window_start_ms,
+        covered_urls: (Array.isArray(payload.covered_urls) ? payload.covered_urls : []).filter((u) => typeof u === 'string').slice(0, MAX_COVERED_URLS),
+      } : {}),
       output_contract: NEWS_ISSUE_CONTRACT,
       record_snapshot: snapshot,
     }),
   };
 }
-export const ISSUE_OPTIONAL_FIELDS = ['focus', 'signed_in_task_id', 'previous_issue_date'];
+export const ISSUE_OPTIONAL_FIELDS = ['focus', 'signed_in_task_id', 'previous_issue_date', 'window_start'];
 
 /** news.issue.generate (Knopf „Ausgabe jetzt erzeugen“ bzw. Planer): Template fuellen, Agenten starten. */
 export async function enqueueIssue(ctx, command) {
