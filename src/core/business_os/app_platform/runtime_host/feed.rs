@@ -1079,6 +1079,10 @@ async fn dispatch_platform(
     // the shared feed (and masking it with a rights-publication error).
     if outcome["status"] == "failed" {
         let id = text(&binding["command"], "id")?.to_owned();
+        let participant = text(&binding["fence"], "participant")?.to_owned();
+        let fence = binding["fence"]["fence"]
+            .as_u64()
+            .context("invalid: platform result fence")?;
         let outcome = outcome.clone();
         retry_write(
             database,
@@ -1088,6 +1092,16 @@ async fn dispatch_platform(
                 let mut doc = document(tx, "business_commands", &id)?
                     .ok_or_else(|| invalid("not_found: platform failure"))?;
                 if doc["status"] == "running" {
+                // Backoff may outlast this lease; only its current P9 owner
+                // may change the nonterminal receipt.
+                write_contract::check_executor_fence(
+                    tx,
+                    &participant,
+                    &id,
+                    ctox_store::change_log::subscription::protocol::Seq(fence),
+                    now(),
+                )?
+                .map_err(|_| invalid("revoked: platform result executor fence lost"))?;
                     let code = outcome["code"].as_str().unwrap_or("unavailable");
                     origin::audit_rejection(tx, &doc, code)?;
                     doc["status"] = json!("failed");
