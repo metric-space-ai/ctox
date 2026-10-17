@@ -289,6 +289,16 @@ mod tests {
                 1280,720,None,0,"browser.input",0,None,None,None).await?;
             assert_eq!(find_browser_document(&db,"browser_sessions","session").await?["allowed_observer_user_ids"],expected);
         }
+        // Reusing a snapshot captured before an ACL update must not lose grants.
+        for (command, user, expected) in [
+            ("browser.observer.grant", "bob", json!(["bob"])),
+            ("browser.observer.grant", "carol", json!(["bob", "carol"])),
+            ("browser.observer.revoke", "bob", json!(["carol"])),
+            ("browser.observer.revoke", "carol", json!([])),
+        ] {
+            assert_eq!(update_observers(&db, &session, "alice", command,
+                &json!({"user_id":user})).await?, expected);
+        }
         assert!(require_owned_session(&Value::Null,"alice").is_err());
         db.close().await?;
         Ok(())
