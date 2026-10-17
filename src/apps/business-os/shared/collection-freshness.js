@@ -1,4 +1,4 @@
-import { collectionFreshnessFromDiagnostics, COLLECTION_FRESHNESS_MAX_AGE_MS } from './sync-contract.js?v=20261016-v2-push-resume-native-owned';
+import { collectionFreshnessFromDiagnostics, COLLECTION_FRESHNESS_MAX_AGE_MS } from './sync-contract.js?v=20261017-v2-command-submit-churn';
 
 // A warning changes the interpretation of cached data, not its availability.
 export function renderCollectionFreshnessWarning(warning, { collections = [], diagnostics, language = 'de', compact = false, contextKey, sessionKey, nowMs = Date.now() } = {}) {

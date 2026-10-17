@@ -4756,6 +4756,7 @@ var CTOX_OUTBOUND_SELLIFY_LOOKUP_METHOD = "ctox.outbound.sellify_lookup.v1";
 var MAX_PEER_SEND_QUEUE_FRAMES = 1024;
 var MAX_PEER_SEND_QUEUE_BYTES = 16 * 1024 * 1024;
 var FAIR_SEND_SCHEDULE = ["high", "high", "high", "high", "normal", "normal", "low"];
+var COMMAND_PLANE_WRITE_COLLECTIONS = /* @__PURE__ */ new Set(["business_commands", "ctox_queue_tasks"]);
 var MAX_SERIALIZED_FRAME_BYTES = 16384;
 var FRAME_ACK_TIMEOUT_MS = 3e4;
 var STALLED_INCOMING_TRANSFER_TIMEOUT_MS = FRAME_ACK_TIMEOUT_MS * 3;
@@ -5032,7 +5033,11 @@ var CtoxWebRtcNativePeer = class {
     this.rejectAllPending(createPeerClosedError(this.options.clientId, "peer-close"));
     this.incomingFrames.clear();
   }
-  send(remotePeerId, payload) {
+  // `hooks` (optional) lets request() observe the real wire hand-off:
+  // onSent() fires after channel.send (inline) or after the framed transfer
+  // completed, onSendFailed(error) when the frame never left this browser,
+  // and cancelled() drops an item whose request already gave up.
+  send(remotePeerId, payload, hooks = null) {
     const connection = this.connections.get(remotePeerId);
     if (!connection?.channel || connection.channel.readyState !== "open") {
       return false;
@@ -5042,7 +5047,8 @@ var CtoxWebRtcNativePeer = class {
       payload,
       text,
       inline: encodedSize(text) <= MAX_INLINE_FRAME_BYTES,
-      priority: classifySendPriority(payload, text)
+      priority: classifySendPriority(payload, text),
+      hooks: hooks && typeof hooks === "object" ? hooks : null
     });
   }
   enqueueSendFrame(connection, item) {
@@ -5095,6 +5101,10 @@ var CtoxWebRtcNativePeer = class {
       while (!this.closed && this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState === "open") {
         const item = nextQueuedSend(connection.sendQueue);
         if (!item) break;
+        if (sendItemCancelled(item)) {
+          this.refreshSendQueueStatus(connection);
+          continue;
+        }
         this.refreshSendQueueStatus(connection);
         this.recordTransportStatus({
           sentScheduledFrames: this.transportStats.sentScheduledFrames + 1,
@@ -5111,14 +5121,18 @@ var CtoxWebRtcNativePeer = class {
             connection.channel.send(item.text);
             this.recordSentInlineFrame(item.payload, connection.channel);
           } catch (error) {
+            notifySendItemFailed(item, error);
             this.removeConnection(connection.remotePeerId, "send-queue-send-failed", null, { expectedConnection: connection });
             throw error;
           }
+          notifySendItemSent(item);
           continue;
         }
         try {
           await this.sendFramed(connection, item.text);
+          notifySendItemSent(item);
         } catch (error) {
+          notifySendItemFailed(item, error);
           const peerClosed = isPeerClosedError(error);
           if (this.connections.get(connection.remotePeerId) === connection && connection.channel?.readyState !== "open") {
             this.removeConnection(connection.remotePeerId, "frame-send-channel-closed", null, { expectedConnection: connection });
@@ -5250,8 +5264,15 @@ var CtoxWebRtcNativePeer = class {
       const item = nextHighPriorityInlineSend(queue);
       if (!item) break;
       this.refreshSendQueueStatus(connection);
+      if (sendItemCancelled(item)) continue;
       await this.waitForSendBuffer(connection.channel, connection);
-      connection.channel.send(item.text);
+      try {
+        connection.channel.send(item.text);
+      } catch (error) {
+        notifySendItemFailed(item, error);
+        throw error;
+      }
+      notifySendItemSent(item);
       this.recordSentInlineFrame(item.payload, connection.channel);
       this.recordTransportStatus({
         sentScheduledFrames: this.transportStats.sentScheduledFrames + 1,
@@ -5360,36 +5381,92 @@ var CtoxWebRtcNativePeer = class {
     const requestPeerId = String(remotePeerId || "");
     const requestConnection = this.connections.get(requestPeerId) || null;
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
+      const entry = {
+        resolve,
+        reject,
+        timer: null,
+        method,
+        peerId: remotePeerId,
+        sentAtMs: 0
+      };
+      const queueWaitTimer = setTimeout(() => {
+        if (entry.sentAtMs || this.pending.get(id) !== entry) return;
         this.pending.delete(id);
-        const error = new Error(`Timed out waiting for WebRTC response ${method}`);
-        const peerId = requestPeerId;
-        const connection = this.connections.get(peerId);
+        const connection = this.connections.get(requestPeerId);
         if (connection && connection === requestConnection) {
-          this.recordConnectionEvent(connection, "request-timeout", { method });
-          if (shouldRecycleConnectionAfterRequestTimeout(method)) {
-            this.forceInitiatorPeers.add(peerId);
-            this.removeConnection(peerId, `request-timeout-${method}`, null, { expectedConnection: connection });
-          }
+          this.recordConnectionEvent(connection, "request-send-queue-timeout", { method });
         }
+        const error = new Error(`Timed out waiting for WebRTC response ${method} (request still queued locally)`);
+        error.code = "ctox_webrtc_request_send_queue_timeout";
+        error.transient = true;
+        error.retryable = true;
         reject(error);
       }, timeoutMs);
-      this.pending.set(id, { resolve, reject, timer, method, peerId: remotePeerId });
+      entry.timer = queueWaitTimer;
+      const armResponseTimer = () => {
+        if (entry.sentAtMs || this.pending.get(id) !== entry) return;
+        entry.sentAtMs = Date.now();
+        clearTimeout(queueWaitTimer);
+        const onResponseDeadline = () => {
+          if (this.pending.get(id) !== entry) return;
+          const now = Date.now();
+          if (now - entry.sentAtMs < responseProgressExtensionCapMs(timeoutMs) && this.incomingTransferProgressing(requestPeerId, entry.sentAtMs, timeoutMs, now)) {
+            entry.timer = setTimeout(onResponseDeadline, timeoutMs);
+            return;
+          }
+          this.pending.delete(id);
+          const error = new Error(`Timed out waiting for WebRTC response ${method}`);
+          const peerId = requestPeerId;
+          const connection = this.connections.get(peerId);
+          if (connection && connection === requestConnection) {
+            this.recordConnectionEvent(connection, "request-timeout", { method });
+            if (shouldRecycleConnectionAfterRequestTimeout(method)) {
+              this.forceInitiatorPeers.add(peerId);
+              this.removeConnection(peerId, `request-timeout-${method}`, null, { expectedConnection: connection });
+            }
+          }
+          reject(error);
+        };
+        entry.timer = setTimeout(onResponseDeadline, timeoutMs);
+      };
+      const hooks = {
+        onSent: armResponseTimer,
+        onSendFailed: (error) => {
+          if (this.pending.get(id) !== entry) return;
+          this.pending.delete(id);
+          clearTimeout(entry.timer);
+          reject(error instanceof Error ? error : new Error(String(error?.message || error)));
+        },
+        cancelled: () => this.pending.get(id) !== entry
+      };
+      this.pending.set(id, entry);
       const frame = { id, method, params };
       if (collection) frame.collection = collection;
-      const sendPromise = method === "ctox.browser.live.v1" || method === "ctox.workjet.jour_fixe.speech.v1" || method === CTOX_OUTBOUND_SELLIFY_LOOKUP_METHOD ? this.sendImmediateControlFrame(remotePeerId, frame) : Promise.resolve(this.send(remotePeerId, frame));
+      const immediate = method === "ctox.browser.live.v1" || method === "ctox.workjet.jour_fixe.speech.v1" || method === CTOX_OUTBOUND_SELLIFY_LOOKUP_METHOD;
+      const sendPromise = immediate ? this.sendImmediateControlFrame(remotePeerId, frame).then((sent) => {
+        if (sent) armResponseTimer();
+        return sent;
+      }) : Promise.resolve(this.send(remotePeerId, frame, hooks));
       sendPromise.then((sent) => {
         if (sent) return;
         this.pending.delete(id);
-        clearTimeout(timer);
+        clearTimeout(entry.timer);
         this.scheduleReconnect(remotePeerId, `send-not-open-${method}`);
         reject(new Error(`WebRTC peer ${remotePeerId} is not open`));
       }).catch((error) => {
         this.pending.delete(id);
-        clearTimeout(timer);
+        clearTimeout(entry.timer);
         reject(error);
       });
     });
+  }
+  incomingTransferProgressing(peerId, sinceMs, windowMs, now = Date.now()) {
+    for (const entry of this.incomingFrames?.values?.() || []) {
+      if (entry?.peerId !== peerId) continue;
+      if (Number(entry.createdAt || 0) < Number(sinceMs || 0)) continue;
+      if (now - Number(entry.lastProgressAt || 0) < windowMs) return true;
+    }
+    return false;
   }
   async requestAuxiliary(remotePeerId, label, method, params = [], timeoutMs = 15e3) {
     const peerId = String(remotePeerId || "");
@@ -7204,6 +7281,7 @@ var webrtcNativeTestInternals = Object.freeze({
   utf8ByteLength,
   recordReceivedFrame,
   classifySendPriority,
+  shouldRecycleConnectionAfterRequestTimeout,
   MAX_SERIALIZED_FRAME_BYTES,
   MAX_INCOMING_FRAME_TRANSFERS,
   MAX_INBOUND_REQUESTS,
@@ -7262,6 +7340,28 @@ function nextHighPriorityInlineSend(queue) {
   if (item) queue.queuedBytes = Math.max(0, queue.queuedBytes - Number(item.byteLength || 0));
   return item;
 }
+function responseProgressExtensionCapMs(timeoutMs) {
+  return Math.max(8 * Number(timeoutMs || 0), 12e4);
+}
+function sendItemCancelled(item) {
+  try {
+    return item?.hooks?.cancelled?.() === true;
+  } catch {
+    return false;
+  }
+}
+function notifySendItemSent(item) {
+  try {
+    item?.hooks?.onSent?.();
+  } catch {
+  }
+}
+function notifySendItemFailed(item, error) {
+  try {
+    item?.hooks?.onSendFailed?.(error);
+  } catch {
+  }
+}
 function shouldRecycleConnectionAfterRequestTimeout(method = "") {
   return ["ctoxProtocol", "token"].includes(String(method || ""));
 }
@@ -7281,7 +7381,10 @@ function classifySendPriority(payload = {}, text = "") {
     "rxdb.file.cancel",
     "ctox.browser.live.v1"
   ].includes(method)) return "high";
-  if (method === "masterWrite" && encodedSize(text) > MAX_INLINE_FRAME_BYTES) return "low";
+  if (method === "masterWrite" && encodedSize(text) > MAX_INLINE_FRAME_BYTES) {
+    if (COMMAND_PLANE_WRITE_COLLECTIONS.has(String(payload?.collection || ""))) return "normal";
+    return "low";
+  }
   if (method === "masterWrite") return "high";
   if (payload?.id && (Object.prototype.hasOwnProperty.call(payload, "result") || Object.prototype.hasOwnProperty.call(payload, "error"))) {
     return "high";
@@ -10915,7 +11018,7 @@ var GLOBAL_QUERY_META_BUDGET_BYTES = 512 * 1024 * 1024;
 var DEFAULT_QUERY_META_BUDGET_BYTES = 6 * 1024 * 1024;
 var KNOWLEDGE_TABLE_QUERY_META_BUDGET_BYTES = 16 * 1024 * 1024;
 var LOCAL_WRITE_PUSH_DEBOUNCE_MS = 50;
-var DIRECT_PUSH_BATCH_MAX_BYTES = 2 * 1024 * 1024;
+var DIRECT_PUSH_BATCH_MAX_BYTES = 512 * 1024;
 var REMOTE_MASTER_READY_TIMEOUT_MS = 65e3;
 var CTOX_BROWSER_LIVE_CAPABILITY = "ctox-browser-live-v1";
 var CTOX_BROWSER_LIVE_CHANNEL = "ctox-browser-live-v1";
@@ -11033,6 +11136,8 @@ var replicationWebRtcTestInternals = Object.freeze({
   demandSidecarPrimaryDelete,
   // Lazy accessors (classes are declared below): let smoke tests drive the
   // real state machines without opening a network connection.
+  boundedDirectPushBatches,
+  DIRECT_PUSH_BATCH_MAX_BYTES,
   getSharedRoomPeerClass: () => SharedRoomPeer,
   getReplicationStateClass: () => CtoxWebRtcReplicationState
 });
@@ -12321,12 +12426,13 @@ var CtoxWebRtcReplicationState = class {
     const maxAttempts = 3;
     let activePeerId = peerId;
     let lastError = null;
+    let attemptBatchSize = Math.max(1, Math.floor(Number(batchSize) || 1));
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
       try {
         const result = await this.peer.request(
           activePeerId,
           "masterChangesSince",
-          [checkpoint, batchSize],
+          [checkpoint, attemptBatchSize],
           timeoutMs,
           this.collection.name
         );
@@ -12339,6 +12445,7 @@ var CtoxWebRtcReplicationState = class {
         activePeerId = await this.waitForOpenPeerId().catch(() => {
           throw error;
         });
+        attemptBatchSize = Math.max(1, Math.floor(attemptBatchSize / 2));
         await delay2(250);
       }
     }
