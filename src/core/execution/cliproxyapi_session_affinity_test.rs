@@ -139,8 +139,13 @@ async fn provider_quota_native_http_late_response_after_relogin_is_not_persisted
         );
         let store = account_quotas::CtoxAccountQuotaStore::new(root.path());
         assert!(store.load("claude", &[account.id]).unwrap().is_empty());
-        let conn = crate::persistence::open_sqlite(root.path()).unwrap();
-        let rows: i64 = conn.query_row("SELECT COUNT(*) FROM ctox_payload_store WHERE payload_key LIKE 'cliproxyapi.auth.reported-quota.v1:%'", [], |row| row.get(0)).unwrap();
+        // Async test body: read through the registered Core owner's snapshot
+        // pool (the async owner API), never through a second file opener.
+        let rows: i64 = crate::persistence::read_core_snapshot(root.path(), |conn| {
+            Ok(conn.query_row("SELECT COUNT(*) FROM ctox_payload_store WHERE payload_key LIKE 'cliproxyapi.auth.reported-quota.v1:%'", [], |row| row.get(0))?)
+        })
+        .await
+        .unwrap();
         assert_eq!(
             rows, 0,
             "a late response cannot write quota into a different credential generation"
