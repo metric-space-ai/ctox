@@ -6,5 +6,5 @@ Nicht von Hand ändern: neuen Pin mit `git show <commit>:ctox-app-api-stub.mjs` 
 Der Wächter `tests/app-api-stub-pin.test.mjs` prüft (a) sha256 der Kopie gegen diese Datei, immer; (b) Byte-Gleichheit
 mit dem gepinnten Commit, wenn das Stub-Repo lokal vorhanden ist.
 
-pin-commit: 8265bd7c88bd7ac955c4ddde1bca1c97817f8dd4
-sha256: 8b765d38d6c206dd03da4a6356832b1597435e0054fb6b44747ad662c285a602
+pin-commit: 64acc2cc861edd07236f18368269c6510a3a3dc8
+sha256: 774540fa812f9716ac67e8a6d06962fe9bb3418318dde05a11962ede9cd24488

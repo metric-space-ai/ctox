@@ -53,7 +53,7 @@
     "icon.svg": "da577c7cfa4604f7002cbb004a7be18eca5e00664914ba6b39e6247fe07b0e20",
     "index.css": "ffed2279ecab03a13d79920e8119cfc69ee53c6bbc2219d56b4202e6ddbeff95",
     "index.html": "5c6bc907f36efbc96fddf45597709c579539a9da80b784870b3848eab997de2e",
-    "index.js": "de325bf9a86bfd37244feca819f3fd492f78df1bc5f5e24981497728f0defa56",
+    "index.js": "ca9bdc5e2b12a2d0aade17efe76b207fec979bbfc9669e4cba2ca18bf8de949c",
     "locales/de.json": "8ab9b7c32aeccc8a3f6b1ff7c480431ec62a67fdad27c2e713d52f8a4b70e108",
     "locales/en.json": "bdda3f7c4dd8468ccd040eb0e023fdb5a015eb4ab317ea5f1c7f675e5efdc753",
     "module.json": "3963ab1dcf0690144873916c901ee818788a621b3d4aeacaaa8c5679d7a87be9",
@@ -89,7 +89,7 @@
         "code_read": [
           "index.js:2",
           "index.js:155",
-          "index.js:1760"
+          "index.js:1764"
         ],
         "code_write": [],
         "declaration_basis": "modules/app-store/V4-PORT.md OFFEN 8 (documents/notes/spreadsheets Fehltreffer; files braucht write über api.files.put); app_drafts read: Kern E56.1a (ctox-platform exportiert read, Zeilenfilter user_id = actor_id), index.js:155 eigene Entwürfe → ctox.app.publish",
@@ -182,7 +182,7 @@
       "_evidence": {
         "code_read": [
           "index.js:74",
-          "index.js:1891",
+          "index.js:1895",
           "vendor/store-shelf/box-art.mjs:270"
         ],
         "code_write": [],
@@ -264,7 +264,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "9e2be00c0b88e2928a3cfc8d55b8cc104dde0d77a98e21153c9bc750f6187c37",
+    "base_hash": "dcb07d3bf43b5a9daf683419c06270cc8871dcc92a745ef19e5966b4e0d1a489",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

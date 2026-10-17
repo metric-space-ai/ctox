@@ -238,6 +238,9 @@ const state = {
   calendarView: 'month',
   activeView: 'dayGridMonth',
   selectedCalendarIds: new Set(),
+  // Calendar row the operator opened (tap on the row, not the checkbox): highlighted in the list, shown in the grid,
+  // default for new events. On a narrow window the tap opens the calendar view (pane-narrow.js reads is-selected).
+  focusedCalendarId: null,
 
   // Third pane (bookings/holds context) — auto-reveal on selection.
   selectedBookingPageId: null,
@@ -377,6 +380,7 @@ export async function mount(root, api, { restored } = {}) {
   if (!root.dataset.app) root.dataset.app = api.app?.id || 'calendar';
   applyLocale(langFrom(api.shell.locale.get()));
   state.selectedCalendarIds = new Set();
+  state.focusedCalendarId = null;
   applyRestoredView(restored);
   state.pendingEditing = restored && typeof restored.editing === 'object' ? restored.editing : null;
 
@@ -1043,7 +1047,7 @@ function renderLeftList() {
     view: state.listView,
     rows: isPages
       ? rows.map((bp) => ([bp.id, bp.title || '', bp.status || '', bp.duration_minutes || 0, bp.slug || '']))
-      : rows.map((cal) => ([cal.id, cal.title || '', cal.color || '', cal.timezone || '', eventCounts.get(cal.id) || 0, state.selectedCalendarIds.has(cal.id) ? 1 : 0])),
+      : rows.map((cal) => ([cal.id, cal.title || '', cal.color || '', cal.timezone || '', eventCounts.get(cal.id) || 0, state.selectedCalendarIds.has(cal.id) ? 1 : 0, state.focusedCalendarId === cal.id ? 1 : 0])),
   });
   renderHtmlIfChanged(els.leftList, html, { signature });
   if (isPages) markActiveBookingPage();
@@ -1056,6 +1060,7 @@ function renderLeftList() {
 // picks one in CSS, so flipping the switch never costs a data read.
 function calendarRowHtml(cal, eventCount = 0) {
   const checked = state.selectedCalendarIds.has(cal.id);
+  const focused = state.focusedCalendarId === cal.id;
   const checkboxId = `calendar-toggle-${safeDomId(cal.id)}`;
   const fallback = labels[state.lang] || labels.de;
   const timezone = cal.timezone || state.t('noTimezone', fallback.noTimezone);
@@ -1063,7 +1068,7 @@ function calendarRowHtml(cal, eventCount = 0) {
     ? `1 ${state.t('eventsCountOne', fallback.eventsCountOne)}`
     : `${eventCount} ${state.t('eventsCount', fallback.eventsCount)}`;
   return `
-    <div class="ctox-list-item calendar-item" data-calendar-id="${escapeHtml(cal.id)}" data-context-record-id="${escapeHtml(cal.id)}" data-context-record-type="calendar_calendar" data-context-label="${escapeHtml(cal.title || cal.id)}">
+    <div class="ctox-list-item calendar-item${focused ? ' is-selected' : ''}" data-action="focus-cal" data-calendar-id="${escapeHtml(cal.id)}"${focused ? ' aria-current="true"' : ''} data-context-record-id="${escapeHtml(cal.id)}" data-context-record-type="calendar_calendar" data-context-label="${escapeHtml(cal.title || cal.id)}">
       <div class="calendar-item-left">
         <input id="${checkboxId}" type="checkbox" class="calendar-item-checkbox" data-action="toggle-cal" data-id="${escapeHtml(cal.id)}" aria-label="${escapeHtml(cal.title || 'Kalender')} anzeigen" ${checked ? 'checked' : ''} />
         <span class="calendar-item-color-indicator" style="background-color: ${safeColor(cal.color)}"></span>
@@ -1151,6 +1156,31 @@ function onLeftListClick(event) {
   const row = target.closest('.booking-page-item[data-action="select-bp"]');
   if (row) {
     selectBookingPage(row.dataset.id || null);
+    return;
+  }
+  if (target.closest('input, label')) return; // the checkbox only toggles visibility (onLeftListChange)
+  const calRow = target.closest('.calendar-item[data-action="focus-cal"]');
+  if (calRow) focusCalendar(calRow.dataset.calendarId || null);
+}
+
+// Opening a calendar row: highlight it, make sure the grid shows it, and use it for new events. In-place class
+// flip plus checkbox sync, never a list rebuild (keeps the well's scrollTop).
+function focusCalendar(id) {
+  if (!id || !state.calendars.some(c => c.id === id)) return;
+  state.focusedCalendarId = id;
+  const wasShown = state.selectedCalendarIds.has(id);
+  state.selectedCalendarIds.add(id);
+  for (const node of els.leftList?.querySelectorAll('.calendar-item') || []) {
+    const active = node.dataset.calendarId === id;
+    node.classList.toggle('is-selected', active);
+    if (active) node.setAttribute('aria-current', 'true');
+    else node.removeAttribute('aria-current');
+    if (active) { const box = node.querySelector('[data-action="toggle-cal"]'); if (box) box.checked = true; }
+  }
+  if (!wasShown) {
+    const filteredEvents = state.events.filter(e => state.selectedCalendarIds.has(e.calendar_id));
+    state.calendarViewInstance?.setEvents(filteredEvents, state.calendars);
+    renderMainBandCounts();
   }
 }
 
@@ -1588,6 +1618,7 @@ function openEventForm(eventId = null, defaults = null) {
   state.editingItem = dbEvent;
   // Präsenz (wer bearbeitet gerade) gibt es in App-API 4.0 nicht (V4-PORT.md OFFEN-2).
   const defaultCalendarId = dbEvent?.calendar_id
+    || (state.calendars.some(c => c.id === state.focusedCalendarId) ? state.focusedCalendarId : '')
     || [...state.selectedCalendarIds].find(id => state.calendars.some(c => c.id === id))
     || state.calendars[0]?.id
     || '';

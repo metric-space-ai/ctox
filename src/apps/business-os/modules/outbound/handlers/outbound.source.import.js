@@ -3,7 +3,7 @@
 //   ctx.cap.browser.automation.run({session_id, steps, timeout_ms}) → {session_id, steps:[{op, ok}], completed, timed_out,
 //     artifact:{ref, file_id}} (CAP-3d, §16.48 Nr. 2: navigate/wait/click/extract-Schritte, _lib/company-import-script.js);
 //     Schrittergebnisse über ctx.cap.files.get({ref}) aus dem files-Datensatz der eigenen App (Strang OLG725).
-//   ctx.cap.knowledge.command(argv) (DataFrames), ctx.cap.artifact.write({command_id, name, json})
+//   ctx.cap.knowledge.command(argv) (DataFrames), ctx.cap.files.put({text}, {id, name, mime}) (Import-Protokoll, E58)
 //     (runtime/business-os-imports/<command_id>/<name>).
 import { fail, sha256Hex, asciiLower } from './_lib/outbound.js';
 import { ensureOutboundKnowledgeContract, firstNonempty, strPath, appendKnowledgeRows } from './_lib/knowledge.js';
@@ -163,22 +163,21 @@ export default async function handle(command, ctx) {
   }
   if (knowledgeRows.length === 0) fail('invalid', 'outbound importer extracted rows but none had a company name');
   await appendKnowledgeRows(ctx, domain, tableKey, knowledgeRows);
-  await ctx.cap.artifact.write({
+  // E58: kein natives artifact.write (Handler-Wächter E17.1) – das Import-Protokoll ist eine Datei der App
+  // (files.put, je Befehl eine eigene id wie früher je command_id ein Artefakt).
+  const companiesJson = {
     command_id: commandId,
-    name: 'outbound_companies.json',
-    json: {
-      command_id: commandId,
-      // Rust: queue_task.message_key; the v4 runtime has no queue task for a handler call.
-      queue_task_id: null,
-      source_id: sourceId,
-      source_url: url,
-      campaign_id: campaignId,
-      knowledge_domain: domain,
-      knowledge_table_key: tableKey,
-      records_count: knowledgeRows.length,
-      records: knowledgeRows,
-      automation,
-    },
-  });
+    // Rust: queue_task.message_key; the v4 runtime has no queue task for a handler call.
+    queue_task_id: null,
+    source_id: sourceId,
+    source_url: url,
+    campaign_id: campaignId,
+    knowledge_domain: domain,
+    knowledge_table_key: tableKey,
+    records_count: knowledgeRows.length,
+    records: knowledgeRows,
+    automation,
+  };
+  await ctx.cap.files.put({ text: JSON.stringify(companiesJson) }, { id: `outbound_companies-${commandId}`, name: 'outbound_companies.json', mime: 'application/json' });
   return { collection: 'knowledge_data_rows', definition_id: 'outbound.companies.v1', records_count: recordIds.length, record_ids: recordIds };
 }

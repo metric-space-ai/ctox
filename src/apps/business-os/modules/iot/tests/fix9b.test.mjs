@@ -1,5 +1,5 @@
 // FIX9b (Shell v4): iot-Detailtitel im schmalen Fenster ohne Ellipse (G4), nur App-CSS.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/a8765b9 \
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c \
 //       node --import ./v4/tools/node/ctox-shared.mjs --test --test-force-exit modules/iot/tests/fix9b.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,7 +11,7 @@ import { dirname, join, normalize, extname } from 'node:path';
 import { homedir } from 'node:os';
 
 const APP = 'iot';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/a8765b9');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const require = createRequire(import.meta.url);

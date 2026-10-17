@@ -16,10 +16,10 @@ Erzeugt von `gen-manifest.mjs`, Basis main@4794af03d. a = schema.js (soweit noch
 | handlers_total | 117 |
 | apps_with_handlers | 16 |
 | legacy_total | 0 |
-| capabilities_distinct | 41 |
+| capabilities_distinct | 40 |
 | triggers_total | 10 |
 | command_rights_entries | 43 |
-| foreign_declarations | 299 |
+| foreign_declarations | 301 |
 | foreign_write_declarations | 32 |
 | foreign_code_only | 94 |
 | foreign_without_export | 0 |

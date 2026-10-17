@@ -42,17 +42,17 @@
   {
     "name": "1280: messages nach dem Senden gleich",
     "ok": true,
-    "detail": "{\"v4\":[33,221,594,430],\"v2\":[33,221,594,430]}"
+    "detail": "{\"v4\":[33,221,458,430],\"v2\":[33,221,458,430]}"
   },
   {
     "name": "1280: textarea nach dem Senden gleich",
     "ok": true,
-    "detail": "{\"v4\":[87,660,486,40],\"v2\":[87,660,486,40]}"
+    "detail": "{\"v4\":[87,660,350,40],\"v2\":[87,660,350,40]}"
   },
   {
     "name": "1280: send nach dem Senden gleich",
     "ok": true,
-    "detail": "{\"v4\":[581,662,36,36],\"v2\":[581,662,36,36]}"
+    "detail": "{\"v4\":[445,662,36,36],\"v2\":[445,662,36,36]}"
   },
   {
     "name": "1280: Verlauf nach dem Senden ohne waagerechten Überlauf wie V2",
@@ -117,17 +117,17 @@
   {
     "name": "420: messages nach dem Senden gleich",
     "ok": true,
-    "detail": "{\"v4\":[1,229,594,430],\"v2\":[1,229,594,430]}"
+    "detail": "{\"v4\":[1,229,402,430],\"v2\":[1,229,402,430]}"
   },
   {
     "name": "420: textarea nach dem Senden gleich",
     "ok": true,
-    "detail": "{\"v4\":[55,668,486,40],\"v2\":[55,668,486,40]}"
+    "detail": "{\"v4\":[55,668,294,40],\"v2\":[55,668,294,40]}"
   },
   {
     "name": "420: send nach dem Senden gleich",
     "ok": true,
-    "detail": "{\"v4\":[549,670,36,36],\"v2\":[549,670,36,36]}"
+    "detail": "{\"v4\":[357,670,36,36],\"v2\":[357,670,36,36]}"
   },
   {
     "name": "420: Verlauf nach dem Senden ohne waagerechten Überlauf wie V2",

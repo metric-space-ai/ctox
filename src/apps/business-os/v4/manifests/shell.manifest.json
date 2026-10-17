@@ -130,7 +130,7 @@
     "v4/frame/desktop.js": "be621803003d967b05050a8442ffc72345fc028dc6cb29816f013e9a031064ce",
     "v4/frame/frame.css": "3e2cb79f65a597be66b4b9eed5138a878c98e699ce5c1f1928b465f361c136d6",
     "v4/frame/glossary.js": "496a962b5a5744ffe5c50d275cd0e31d0d4228cfd4d0a6d43f5276288190410e",
-    "v4/frame/index.js": "a95daefa94c322221f145e87094b351195c695a537c3f797b395ee9777b2ac4b",
+    "v4/frame/index.js": "aa53555e5b1a7e6716e525e0611cd5ad5fe10effcd6193cf119732c3bc9d5ca3",
     "v4/frame/launcher.js": "e4c141ed28922d3c03d3872633adf09a34e80de9f9e927399641e2066b790cde",
     "v4/frame/pane-heads.js": "5049171627830e5b42a61d4140b0de81f8b79bf67e6296bcee1a373cc92125c1",
     "v4/frame/pane-narrow.js": "85cd2ec7dfc185424ec9dd098f5ccb3d2d7973b01e0cc22a92b1f063da04272d",
@@ -143,9 +143,9 @@
     "v4/shell/chat/chat-v2.css": "2b8052b88bf02528c4db3aca499620b9228826a97546acfbe817fe6d88a51317",
     "v4/shell/chat/chat-v4.css": "4b87f2262874e47d228d3ef0120f267a61f4552c524aa5240004c70246c008fa",
     "v4/shell/chat/index.js": "8d4e4119272572b17afb1c2ce173ee0c6043026ae6b389b150b696e1d8a35b35",
-    "v4/shell/chat/raw-db.js": "bcd41043400bc909b56b45538387921b981ea0542e627d534dfb2f137b61d065",
+    "v4/shell/chat/raw-db.js": "2d99d5fd55535350ed7b2d1c07ba6d7f36b06f8b3d0bda7e19ae9fed4c581d09",
     "v4/shell/column-resizers.js": "ccd8e1b9615381987ccc8f710ae8faf01c924f3d7c74a76b3a029469f71c554e",
-    "v4/shell/kernel-adapter.js": "d52b5123bacdc2e08db0970f8a4d84cf29006eed2fda01af5a7b603212160eb2",
+    "v4/shell/kernel-adapter.js": "8b55208d36f2bd801487ebc678a1bb0499c579bfc879f73ea0a28a3091a073ed",
     "v4/shell/report.js": "2809f32401811004129ad7742c61d72da1e8f25792a5a87b0b94a650460971ff",
     "v4/shell/status-zone.js": "91337341f92baed0887bb194f58c2446a77007024fa859892c3e7ab46575ee76",
     "v4/shell/sync-state.js": "a3a49dc99d5eabf5b7a798f07a7311e7519fd3fc67fff45ccb60746e4a9d0e42",
@@ -168,7 +168,7 @@
     "v4/source/reports-tab.js": "b94228ff23c3ac665be676f86271636f59878e7d87ee269f47c0431ff142adbd",
     "v4/source/schema-diff.js": "2631f21cbf0924d7010e33e98da6b143811c0085eb3dd8ae540c5185b0fe31ec",
     "v4/source/source-mode.css": "7179e9c7dc68d9938f773a7c5b061aa8e40fddfd327aed7d44ed25551ccc9131",
-    "v4/source/source-mode.js": "eb5cb4f47c32eec1711d6d9c2a4cceb865b2db2217757406f8bc699046b5b88f",
+    "v4/source/source-mode.js": "33c8098c1d08c53bf9b0fbb896719ca13fb7c6d3de003a67890286d289f4ed1f",
     "v4/source/text-diff.js": "78773df3c7acc2dd08ddc1018156f2ef88ec8e11e36771b0859f87fc07837d2c",
     "v4/source/upload.js": "42ed570e10b90516461c06791d470d61ad1c02fed905fc5a3fba99de17924105",
     "v4/sw.js": "4263986afea2f1dfd885b04dee4ff675f1cdf2395ece4fca7f3efc597a8171c3"
@@ -219,6 +219,17 @@
         "read"
       ],
       "owner_app": "ctox"
+    },
+    "coding_turns": {
+      "_evidence": {
+        "sources": [
+          "v4/source/coding-port.js:27 (turns: api.query coding_turns)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
     },
     "ctox_bug_reports": {
       "_evidence": {
@@ -286,6 +297,17 @@
         "read"
       ],
       "owner_app": "desktop"
+    },
+    "files": {
+      "_evidence": {
+        "sources": [
+          "v4/source/coding-port.js:42 (readPatch: api.get files → ref)"
+        ]
+      },
+      "ops": [
+        "read"
+      ],
+      "owner_app": "ctox-platform"
     },
     "shell_preferences": {
       "_evidence": {
@@ -365,7 +387,7 @@
   "migrations": {},
   "min_app_api": "4.0",
   "provenance": {
-    "base_hash": "80d78e1bdeb430cad19ed702f05f9ca4a9fbb51fad552db81750f8e558186c54",
+    "base_hash": "283cd4a294bc4d5b77e029bf31f5a9911b5f05a3215a07e2239a29daa2d1d4c8",
     "base_release": "main@4794af03d",
     "locally_modified": false
   },

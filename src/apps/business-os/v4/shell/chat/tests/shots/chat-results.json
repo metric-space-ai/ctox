@@ -17,7 +17,7 @@
   {
     "name": "(b) genau ein Befehl business_os.chat.task geschrieben und behandelt",
     "ok": true,
-    "detail": "{\"handled\":1,\"docs\":[{\"id\":\"2a32e02b-23c7-8dde-b25f-f96e53e82b55\",\"type\":\"business_os.chat.task\",\"app_id\":\"shell\",\"record_id\":\"chat_seed_chat4\",\"status\":\"done\"}]}"
+    "detail": "{\"handled\":1,\"docs\":[{\"id\":\"954994ed-88bb-8136-84c5-9cccc085b28a\",\"type\":\"business_os.chat.task\",\"app_id\":\"shell\",\"record_id\":\"chat_seed_chat4\",\"status\":\"done\"}]}"
   },
   {
     "name": "(b) Nutzlast: prompt/instruction = getippter Text, chat_id = Chat, Kanal business_os.llm.chat → business_os_chat",
@@ -27,7 +27,7 @@
   {
     "name": "(b) Absender App shell, Datensatzbezug = Chat",
     "ok": true,
-    "detail": "{\"id\":\"2a32e02b-23c7-8dde-b25f-f96e53e82b55\",\"type\":\"business_os.chat.task\",\"app_id\":\"shell\",\"record_id\":\"chat_seed_chat4\",\"status\":\"done\"}"
+    "detail": "{\"id\":\"954994ed-88bb-8136-84c5-9cccc085b28a\",\"type\":\"business_os.chat.task\",\"app_id\":\"shell\",\"record_id\":\"chat_seed_chat4\",\"status\":\"done\"}"
   },
   {
     "name": "(b) Verlauf zeigt die Nachricht und die Annahme der Crew",
@@ -38,6 +38,11 @@
     "name": "(b) Verlauf in business_chats gespeichert (api.put)",
     "ok": true,
     "detail": "{\"found\":true,\"typed\":true,\"owner\":\"owner\"}"
+  },
+  {
+    "name": "(b) langer Status weitet die Fensterspalte nicht (Nachrichten nicht abgeschnitten)",
+    "ok": true,
+    "detail": "{\"win\":460,\"col\":458,\"status\":106}"
   },
   {
     "name": "(a) 420: Chatleiste unten links",

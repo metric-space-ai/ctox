@@ -74,7 +74,9 @@ export function measureInPage({ app, vocab, allow, owner, withG5 }) {
   if (outside.length) out.G1.push(`${outside.length} Elemente ragen aus root: ${[...new Set(outside)].slice(0, 6).join('; ')}`);
   if (hscroll.length) out.G1.push(`${hscroll.length} innere Container scrollen horizontal: ${hscroll.slice(0, 4).join('; ')}`);
   if (hscrollAllowed.length) out.notes.push(`G1 erlaubt: ${hscrollAllowed.length} Container mit [data-scroll-x] scrollen seitlich: ${hscrollAllowed.slice(0, 4).join('; ')}`);
-  const bodyNew = [...document.body.children].filter((e) => !window.__geo.bodyBefore.includes(e) && e.tagName !== 'SCRIPT' && e.tagName !== 'LINK' && e.tagName !== 'STYLE');
+  // Die Chatleiste der Shell (CHAT4, v4/shell/chat: div.v4f-chat) hängt der Rahmen bewusst an document.body, sobald ctox
+  // aktiv ist – Shell, nicht App. Jedes andere neue body-Kind bleibt ein G1-Befund.
+  const bodyNew = [...document.body.children].filter((e) => !window.__geo.bodyBefore.includes(e) && e.tagName !== 'SCRIPT' && e.tagName !== 'LINK' && e.tagName !== 'STYLE' && !e.classList.contains('v4f-chat'));
   if (bodyNew.length) out.G1.push(`${bodyNew.length} Elemente an document.body: ${bodyNew.slice(0, 3).map(desc).join(', ')}`);
   // Punktabtastung: App-Pixel über Fensterkopf, Zone oder Taskleiste?
   const zoneSlot = win.querySelector('[data-v4-zone-slot]');
@@ -224,7 +226,12 @@ export function measureInPage({ app, vocab, allow, owner, withG5 }) {
   out.signature = { columns, keys: [...keys] };
 
   // ---- Token-Abdeckung (Info): var(--x) ohne Rückfall, die im Rahmen nicht definiert sind ----
-  const appSheets = [...document.styleSheets].filter((s) => !window.__geo.sheetsBefore.has(s.ownerNode) && !(s.ownerNode?.dataset && 'v4FrameCss' in s.ownerNode.dataset));
+  // Shell-eigene Blätter (Chatleiste CHAT4 unter /v4/shell/, Rahmen unter /v4/frame/) kommen erst mit der App-Aktivierung
+  // dazu, sind aber kein App-CSS: G5 schaltete sonst die Chat-Stile ab und meldete die Chatleiste als „App-Leck“.
+  // Dazu die zwei Stilblöcke, die die V2-Chatleiste selbst einhängt (shared/business-chat.js, Crew-Figuren).
+  const SHELL_STYLE_IDS = new Set(['ctox-business-chat-style', 'ctox-crew-creature-css']);
+  const shellOwned = (sheet) => (sheet.href ? /^\/v4\/(shell|frame)\//.test(new URL(sheet.href, location.href).pathname) : SHELL_STYLE_IDS.has(sheet.ownerNode?.id));
+  const appSheets = [...document.styleSheets].filter((s) => !window.__geo.sheetsBefore.has(s.ownerNode) && !(s.ownerNode?.dataset && 'v4FrameCss' in s.ownerNode.dataset) && !shellOwned(s));
   out.info.appSheets = appSheets.map((s) => (s.href || '(inline)').replace(location.origin, ''));
   const rulesOf = (list, acc = []) => { for (const r of list) { if (r.selectorText !== undefined) acc.push(r); if (r.cssRules) rulesOf(r.cssRules, acc); } return acc; };
   const rules = [];

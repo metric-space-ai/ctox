@@ -14,10 +14,10 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | Collections gesamt / App-eigen / ctox-platform | 242 / 226 / 16 |
 | Handler gesamt (Apps mit Handlern) | 117 (16) |
 | Legacy-Rest gesamt (ctx.cap.legacy) | 0 |
-| Capabilities gesamt (verschieden, ohne legacy) | 41 |
+| Capabilities gesamt (verschieden, ohne legacy) | 40 |
 | Trigger | 10 |
 | command_rights-Einträge | 43 |
-| foreign-Deklarationen (davon write / nur Code-Scan) | 299 (32 / 94) |
+| foreign-Deklarationen (davon write / nur Code-Scan) | 301 (32 / 94) |
 | **foreign ohne passendes exports (Soll 0)** | **0** |
 | Plattformzugriffe auf exports beschränkt | 0 |
 | Befehlstypen mit Handlern in mehreren Apps | 0 |
@@ -86,7 +86,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 ## Legacy-Rest je App
 
 
-## Capabilities gesamt (41)
+## Capabilities gesamt (40)
 
 | Capability | Apps |
 |---|---|
@@ -101,7 +101,6 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | `agent.task.set_metadata` | outbound-lead-generation |
 | `agent.task.update` | outbound-lead-generation |
 | `agent.task.workspace.read` | documents, knowledge, outbound-lead-generation, research |
-| `artifact.write` | outbound |
 | `audit.event` | outbound, threads |
 | `blob.materialize` | mail |
 | `browser.auth_assist.request` | outbound, outbound-lead-generation |
@@ -114,7 +113,7 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 | `fence.claim` | outbound-lead-generation |
 | `fence.release` | outbound-lead-generation |
 | `files.get` | outbound, outbound-lead-generation |
-| `files.put` | outbound-lead-generation |
+| `files.put` | outbound, outbound-lead-generation |
 | `identity.users.list` | kundenpipeline |
 | `knowledge.query` | iot, outbound, research |
 | `mail.delivery_log.query` | outbound |
@@ -153,8 +152,8 @@ Prüfung: `node --test src/apps/business-os/v4/tools/manifest/gen-manifest.test.
 |---|---|---|---|
 | buchhaltung | ctox | `ctox.app.modify.request` | index.js:4415 |
 | buchhaltung | ctox | `ctox.chat.task` | index.js:4415 |
-| desktop | ctox | `ctox.app.modify.request` | index.js:469 |
-| desktop | ctox | `ctox.chat.task` | index.js:469 |
+| desktop | ctox | `ctox.app.modify.request` | index.js:522 |
+| desktop | ctox | `ctox.chat.task` | index.js:522 |
 | documents | ctox | `ctox.app.modify.request` | index.js:658 |
 | documents | ctox | `ctox.chat.task` | index.js:658 |
 | knowledge | ctox | `ctox.app.modify.request` | index.js:2857 |

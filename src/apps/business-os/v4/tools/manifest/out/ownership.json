@@ -2627,7 +2627,8 @@
           "tickets"
         ],
         "coding_turns": [
-          "coding-agents"
+          "coding-agents",
+          "shell"
         ],
         "ctox_queue_tasks": [
           "browser",
@@ -2659,6 +2660,7 @@
           "matching",
           "outbound-lead-generation",
           "research",
+          "shell",
           "spreadsheets"
         ],
         "machine_enrollments": [],

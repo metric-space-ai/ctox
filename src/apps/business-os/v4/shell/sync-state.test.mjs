@@ -243,9 +243,9 @@ test('Z45 V3-Abfrage höchstens einmal je Sekunde (pollMs wird auf 1000 angehobe
   s.destroy();
 });
 
-// ---- Gegen den Kern-Stub (Standard Pin 7b9560d: metrics.collections + reconnect + Abo-Liveness, K-1e) ----------
+// ---- Gegen den Kern-Stub (Standard Pin 8265bd7: metrics.collections + reconnect + Abo-Liveness, K-1e) ----------
 const PINS = path.join(os.homedir(), '.local/state/shell-v4/stub-pins');
-const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(PINS, '7b9560d');
+const STUB_DIR = process.env.CTOX_APP_API_STUB || path.join(PINS, '8265bd7');
 const stubFile = path.join(STUB_DIR, 'ctox-app-api-stub.mjs');
 test('Z45 gegen Kern-Stub: live → ok, setBacklog → warn, failCollection → error, offline → warn, reconnect über den Adapter', { skip: !fs.existsSync(stubFile) && `Stub fehlt: ${stubFile}` }, async () => {
   const { createStubKernel } = await import(pathToFileURL(stubFile).href);

@@ -13,7 +13,7 @@ import {
   DECLARATION_FILE, DECLARATION_FORMAT, validateDeclaration, triggerShapeError, collectConstants, resolveString,
   topLevelProps, scanCommandCalls, scanTriggerExports,
   scanUiCommandTypes, blankComments, SHELL_COMMANDS_OUT, PLATFORM_ROUTES_PENDING, PLATFORM_REGISTRY_ROUTES, COMMAND_INVENTORY_FILE,
-  EXACT_OWNERS, isPlatformRoute, loadPlatformRoutes, enclosingObjectHasDispatchFalse, splitPlatformHandlers, platformHandlerViolations,
+  EXACT_OWNERS, isPlatformRoute, loadPlatformRoutes, enclosingObjectHasDispatchFalse, splitPlatformHandlers, platformHandlerViolations, PLATFORM_FALLBACK_EXPORTS,
 } from './gen-manifest.mjs';
 import crypto from 'node:crypto';
 import zlib from 'node:zlib';
@@ -1303,4 +1303,10 @@ test('E42.1: erzeugte Manifeste tragen keinen Handler für einen Plattform-Typ d
   assert.deepEqual(platformHandlerViolations(manifests, routes), []);
   const documents = manifests.find((m) => m.app_id === 'documents');
   assert.ok(!Object.keys(documents.handlers).some((t) => t.startsWith('office.document.')), 'documents: office.document.* tot (E42.1)');
+});
+
+test('PLATFORM_FALLBACK_EXPORTS gleicht den exports des Kern-Plattform-Manifests (keine Drift)', () => {
+  const real = JSON.parse(fs.readFileSync(path.join(DEFAULT_REPO, 'src/core/business_os/v4/ctox-platform.manifest.json'), 'utf8')).exports;
+  const norm = (o) => Object.fromEntries(Object.entries(o).filter(([k]) => !k.startsWith('_')).map(([k, v]) => [k, [...v].sort()]).sort(([a], [b]) => a.localeCompare(b)));
+  assert.deepEqual(norm(PLATFORM_FALLBACK_EXPORTS), norm(real));
 });

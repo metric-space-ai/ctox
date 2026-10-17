@@ -23,6 +23,9 @@
 [data-app="invoices"] .invoices-rail { grid-column: 1; grid-template-rows: auto auto minmax(0, 1fr) auto; }
 [data-app="invoices"] .invoices-module > [data-resizer="left"] { grid-column: 2; }
 [data-app="invoices"] .invoices-main { grid-column: 3; grid-template-rows: auto minmax(0, 1fr); }
+/* The detail pane is its own size container: the line table follows the pane width, not the window. With the rail
+   beside it, the pane at a 900px window is ~530px wide and the 7-column table no longer fits (Geometrie G1). */
+[data-app="invoices"] .invoices-main { container: invoices-pane / inline-size; }
 
 /* Shard / compact selector rows (both are the kit .ctox-list-item). Selection
    is an in-place is-selected flip — the kit paints the accent fill + bar. */
@@ -154,11 +157,13 @@
   padding-bottom: 0;
 }
 
+/* The title row is one shell header row tall and grows with a wrapping title (VIS4 / G4: no ellipsis); pane-heads.js
+   grows the sibling head along so both heads still end on one line (G7). */
 [data-app="invoices"] .invoices-module .ctox-pane-title-row {
   box-sizing: border-box;
   min-width: 0;
   min-height: var(--shell-v2-header-row-size, 37px);
-  height: var(--shell-v2-header-row-size, 37px);
+  height: auto;
 }
 
 /* FIRST head of the top row: keep the 80px icon zone free. The head's own
@@ -202,20 +207,27 @@
 [data-app="invoices"] .invoices-module .ctox-pane-titles {
   flex: 1 1 auto;
   flex-direction: row;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: 2px 8px;
   min-width: 0;
   padding-top: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
+/* Long record titles („RE-2026-1040 · Müller Maschinenbau GmbH“) wrap at word boundaries instead of an ellipsis;
+   if the line beside the kicker is too short, the title moves under the kicker (flex-wrap above). */
 [data-app="invoices"] .invoices-module .ctox-pane-title {
+  flex: 0 1 auto;
+  max-width: 100%;
   min-width: 0;
   margin-top: 0;
-  line-height: 1.1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.2;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+  overflow-wrap: normal;
+  hyphens: manual;
 }
 
 [data-app="invoices"] .invoices-module .ctox-pane-actions {
@@ -236,6 +248,14 @@
 [data-app="invoices"] .invoices-module .ctox-filterbar .ctox-pane-search {
   min-height: 30px;
   height: 30px;
+  /* Schmale Fenster: das Suchfeld nimmt den freien Platz der Leiste und wird nie auf ein Zeichen gequetscht. */
+  flex: 1 1 8rem;
+  min-width: 8rem;
+}
+
+[data-app="invoices"] .invoices-module .ctox-filterbar {
+  width: 100%;
+  min-width: 0;
 }
 
 /* Pane bodies below the static heads take the remaining pane height; the
@@ -278,15 +298,28 @@
   [data-app="invoices"] .invoices-module .invoices-main > .ctox-pane-header {
     padding-right: 14px;
   }
+
+  /* G4 @420: between icon zone and window control only a few letters of „Rechnungen“ were left beside the head
+     actions. The title row wraps: the title keeps a full line, the actions move into a second line below it, and
+     the head grows (pattern modules/customers FIX11). */
+  [data-app="invoices"] .invoices-module .ctox-pane-title-row {
+    flex-wrap: wrap;
+    row-gap: 4px;
+  }
+  [data-app="invoices"] .invoices-module .ctox-pane-title-row > .ctox-pane-titles {
+    flex: 1 0 auto;
+    max-width: 100%;
+  }
 }
 
-/* Positionen schmal (FIX10, Standard lexoffice mobil): in der einspaltigen Stufe (Fenster ≤ 768 px) wird jede Position zur Karte
+/* Positionen schmal (FIX10, Standard lexoffice mobil): ist die Detail-Pane ≤ 760 px breit, wird jede Position zur Karte
    „Beschreibung / Menge Einheit × Einzelpreis = Betrag / USt · SKR“ statt einer seitwärts scrollenden Tabelle.
-   Gemessen wird das Fenster (Container business-app-window), nie der Bildschirm (Shell-V2-Vertrag). Der
+   Gemessen wird die eigene Pane (Container invoices-pane), nie der Bildschirm: das deckt die einspaltige Stufe
+   (Fenster ≤ 768 px) UND die zweispaltige bei mittlerer Fensterbreite (900 px: Pane ~530 px, Geometrie G1). Der
    Zeilenbetrag (.invoices-line-amount) erscheint nur in der Karte; breit bleibt die Tabelle unverändert. */
 [data-app="invoices"] .invoices-lines-view .invoices-line-amount { display: none; }
 
-@container business-app-window (max-width: 768px) {
+@container invoices-pane (max-width: 760px) {
   [data-app="invoices"] .invoices-lines-table { min-width: 0; }
   [data-app="invoices"] .invoices-lines-view,
   [data-app="invoices"] .invoices-lines-view tbody {

@@ -8,7 +8,7 @@
 //   (c) ohne ctox/Chatleiste → direkter Weg, genau ein Befehl, kein Fehler-/navigate-Eintrag in der Zone
 //   (d) Entwurf byte-gleich zur Anweisung, die der Handler research.systematic.run aus dem gesendeten Befehl rendert
 // Exit 0 = alles grün, sonst 1 (auch in der Gegenprobe; dort ist Exit 1 das erwartete Ergebnis).
-// Umgebung: CTOX_APP_API_STUB (Standard ~/.local/state/shell-v4/stub-pins/b6624eb), PLAYWRIGHT_MODULE_PATH,
+// Umgebung: CTOX_APP_API_STUB (Standard ~/.local/state/shell-v4/stub-pins/64acc2c), PLAYWRIGHT_MODULE_PATH,
 // RCH2_SHOTS (Bildordner, Standard v4/shell/chat/tests/shots).
 import { createRequire } from 'node:module';
 import { execFileSync } from 'node:child_process';
@@ -20,11 +20,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const BOS = path.resolve(here, '../../../..');
 const RESEARCH = path.join(BOS, 'modules/research');
-process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/b6624eb');
+process.env.CTOX_APP_API_STUB ||= path.join(os.homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 // ctox:shared/ für den Handler in Node (wie --import v4/tools/node/ctox-shared.mjs), vor dem Laden von enqueue.js.
 await import(pathToFileURL(path.join(BOS, 'v4/tools/node/ctox-shared.mjs')).href);
 const { enqueueSystematicRun } = await import(pathToFileURL(path.join(RESEARCH, 'handlers/_lib/enqueue.js')).href);
 const { startServer } = await import(pathToFileURL(path.join(BOS, 'v4/frame/lab/serve.mjs')).href);
+const { realManifestRoutes } = await import(pathToFileURL(path.join(BOS, 'v4/tools/port/real-manifest.mjs')).href);
 
 function loadPlaywright() {
   const tries = [process.env.PLAYWRIGHT_MODULE_PATH, path.join(BOS, 'package.json'), path.join(os.homedir(), 'Documents/ctox/src/apps/business-os/package.json')].filter(Boolean);
@@ -126,7 +127,7 @@ let researchWin = null;
 try {
   await P.goto(`${base}/v4/frame/lab/stub-lab.html?inst=rch2-${Date.now().toString(36)}`);
   await P.waitForFunction(() => window.__labReady === true && document.querySelector('[data-v4-ready]'));
-  await P.evaluate(async ({ run, task, tables }) => {
+  await P.evaluate(async ({ run, task, tables, routes }) => {
     const { kernel } = window.__lab;
     window.__rch2 = { handled: [] };
     // Empfänger: research.systematic.run (Handler der research-App) und – zur Kontrolle – der Standard-Chatbefehl.
@@ -137,18 +138,19 @@ try {
       });
     }
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#0f766e"/></svg>';
-    await kernel.sim.publishAppVersion('ctox', '1.0.0', { title: 'CTOX', layout: { category: 'Crew', icon_svg: svg }, styles: [],
-      collections: { business_chats: {}, ctox_crew_members: {}, ctox_harness_status: {}, ctox_harness_events: {} } });
-    // research wie ihr Manifest: eigener Handler für research.systematic.run (berechtigt den Befehlstyp im Entwurf).
+    // E48 (Stub 8265bd7): echte Manifeste (Routen, Rechte, collections + exports) für ctox (Eigentümer der Shell-Chatlesungen)
+    // und research samt deren Eigentümern (knowledge, documents); business_apps-Zeilen davor, sonst überschreiben sie active_ver.
+    await kernel.sim.push('business_apps', [{ id: 'knowledge', title: 'Knowledge' }]);
+    for (const o of routes.research._fixture_owners) if (o.app !== 'ctox' && !(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
+    await kernel.sim.publishAppVersion('ctox', '1.0.0', { title: 'CTOX', layout: { category: 'Crew', icon_svg: svg }, styles: [], manifestExtra: routes.ctox });
+    // research wie ihr Manifest (eigener Handler für research.systematic.run berechtigt den Befehlstyp im Entwurf).
     await kernel.sim.publishAppVersion('research', '1.0.0', { title: 'Web Research',
       layout: { category: 'Wissen', icon_svg: svg, default_width: 1180, default_height: 680 }, styles: ['index.css'],
-      handlers: { [run]: 'handlers/research.systematic.run.js' },
-      collections: { research_tasks: {}, research_runs: {}, research_notes: {} } });
-    await kernel.sim.push('business_apps', [{ id: 'knowledge', title: 'Knowledge' }]);
+      manifestExtra: routes.research });
     await kernel.sim.push('research_tasks', [task]);
     await kernel.sim.push('knowledge_tables', tables);
     await kernel.sim.settle?.();
-  }, { run: RUN, task: TASK, tables: TABLES });
+  }, { run: RUN, task: TASK, tables: TABLES, routes: { ctox: realManifestRoutes('ctox'), research: realManifestRoutes('research') } });
   await P.waitForSelector('[data-ctox-chat-root] [data-chat-dock]', { timeout: 8000 }).catch(() => {});
   researchWin = await P.evaluate(() => window.__lab.frame.shellHandle().openWindow('research'));
   const taskSel = `.shell-window[data-window-app="research"] .research-task-item[data-task-id="${TASK.id}"]`;

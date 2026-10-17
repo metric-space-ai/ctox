@@ -1,6 +1,6 @@
 // desktop gegen den eingefrorenen App-API-4.0-Stub (createStubKernel) in echtem Chromium.
-// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/8265bd7), Muster modules/knowledge.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/8265bd7 node --test src/apps/business-os/modules/desktop/tests/v4-api.test.mjs
+// Stub: CTOX_APP_API_STUB (Pflicht-Pin ~/.local/state/shell-v4/stub-pins/64acc2c), Muster modules/knowledge.
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c node --test src/apps/business-os/modules/desktop/tests/v4-api.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
@@ -12,7 +12,7 @@ import { homedir } from 'node:os';
 import { realManifestRoutes } from '../../../v4/tools/port/real-manifest.mjs';
 
 const APP = 'desktop';
-const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/8265bd7');
+const STUB = process.env.CTOX_APP_API_STUB || join(homedir(), '.local/state/shell-v4/stub-pins/64acc2c');
 const HERE = dirname(fileURLToPath(import.meta.url));
 const BOS = normalize(join(HERE, '../../..'));
 const SHOTS = join(HERE, 'shots');
@@ -60,7 +60,8 @@ before(async () => {
     window.__mod = await import(`/modules/${APP}/index.js`);
     const kernel = createStubKernel({ storage: 'memory', latencyMs: 5, multiTab: false });
     await kernel.ready;
-    await kernel.sim.push('business_apps', [{ id: 'desktop', title: 'Desktop' }, { id: 'explorer', title: 'Explorer' }, { id: 'notes', title: 'Notizen' }, { id: 'ctox', title: 'CTOX' }]);
+    await kernel.sim.push('business_apps', [{ id: 'desktop', title: 'Desktop' }, { id: 'explorer', title: 'Explorer' }, { id: 'notes', title: 'Notizen' }, { id: 'ctox', title: 'CTOX' },
+      { id: 'lib:ctox-office', title: 'lib:ctox-office@1.0' }]);
     // FIXT-R: Eigentümer der Fremd-Collections (ctox-platform, documents, notes) vor der eigenen Version, diese nach der
     // business_apps-Zeile.
     for (const o of window.__routes?._fixture_owners ?? []) if (!(await kernel.sim.inspect('business_apps', o.app))?.data?.active_ver) await kernel.sim.publishAppVersion(o.app, o.ver, o.publish);
@@ -100,6 +101,9 @@ test('mount: Icons live aus desktop_icons, Standard-Icons für business_apps ang
   assert.ok(!l.includes('Desktop'), 'eigene App nicht als Icon');
   const ids = (await icons()).map((d) => d.id);
   for (const id of ['desk_icon_explorer', 'desk_icon_notes', 'desk_icon_ctox']) assert.ok(ids.includes(id), id);
+  // Plattform (ctox-platform, vom Kern veröffentlicht) und Bibliotheken (lib:*) sind keine Apps → kein Icon.
+  for (const id of ['desk_icon_ctox-platform', 'desk_icon_lib:ctox-office']) assert.ok(!ids.includes(id), id);
+  assert.ok(!l.some((t) => /^lib:|ctox-platform/.test(t)), JSON.stringify(l));
   const layout = await page.evaluate(() => window.__api.get('desktop_layout', 'layout').get());
   assert.equal(layout.grid_cell_w, 120);
   assert.equal(await page.evaluate(() => Boolean(document.querySelector('.ctox-syncing, [role="status"], [data-widget-sync], [data-widget-status], .desktop-icon-empty'))), false);

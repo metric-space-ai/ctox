@@ -1,5 +1,5 @@
 // FIX9b (Shell v4): Web Research ohne Rohcodes, Fachjargon und Null-Kennzahlen; Leerzustand mit Aktion.
-// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/a8765b9 \
+// Lauf: CTOX_APP_API_STUB=~/.local/state/shell-v4/stub-pins/64acc2c \
 //       node --import ./v4/tools/node/ctox-shared.mjs --test --test-force-exit modules/research/tests/fix9b.test.mjs
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';

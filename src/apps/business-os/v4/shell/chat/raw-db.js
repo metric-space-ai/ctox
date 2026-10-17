@@ -20,7 +20,8 @@
 // business_chats) die Datei darüber lesen. Kein Lesen oder Schreiben der echten desktop_files.
 // v4-allow: debt L-42
 
-const RX_META = ['_rev', '_meta', '_attachments', '_deleted'];
+// E47: gelesene Dokumente tragen _rev/_pending (Lese-Metadaten des Kerns); beim Zurückschreiben nie mitsenden.
+const RX_META = ['_rev', '_pending', '_meta', '_attachments', '_deleted'];
 
 function clean(doc) {
   const out = { ...(doc && typeof doc === 'object' ? doc : {}) };
