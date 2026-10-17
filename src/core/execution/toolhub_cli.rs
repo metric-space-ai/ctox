@@ -321,13 +321,19 @@ fn request_adapter(root: &Path, role: AgentRole, service: &str, reason: &str) ->
     if slug.is_empty() || slug.len() > 64 {
         bail!("service name must be 1-64 letters, digits or dashes");
     }
-    let dedupe_key = format!("toolhub-adapter-build:{slug}");
+    let base_key = format!("toolhub-adapter-build:{slug}");
     let items = tickets::list_ticket_self_work_items(root, Some("internal"), None, 500)?;
-    if let Some(item) = items.iter().find(|i| {
-        i.metadata["dedupe_key"] == json!(dedupe_key) && !matches!(i.state.as_str(), "closed" | "failed" | "cancelled")
-    }) {
+    // `<base>` for the first mission, `<base>:<n>` for later ones (a closed
+    // mission is never reopened; the work id derives from the dedupe key).
+    let ours: Vec<_> = items
+        .iter()
+        .filter(|i| i.kind == BUILDER_MISSION_KIND)
+        .filter(|i| i.metadata["dedupe_key"].as_str().is_some_and(|k| k == base_key || k.strip_prefix(&format!("{base_key}:")).is_some_and(|n| n.parse::<u32>().is_ok())))
+        .collect();
+    if let Some(item) = ours.iter().find(|i| !matches!(i.state.as_str(), "closed" | "failed" | "cancelled")) {
         return Ok(json!({"work_id": item.work_id, "state": item.state, "existing": true}));
     }
+    let dedupe_key = if ours.is_empty() { base_key } else { format!("{base_key}:{}", ours.len() + 1) };
     let item = tickets::put_ticket_self_work_item(
         root,
         tickets::TicketSelfWorkUpsertInput {
